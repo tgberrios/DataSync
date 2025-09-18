@@ -136,18 +136,25 @@ public:
                     << std::endl;
 
           {
+            // Detectar columna de tiempo con prioridad
+            std::string timeColumn =
+                detectTimeColumnMariaDB(mariaConn.get(), schemaName, tableName);
+
             pqxx::work txn(pgConn);
-            txn.exec("INSERT INTO metadata.catalog "
-                     "(schema_name, table_name, cluster_name, db_engine, "
-                     "connection_string, "
-                     "last_sync_time, last_sync_column, status, "
-                     "last_offset, active) "
-                     "VALUES ('" +
-                     escapeSQL(schemaName) + "', '" + escapeSQL(tableName) +
-                     "', '', 'MariaDB', '" + escapeSQL(connStr) +
-                     "', NOW(), '', 'PENDING', '0', false) "
-                     "ON CONFLICT (schema_name, table_name, db_engine) "
-                     "DO UPDATE SET last_sync_time = NOW();");
+            txn.exec(
+                "INSERT INTO metadata.catalog "
+                "(schema_name, table_name, cluster_name, db_engine, "
+                "connection_string, "
+                "last_sync_time, last_sync_column, status, "
+                "last_offset, active) "
+                "VALUES ('" +
+                escapeSQL(schemaName) + "', '" + escapeSQL(tableName) +
+                "', '', 'MariaDB', '" + escapeSQL(connStr) + "', NOW(), '" +
+                escapeSQL(timeColumn) +
+                "', 'PENDING', '0', false) "
+                "ON CONFLICT (schema_name, table_name, db_engine) "
+                "DO UPDATE SET last_sync_time = NOW(), last_sync_column = '" +
+                escapeSQL(timeColumn) + "';");
             txn.commit();
           }
         }
@@ -216,13 +223,14 @@ public:
 
         Logger::debug("syncCatalogMSSQLToPostgres",
                       "Connecting to MSSQL: " + connStr);
-        
+
         // Usar ConnectionPool para obtener conexión MSSQL
         ConnectionGuard mssqlGuard(g_connectionPool.get(), DatabaseType::MSSQL);
         auto mssqlConn = mssqlGuard.get<ODBCHandles>();
         if (!mssqlConn) {
           Logger::error("syncCatalogMSSQLToPostgres",
-                        "Failed to connect to MSSQL with connection: " + connStr);
+                        "Failed to connect to MSSQL with connection: " +
+                            connStr);
           continue;
         }
 
@@ -241,7 +249,8 @@ public:
 
         Logger::debug("syncCatalogMSSQLToPostgres",
                       "Executing discovery query...");
-        auto discoveredTables = executeQueryMSSQL(mssqlConn->dbc, discoverQuery);
+        auto discoveredTables =
+            executeQueryMSSQL(mssqlConn->dbc, discoverQuery);
         Logger::info("syncCatalogMSSQLToPostgres",
                      "Found " + std::to_string(discoveredTables.size()) +
                          " tables");
@@ -256,21 +265,32 @@ public:
                         "Processing table: " + schemaName + "." + tableName);
 
           {
+            // Detectar columna de tiempo con prioridad
+            std::string timeColumn =
+                detectTimeColumnMSSQL(mssqlConn->dbc, schemaName, tableName);
+
             pqxx::work txn(pgConn);
-            // Verificar si la tabla ya existe con esta connection_string específica
-            auto existingCheck = txn.exec(
-                "SELECT COUNT(*) FROM metadata.catalog "
-                "WHERE schema_name='" + escapeSQL(schemaName) + 
-                "' AND table_name='" + escapeSQL(tableName) + 
-                "' AND db_engine='MSSQL' AND connection_string='" + 
-                escapeSQL(connStr) + "';");
-            
+            // Verificar si la tabla ya existe con esta connection_string
+            // específica
+            auto existingCheck =
+                txn.exec("SELECT COUNT(*) FROM metadata.catalog "
+                         "WHERE schema_name='" +
+                         escapeSQL(schemaName) + "' AND table_name='" +
+                         escapeSQL(tableName) +
+                         "' AND db_engine='MSSQL' AND connection_string='" +
+                         escapeSQL(connStr) + "';");
+
             if (!existingCheck.empty() && existingCheck[0][0].as<int>() > 0) {
-              // Tabla ya existe con esta connection_string, solo actualizar timestamp
-              txn.exec("UPDATE metadata.catalog SET last_sync_time = NOW() "
-                       "WHERE schema_name='" + escapeSQL(schemaName) + 
-                       "' AND table_name='" + escapeSQL(tableName) + 
-                       "' AND db_engine='MSSQL' AND connection_string='" + 
+              // Tabla ya existe con esta connection_string, actualizar
+              // timestamp y columna de tiempo
+              txn.exec("UPDATE metadata.catalog SET last_sync_time = NOW(), "
+                       "last_sync_column = '" +
+                       escapeSQL(timeColumn) +
+                       "' "
+                       "WHERE schema_name='" +
+                       escapeSQL(schemaName) + "' AND table_name='" +
+                       escapeSQL(tableName) +
+                       "' AND db_engine='MSSQL' AND connection_string='" +
                        escapeSQL(connStr) + "';");
             } else {
               // Tabla nueva, insertar
@@ -282,7 +302,8 @@ public:
                        "VALUES ('" +
                        escapeSQL(schemaName) + "', '" + escapeSQL(tableName) +
                        "', '', 'MSSQL', '" + escapeSQL(connStr) +
-                       "', NOW(), '', 'PENDING', '0', false);");
+                       "', NOW(), '" + escapeSQL(timeColumn) +
+                       "', 'PENDING', '0', false);");
             }
             txn.commit();
           }
@@ -388,18 +409,25 @@ public:
                         "Processing table: " + schemaName + "." + tableName);
 
           {
+            // Detectar columna de tiempo con prioridad
+            std::string timeColumn =
+                detectTimeColumnPostgres(*sourcePgConn, schemaName, tableName);
+
             pqxx::work txn(pgConn);
-            txn.exec("INSERT INTO metadata.catalog "
-                     "(schema_name, table_name, cluster_name, db_engine, "
-                     "connection_string, "
-                     "last_sync_time, last_sync_column, status, "
-                     "last_offset, active) "
-                     "VALUES ('" +
-                     escapeSQL(schemaName) + "', '" + escapeSQL(tableName) +
-                     "', '', 'PostgreSQL', '" + escapeSQL(connStr) +
-                     "', NOW(), '', 'PENDING', '0', false) "
-                     "ON CONFLICT (schema_name, table_name, db_engine) "
-                     "DO UPDATE SET last_sync_time = NOW();");
+            txn.exec(
+                "INSERT INTO metadata.catalog "
+                "(schema_name, table_name, cluster_name, db_engine, "
+                "connection_string, "
+                "last_sync_time, last_sync_column, status, "
+                "last_offset, active) "
+                "VALUES ('" +
+                escapeSQL(schemaName) + "', '" + escapeSQL(tableName) +
+                "', '', 'PostgreSQL', '" + escapeSQL(connStr) + "', NOW(), '" +
+                escapeSQL(timeColumn) +
+                "', 'PENDING', '0', false) "
+                "ON CONFLICT (schema_name, table_name, db_engine) "
+                "DO UPDATE SET last_sync_time = NOW(), last_sync_column = '" +
+                escapeSQL(timeColumn) + "';");
             txn.commit();
           }
         }
@@ -627,6 +655,108 @@ public:
   }
 
 private:
+  std::string detectTimeColumnMSSQL(SQLHDBC conn, const std::string &schema,
+                                    const std::string &table) {
+    try {
+      std::string query =
+          "SELECT c.name AS COLUMN_NAME "
+          "FROM sys.columns c "
+          "INNER JOIN sys.tables t ON c.object_id = t.object_id "
+          "INNER JOIN sys.schemas s ON t.schema_id = s.schema_id "
+          "WHERE s.name = '" +
+          escapeSQL(schema) + "' AND t.name = '" + escapeSQL(table) +
+          "' "
+          "AND c.name IN ('updated_at', 'created_at', 'modified_at', "
+          "'timestamp', 'last_modified', 'updated_time', 'created_time') "
+          "ORDER BY CASE c.name "
+          "  WHEN 'updated_at' THEN 1 "
+          "  WHEN 'modified_at' THEN 2 "
+          "  WHEN 'last_modified' THEN 3 "
+          "  WHEN 'updated_time' THEN 4 "
+          "  WHEN 'created_at' THEN 5 "
+          "  WHEN 'created_time' THEN 6 "
+          "  WHEN 'timestamp' THEN 7 "
+          "  ELSE 8 END;";
+
+      auto results = executeQueryMSSQL(conn, query);
+      if (!results.empty() && !results[0][0].empty()) {
+        return results[0][0];
+      }
+    } catch (const std::exception &e) {
+      Logger::error("detectTimeColumnMSSQL",
+                    "Error detecting time column: " + std::string(e.what()));
+    }
+    return "";
+  }
+
+  std::string detectTimeColumnMariaDB(MYSQL *conn, const std::string &schema,
+                                      const std::string &table) {
+    try {
+      std::string query =
+          "SELECT COLUMN_NAME "
+          "FROM information_schema.columns "
+          "WHERE table_schema = '" +
+          escapeSQL(schema) + "' AND table_name = '" + escapeSQL(table) +
+          "' "
+          "AND COLUMN_NAME IN ('updated_at', 'created_at', 'modified_at', "
+          "'timestamp', 'last_modified', 'updated_time', 'created_time') "
+          "ORDER BY CASE COLUMN_NAME "
+          "  WHEN 'updated_at' THEN 1 "
+          "  WHEN 'modified_at' THEN 2 "
+          "  WHEN 'last_modified' THEN 3 "
+          "  WHEN 'updated_time' THEN 4 "
+          "  WHEN 'created_at' THEN 5 "
+          "  WHEN 'created_time' THEN 6 "
+          "  WHEN 'timestamp' THEN 7 "
+          "  ELSE 8 END;";
+
+      auto results = executeQueryMariaDB(conn, query);
+      if (!results.empty() && !results[0][0].empty()) {
+        return results[0][0];
+      }
+    } catch (const std::exception &e) {
+      Logger::error("detectTimeColumnMariaDB",
+                    "Error detecting time column: " + std::string(e.what()));
+    }
+    return "";
+  }
+
+  std::string detectTimeColumnPostgres(pqxx::connection &conn,
+                                       const std::string &schema,
+                                       const std::string &table) {
+    try {
+      std::string query =
+          "SELECT column_name "
+          "FROM information_schema.columns "
+          "WHERE table_schema = '" +
+          escapeSQL(schema) + "' AND table_name = '" + escapeSQL(table) +
+          "' "
+          "AND column_name IN ('updated_at', 'created_at', 'modified_at', "
+          "'timestamp', 'last_modified', 'updated_time', 'created_time') "
+          "ORDER BY CASE column_name "
+          "  WHEN 'updated_at' THEN 1 "
+          "  WHEN 'modified_at' THEN 2 "
+          "  WHEN 'last_modified' THEN 3 "
+          "  WHEN 'updated_time' THEN 4 "
+          "  WHEN 'created_at' THEN 5 "
+          "  WHEN 'created_time' THEN 6 "
+          "  WHEN 'timestamp' THEN 7 "
+          "  ELSE 8 END;";
+
+      pqxx::work txn(conn);
+      auto results = txn.exec(query);
+      txn.commit();
+
+      if (!results.empty() && !results[0][0].is_null()) {
+        return results[0][0].as<std::string>();
+      }
+    } catch (const std::exception &e) {
+      Logger::error("detectTimeColumnPostgres",
+                    "Error detecting time column: " + std::string(e.what()));
+    }
+    return "";
+  }
+
   std::string escapeSQL(const std::string &value) {
     std::string escaped = value;
     size_t pos = 0;
@@ -642,15 +772,21 @@ private:
     std::string token;
     while (std::getline(ss, token, ';')) {
       auto pos = token.find('=');
-      if (pos == std::string::npos) continue;
+      if (pos == std::string::npos)
+        continue;
       std::string key = token.substr(0, pos);
       std::string value = token.substr(pos + 1);
       if (key == "DATABASE") {
-        Logger::debug("extractDatabaseName", "Extracted database: " + value + " from connection: " + connectionString);
+        Logger::debug("extractDatabaseName",
+                      "Extracted database: " + value +
+                          " from connection: " + connectionString);
         return value;
       }
     }
-    Logger::warning("extractDatabaseName", "No DATABASE found in connection string, using master fallback: " + connectionString);
+    Logger::warning(
+        "extractDatabaseName",
+        "No DATABASE found in connection string, using master fallback: " +
+            connectionString);
     return "master"; // fallback
   }
 
@@ -807,9 +943,10 @@ private:
         ConnectionGuard mssqlGuard(g_connectionPool.get(), DatabaseType::MSSQL);
         auto mssqlConn = mssqlGuard.get<ODBCHandles>();
         if (!mssqlConn) {
-          Logger::warning("cleanNonExistentMSSQLTables",
-                          "Cannot connect to MSSQL with connection: " +
-                              connection_string + " - SKIPPING this connection");
+          Logger::warning(
+              "cleanNonExistentMSSQLTables",
+              "Cannot connect to MSSQL with connection: " + connection_string +
+                  " - SKIPPING this connection");
           continue;
         }
 
@@ -825,27 +962,33 @@ private:
         // Construir query batch para verificar todas las tablas de esta
         // conexión - usar sys.tables con base de datos específica
         std::string databaseName = extractDatabaseName(connection_string);
-        Logger::debug("cleanNonExistentMSSQLTables", "Using database: " + databaseName + " for connection: " + connection_string);
-        std::string batchQuery = "SELECT s.name AS table_schema, t.name AS table_name FROM "
-                                 "[" + databaseName + "].sys.tables t "
-                                 "INNER JOIN [" + databaseName + "].sys.schemas s ON t.schema_id = s.schema_id "
-                                 "WHERE s.name NOT IN ('INFORMATION_SCHEMA', 'sys', 'guest') "
-                                 "AND t.name NOT LIKE 'spt_%' "
-                                 "AND t.name NOT LIKE 'MS%' "
-                                 "AND t.name NOT LIKE 'sp_%' "
-                                 "AND t.name NOT LIKE 'fn_%' "
-                                 "AND t.name NOT LIKE 'xp_%' "
-                                 "AND t.name NOT LIKE 'dt_%' "
-                                 "AND (";
+        Logger::debug("cleanNonExistentMSSQLTables",
+                      "Using database: " + databaseName +
+                          " for connection: " + connection_string);
+        std::string batchQuery =
+            "SELECT s.name AS table_schema, t.name AS table_name FROM "
+            "[" +
+            databaseName +
+            "].sys.tables t "
+            "INNER JOIN [" +
+            databaseName +
+            "].sys.schemas s ON t.schema_id = s.schema_id "
+            "WHERE s.name NOT IN ('INFORMATION_SCHEMA', 'sys', 'guest') "
+            "AND t.name NOT LIKE 'spt_%' "
+            "AND t.name NOT LIKE 'MS%' "
+            "AND t.name NOT LIKE 'sp_%' "
+            "AND t.name NOT LIKE 'fn_%' "
+            "AND t.name NOT LIKE 'xp_%' "
+            "AND t.name NOT LIKE 'dt_%' "
+            "AND (";
         std::string whereConditions;
 
         for (size_t i = 0; i < tableResults.size(); ++i) {
           if (i > 0)
             whereConditions += " OR ";
-          whereConditions += "(s.name='" +
-                             tableResults[i][0].as<std::string>() +
-                             "' AND t.name='" +
-                             tableResults[i][1].as<std::string>() + "')";
+          whereConditions +=
+              "(s.name='" + tableResults[i][0].as<std::string>() +
+              "' AND t.name='" + tableResults[i][1].as<std::string>() + "')";
         }
 
         batchQuery += whereConditions + ") ORDER BY s.name, t.name;";
@@ -986,7 +1129,6 @@ private:
       return nullptr;
     }
   }
-
 
   std::vector<std::vector<std::string>>
   executeQueryMariaDB(MYSQL *conn, const std::string &query) {
