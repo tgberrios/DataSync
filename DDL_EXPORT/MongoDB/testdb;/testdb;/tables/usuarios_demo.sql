@@ -1,7 +1,7 @@
 -- Table DDL for testdb;.usuarios_demo
 -- Engine: MongoDB
 -- Database: testdb;
--- Generated: 1758161586
+-- Generated: 1758163114
 
 -- MongoDB View: usuarios_demo
 -- Schema: testdb;

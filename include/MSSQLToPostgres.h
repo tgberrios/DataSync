@@ -449,7 +449,14 @@ public:
           if (targetCount == 0) {
             updateStatus(pgConn, schema_name, table_name, "NO_DATA", 0);
           } else {
-            updateStatus(pgConn, schema_name, table_name, "ERROR", 0);
+            Logger::warning(
+                "transferDataMSSQLToPostgres",
+                "Source has no data but target has " +
+                    std::to_string(targetCount) + " records for table " +
+                    schema_name + "." + table_name +
+                    ". This might indicate source table is empty or filtered.");
+            updateStatus(pgConn, schema_name, table_name, "NO_DATA",
+                         targetCount);
           }
           continue;
         }
@@ -509,10 +516,16 @@ public:
           continue;
         }
 
-        // Si sourceCount > targetCount, necesitamos transferir datos faltantes
+        // Si sourceCount < targetCount, verificar si hay datos inconsistentes
         if (sourceCount < targetCount) {
-          updateStatus(pgConn, schema_name, table_name, "ERROR", targetCount);
-          continue;
+          Logger::warning(
+              "transferDataMSSQLToPostgres",
+              "Source count (" + std::to_string(sourceCount) +
+                  ") is less than target count (" +
+                  std::to_string(targetCount) + ") for table " + schema_name +
+                  "." + table_name +
+                  ". This might indicate data inconsistency or partial sync.");
+          // No marcar como ERROR, continuar con la transferencia normal
         }
 
         // Luego ejecutar la query sin prefijo de base de datos
@@ -543,6 +556,11 @@ public:
                 "ORDER BY c.column_id;");
 
         if (columns.empty()) {
+          Logger::error("transferDataMSSQLToPostgres",
+                        "No columns found for table " + schema_name + "." +
+                            table_name +
+                            ". This indicates the table structure could not be "
+                            "retrieved from MSSQL.");
           updateStatus(pgConn, schema_name, table_name, "ERROR");
           continue;
         }
@@ -588,6 +606,11 @@ public:
         }
 
         if (columnNames.empty()) {
+          Logger::error(
+              "transferDataMSSQLToPostgres",
+              "No valid column names found for table " + schema_name + "." +
+                  table_name +
+                  ". This indicates a problem with column metadata parsing.");
           updateStatus(pgConn, schema_name, table_name, "ERROR");
           continue;
         }
