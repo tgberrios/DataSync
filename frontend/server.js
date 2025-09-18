@@ -10,11 +10,11 @@ app.use(cors());
 app.use(express.json());
 
 const pool = new Pool({
-  host: "10.12.240.40",
+  host: "localhost",
   port: 5432,
   database: "DataLake",
-  user: "Datalake_User",
-  password: "keepprofessional",
+  user: "tomy.berrios",
+  password: "Yucaquemada1",
 });
 
 // Test connection
@@ -30,59 +30,73 @@ pool.connect((err, client, done) => {
 // Obtener catálogo con paginación, filtros y búsqueda
 app.get("/api/catalog", async (req, res) => {
   try {
-    const { page = 1, limit = 10, engine = '', status = '', active = '', search = '' } = req.query;
+    const {
+      page = 1,
+      limit = 10,
+      engine = "",
+      status = "",
+      active = "",
+      search = "",
+    } = req.query;
     const offset = (page - 1) * limit;
-    
+
     let whereConditions = [];
     let queryParams = [];
     let paramCount = 0;
-    
+
     if (engine) {
       paramCount++;
       whereConditions.push(`db_engine = $${paramCount}`);
       queryParams.push(engine);
     }
-    
+
     if (status) {
       paramCount++;
       whereConditions.push(`status = $${paramCount}`);
       queryParams.push(status);
     }
-    
-    if (active !== '') {
+
+    if (active !== "") {
       paramCount++;
       whereConditions.push(`active = $${paramCount}`);
-      queryParams.push(active === 'true');
+      queryParams.push(active === "true");
     }
-    
+
     if (search) {
       paramCount++;
-      whereConditions.push(`(schema_name ILIKE $${paramCount} OR table_name ILIKE $${paramCount} OR cluster_name ILIKE $${paramCount})`);
+      whereConditions.push(
+        `(schema_name ILIKE $${paramCount} OR table_name ILIKE $${paramCount} OR cluster_name ILIKE $${paramCount})`
+      );
       queryParams.push(`%${search}%`);
     }
-    
-    const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
-    
+
+    const whereClause =
+      whereConditions.length > 0
+        ? `WHERE ${whereConditions.join(" AND ")}`
+        : "";
+
     const countQuery = `SELECT COUNT(*) FROM metadata.catalog ${whereClause}`;
     const countResult = await pool.query(countQuery, queryParams);
     const total = parseInt(countResult.rows[0].count);
-    
+
     paramCount++;
-    const dataQuery = `SELECT * FROM metadata.catalog ${whereClause} ORDER BY schema_name, table_name LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
+    const dataQuery = `SELECT * FROM metadata.catalog ${whereClause} ORDER BY schema_name, table_name LIMIT $${paramCount} OFFSET $${
+      paramCount + 1
+    }`;
     queryParams.push(limit, offset);
-    
+
     const result = await pool.query(dataQuery, queryParams);
-    
+
     const totalPages = Math.ceil(total / limit);
-    
+
     res.json({
       data: result.rows,
       pagination: {
         total,
         totalPages,
         currentPage: parseInt(page),
-        limit: parseInt(limit)
-      }
+        limit: parseInt(limit),
+      },
     });
   } catch (err) {
     console.error("Database error:", err);
