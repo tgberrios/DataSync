@@ -893,6 +893,33 @@ public:
     }
   }
 
+  std::string getLastSyncTimeOptimized(pqxx::connection &pgConn,
+                                       const std::string &schema_name,
+                                       const std::string &table_name,
+                                       const std::string &lastSyncColumn) {
+    try {
+      if (lastSyncColumn.empty()) {
+        return "";
+      }
+
+      // Usar una consulta optimizada con índice en la columna de tiempo
+      std::string query = "SELECT MAX(\"" + lastSyncColumn + "\") FROM \"" +
+                          schema_name + "\".\"" + table_name + "\";";
+
+      pqxx::work txn(pgConn);
+      auto result = txn.exec(query);
+      txn.commit();
+
+      if (!result.empty() && !result[0][0].is_null()) {
+        return result[0][0].as<std::string>();
+      }
+    } catch (const std::exception &e) {
+      Logger::error("getLastSyncTimeOptimized",
+                    "Error getting last sync time: " + std::string(e.what()));
+    }
+    return "";
+  }
+
   void updateStatus(pqxx::connection &pgConn, const std::string &schema_name,
                     const std::string &table_name, const std::string &status,
                     size_t offset = 0) {
