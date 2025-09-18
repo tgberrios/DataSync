@@ -82,33 +82,35 @@ void SyncReporter::collectPerformanceMetrics(pqxx::connection &pgConn,
   try {
     pqxx::work txn(pgConn);
 
-    // Get metrics for each engine type
+    // Get metrics for each engine type from transfer_metrics
     auto results = txn.exec(
         "WITH transfer_stats AS ("
-        "  SELECT db_engine,"
-        "         COUNT(*) as total_transfers,"
-        "         COUNT(*) FILTER (WHERE status IN ('PERFECT_MATCH', "
-        "'LISTENING_CHANGES')) as success_count,"
-        "         COUNT(*) FILTER (WHERE status = 'ERROR') as error_count,"
-        "         COUNT(*) FILTER (WHERE active = true) as active_transfers,"
-        "         AVG(CASE WHEN last_sync_duration IS NOT NULL THEN "
-        "last_sync_duration "
-        "ELSE NULL END) as avg_duration,"
-        "         MAX(CASE WHEN last_sync_duration IS NOT NULL THEN "
-        "last_sync_duration "
-        "ELSE NULL END) as max_duration,"
-        "         SUM(last_sync_rows) as rows_transferred,"
-        "         SUM(last_sync_bytes) as bytes_transferred,"
-        "         MAX(last_error) as last_error"
-        "  FROM metadata.catalog "
-        "  GROUP BY db_engine"
+        "  SELECT c.db_engine,"
+        "         COUNT(DISTINCT (c.schema_name, c.table_name)) as "
+        "total_transfers,"
+        "         COUNT(DISTINCT (c.schema_name, c.table_name)) FILTER (WHERE "
+        "c.status IN ('PERFECT_MATCH', 'LISTENING_CHANGES')) as success_count,"
+        "         COUNT(DISTINCT (c.schema_name, c.table_name)) FILTER (WHERE "
+        "c.status = 'ERROR') as error_count,"
+        "         COUNT(DISTINCT (c.schema_name, c.table_name)) FILTER (WHERE "
+        "c.active = true) as active_transfers,"
+        "         AVG(tm.transfer_duration_ms) as avg_duration,"
+        "         MAX(tm.transfer_duration_ms) as max_duration,"
+        "         SUM(tm.records_transferred) as rows_transferred,"
+        "         SUM(tm.bytes_transferred) as bytes_transferred,"
+        "         MAX(tm.error_message) as last_error"
+        "  FROM metadata.catalog c"
+        "  LEFT JOIN metadata.transfer_metrics tm ON c.schema_name = "
+        "tm.schema_name AND "
+        "c.table_name = tm.table_name"
+        "  GROUP BY c.db_engine"
         ")"
         "SELECT db_engine, total_transfers, success_count, error_count, "
         "active_transfers,"
         "       avg_duration, max_duration, rows_transferred, "
         "bytes_transferred, last_error,"
         "       CASE WHEN avg_duration IS NOT NULL THEN rows_transferred / "
-        "NULLIF(EXTRACT(EPOCH FROM avg_duration), 0) ELSE 0 END as "
+        "NULLIF(avg_duration / 1000.0, 0) ELSE 0 END as "
         "rows_per_second "
         "FROM transfer_stats");
 
@@ -129,22 +131,27 @@ void SyncReporter::collectPerformanceMetrics(pqxx::connection &pgConn,
       stats.engineMetrics[engine] = std::move(metrics);
     }
 
-    // Get current transfer progress
+    // Get current transfer progress from transfer_metrics
     auto currentTransfer =
-        txn.exec("SELECT schema_name, table_name, db_engine, "
-                 "       total_rows, processed_rows, "
-                 "       CEIL(total_rows::float / " +
+        txn.exec("SELECT c.schema_name, c.table_name, c.db_engine, "
+                 "       tm.records_transferred as total_rows, "
+                 "       tm.records_transferred as processed_rows, "
+                 "       CEIL(tm.records_transferred::float / " +
                  std::to_string(SyncConfig::getChunkSize()) +
                  ") as total_chunks, "
-                 "       CEIL(processed_rows::float / " +
+                 "       CEIL(tm.records_transferred::float / " +
                  std::to_string(SyncConfig::getChunkSize()) +
                  ") as current_chunk, "
-                 "       CASE WHEN last_sync_start IS NOT NULL "
-                 "            THEN EXTRACT(EPOCH FROM (NOW() - "
-                 "last_sync_start)) * processed_rows / NULLIF(total_rows, 0) "
+                 "       CASE WHEN tm.started_at IS NOT NULL AND "
+                 "tm.transfer_duration_ms IS NOT NULL "
+                 "            THEN tm.records_transferred / "
+                 "NULLIF(tm.transfer_duration_ms / 1000.0, 0) "
                  "            ELSE 0 END as rows_per_second "
-                 "FROM metadata.catalog "
-                 "WHERE status = 'PROCESSING' "
+                 "FROM metadata.catalog c "
+                 "LEFT JOIN metadata.transfer_metrics tm ON c.schema_name = "
+                 "tm.schema_name AND c.table_name = tm.table_name "
+                 "WHERE c.status = 'PROCESSING' "
+                 "ORDER BY tm.started_at DESC "
                  "LIMIT 1");
 
     if (!currentTransfer.empty()) {
@@ -687,13 +694,17 @@ void SyncReporter::collectRecentActivityMetrics(pqxx::connection &pgConn,
     pqxx::work txn(pgConn);
 
     auto results = txn.exec1(
-        "SELECT COUNT(*) FILTER (WHERE last_sync_start > NOW() - INTERVAL '1 "
+        "SELECT COUNT(*) FILTER (WHERE tm.started_at > NOW() - INTERVAL '1 "
         "hour') as transfers_last_hour, "
-        "       COUNT(*) FILTER (WHERE status = 'ERROR' AND last_error_time > "
+        "       COUNT(*) FILTER (WHERE c.status = 'ERROR' AND tm.completed_at "
+        "> "
         "NOW() - INTERVAL '1 hour') as errors_last_hour, "
-        "       MAX(CASE WHEN status = 'ERROR' THEN last_error ELSE NULL END) "
-        "as last_error "
-        "FROM metadata.catalog");
+        "       MAX(CASE WHEN c.status = 'ERROR' THEN tm.error_message ELSE "
+        "NULL END) as last_error "
+        "FROM metadata.catalog c "
+        "LEFT JOIN metadata.transfer_metrics tm ON c.schema_name = "
+        "tm.schema_name AND "
+        "c.table_name = tm.table_name");
 
     stats.transfersLastHour = results[0].as<int>();
     stats.errorsLastHour = results[1].as<int>();
