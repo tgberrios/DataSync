@@ -168,15 +168,19 @@ public:
 
         // Luego ejecutar la query sin prefijo de base de datos
         std::string query =
-            "SELECT c.name AS COLUMN_NAME, t.name AS DATA_TYPE, "
+            "SELECT c.name AS COLUMN_NAME, tp.name AS DATA_TYPE, "
             "CASE WHEN c.is_nullable = 1 THEN 'YES' ELSE 'NO' END as "
             "IS_NULLABLE, "
             "CASE WHEN pk.column_id IS NOT NULL THEN 'YES' ELSE 'NO' END as "
             "IS_PRIMARY_KEY, "
-            "c.max_length AS CHARACTER_MAXIMUM_LENGTH, NULL AS COLUMN_DEFAULT "
+            "c.max_length AS CHARACTER_MAXIMUM_LENGTH, "
+            "c.precision AS NUMERIC_PRECISION, "
+            "c.scale AS NUMERIC_SCALE, "
+            "NULL AS COLUMN_DEFAULT "
             "FROM sys.columns c "
             "INNER JOIN sys.tables t ON c.object_id = t.object_id "
             "INNER JOIN sys.schemas s ON t.schema_id = s.schema_id "
+            "INNER JOIN sys.types tp ON c.user_type_id = tp.user_type_id "
             "LEFT JOIN ( "
             "  SELECT ic.column_id, ic.object_id "
             "  FROM sys.indexes i "
@@ -215,7 +219,7 @@ public:
         std::string detectedTimeColumn = "";
 
         for (const auto &col : columns) {
-          if (col.size() < 6)
+          if (col.size() < 8)
             continue;
 
           std::string colName = col[0];
@@ -225,7 +229,9 @@ public:
           std::string nullable = (col[2] == "YES") ? "" : " NOT NULL";
           std::string isPrimaryKey = col[3];
           std::string maxLength = col[4];
-          std::string columnDefault = col[5];
+          std::string numericPrecision = col[5];
+          std::string numericScale = col[6];
+          std::string columnDefault = col[7];
 
           std::string pgType = "TEXT";
           if (dataType == "int") {
@@ -238,8 +244,22 @@ public:
             pgType = "SMALLINT";
           } else if (dataType == "bit") {
             pgType = "BOOLEAN";
-          } else if (dataType == "decimal" || dataType == "numeric") {
-            pgType = "NUMERIC";
+          } else if (dataType == "decimal") {
+            // Para decimal, usar la precisión y escala de MSSQL
+            if (!numericPrecision.empty() && numericPrecision != "NULL" &&
+                !numericScale.empty() && numericScale != "NULL") {
+              pgType = "NUMERIC(" + numericPrecision + "," + numericScale + ")";
+            } else {
+              pgType = "NUMERIC(18,4)";
+            }
+          } else if (dataType == "numeric") {
+            // Para numeric, usar la precisión y escala de MSSQL
+            if (!numericPrecision.empty() && numericPrecision != "NULL" &&
+                !numericScale.empty() && numericScale != "NULL") {
+              pgType = "NUMERIC(" + numericPrecision + "," + numericScale + ")";
+            } else {
+              pgType = "NUMERIC(18,4)";
+            }
           } else if (dataType == "float") {
             pgType = "REAL";
           } else if (dataType == "real") {
@@ -498,15 +518,18 @@ public:
         // Luego ejecutar la query sin prefijo de base de datos
         auto columns = executeQueryMSSQL(
             mssqlConn->dbc,
-            "SELECT c.name AS COLUMN_NAME, t.name AS DATA_TYPE, "
+            "SELECT c.name AS COLUMN_NAME, tp.name AS DATA_TYPE, "
             "CASE WHEN c.is_nullable = 1 THEN 'YES' ELSE 'NO' END as "
             "IS_NULLABLE, "
             "CASE WHEN pk.column_id IS NOT NULL THEN 'YES' ELSE 'NO' END as "
             "IS_PRIMARY_KEY, "
-            "c.max_length AS CHARACTER_MAXIMUM_LENGTH "
+            "c.max_length AS CHARACTER_MAXIMUM_LENGTH, "
+            "c.precision AS NUMERIC_PRECISION, "
+            "c.scale AS NUMERIC_SCALE "
             "FROM sys.columns c "
             "INNER JOIN sys.tables t ON c.object_id = t.object_id "
             "INNER JOIN sys.schemas s ON t.schema_id = s.schema_id "
+            "INNER JOIN sys.types tp ON c.user_type_id = tp.user_type_id "
             "LEFT JOIN ( "
             "  SELECT ic.column_id, ic.object_id "
             "  FROM sys.indexes i "
@@ -529,7 +552,7 @@ public:
         std::vector<bool> columnNullable;
 
         for (const auto &col : columns) {
-          if (col.size() < 5)
+          if (col.size() < 7)
             continue;
 
           std::string colName = col[0];
@@ -539,6 +562,8 @@ public:
 
           std::string dataType = col[1];
           std::string maxLength = col[4];
+          std::string numericPrecision = col[5];
+          std::string numericScale = col[6];
 
           std::string pgType = "TEXT";
           if (dataType == "varchar" || dataType == "nvarchar") {
@@ -546,6 +571,14 @@ public:
                 (!maxLength.empty() && maxLength != "NULL" && maxLength != "-1")
                     ? "VARCHAR(" + maxLength + ")"
                     : "VARCHAR";
+          } else if (dataType == "decimal" || dataType == "numeric") {
+            // Para decimal/numeric, usar la precisión y escala de MSSQL
+            if (!numericPrecision.empty() && numericPrecision != "NULL" &&
+                !numericScale.empty() && numericScale != "NULL") {
+              pgType = "NUMERIC(" + numericPrecision + "," + numericScale + ")";
+            } else {
+              pgType = "NUMERIC(18,4)";
+            }
           } else if (dataTypeMap.count(dataType)) {
             pgType = dataTypeMap[dataType];
           }

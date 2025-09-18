@@ -1,7 +1,7 @@
 -- Table DDL for SportBook.usuarios
 -- Engine: MariaDB
 -- Database: SportBook
--- Generated: 1758155956
+-- Generated: 1758160472
 
 CREATE TABLE `usuarios` (
   `id` int(11) NOT NULL DEFAULT 0,
