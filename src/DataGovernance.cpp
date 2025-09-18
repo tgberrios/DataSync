@@ -278,9 +278,9 @@ void DataGovernance::analyzeDataQuality(pqxx::connection &conn,
       }
     }
 
-    std::string duplicateQuery = "SELECT COUNT(*) - COUNT(DISTINCT *) FROM \"" +
-                                 escapeSQL(schema_name) + "\".\"" +
-                                 escapeSQL(table_name) + "\";";
+    std::string duplicateQuery =
+        "SELECT COUNT(*) - COUNT(DISTINCT ctid) FROM \"" +
+        escapeSQL(schema_name) + "\".\"" + escapeSQL(table_name) + "\";";
     try {
       auto duplicateResult = txn.exec(duplicateQuery);
       if (!duplicateResult.empty() && metadata.total_rows > 0) {

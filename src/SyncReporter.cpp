@@ -91,9 +91,11 @@ void SyncReporter::collectPerformanceMetrics(pqxx::connection &pgConn,
         "'LISTENING_CHANGES')) as success_count,"
         "         COUNT(*) FILTER (WHERE status = 'ERROR') as error_count,"
         "         COUNT(*) FILTER (WHERE active = true) as active_transfers,"
-        "         AVG(CASE WHEN last_sync_duration > 0 THEN last_sync_duration "
+        "         AVG(CASE WHEN last_sync_duration IS NOT NULL THEN "
+        "last_sync_duration "
         "ELSE NULL END) as avg_duration,"
-        "         MAX(CASE WHEN last_sync_duration > 0 THEN last_sync_duration "
+        "         MAX(CASE WHEN last_sync_duration IS NOT NULL THEN "
+        "last_sync_duration "
         "ELSE NULL END) as max_duration,"
         "         SUM(last_sync_rows) as rows_transferred,"
         "         SUM(last_sync_bytes) as bytes_transferred,"
@@ -105,8 +107,9 @@ void SyncReporter::collectPerformanceMetrics(pqxx::connection &pgConn,
         "active_transfers,"
         "       avg_duration, max_duration, rows_transferred, "
         "bytes_transferred, last_error,"
-        "       CASE WHEN avg_duration > 0 THEN rows_transferred / "
-        "NULLIF(avg_duration, 0) ELSE 0 END as rows_per_second "
+        "       CASE WHEN avg_duration IS NOT NULL THEN rows_transferred / "
+        "NULLIF(EXTRACT(EPOCH FROM avg_duration), 0) ELSE 0 END as "
+        "rows_per_second "
         "FROM transfer_stats");
 
     for (const auto &row : results) {
@@ -128,29 +131,32 @@ void SyncReporter::collectPerformanceMetrics(pqxx::connection &pgConn,
 
     // Get current transfer progress
     auto currentTransfer =
-        txn.exec1("SELECT schema_name, table_name, db_engine, "
-                  "       total_rows, processed_rows, "
-                  "       CEIL(total_rows::float / $1) as total_chunks, "
-                  "       CEIL(processed_rows::float / $1) as current_chunk, "
-                  "       CASE WHEN last_sync_start IS NOT NULL "
-                  "            THEN EXTRACT(EPOCH FROM (NOW() - "
-                  "last_sync_start)) * processed_rows / NULLIF(total_rows, 0) "
-                  "            ELSE 0 END as rows_per_second "
-                  "FROM metadata.catalog "
-                  "WHERE status = 'PROCESSING' "
-                  "LIMIT 1",
-                  std::to_string(SyncConfig::getChunkSize()));
+        txn.exec("SELECT schema_name, table_name, db_engine, "
+                 "       total_rows, processed_rows, "
+                 "       CEIL(total_rows::float / " +
+                 std::to_string(SyncConfig::getChunkSize()) +
+                 ") as total_chunks, "
+                 "       CEIL(processed_rows::float / " +
+                 std::to_string(SyncConfig::getChunkSize()) +
+                 ") as current_chunk, "
+                 "       CASE WHEN last_sync_start IS NOT NULL "
+                 "            THEN EXTRACT(EPOCH FROM (NOW() - "
+                 "last_sync_start)) * processed_rows / NULLIF(total_rows, 0) "
+                 "            ELSE 0 END as rows_per_second "
+                 "FROM metadata.catalog "
+                 "WHERE status = 'PROCESSING' "
+                 "LIMIT 1");
 
     if (!currentTransfer.empty()) {
-      stats.currentTransfer.tableName = currentTransfer[0].as<std::string>() +
-                                        "." +
-                                        currentTransfer[1].as<std::string>();
-      stats.currentTransfer.engineType = currentTransfer[2].as<std::string>();
-      stats.currentTransfer.totalRows = currentTransfer[3].as<size_t>();
-      stats.currentTransfer.processedRows = currentTransfer[4].as<size_t>();
-      stats.currentTransfer.totalChunks = currentTransfer[5].as<size_t>();
-      stats.currentTransfer.currentChunk = currentTransfer[6].as<size_t>();
-      stats.currentTransfer.rowsPerSecond = currentTransfer[7].as<double>();
+      const auto &row = currentTransfer[0];
+      stats.currentTransfer.tableName =
+          row[0].as<std::string>() + "." + row[1].as<std::string>();
+      stats.currentTransfer.engineType = row[2].as<std::string>();
+      stats.currentTransfer.totalRows = row[3].as<size_t>();
+      stats.currentTransfer.processedRows = row[4].as<size_t>();
+      stats.currentTransfer.totalChunks = row[5].as<size_t>();
+      stats.currentTransfer.currentChunk = row[6].as<size_t>();
+      stats.currentTransfer.rowsPerSecond = row[7].as<double>();
       stats.currentTransfer.inProgress = true;
     }
 
@@ -178,7 +184,7 @@ void SyncReporter::collectDatabaseHealthMetrics(pqxx::connection &pgConn,
     stats.totalConnections = connStats[1].as<int>();
 
     // Calculate uptime string
-    int uptime = connStats[2].as<int>();
+    int uptime = static_cast<int>(connStats[2].as<double>());
     int days = uptime / 86400;
     int hours = (uptime % 86400) / 3600;
     int minutes = (uptime % 3600) / 60;

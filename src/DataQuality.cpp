@@ -140,12 +140,10 @@ bool DataQuality::checkDuplicates(pqxx::connection &conn,
   try {
     pqxx::work txn(conn);
 
-    // Count duplicates across all columns
-    auto result = txn.exec("WITH duplicates AS ("
-                           "  SELECT COUNT(*) - COUNT(DISTINCT *) as dup_count "
-                           "  FROM " +
-                           metrics.schema_name + "." + metrics.table_name +
-                           ") SELECT COALESCE(dup_count, 0) FROM duplicates");
+    // Count duplicates using a simpler approach
+    auto result =
+        txn.exec("SELECT COUNT(*) - COUNT(DISTINCT ctid) as dup_count FROM " +
+                 metrics.schema_name + "." + metrics.table_name);
 
     metrics.duplicate_count = result[0][0].as<size_t>();
 
