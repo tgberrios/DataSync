@@ -182,8 +182,8 @@ const Dashboard = () => {
             <Grid>
               <Value>Perfect Match: {stats.syncStatus.perfectMatch}</Value>
               <Value>Listening Changes: {stats.syncStatus.listeningChanges}</Value>
-              <Value>Full Load (Active): {stats.syncStatus.fullLoadActive}</Value>
-              <Value>Full Load (Inactive): {stats.syncStatus.fullLoadInactive}</Value>
+              <Value>Active: {stats.syncStatus.fullLoadActive}</Value>
+              <Value>Inactive: {stats.syncStatus.fullLoadInactive}</Value>
               <Value>No Data: {stats.syncStatus.noData}</Value>
               <Value>Errors: {stats.syncStatus.errors}</Value>
             </Grid>

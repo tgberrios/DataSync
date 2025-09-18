@@ -1269,13 +1269,8 @@ void DDLExporter::exportMSSQLDDL(const SchemaInfo &schema) {
     if (database.empty())
       database = schema.schema_name;
 
-    // Build MSSQL connection string
-    std::string odbcConnStr = "DRIVER={ODBC Driver 18 for SQL Server};";
-    odbcConnStr += "SERVER=" + server + ";";
-    odbcConnStr += "DATABASE=master;";
-    odbcConnStr += "UID=sa;";
-    odbcConnStr += "PWD=Yucaquemada1;";
-    odbcConnStr += "TrustServerCertificate=yes;";
+    // Get MSSQL connection string from configuration
+    std::string odbcConnStr = getConnectionString(schema);
 
     // Initialize ODBC
     SQLHENV env;
