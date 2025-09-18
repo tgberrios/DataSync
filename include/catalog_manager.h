@@ -120,11 +120,11 @@ public:
             "AND table_type = 'BASE TABLE' "
             "ORDER BY table_schema, table_name;";
 
-        std::cerr << "Executing discovery query..." << std::endl;
+        // std::cerr << "Executing discovery query..." << std::endl;
         auto discoveredTables =
             executeQueryMariaDB(mariaConn.get(), discoverQuery);
-        std::cerr << "Found " << discoveredTables.size() << " tables"
-                  << std::endl;
+        // std::cerr << "Found " << discoveredTables.size() << " tables"
+        //<< std::endl;
 
         for (const auto &row : discoveredTables) {
           if (row.size() < 2)
@@ -132,8 +132,8 @@ public:
 
           std::string schemaName = row[0];
           std::string tableName = row[1];
-          std::cerr << "Processing table: " << schemaName << "." << tableName
-                    << std::endl;
+          // std::cerr << "Processing table: " << schemaName << "." << tableName
+          //<< std::endl;
 
           {
             // Detectar columna de tiempo con prioridad
@@ -160,8 +160,8 @@ public:
         }
       }
     } catch (const std::exception &e) {
-      std::cerr << "Error in syncCatalogMariaDBToPostgres: " << e.what()
-                << std::endl;
+      // std::cerr << "Error in syncCatalogMariaDBToPostgres: " << e.what()
+      //<< std::endl;
     }
   }
 
