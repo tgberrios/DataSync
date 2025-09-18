@@ -3,6 +3,7 @@
 
 #include "Config.h"
 #include "logger.h"
+#include <algorithm>
 #include <bson/bson.h>
 #include <json/json.h>
 #include <mongoc/mongoc.h>
@@ -45,7 +46,8 @@ public:
             continue;
           }
 
-          std::string lowerSchemaName = toLowerCase(schemaName);
+          std::string cleanSchemaName = cleanSchemaNameForPostgres(schemaName);
+          std::string lowerSchemaName = toLowerCase(cleanSchemaName);
           createSchemaIfNotExists(txn, lowerSchemaName);
 
           std::string createTableQuery = buildCreateTableQuery(
@@ -159,6 +161,26 @@ private:
     std::string result = str;
     std::transform(result.begin(), result.end(), result.begin(), ::tolower);
     return result;
+  }
+
+  std::string cleanSchemaNameForPostgres(const std::string &schemaName) {
+    std::string cleaned = schemaName;
+    // Remove semicolons and other problematic characters
+    cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), ';'),
+                  cleaned.end());
+    cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '.'),
+                  cleaned.end());
+    cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '-'),
+                  cleaned.end());
+    cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), ' '),
+                  cleaned.end());
+
+    // If empty after cleaning, use default
+    if (cleaned.empty()) {
+      cleaned = "default_schema";
+    }
+
+    return cleaned;
   }
 
   void createSchemaIfNotExists(pqxx::work &txn, const std::string &schemaName) {
@@ -278,9 +300,14 @@ private:
                    "Processing RESET table: " + schemaName + "." + tableName);
       {
         pqxx::work txn(pgConn);
-        std::string lowerSchemaName = toLowerCase(schemaName);
+        std::string cleanSchemaName = cleanSchemaNameForPostgres(schemaName);
+        std::string lowerSchemaName = toLowerCase(cleanSchemaName);
         txn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" + tableName +
                  "\" CASCADE;");
+        txn.exec("UPDATE metadata.catalog SET last_offset='0' WHERE "
+                 "schema_name='" +
+                 escapeSQL(schemaName) + "' AND table_name='" +
+                 escapeSQL(tableName) + "';");
         txn.commit();
       }
       updateStatus(pgConn, schemaName, tableName, "FULL_LOAD", 0);
@@ -288,6 +315,36 @@ private:
                    "Table " + schemaName + "." + tableName +
                        " reset completed, status changed to FULL_LOAD");
       return;
+    }
+
+    if (status == "FULL_LOAD") {
+      Logger::info("processTable", "Processing FULL_LOAD table: " + schemaName +
+                                       "." + tableName);
+
+      pqxx::work txn(pgConn);
+      auto offsetCheck = txn.exec(
+          "SELECT last_offset FROM metadata.catalog WHERE schema_name='" +
+          escapeSQL(schemaName) + "' AND table_name='" + escapeSQL(tableName) +
+          "';");
+
+      bool shouldTruncate = true;
+      if (!offsetCheck.empty() && !offsetCheck[0][0].is_null()) {
+        std::string currentOffset = offsetCheck[0][0].as<std::string>();
+        if (currentOffset != "0" && !currentOffset.empty()) {
+          shouldTruncate = false;
+        }
+      }
+
+      if (shouldTruncate) {
+        std::string cleanSchemaName = cleanSchemaNameForPostgres(schemaName);
+        Logger::info("processTable",
+                     "Truncating table: " + toLowerCase(cleanSchemaName) + "." +
+                         tableName);
+        txn.exec("TRUNCATE TABLE \"" + toLowerCase(cleanSchemaName) + "\".\"" +
+                 tableName + "\" CASCADE;");
+        Logger::debug("processTable", "Table truncated successfully");
+      }
+      txn.commit();
     }
 
     auto mongoClient = connectMongoDB(mongoConnStr);
@@ -340,7 +397,8 @@ private:
   int getTargetCount(pqxx::connection &pgConn, const std::string &schemaName,
                      const std::string &tableName) {
     try {
-      std::string lowerSchemaName = toLowerCase(schemaName);
+      std::string cleanSchemaName = cleanSchemaNameForPostgres(schemaName);
+      std::string lowerSchemaName = toLowerCase(cleanSchemaName);
       pqxx::connection countConn(DatabaseConfig::getPostgresConnectionString());
       pqxx::work txn(countConn);
       auto result = txn.exec("SELECT COUNT(*) FROM \"" + lowerSchemaName +
@@ -422,8 +480,9 @@ private:
   std::string buildInsertQuery(const bson_t *doc, const std::string &schemaName,
                                const std::string &tableName) {
     try {
-      std::string insertQuery =
-          "INSERT INTO \"" + schemaName + "\".\"" + tableName + "\" VALUES (";
+      std::string cleanSchemaName = cleanSchemaNameForPostgres(schemaName);
+      std::string insertQuery = "INSERT INTO \"" + cleanSchemaName + "\".\"" +
+                                tableName + "\" VALUES (";
       std::vector<std::string> values;
 
       bson_iter_t iter;

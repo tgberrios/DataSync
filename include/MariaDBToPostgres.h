@@ -368,54 +368,28 @@ public:
 
         // Si sourceCount = targetCount, verificar si hay cambios incrementales
         if (sourceCount == targetCount) {
-          // std::cerr << "Source count equals target count, checking for
-          // incremental changes" << std::endl; Si tiene columna de tiempo,
-          // verificar cambios incrementales
-          if (!table.last_sync_column.empty()) {
-            // std::cerr << "Has time column: " << table.last_sync_column <<
-            // std::endl; Obtener MAX de MariaDB y PostgreSQL para comparar
-            std::string mariaMaxQuery = "SELECT MAX(`" +
-                                        table.last_sync_column + "`) FROM `" +
-                                        schema_name + "`.`" + table_name + "`;";
-            std::string pgMaxQuery = "SELECT MAX(\"" + table.last_sync_column +
-                                     "\") FROM \"" + lowerSchemaName + "\".\"" +
-                                     table_name + "\";";
+          // Verificar si hay datos nuevos usando last_offset
+          size_t lastOffset = 0;
+          try {
+            pqxx::work txn(pgConn);
+            auto offsetRes = txn.exec(
+                "SELECT last_offset FROM metadata.catalog WHERE schema_name='" +
+                escapeSQL(schema_name) + "' AND table_name='" +
+                escapeSQL(table_name) + "';");
+            txn.commit();
 
-            try {
-              // Obtener MAX de MariaDB
-              auto mariaMaxRes =
-                  executeQueryMariaDB(mariadbConn, mariaMaxQuery);
-              std::string mariaMaxTime = "";
-              if (!mariaMaxRes.empty() && !mariaMaxRes[0][0].empty()) {
-                mariaMaxTime = mariaMaxRes[0][0];
-              }
-
-              // Obtener MAX de PostgreSQL
-              pqxx::work txnPg(pgConn);
-              auto pgMaxRes = txnPg.exec(pgMaxQuery);
-              txnPg.commit();
-
-              std::string pgMaxTime = "";
-              if (!pgMaxRes.empty() && !pgMaxRes[0][0].is_null()) {
-                pgMaxTime = pgMaxRes[0][0].as<std::string>();
-              }
-
-              if (mariaMaxTime == pgMaxTime) {
-                updateStatus(pgConn, schema_name, table_name, "PERFECT_MATCH",
-                             targetCount);
-              } else {
-                updateStatus(pgConn, schema_name, table_name,
-                             "LISTENING_CHANGES", targetCount);
-              }
-            } catch (const std::exception &e) {
-              Logger::error("transferDataMariaDBToPostgres",
-                            "Error comparing MAX times: " +
-                                std::string(e.what()));
-              updateStatus(pgConn, schema_name, table_name, "LISTENING_CHANGES",
-                           targetCount);
+            if (!offsetRes.empty() && !offsetRes[0][0].is_null()) {
+              lastOffset = std::stoul(offsetRes[0][0].as<std::string>());
             }
-          } else {
+          } catch (...) {
+            lastOffset = 0;
+          }
+
+          if (lastOffset >= sourceCount) {
             updateStatus(pgConn, schema_name, table_name, "PERFECT_MATCH",
+                         targetCount);
+          } else {
+            updateStatus(pgConn, schema_name, table_name, "LISTENING_CHANGES",
                          targetCount);
           }
           continue;
@@ -554,42 +528,7 @@ public:
           std::string selectQuery =
               "SELECT * FROM `" + schema_name + "`.`" + table_name + "`";
 
-          // Para sincronización incremental, usar el MAX de PostgreSQL como
-          // punto de partida (SOLO si NO es FULL_LOAD)
-          if (!table.last_sync_column.empty() && table.status != "FULL_LOAD") {
-            std::string pgMaxQuery = "SELECT MAX(\"" + table.last_sync_column +
-                                     "\") FROM \"" + lowerSchemaName + "\".\"" +
-                                     table_name + "\";";
-
-            try {
-              pqxx::work txnPg(pgConn);
-              auto pgMaxRes = txnPg.exec(pgMaxQuery);
-              txnPg.commit();
-
-              if (!pgMaxRes.empty() && !pgMaxRes[0][0].is_null()) {
-                std::string pgMaxTime = pgMaxRes[0][0].as<std::string>();
-                // std::cerr << "Using PostgreSQL MAX(" <<
-                // table.last_sync_column
-                //           << ") for incremental sync: " << pgMaxTime
-                //           << std::endl;
-                selectQuery += " WHERE `" + table.last_sync_column + "` > '" +
-                               pgMaxTime + "'";
-              } else if (!table.last_sync_time.empty()) {
-                // std::cerr << "Using last_sync_time for incremental sync: "
-                //           << table.last_sync_time << std::endl;
-                selectQuery += " WHERE `" + table.last_sync_column + "` > '" +
-                               table.last_sync_time + "'";
-              }
-            } catch (const std::exception &e) {
-              Logger::error("transferDataMariaDBToPostgres",
-                            "Error getting PostgreSQL MAX: " +
-                                std::string(e.what()));
-            }
-          } else if (table.status == "FULL_LOAD") {
-            // std::cerr << "FULL_LOAD mode: fetching ALL data without time
-            // filter" << std::endl;
-          }
-
+          // Usar last_offset para paginación simple y eficiente
           selectQuery += " LIMIT " + std::to_string(CHUNK_SIZE) + " OFFSET " +
                          std::to_string(targetCount) + ";";
 
