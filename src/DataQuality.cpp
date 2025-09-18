@@ -1,4 +1,25 @@
 #include "DataQuality.h"
+#include <algorithm>
+
+std::string cleanSchemaNameForPostgres(const std::string &schemaName) {
+  std::string cleaned = schemaName;
+  // Remove semicolons and other problematic characters
+  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), ';'),
+                cleaned.end());
+  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '.'),
+                cleaned.end());
+  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '-'),
+                cleaned.end());
+  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), ' '),
+                cleaned.end());
+
+  // If empty after cleaning, use default
+  if (cleaned.empty()) {
+    cleaned = "default_schema";
+  }
+
+  return cleaned;
+}
 
 bool DataQuality::validateTable(pqxx::connection &conn,
                                 const std::string &schema,
@@ -87,10 +108,11 @@ bool DataQuality::checkDataTypes(pqxx::connection &conn,
       std::string type = row[1].as<std::string>();
 
       // Check for type-specific issues
-      auto type_check = txn.exec("SELECT COUNT(*) FROM " + metrics.schema_name +
-                                 "." + metrics.table_name + " WHERE " + column +
-                                 " IS NOT NULL AND " + "NOT pg_typeof(" +
-                                 column + ")::text = " + txn.quote(type));
+      std::string cleanSchema = cleanSchemaNameForPostgres(metrics.schema_name);
+      auto type_check = txn.exec(
+          "SELECT COUNT(*) FROM \"" + cleanSchema + "\".\"" +
+          metrics.table_name + "\" WHERE \"" + column + "\" IS NOT NULL AND " +
+          "NOT pg_typeof(\"" + column + "\")::text = " + txn.quote(type));
 
       size_t invalid_count = type_check[0][0].as<size_t>();
       if (invalid_count > 0) {
@@ -115,16 +137,34 @@ bool DataQuality::checkNullCounts(pqxx::connection &conn,
   try {
     pqxx::work txn(conn);
 
+    // Check if table exists first
+    std::string cleanSchema = cleanSchemaNameForPostgres(metrics.schema_name);
+    auto tableExists =
+        txn.exec("SELECT COUNT(*) FROM information_schema.tables "
+                 "WHERE table_schema = " +
+                 txn.quote(cleanSchema) +
+                 " AND table_name = " + txn.quote(metrics.table_name));
+
+    if (tableExists[0][0].as<int>() == 0) {
+      Logger::debug("DataQuality",
+                    "Table " + cleanSchema + "." + metrics.table_name +
+                        " does not exist, skipping null count check");
+      metrics.total_rows = 0;
+      metrics.null_count = 0;
+      txn.commit();
+      return true;
+    }
+
     // Get total rows and null counts
     auto result = txn.exec(
         "SELECT COUNT(*) as total, "
         "SUM(CASE WHEN EXISTS (SELECT 1 FROM json_each_text(to_json(t)) j "
         "WHERE j.value IS NULL) THEN 1 ELSE 0 END) as null_rows "
-        "FROM " +
-        metrics.schema_name + "." + metrics.table_name + " t");
+        "FROM \"" +
+        cleanSchema + "\".\"" + metrics.table_name + "\" t");
 
-    metrics.total_rows = result[0][0].as<size_t>();
-    metrics.null_count = result[0][1].as<size_t>();
+    metrics.total_rows = result[0][0].is_null() ? 0 : result[0][0].as<size_t>();
+    metrics.null_count = result[0][1].is_null() ? 0 : result[0][1].as<size_t>();
 
     txn.commit();
     return true;
@@ -140,12 +180,30 @@ bool DataQuality::checkDuplicates(pqxx::connection &conn,
   try {
     pqxx::work txn(conn);
 
+    // Check if table exists first
+    std::string cleanSchema = cleanSchemaNameForPostgres(metrics.schema_name);
+    auto tableExists =
+        txn.exec("SELECT COUNT(*) FROM information_schema.tables "
+                 "WHERE table_schema = " +
+                 txn.quote(cleanSchema) +
+                 " AND table_name = " + txn.quote(metrics.table_name));
+
+    if (tableExists[0][0].as<int>() == 0) {
+      Logger::debug("DataQuality",
+                    "Table " + cleanSchema + "." + metrics.table_name +
+                        " does not exist, skipping duplicate check");
+      metrics.duplicate_count = 0;
+      txn.commit();
+      return true;
+    }
+
     // Count duplicates using a simpler approach
     auto result =
-        txn.exec("SELECT COUNT(*) - COUNT(DISTINCT ctid) as dup_count FROM " +
-                 metrics.schema_name + "." + metrics.table_name);
+        txn.exec("SELECT COUNT(*) - COUNT(DISTINCT ctid) as dup_count FROM \"" +
+                 cleanSchema + "\".\"" + metrics.table_name + "\"");
 
-    metrics.duplicate_count = result[0][0].as<size_t>();
+    metrics.duplicate_count =
+        result[0][0].is_null() ? 0 : result[0][0].as<size_t>();
 
     txn.commit();
     return true;
@@ -199,14 +257,29 @@ std::string DataQuality::calculateChecksum(pqxx::connection &conn,
   try {
     pqxx::work txn(conn);
 
+    // Check if table exists first
+    std::string cleanSchema = cleanSchemaNameForPostgres(schema);
+    auto tableExists = txn.exec(
+        "SELECT COUNT(*) FROM information_schema.tables "
+        "WHERE table_schema = " +
+        txn.quote(cleanSchema) + " AND table_name = " + txn.quote(table));
+
+    if (tableExists[0][0].as<int>() == 0) {
+      Logger::debug("DataQuality",
+                    "Table " + cleanSchema + "." + table +
+                        " does not exist, skipping checksum calculation");
+      txn.commit();
+      return "";
+    }
+
     // Calculate MD5 hash of the entire table content
     auto result =
         txn.exec("SELECT MD5(CAST((SELECT string_agg(CAST(t AS text), '') "
-                 "FROM (SELECT * FROM " +
-                 schema + "." + table + " ORDER BY 1) t) AS text))");
+                 "FROM (SELECT * FROM \"" +
+                 cleanSchema + "\".\"" + table + "\" ORDER BY 1) t) AS text))");
 
     txn.commit();
-    return result[0][0].as<std::string>();
+    return result[0][0].is_null() ? "" : result[0][0].as<std::string>();
   } catch (const std::exception &e) {
     Logger::error("DataQuality",
                   "Error calculating checksum: " + std::string(e.what()));
