@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import EditModal from './EditModal';
 import styled from 'styled-components';
 import { format } from 'date-fns';
@@ -126,6 +126,107 @@ const ErrorMessage = styled.div`
   border: 1px solid #ef9a9a;
 `;
 
+// Pagination styling
+const Pagination = styled.div`
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  margin-top: 20px;
+  padding: 15px;
+`;
+
+const PageButton = styled.button<{ $active?: boolean }>`
+  padding: 5px 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: ${props => props.$active ? '#333' : 'white'};
+  color: ${props => props.$active ? 'white' : '#333'};
+  cursor: pointer;
+  font-family: monospace;
+  
+  &:hover {
+    background: ${props => props.$active ? '#333' : '#f5f5f5'};
+  }
+  
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+`;
+
+const PaginationInfo = styled.div`
+  text-align: center;
+  margin-bottom: 10px;
+  color: #666;
+  font-size: 0.9em;
+`;
+
+const ResetButton = styled.button`
+  padding: 8px 15px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+  font-family: monospace;
+  
+  &:hover {
+    background: #f5f5f5;
+  }
+`;
+
+const SearchContainer = styled.div`
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+  padding: 15px;
+  background: #f9f9f9;
+  border-radius: 4px;
+  border: 1px solid #e0e0e0;
+`;
+
+const SearchInput = styled.input`
+  flex: 1;
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 14px;
+  
+  &:focus {
+    outline: none;
+    border-color: #333;
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.1);
+  }
+`;
+
+const SearchButton = styled.button`
+  padding: 10px 20px;
+  border: 1px solid #333;
+  border-radius: 4px;
+  background: #333;
+  color: white;
+  cursor: pointer;
+  font-family: monospace;
+  
+  &:hover {
+    background: #555;
+  }
+`;
+
+const ClearSearchButton = styled.button`
+  padding: 10px 15px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+  font-family: monospace;
+  
+  &:hover {
+    background: #f5f5f5;
+  }
+`;
+
 const Catalog = () => {
   const [filter, setFilter] = useState({
     engine: '',
@@ -133,10 +234,20 @@ const Catalog = () => {
     active: ''
   });
 
+  const [search, setSearch] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+
   const [data, setData] = useState<CatalogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedEntry, setSelectedEntry] = useState<CatalogEntry | null>(null);
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState({
+    total: 0,
+    totalPages: 0,
+    currentPage: 1,
+    limit: 10
+  });
 
   // Cargar datos del catálogo
   useEffect(() => {
@@ -144,8 +255,14 @@ const Catalog = () => {
       try {
         setLoading(true);
         setError(null);
-        const entries = await catalogApi.getCatalogEntries();
-        setData(entries);
+        const response = await catalogApi.getCatalogEntries({
+          page,
+          limit: 10,
+          ...filter,
+          search
+        });
+        setData(response.data);
+        setPagination(response.pagination);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Error loading catalog data');
       } finally {
@@ -154,10 +271,19 @@ const Catalog = () => {
     };
 
     fetchData();
-    // Actualizar cada 30 segundos
     const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [page, filter, search]);
+
+  // Debounce para la búsqueda
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setSearch(searchInput);
+      setPage(1);
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [searchInput]);
 
   // Manejar cambio de estado activo
   const handleToggleActive = async (entry: CatalogEntry) => {
@@ -170,8 +296,14 @@ const Catalog = () => {
         !entry.active
       );
       // Recargar datos después de la actualización
-      const entries = await catalogApi.getCatalogEntries();
-      setData(entries);
+      const response = await catalogApi.getCatalogEntries({
+        page,
+        limit: 10,
+        ...filter,
+        search
+      });
+      setData(response.data);
+      setPagination(response.pagination);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error updating entry status');
     } finally {
@@ -185,8 +317,14 @@ const Catalog = () => {
       setLoading(true);
       await catalogApi.updateEntry(updatedEntry);
       // Recargar datos después de la actualización
-      const entries = await catalogApi.getCatalogEntries();
-      setData(entries);
+      const response = await catalogApi.getCatalogEntries({
+        page,
+        limit: 10,
+        ...filter,
+        search
+      });
+      setData(response.data);
+      setPagination(response.pagination);
       setSelectedEntry(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error updating entry');
@@ -204,8 +342,13 @@ const Catalog = () => {
         entry.db_engine
       );
       // Recargar datos después de la sincronización
-      const entries = await catalogApi.getCatalogEntries();
-      setData(entries);
+      const response = await catalogApi.getCatalogEntries({
+        page,
+        limit: 10,
+        ...filter
+      });
+      setData(response.data);
+      setPagination(response.pagination);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error triggering full sync');
     } finally {
@@ -222,6 +365,36 @@ const Catalog = () => {
       </Header>
       
       {error && <ErrorMessage>{error}</ErrorMessage>}
+
+      <SearchContainer>
+        <SearchInput
+          type="text"
+          placeholder="Search by schema name, table name, or cluster name..."
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          onKeyPress={(e) => {
+            if (e.key === 'Enter') {
+              setSearch(searchInput);
+              setPage(1);
+            }
+          }}
+        />
+        <SearchButton onClick={() => {
+          setSearch(searchInput);
+          setPage(1);
+        }}>
+          Search
+        </SearchButton>
+        {(search || searchInput) && (
+          <ClearSearchButton onClick={() => {
+            setSearch('');
+            setSearchInput('');
+            setPage(1);
+          }}>
+            Clear
+          </ClearSearchButton>
+        )}
+      </SearchContainer>
 
       <FiltersContainer>
         <Select 
@@ -254,7 +427,20 @@ const Catalog = () => {
           <option value="true">Active</option>
           <option value="false">Inactive</option>
         </Select>
+
+        <ResetButton onClick={() => {
+          setFilter({ engine: '', status: '', active: '' });
+          setSearch('');
+          setSearchInput('');
+          setPage(1);
+        }}>
+          Reset All
+        </ResetButton>
       </FiltersContainer>
+
+      <PaginationInfo>
+        Showing {data.length} of {pagination.total} entries (Page {pagination.currentPage} of {pagination.totalPages})
+      </PaginationInfo>
 
       <Table>
         <thead>
@@ -298,6 +484,37 @@ const Catalog = () => {
           ))}
         </tbody>
       </Table>
+
+      <Pagination>
+        <PageButton
+          disabled={page === 1}
+          onClick={() => setPage(page - 1)}
+        >
+          Previous
+        </PageButton>
+        
+        {Array.from({ length: pagination.totalPages }, (_, i) => i + 1)
+          .filter(p => Math.abs(p - page) <= 2 || p === 1 || p === pagination.totalPages)
+          .map((p, i, arr) => (
+            <React.Fragment key={p}>
+              {i > 0 && arr[i - 1] !== p - 1 && <span>...</span>}
+              <PageButton
+                $active={p === page}
+                onClick={() => setPage(p)}
+              >
+                {p}
+              </PageButton>
+            </React.Fragment>
+          ))
+        }
+        
+        <PageButton
+          disabled={page === pagination.totalPages}
+          onClick={() => setPage(page + 1)}
+        >
+          Next
+        </PageButton>
+      </Pagination>
 
       {selectedEntry && (
         <EditModal

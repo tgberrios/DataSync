@@ -17,6 +17,9 @@ include_directories(
 link_directories(
     /usr/local/lib
     /usr/lib64
+    /usr/pgsql-17/lib
+    /usr/pgsql-13/lib
+    /usr/lib64/mysql
     /opt/microsoft/msodbcsql/lib64
 )
 
@@ -42,10 +45,12 @@ add_definitions(-DJSON_USE_IMPLICIT_CONVERSIONS=1)
 
 target_link_libraries(DataSync
     mariadb
+    mysqlclient
     pqxx
     pq
     pthread
     odbc
     mongoc-1.0
     bson-1.0
+    stdc++fs
 )

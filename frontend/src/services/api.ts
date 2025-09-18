@@ -230,11 +230,18 @@ export const monitorApi = {
 };
 
 export const catalogApi = {
-  // Obtener todas las entradas del catálogo
-  getCatalogEntries: async () => {
+  // Obtener entradas del catálogo con paginación, filtros y búsqueda
+  getCatalogEntries: async (params: {
+    page?: number;
+    limit?: number;
+    engine?: string;
+    status?: string;
+    active?: string;
+    search?: string;
+  } = {}) => {
     try {
-      console.log("Fetching catalog entries...");
-      const response = await api.get<CatalogEntry[]>("/catalog");
+      console.log("Fetching catalog entries with params:", params);
+      const response = await api.get("/catalog", { params });
       console.log("Received catalog data:", response.data);
       return response.data;
     } catch (error) {

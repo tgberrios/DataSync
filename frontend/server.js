@@ -10,11 +10,11 @@ app.use(cors());
 app.use(express.json());
 
 const pool = new Pool({
-  host: "localhost",
+  host: "10.12.240.40",
   port: 5432,
   database: "DataLake",
-  user: "tomy.berrios",
-  password: "Yucaquemada1",
+  user: "Datalake_User",
+  password: "keepprofessional",
 });
 
 // Test connection
@@ -27,12 +27,63 @@ pool.connect((err, client, done) => {
   }
 });
 
-// Obtener catálogo
+// Obtener catálogo con paginación, filtros y búsqueda
 app.get("/api/catalog", async (req, res) => {
   try {
-    const result = await pool.query("SELECT * FROM metadata.catalog");
-    console.log("Catalog data retrieved:", result.rows);
-    res.json(result.rows);
+    const { page = 1, limit = 10, engine = '', status = '', active = '', search = '' } = req.query;
+    const offset = (page - 1) * limit;
+    
+    let whereConditions = [];
+    let queryParams = [];
+    let paramCount = 0;
+    
+    if (engine) {
+      paramCount++;
+      whereConditions.push(`db_engine = $${paramCount}`);
+      queryParams.push(engine);
+    }
+    
+    if (status) {
+      paramCount++;
+      whereConditions.push(`status = $${paramCount}`);
+      queryParams.push(status);
+    }
+    
+    if (active !== '') {
+      paramCount++;
+      whereConditions.push(`active = $${paramCount}`);
+      queryParams.push(active === 'true');
+    }
+    
+    if (search) {
+      paramCount++;
+      whereConditions.push(`(schema_name ILIKE $${paramCount} OR table_name ILIKE $${paramCount} OR cluster_name ILIKE $${paramCount})`);
+      queryParams.push(`%${search}%`);
+    }
+    
+    const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
+    
+    const countQuery = `SELECT COUNT(*) FROM metadata.catalog ${whereClause}`;
+    const countResult = await pool.query(countQuery, queryParams);
+    const total = parseInt(countResult.rows[0].count);
+    
+    paramCount++;
+    const dataQuery = `SELECT * FROM metadata.catalog ${whereClause} ORDER BY schema_name, table_name LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
+    queryParams.push(limit, offset);
+    
+    const result = await pool.query(dataQuery, queryParams);
+    
+    const totalPages = Math.ceil(total / limit);
+    
+    res.json({
+      data: result.rows,
+      pagination: {
+        total,
+        totalPages,
+        currentPage: parseInt(page),
+        limit: parseInt(limit)
+      }
+    });
   } catch (err) {
     console.error("Database error:", err);
     res.status(500).json({ error: err.message });
@@ -45,7 +96,7 @@ app.patch("/api/catalog/status", async (req, res) => {
   try {
     const result = await pool.query(
       `UPDATE metadata.catalog 
-       SET active = $1, updated_at = NOW()
+       SET active = $1
        WHERE schema_name = $2 AND table_name = $3 AND db_engine = $4
        RETURNING *`,
       [active, schema_name, table_name, db_engine]
@@ -63,7 +114,7 @@ app.post("/api/catalog/sync", async (req, res) => {
   try {
     const result = await pool.query(
       `UPDATE metadata.catalog 
-       SET status = 'full_load', updated_at = NOW()
+       SET status = 'full_load'
        WHERE schema_name = $1 AND table_name = $2 AND db_engine = $3
        RETURNING *`,
       [schema_name, table_name, db_engine]
@@ -86,8 +137,8 @@ app.get("/api/dashboard/stats", async (req, res) => {
       SELECT 
         COUNT(*) FILTER (WHERE status = 'PERFECT_MATCH') as perfect_match,
         COUNT(*) FILTER (WHERE status = 'LISTENING_CHANGES') as listening_changes,
-        COUNT(*) FILTER (WHERE status = 'FULL_LOAD' AND active = true) as full_load_active,
-        COUNT(*) FILTER (WHERE status = 'FULL_LOAD' AND active = false) as full_load_inactive,
+        COUNT(*) FILTER (WHERE active = true) as full_load_active,
+        COUNT(*) FILTER (WHERE active = false) as full_load_inactive,
         COUNT(*) FILTER (WHERE status = 'NO_DATA') as no_data,
         COUNT(*) FILTER (WHERE status = 'ERROR') as errors,
         STRING_AGG(CASE WHEN status = 'PROCESSING' 
@@ -189,7 +240,7 @@ app.get("/api/dashboard/stats", async (req, res) => {
         COUNT(*) FILTER (WHERE status = 'PROCESSING') as active_connections,
         COUNT(*) FILTER (WHERE status != 'PROCESSING' AND active = true) as idle_connections,
         COUNT(*) FILTER (WHERE status = 'ERROR') as failed_connections,
-        MAX(updated_at) as last_update
+        MAX(last_sync_time) as last_update
       FROM metadata.catalog
     `);
 

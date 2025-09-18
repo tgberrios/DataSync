@@ -2,6 +2,7 @@
 #define MSSQLTOPOSTGRES_H
 
 #include "Config.h"
+#include "ConnectionPool.h"
 #include "SyncReporter.h"
 #include "logger.h"
 #include <algorithm>
@@ -77,8 +78,17 @@ public:
 
   void syncIndexesAndConstraints(const std::string &schema_name,
                                  const std::string &table_name,
-                                 SQLHDBC mssqlConn, pqxx::connection &pgConn,
+                                 pqxx::connection &pgConn,
                                  const std::string &lowerSchemaName) {
+    ConnectionGuard mssqlGuard(g_connectionPool.get(), DatabaseType::MSSQL);
+    auto mssqlConn = mssqlGuard.get<ODBCHandles>();
+    if (!mssqlConn) {
+      Logger::error("syncIndexesAndConstraints",
+                    "Failed to connect to MSSQL for " + schema_name + "." +
+                        table_name);
+      return;
+    }
+
     std::string query = "SELECT i.name AS index_name, "
                         "CASE WHEN i.is_unique = 1 THEN 'UNIQUE' ELSE "
                         "'NON_UNIQUE' END AS uniqueness, "
@@ -96,7 +106,7 @@ public:
                         "AND i.name IS NOT NULL AND i.is_primary_key = 0 "
                         "ORDER BY i.name, ic.key_ordinal;";
 
-    auto results = executeQueryMSSQL(mssqlConn, query);
+    auto results = executeQueryMSSQL(mssqlConn->dbc, query);
 
     for (const auto &row : results) {
       if (row.size() < 3)
@@ -136,7 +146,8 @@ public:
         if (table.db_engine != "MSSQL")
           continue;
 
-        auto mssqlConn = connectMSSQL(table.connection_string);
+        ConnectionGuard mssqlGuard(g_connectionPool.get(), DatabaseType::MSSQL);
+        auto mssqlConn = mssqlGuard.get<ODBCHandles>();
         if (!mssqlConn) {
           Logger::error("setupTableTargetMSSQLToPostgres",
                         "Failed to connect to MSSQL for " + table.schema_name +
@@ -144,31 +155,41 @@ public:
           continue;
         }
 
-        std::string query =
-            "SELECT c.COLUMN_NAME, c.DATA_TYPE, c.IS_NULLABLE, "
-            "CASE WHEN pk.COLUMN_NAME IS NOT NULL THEN 'YES' ELSE 'NO' END as "
-            "IS_PRIMARY_KEY, "
-            "c.CHARACTER_MAXIMUM_LENGTH, c.COLUMN_DEFAULT "
-            "FROM INFORMATION_SCHEMA.COLUMNS c "
-            "LEFT JOIN ( "
-            "  SELECT ku.COLUMN_NAME "
-            "  FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc "
-            "  INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE ku "
-            "  ON tc.CONSTRAINT_NAME = ku.CONSTRAINT_NAME "
-            "  WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY' "
-            "  AND tc.TABLE_SCHEMA = '" +
-            table.schema_name +
-            "' "
-            "  AND tc.TABLE_NAME = '" +
-            table.table_name +
-            "' "
-            ") pk ON c.COLUMN_NAME = pk.COLUMN_NAME "
-            "WHERE c.TABLE_SCHEMA = '" +
-            table.schema_name + "' AND c.TABLE_NAME = '" + table.table_name +
-            "' "
-            "ORDER BY c.ORDINAL_POSITION;";
+        // Usar USE [database] para cambiar el contexto de base de datos
+        std::string databaseName = extractDatabaseName(table.connection_string);
+        Logger::debug("setupTableTargetMSSQLToPostgres",
+                      "Processing table " + table.schema_name + "." +
+                          table.table_name + " with database: " + databaseName +
+                          " from connection: " + table.connection_string);
 
-        auto columns = executeQueryMSSQL(mssqlConn, query);
+        // Primero cambiar a la base de datos correcta
+        std::string useQuery = "USE [" + databaseName + "];";
+        auto useResult = executeQueryMSSQL(mssqlConn->dbc, useQuery);
+
+        // Luego ejecutar la query sin prefijo de base de datos
+        std::string query =
+            "SELECT c.name AS COLUMN_NAME, t.name AS DATA_TYPE, "
+            "CASE WHEN c.is_nullable = 1 THEN 'YES' ELSE 'NO' END as "
+            "IS_NULLABLE, "
+            "CASE WHEN pk.column_id IS NOT NULL THEN 'YES' ELSE 'NO' END as "
+            "IS_PRIMARY_KEY, "
+            "c.max_length AS CHARACTER_MAXIMUM_LENGTH, NULL AS COLUMN_DEFAULT "
+            "FROM sys.columns c "
+            "INNER JOIN sys.tables t ON c.object_id = t.object_id "
+            "INNER JOIN sys.schemas s ON t.schema_id = s.schema_id "
+            "LEFT JOIN ( "
+            "  SELECT ic.column_id, ic.object_id "
+            "  FROM sys.indexes i "
+            "  INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id "
+            "AND i.index_id = ic.index_id "
+            "  WHERE i.is_primary_key = 1 "
+            ") pk ON c.column_id = pk.column_id AND t.object_id = pk.object_id "
+            "WHERE s.name = '" +
+            table.schema_name + "' AND t.name = '" + table.table_name +
+            "' "
+            "ORDER BY c.column_id;";
+
+        auto columns = executeQueryMSSQL(mssqlConn->dbc, query);
 
         if (columns.empty()) {
           Logger::error("setupTableTargetMSSQLToPostgres",
@@ -356,7 +377,8 @@ public:
                                                table.table_name + " (" +
                                                table.status + ")";
 
-        auto mssqlConn = connectMSSQL(table.connection_string);
+        ConnectionGuard mssqlGuard(g_connectionPool.get(), DatabaseType::MSSQL);
+        auto mssqlConn = mssqlGuard.get<ODBCHandles>();
         if (!mssqlConn) {
           Logger::error("transferDataMSSQLToPostgres",
                         "Failed to connect to MSSQL for " + table.schema_name +
@@ -371,9 +393,14 @@ public:
         std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
                        lowerSchemaName.begin(), ::tolower);
 
-        auto countRes = executeQueryMSSQL(mssqlConn, "SELECT COUNT(*) FROM [" +
-                                                         schema_name + "].[" +
-                                                         table_name + "];");
+        // Usar USE [database] para cambiar el contexto de base de datos
+        std::string databaseName = extractDatabaseName(table.connection_string);
+        std::string useQuery = "USE [" + databaseName + "];";
+        auto useResult = executeQueryMSSQL(mssqlConn->dbc, useQuery);
+
+        auto countRes = executeQueryMSSQL(
+            mssqlConn->dbc,
+            "SELECT COUNT(*) FROM [" + schema_name + "].[" + table_name + "];");
         size_t sourceCount = 0;
         if (!countRes.empty() && !countRes[0][0].empty()) {
           sourceCount = std::stoul(countRes[0][0]);
@@ -420,8 +447,12 @@ public:
                                      table_name + "\";";
 
             try {
+              // Asegurar que estamos en la base de datos correcta
+              executeQueryMSSQL(mssqlConn->dbc, "USE [" + databaseName + "];");
+
               // Obtener MAX de MSSQL
-              auto mssqlMaxRes = executeQueryMSSQL(mssqlConn, mssqlMaxQuery);
+              auto mssqlMaxRes =
+                  executeQueryMSSQL(mssqlConn->dbc, mssqlMaxQuery);
               std::string mssqlMaxTime = "";
               if (!mssqlMaxRes.empty() && !mssqlMaxRes[0][0].empty()) {
                 mssqlMaxTime = mssqlMaxRes[0][0];
@@ -464,29 +495,29 @@ public:
           continue;
         }
 
+        // Luego ejecutar la query sin prefijo de base de datos
         auto columns = executeQueryMSSQL(
-            mssqlConn,
-            "SELECT c.COLUMN_NAME, c.DATA_TYPE, c.IS_NULLABLE, "
-            "CASE WHEN pk.COLUMN_NAME IS NOT NULL THEN 'YES' ELSE 'NO' END as "
+            mssqlConn->dbc,
+            "SELECT c.name AS COLUMN_NAME, t.name AS DATA_TYPE, "
+            "CASE WHEN c.is_nullable = 1 THEN 'YES' ELSE 'NO' END as "
+            "IS_NULLABLE, "
+            "CASE WHEN pk.column_id IS NOT NULL THEN 'YES' ELSE 'NO' END as "
             "IS_PRIMARY_KEY, "
-            "c.CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS c "
+            "c.max_length AS CHARACTER_MAXIMUM_LENGTH "
+            "FROM sys.columns c "
+            "INNER JOIN sys.tables t ON c.object_id = t.object_id "
+            "INNER JOIN sys.schemas s ON t.schema_id = s.schema_id "
             "LEFT JOIN ( "
-            "  SELECT ku.COLUMN_NAME "
-            "  FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc "
-            "  INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE ku "
-            "  ON tc.CONSTRAINT_NAME = ku.CONSTRAINT_NAME "
-            "  WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY' "
-            "  AND tc.TABLE_SCHEMA = '" +
-                schema_name +
+            "  SELECT ic.column_id, ic.object_id "
+            "  FROM sys.indexes i "
+            "  INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id "
+            "AND i.index_id = ic.index_id "
+            "  WHERE i.is_primary_key = 1 "
+            ") pk ON c.column_id = pk.column_id AND t.object_id = pk.object_id "
+            "WHERE s.name = '" +
+                schema_name + "' AND t.name = '" + table_name +
                 "' "
-                "  AND tc.TABLE_NAME = '" +
-                table_name +
-                "' "
-                ") pk ON c.COLUMN_NAME = pk.COLUMN_NAME "
-                "WHERE c.TABLE_SCHEMA = '" +
-                schema_name + "' AND c.TABLE_NAME = '" + table_name +
-                "' "
-                "ORDER BY c.ORDINAL_POSITION;");
+                "ORDER BY c.column_id;");
 
         if (columns.empty()) {
           updateStatus(pgConn, schema_name, table_name, "ERROR");
@@ -595,6 +626,10 @@ public:
         bool hasMoreData = true;
         while (hasMoreData) {
           const size_t CHUNK_SIZE = SyncConfig::getChunkSize();
+
+          // Asegurar que estamos en la base de datos correcta
+          executeQueryMSSQL(mssqlConn->dbc, "USE [" + databaseName + "];");
+
           std::string selectQuery =
               "SELECT * FROM [" + schema_name + "].[" + table_name + "]";
 
@@ -635,7 +670,7 @@ public:
                          " ROWS FETCH NEXT " + std::to_string(CHUNK_SIZE) +
                          " ROWS ONLY;";
 
-          auto results = executeQueryMSSQL(mssqlConn, selectQuery);
+          auto results = executeQueryMSSQL(mssqlConn->dbc, selectQuery);
 
           if (results.empty()) {
             hasMoreData = false;
@@ -858,8 +893,8 @@ public:
 
         if (!tableCheck.empty() && tableCheck[0][0].as<int>() > 0) {
           updateQuery += ", last_sync_time=(SELECT MAX(\"" + lastSyncColumn +
-                         "\") FROM \"" + schema_name + "\".\"" + table_name +
-                         "\")";
+                         "\")::timestamp FROM \"" + schema_name + "\".\"" +
+                         table_name + "\")";
         } else {
           updateQuery += ", last_sync_time=NOW()";
         }
@@ -889,51 +924,20 @@ private:
     return escaped;
   }
 
-  SQLHDBC connectMSSQL(const std::string &connStr) {
-    SQLHENV env;
-    SQLHDBC dbc;
-    SQLRETURN ret;
-
-    // Allocate environment handle
-    ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env);
-    if (ret != SQL_SUCCESS) {
-      Logger::error("connectMSSQL", "SQLAllocHandle(ENV) failed");
-      return nullptr;
+  std::string extractDatabaseName(const std::string &connectionString) {
+    std::istringstream ss(connectionString);
+    std::string token;
+    while (std::getline(ss, token, ';')) {
+      auto pos = token.find('=');
+      if (pos == std::string::npos)
+        continue;
+      std::string key = token.substr(0, pos);
+      std::string value = token.substr(pos + 1);
+      if (key == "DATABASE") {
+        return value;
+      }
     }
-
-    // Set ODBC version
-    ret =
-        SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION, (SQLPOINTER)SQL_OV_ODBC3, 0);
-    if (ret != SQL_SUCCESS) {
-      Logger::error("connectMSSQL", "SQLSetEnvAttr failed");
-      SQLFreeHandle(SQL_HANDLE_ENV, env);
-      return nullptr;
-    }
-
-    // Allocate connection handle
-    ret = SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc);
-    if (ret != SQL_SUCCESS) {
-      Logger::error("connectMSSQL", "SQLAllocHandle(DBC) failed");
-      SQLFreeHandle(SQL_HANDLE_ENV, env);
-      return nullptr;
-    }
-
-    // Connect to database
-    SQLCHAR outstr[1024];
-    SQLSMALLINT outstrlen;
-    ret =
-        SQLDriverConnect(dbc, NULL, (SQLCHAR *)connStr.c_str(), SQL_NTS, outstr,
-                         sizeof(outstr), &outstrlen, SQL_DRIVER_NOPROMPT);
-
-    if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
-      Logger::error("connectMSSQL", "SQLDriverConnect failed");
-      SQLFreeHandle(SQL_HANDLE_DBC, dbc);
-      SQLFreeHandle(SQL_HANDLE_ENV, env);
-      return nullptr;
-    }
-
-    Logger::debug("connectMSSQL", "MSSQL connection established successfully");
-    return dbc;
+    return "master"; // fallback
   }
 
   std::vector<std::vector<std::string>>
@@ -953,7 +957,19 @@ private:
 
     ret = SQLExecDirect(stmt, (SQLCHAR *)query.c_str(), SQL_NTS);
     if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
-      Logger::error("executeQueryMSSQL", "SQLExecDirect failed");
+      SQLCHAR sqlState[6];
+      SQLCHAR errorMsg[SQL_MAX_MESSAGE_LENGTH];
+      SQLINTEGER nativeError;
+      SQLSMALLINT msgLen;
+
+      SQLGetDiagRec(SQL_HANDLE_STMT, stmt, 1, sqlState, &nativeError, errorMsg,
+                    sizeof(errorMsg), &msgLen);
+
+      Logger::error(
+          "executeQueryMSSQL",
+          "SQLExecDirect failed - SQLState: " + std::string((char *)sqlState) +
+              ", NativeError: " + std::to_string(nativeError) + ", Error: " +
+              std::string((char *)errorMsg) + ", Query: " + query);
       SQLFreeHandle(SQL_HANDLE_STMT, stmt);
       return results;
     }

@@ -2,6 +2,7 @@
 #define CATALOG_MANAGER_H
 
 #include "Config.h"
+#include "ConnectionPool.h"
 #include "logger.h"
 #include <algorithm>
 #include <bson/bson.h>
@@ -215,10 +216,13 @@ public:
 
         Logger::debug("syncCatalogMSSQLToPostgres",
                       "Connecting to MSSQL: " + connStr);
-        SQLHDBC mssqlConn = connectMSSQL(connStr);
+        
+        // Usar ConnectionPool para obtener conexión MSSQL
+        ConnectionGuard mssqlGuard(g_connectionPool.get(), DatabaseType::MSSQL);
+        auto mssqlConn = mssqlGuard.get<ODBCHandles>();
         if (!mssqlConn) {
           Logger::error("syncCatalogMSSQLToPostgres",
-                        "Failed to connect to MSSQL");
+                        "Failed to connect to MSSQL with connection: " + connStr);
           continue;
         }
 
@@ -237,7 +241,7 @@ public:
 
         Logger::debug("syncCatalogMSSQLToPostgres",
                       "Executing discovery query...");
-        auto discoveredTables = executeQueryMSSQL(mssqlConn, discoverQuery);
+        auto discoveredTables = executeQueryMSSQL(mssqlConn->dbc, discoverQuery);
         Logger::info("syncCatalogMSSQLToPostgres",
                      "Found " + std::to_string(discoveredTables.size()) +
                          " tables");
@@ -253,17 +257,33 @@ public:
 
           {
             pqxx::work txn(pgConn);
-            txn.exec("INSERT INTO metadata.catalog "
-                     "(schema_name, table_name, cluster_name, db_engine, "
-                     "connection_string, "
-                     "last_sync_time, last_sync_column, status, "
-                     "last_offset, active) "
-                     "VALUES ('" +
-                     escapeSQL(schemaName) + "', '" + escapeSQL(tableName) +
-                     "', '', 'MSSQL', '" + escapeSQL(connStr) +
-                     "', NOW(), '', 'PENDING', '0', false) "
-                     "ON CONFLICT (schema_name, table_name, db_engine) "
-                     "DO UPDATE SET last_sync_time = NOW();");
+            // Verificar si la tabla ya existe con esta connection_string específica
+            auto existingCheck = txn.exec(
+                "SELECT COUNT(*) FROM metadata.catalog "
+                "WHERE schema_name='" + escapeSQL(schemaName) + 
+                "' AND table_name='" + escapeSQL(tableName) + 
+                "' AND db_engine='MSSQL' AND connection_string='" + 
+                escapeSQL(connStr) + "';");
+            
+            if (!existingCheck.empty() && existingCheck[0][0].as<int>() > 0) {
+              // Tabla ya existe con esta connection_string, solo actualizar timestamp
+              txn.exec("UPDATE metadata.catalog SET last_sync_time = NOW() "
+                       "WHERE schema_name='" + escapeSQL(schemaName) + 
+                       "' AND table_name='" + escapeSQL(tableName) + 
+                       "' AND db_engine='MSSQL' AND connection_string='" + 
+                       escapeSQL(connStr) + "';");
+            } else {
+              // Tabla nueva, insertar
+              txn.exec("INSERT INTO metadata.catalog "
+                       "(schema_name, table_name, cluster_name, db_engine, "
+                       "connection_string, "
+                       "last_sync_time, last_sync_column, status, "
+                       "last_offset, active) "
+                       "VALUES ('" +
+                       escapeSQL(schemaName) + "', '" + escapeSQL(tableName) +
+                       "', '', 'MSSQL', '" + escapeSQL(connStr) +
+                       "', NOW(), '', 'PENDING', '0', false);");
+            }
             txn.commit();
           }
         }
@@ -617,6 +637,23 @@ private:
     return escaped;
   }
 
+  std::string extractDatabaseName(const std::string &connectionString) {
+    std::istringstream ss(connectionString);
+    std::string token;
+    while (std::getline(ss, token, ';')) {
+      auto pos = token.find('=');
+      if (pos == std::string::npos) continue;
+      std::string key = token.substr(0, pos);
+      std::string value = token.substr(pos + 1);
+      if (key == "DATABASE") {
+        Logger::debug("extractDatabaseName", "Extracted database: " + value + " from connection: " + connectionString);
+        return value;
+      }
+    }
+    Logger::warning("extractDatabaseName", "No DATABASE found in connection string, using master fallback: " + connectionString);
+    return "master"; // fallback
+  }
+
   void cleanNonExistentPostgresTables(pqxx::connection &pgConn) {
     try {
       // Logger::debug("cleanNonExistentPostgresTables",
@@ -758,40 +795,88 @@ private:
       //               "Starting MSSQL table cleanup");
       pqxx::work txn(pgConn);
 
-      // Obtener todas las tablas marcadas como MSSQL
-      auto results = txn.exec("SELECT schema_name, table_name, "
-                              "connection_string FROM metadata.catalog "
-                              "WHERE db_engine='MSSQL';");
+      // Obtener connection_strings únicos de MSSQL
+      auto connectionResults =
+          txn.exec("SELECT DISTINCT connection_string FROM metadata.catalog "
+                   "WHERE db_engine='MSSQL';");
 
-      for (const auto &row : results) {
-        std::string schema_name = row[0].as<std::string>();
-        std::string table_name = row[1].as<std::string>();
-        std::string connection_string = row[2].as<std::string>();
+      for (const auto &connRow : connectionResults) {
+        std::string connection_string = connRow[0].as<std::string>();
 
-        // Verificar si la tabla existe en MSSQL
-        SQLHDBC mssqlConn = connectMSSQL(connection_string);
+        // Conectar una vez por connection_string
+        ConnectionGuard mssqlGuard(g_connectionPool.get(), DatabaseType::MSSQL);
+        auto mssqlConn = mssqlGuard.get<ODBCHandles>();
         if (!mssqlConn) {
           Logger::warning("cleanNonExistentMSSQLTables",
-                          "Cannot connect to MSSQL for table " + schema_name +
-                              "." + table_name);
+                          "Cannot connect to MSSQL with connection: " +
+                              connection_string + " - SKIPPING this connection");
           continue;
         }
 
-        auto checkResult = executeQueryMSSQL(
-            mssqlConn, "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES "
-                       "WHERE TABLE_SCHEMA='" +
-                           schema_name +
-                           "' "
-                           "AND TABLE_NAME='" +
-                           table_name + "';");
+        // Obtener todas las tablas para este connection_string
+        auto tableResults =
+            txn.exec("SELECT schema_name, table_name FROM metadata.catalog "
+                     "WHERE db_engine='MSSQL' AND connection_string='" +
+                     escapeSQL(connection_string) + "';");
 
-        if (checkResult.empty() || checkResult[0][0] == "0") {
-          Logger::info("cleanNonExistentMSSQLTables",
-                       "Removing non-existent MSSQL table: " + schema_name +
-                           "." + table_name);
-          txn.exec("DELETE FROM metadata.catalog WHERE schema_name='" +
-                   schema_name + "' AND table_name='" + table_name +
-                   "' AND db_engine='MSSQL';");
+        if (tableResults.empty())
+          continue;
+
+        // Construir query batch para verificar todas las tablas de esta
+        // conexión - usar sys.tables con base de datos específica
+        std::string databaseName = extractDatabaseName(connection_string);
+        Logger::debug("cleanNonExistentMSSQLTables", "Using database: " + databaseName + " for connection: " + connection_string);
+        std::string batchQuery = "SELECT s.name AS table_schema, t.name AS table_name FROM "
+                                 "[" + databaseName + "].sys.tables t "
+                                 "INNER JOIN [" + databaseName + "].sys.schemas s ON t.schema_id = s.schema_id "
+                                 "WHERE s.name NOT IN ('INFORMATION_SCHEMA', 'sys', 'guest') "
+                                 "AND t.name NOT LIKE 'spt_%' "
+                                 "AND t.name NOT LIKE 'MS%' "
+                                 "AND t.name NOT LIKE 'sp_%' "
+                                 "AND t.name NOT LIKE 'fn_%' "
+                                 "AND t.name NOT LIKE 'xp_%' "
+                                 "AND t.name NOT LIKE 'dt_%' "
+                                 "AND (";
+        std::string whereConditions;
+
+        for (size_t i = 0; i < tableResults.size(); ++i) {
+          if (i > 0)
+            whereConditions += " OR ";
+          whereConditions += "(s.name='" +
+                             tableResults[i][0].as<std::string>() +
+                             "' AND t.name='" +
+                             tableResults[i][1].as<std::string>() + "')";
+        }
+
+        batchQuery += whereConditions + ") ORDER BY s.name, t.name;";
+
+        // Ejecutar verificación batch
+        auto existingTables = executeQueryMSSQL(mssqlConn->dbc, batchQuery);
+
+        // Crear set de tablas existentes para lookup rápido
+        std::set<std::pair<std::string, std::string>> existingTableSet;
+        for (const auto &table : existingTables) {
+          if (table.size() >= 2) {
+            existingTableSet.insert({table[0], table[1]});
+          }
+        }
+
+        // Eliminar tablas que no existen
+        for (const auto &tableRow : tableResults) {
+          std::string schema_name = tableRow[0].as<std::string>();
+          std::string table_name = tableRow[1].as<std::string>();
+
+          if (existingTableSet.find({schema_name, table_name}) ==
+              existingTableSet.end()) {
+            Logger::info("cleanNonExistentMSSQLTables",
+                         "Removing non-existent MSSQL table: " + schema_name +
+                             "." + table_name);
+
+            txn.exec("DELETE FROM metadata.catalog WHERE schema_name='" +
+                     schema_name + "' AND table_name='" + table_name +
+                     "' AND db_engine='MSSQL' AND connection_string='" +
+                     escapeSQL(connection_string) + "';");
+          }
         }
       }
 
@@ -902,6 +987,7 @@ private:
     }
   }
 
+
   std::vector<std::vector<std::string>>
   executeQueryMariaDB(MYSQL *conn, const std::string &query) {
     std::vector<std::vector<std::string>> results;
@@ -938,53 +1024,6 @@ private:
     }
     mysql_free_result(res);
     return results;
-  }
-
-  SQLHDBC connectMSSQL(const std::string &connStr) {
-    SQLHENV env;
-    SQLHDBC dbc;
-    SQLRETURN ret;
-
-    // Allocate environment handle
-    ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env);
-    if (ret != SQL_SUCCESS) {
-      Logger::error("connectMSSQL", "SQLAllocHandle(ENV) failed");
-      return nullptr;
-    }
-
-    // Set ODBC version
-    ret =
-        SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION, (SQLPOINTER)SQL_OV_ODBC3, 0);
-    if (ret != SQL_SUCCESS) {
-      Logger::error("connectMSSQL", "SQLSetEnvAttr failed");
-      SQLFreeHandle(SQL_HANDLE_ENV, env);
-      return nullptr;
-    }
-
-    // Allocate connection handle
-    ret = SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc);
-    if (ret != SQL_SUCCESS) {
-      Logger::error("connectMSSQL", "SQLAllocHandle(DBC) failed");
-      SQLFreeHandle(SQL_HANDLE_ENV, env);
-      return nullptr;
-    }
-
-    // Connect to database
-    SQLCHAR outstr[1024];
-    SQLSMALLINT outstrlen;
-    ret =
-        SQLDriverConnect(dbc, NULL, (SQLCHAR *)connStr.c_str(), SQL_NTS, outstr,
-                         sizeof(outstr), &outstrlen, SQL_DRIVER_NOPROMPT);
-
-    if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
-      Logger::error("connectMSSQL", "SQLDriverConnect failed");
-      SQLFreeHandle(SQL_HANDLE_DBC, dbc);
-      SQLFreeHandle(SQL_HANDLE_ENV, env);
-      return nullptr;
-    }
-
-    Logger::debug("connectMSSQL", "MSSQL connection established successfully");
-    return dbc;
   }
 
   std::vector<std::vector<std::string>>

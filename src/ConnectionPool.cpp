@@ -122,6 +122,44 @@ void ConnectionPool::loadConfigFromDatabase() {
       }
     }
 
+    // Load MariaDB connections from catalog
+    auto mariaResult = txn.exec(
+        "SELECT DISTINCT connection_string FROM metadata.catalog WHERE db_engine = 'MariaDB' AND active = true");
+
+    for (const auto &row : mariaResult) {
+      std::string connStr = row[0].as<std::string>();
+      
+      ConnectionConfig mariaConfig;
+      mariaConfig.type = DatabaseType::MARIADB;
+      mariaConfig.connectionString = connStr;
+      mariaConfig.minConnections = 1;
+      mariaConfig.maxConnections = 3;
+      mariaConfig.maxIdleTime = 300;
+      mariaConfig.autoReconnect = true;
+      
+      configs.push_back(mariaConfig);
+      Logger::debug("ConnectionPool", "Added MariaDB config from catalog");
+    }
+
+    // Load MSSQL connections from catalog
+    auto mssqlResult = txn.exec(
+        "SELECT DISTINCT connection_string FROM metadata.catalog WHERE db_engine = 'MSSQL' AND active = true");
+
+    for (const auto &row : mssqlResult) {
+      std::string connStr = row[0].as<std::string>();
+      
+      ConnectionConfig mssqlConfig;
+      mssqlConfig.type = DatabaseType::MSSQL;
+      mssqlConfig.connectionString = connStr;
+      mssqlConfig.minConnections = 1;
+      mssqlConfig.maxConnections = 3;
+      mssqlConfig.maxIdleTime = 300;
+      mssqlConfig.autoReconnect = true;
+      
+      configs.push_back(mssqlConfig);
+      Logger::debug("ConnectionPool", "Added MSSQL config from catalog");
+    }
+
     txn.commit();
   } catch (const std::exception &e) {
     Logger::error("ConnectionPool",
@@ -147,9 +185,32 @@ ConnectionPool::getConnection(DatabaseType type) {
   if (isShuttingDown)
     return nullptr;
 
-  // Get connection from pool
-  auto conn = availableConnections.front();
-  availableConnections.pop();
+  // Find connection of the correct type
+  std::shared_ptr<PooledConnection> conn = nullptr;
+  std::queue<std::shared_ptr<PooledConnection>> tempQueue;
+  
+  while (!availableConnections.empty()) {
+    auto candidate = availableConnections.front();
+    availableConnections.pop();
+    
+    if (candidate->type == type) {
+      conn = candidate;
+      break;
+    } else {
+      tempQueue.push(candidate);
+    }
+  }
+  
+  // Put back connections that weren't the right type
+  while (!tempQueue.empty()) {
+    availableConnections.push(tempQueue.front());
+    tempQueue.pop();
+  }
+  
+  if (!conn) {
+    Logger::error("ConnectionPool", "No available " + databaseTypeToString(type) + " connection found");
+    return nullptr;
+  }
 
   // Validate connection
   if (!validateConnection(conn)) {
@@ -430,7 +491,7 @@ ConnectionPool::createMariaDBConnection(const ConnectionConfig &config) {
     }
 
     // Set connection options
-    my_bool reconnect = 1;
+    bool reconnect = true;
     mysql_options(mysql, MYSQL_OPT_RECONNECT, &reconnect);
 
     // Parse connection string
