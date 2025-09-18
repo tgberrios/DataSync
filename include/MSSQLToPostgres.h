@@ -463,54 +463,28 @@ public:
 
         // Si sourceCount = targetCount, verificar si hay cambios incrementales
         if (sourceCount == targetCount) {
-          // Si tiene columna de tiempo, verificar cambios incrementales
-          if (!table.last_sync_column.empty()) {
-            // Obtener MAX de MSSQL y PostgreSQL para comparar
-            std::string mssqlMaxQuery = "SELECT MAX([" +
-                                        table.last_sync_column + "]) FROM [" +
-                                        schema_name + "].[" + table_name + "];";
-            std::string pgMaxQuery = "SELECT MAX(\"" + table.last_sync_column +
-                                     "\") FROM \"" + lowerSchemaName + "\".\"" +
-                                     table_name + "\";";
+          // Verificar si hay datos nuevos usando last_offset
+          size_t lastOffset = 0;
+          try {
+            pqxx::work txn(pgConn);
+            auto offsetRes = txn.exec(
+                "SELECT last_offset FROM metadata.catalog WHERE schema_name='" +
+                escapeSQL(schema_name) + "' AND table_name='" +
+                escapeSQL(table_name) + "';");
+            txn.commit();
 
-            try {
-              // Asegurar que estamos en la base de datos correcta
-              executeQueryMSSQL(mssqlConn->dbc, "USE [" + databaseName + "];");
-
-              // Obtener MAX de MSSQL
-              auto mssqlMaxRes =
-                  executeQueryMSSQL(mssqlConn->dbc, mssqlMaxQuery);
-              std::string mssqlMaxTime = "";
-              if (!mssqlMaxRes.empty() && !mssqlMaxRes[0][0].empty()) {
-                mssqlMaxTime = mssqlMaxRes[0][0];
-              }
-
-              // Obtener MAX de PostgreSQL
-              pqxx::work txnPg(pgConn);
-              auto pgMaxRes = txnPg.exec(pgMaxQuery);
-              txnPg.commit();
-
-              std::string pgMaxTime = "";
-              if (!pgMaxRes.empty() && !pgMaxRes[0][0].is_null()) {
-                pgMaxTime = pgMaxRes[0][0].as<std::string>();
-              }
-
-              if (mssqlMaxTime == pgMaxTime) {
-                updateStatus(pgConn, schema_name, table_name, "PERFECT_MATCH",
-                             targetCount);
-              } else {
-                updateStatus(pgConn, schema_name, table_name,
-                             "LISTENING_CHANGES", targetCount);
-              }
-            } catch (const std::exception &e) {
-              Logger::error("transferDataMSSQLToPostgres",
-                            "Error comparing MAX times: " +
-                                std::string(e.what()));
-              updateStatus(pgConn, schema_name, table_name, "LISTENING_CHANGES",
-                           targetCount);
+            if (!offsetRes.empty() && !offsetRes[0][0].is_null()) {
+              lastOffset = std::stoul(offsetRes[0][0].as<std::string>());
             }
-          } else {
+          } catch (...) {
+            lastOffset = 0;
+          }
+
+          if (lastOffset >= sourceCount) {
             updateStatus(pgConn, schema_name, table_name, "PERFECT_MATCH",
+                         targetCount);
+          } else {
+            updateStatus(pgConn, schema_name, table_name, "LISTENING_CHANGES",
                          targetCount);
           }
           continue;
@@ -689,40 +663,8 @@ public:
           std::string selectQuery =
               "SELECT * FROM [" + schema_name + "].[" + table_name + "]";
 
-          // Para sincronización incremental, usar el MAX de PostgreSQL como
-          // punto de partida (SOLO si NO es FULL_LOAD)
-          if (!table.last_sync_column.empty() && table.status != "FULL_LOAD") {
-            std::string pgMaxQuery = "SELECT MAX(\"" + table.last_sync_column +
-                                     "\") FROM \"" + lowerSchemaName + "\".\"" +
-                                     table_name + "\";";
-
-            try {
-              pqxx::work txnPg(pgConn);
-              auto pgMaxRes = txnPg.exec(pgMaxQuery);
-              txnPg.commit();
-
-              if (!pgMaxRes.empty() && !pgMaxRes[0][0].is_null()) {
-                std::string pgMaxTime = pgMaxRes[0][0].as<std::string>();
-                selectQuery += " WHERE [" + table.last_sync_column + "] > '" +
-                               pgMaxTime + "'";
-              } else if (!table.last_sync_time.empty()) {
-                selectQuery += " WHERE [" + table.last_sync_column + "] > '" +
-                               table.last_sync_time + "'";
-              }
-            } catch (const std::exception &e) {
-              Logger::error("transferDataMSSQLToPostgres",
-                            "Error getting PostgreSQL MAX: " +
-                                std::string(e.what()));
-            }
-          } else if (table.status == "FULL_LOAD") {
-            // FULL_LOAD mode: fetching ALL data without time filter
-          }
-
-          selectQuery += " ORDER BY " +
-                         (table.last_sync_column.empty()
-                              ? "1"
-                              : "[" + table.last_sync_column + "]") +
-                         " OFFSET " + std::to_string(targetCount) +
+          // Usar last_offset para paginación simple y eficiente
+          selectQuery += " ORDER BY 1 OFFSET " + std::to_string(targetCount) +
                          " ROWS FETCH NEXT " + std::to_string(CHUNK_SIZE) +
                          " ROWS ONLY;";
 
@@ -975,9 +917,27 @@ public:
                      table_name + "';");
 
         if (!tableCheck.empty() && tableCheck[0][0].as<int>() > 0) {
-          updateQuery += ", last_sync_time=(SELECT MAX(\"" + lastSyncColumn +
-                         "\")::timestamp FROM \"" + schema_name + "\".\"" +
-                         table_name + "\")";
+          // Verificar el tipo de columna antes de hacer el cast
+          auto columnTypeCheck =
+              txn.exec("SELECT data_type FROM information_schema.columns "
+                       "WHERE table_schema='" +
+                       schema_name + "' AND table_name='" + table_name +
+                       "' AND column_name='" + lastSyncColumn + "';");
+
+          if (!columnTypeCheck.empty()) {
+            std::string columnType = columnTypeCheck[0][0].as<std::string>();
+            if (columnType == "time without time zone") {
+              // Para columnas TIME, usar NOW() en lugar de MAX()
+              updateQuery += ", last_sync_time=NOW()";
+            } else {
+              // Para columnas TIMESTAMP/DATE, usar MAX con cast apropiado
+              updateQuery += ", last_sync_time=(SELECT MAX(\"" +
+                             lastSyncColumn + "\")::timestamp FROM \"" +
+                             schema_name + "\".\"" + table_name + "\")";
+            }
+          } else {
+            updateQuery += ", last_sync_time=NOW()";
+          }
         } else {
           updateQuery += ", last_sync_time=NOW()";
         }

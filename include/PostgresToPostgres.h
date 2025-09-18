@@ -73,8 +73,8 @@ public:
 
   void transferDataPostgresToPostgres() {
     try {
-      //Logger::debug("transferDataPostgresToPostgres",
-      //              "Starting PostgreSQL to PostgreSQL transfer");
+      // Logger::debug("transferDataPostgresToPostgres",
+      //               "Starting PostgreSQL to PostgreSQL transfer");
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
 
       {
@@ -275,6 +275,35 @@ private:
       }
       updateStatus(pgConn, schemaName, tableName, "FULL_LOAD", 0);
       return;
+    }
+
+    if (status == "FULL_LOAD") {
+      Logger::info("processTable", "Processing FULL_LOAD table: " + schemaName +
+                                       "." + tableName);
+
+      pqxx::work txn(pgConn);
+      auto offsetCheck = txn.exec(
+          "SELECT last_offset FROM metadata.catalog WHERE schema_name='" +
+          escapeSQL(schemaName) + "' AND table_name='" + escapeSQL(tableName) +
+          "';");
+
+      bool shouldTruncate = true;
+      if (!offsetCheck.empty() && !offsetCheck[0][0].is_null()) {
+        std::string currentOffset = offsetCheck[0][0].as<std::string>();
+        if (currentOffset != "0" && !currentOffset.empty()) {
+          shouldTruncate = false;
+        }
+      }
+
+      if (shouldTruncate) {
+        Logger::info("processTable",
+                     "Truncating table: " + toLowerCase(schemaName) + "." +
+                         tableName);
+        txn.exec("TRUNCATE TABLE \"" + toLowerCase(schemaName) + "\".\"" +
+                 tableName + "\" CASCADE;");
+        Logger::debug("processTable", "Table truncated successfully");
+      }
+      txn.commit();
     }
 
     auto sourceConn = connectPostgres(sourceConnStr);
