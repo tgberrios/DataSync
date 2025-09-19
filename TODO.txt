@@ -42,3 +42,7 @@ bool compareAndUpdateRecord(...);
 🎯 OBJETIVO FINAL
 Implementar sincronización delta completa (INSERT + UPDATE + DELETE) en los 3 archivos restantes, siguiendo exactamente el mismo patrón que ya funciona en MariaDBToPostgres.h.
 IMPORTANTE: Mantener la misma lógica, estructura y flujo que ya está funcionando perfectamente en MariaDBToPostgres.h. No crear nuevas funciones innecesarias, usar las existentes y seguir el principio KISS.
+
+
+
+JOB DE AIRFLOW PARA HACERLO DE MONGO EL UPDATE CADA DOMINGO 

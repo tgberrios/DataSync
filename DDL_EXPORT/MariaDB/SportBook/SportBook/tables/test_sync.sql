@@ -1,7 +1,7 @@
 -- Table DDL for SportBook.test_sync
 -- Engine: MariaDB
 -- Database: SportBook
--- Generated: 1758307930
+-- Generated: 1758320182
 
 CREATE TABLE `test_sync` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
