@@ -40,11 +40,7 @@ void MetricsCollector::createMetricsTable() {
         "db_engine VARCHAR(50) NOT NULL,"
         "records_transferred BIGINT,"
         "bytes_transferred BIGINT,"
-        "transfer_duration_ms INTEGER,"
-        "transfer_rate_per_second DECIMAL(20,2),"
-        "chunk_size INTEGER,"
         "memory_used_mb DECIMAL(15,2),"
-        "cpu_usage_percent DECIMAL(5,2),"
         "io_operations_per_second INTEGER,"
         "avg_latency_ms DECIMAL(10,2),"
         "min_latency_ms DECIMAL(10,2),"
@@ -89,31 +85,22 @@ void MetricsCollector::collectTransferMetrics() {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
     pqxx::work txn(conn);
 
-    // Query para obtener métricas de transferencia
     std::string transferQuery =
         "SELECT "
         "c.schema_name,"
         "c.table_name,"
         "c.db_engine,"
-        "COALESCE(t.current_records, 0) as current_records,"
-        "COALESCE(c.last_offset, 0) as last_sync_records,"
-        "COALESCE(t.current_records, 0) - COALESCE(c.last_offset, 0) as "
-        "records_transferred,"
+        "c.status,"
         "c.last_sync_time,"
-        "EXTRACT(EPOCH FROM (NOW() - c.last_sync_time)) * 1000 as "
-        "transfer_duration_ms "
+        "c.last_sync_column,"
+        "COALESCE(pg.n_live_tup, 0) as current_records,"
+        "COALESCE(pg_total_relation_size(pg_class.oid), 0) as table_size_bytes "
         "FROM metadata.catalog c "
-        "LEFT JOIN ("
-        "    SELECT "
-        "        table_schema,"
-        "        table_name,"
-        "        COUNT(*) as current_records "
-        "    FROM information_schema.tables "
-        "    WHERE table_schema NOT IN ('information_schema', 'pg_catalog', "
-        "'pg_toast', 'pg_temp_1', 'pg_toast_temp_1', 'metadata') "
-        "    GROUP BY table_schema, table_name"
-        ") t ON c.schema_name = t.table_schema AND c.table_name = t.table_name "
-        "WHERE c.db_engine IS NOT NULL;";
+        "LEFT JOIN pg_stat_user_tables pg ON c.schema_name = pg.schemaname AND "
+        "c.table_name = pg.relname "
+        "LEFT JOIN pg_class ON pg.relname = pg_class.relname AND pg.schemaname "
+        "= pg_class.relnamespace::regnamespace::text "
+        "WHERE c.db_engine IS NOT NULL AND c.active = true;";
 
     auto result = txn.exec(transferQuery);
     txn.commit();
@@ -124,19 +111,51 @@ void MetricsCollector::collectTransferMetrics() {
       metric.schema_name = row[0].as<std::string>();
       metric.table_name = row[1].as<std::string>();
       metric.db_engine = row[2].as<std::string>();
-      metric.records_transferred =
-          row[5].is_null() ? 0 : row[5].as<long long>();
-      metric.transfer_duration_ms =
-          row[7].is_null() ? 0 : static_cast<int>(row[7].as<double>());
-      metric.chunk_size = 1000; // Default chunk size
+      std::string status = row[3].as<std::string>();
+      long long currentRecords = row[6].is_null() ? 0 : row[6].as<long long>();
+      long long tableSizeBytes = row[7].is_null() ? 0 : row[7].as<long long>();
 
-      if (metric.transfer_duration_ms > 0) {
-        metric.transfer_rate_per_second = calculateTransferRate(
-            metric.records_transferred, metric.transfer_duration_ms);
+      if (currentRecords <= 0 && tableSizeBytes <= 0) {
+        continue;
       }
 
-      metric.bytes_transferred =
-          calculateBytesTransferred(metric.schema_name, metric.table_name);
+      metric.records_transferred = currentRecords;
+      metric.bytes_transferred = tableSizeBytes;
+      metric.memory_used_mb = tableSizeBytes / (1024.0 * 1024.0);
+      metric.io_operations_per_second = 0;
+      metric.avg_latency_ms = 0.0;
+      metric.min_latency_ms = 0.0;
+      metric.max_latency_ms = 0.0;
+      metric.p95_latency_ms = 0.0;
+      metric.p99_latency_ms = 0.0;
+      metric.latency_samples = 0;
+
+      if (status == "full_load") {
+        metric.transfer_type = "FULL_LOAD";
+      } else if (status == "incremental") {
+        metric.transfer_type = "INCREMENTAL";
+      } else {
+        metric.transfer_type = "SYNC";
+      }
+
+      if (status == "ERROR") {
+        metric.status = "FAILED";
+        metric.error_message = "Transfer failed";
+      } else if (status == "NO_DATA") {
+        metric.status = "SUCCESS";
+        metric.error_message = "No data to transfer";
+      } else {
+        metric.status = "SUCCESS";
+        metric.error_message = "";
+      }
+
+      if (!row[4].is_null()) {
+        metric.completed_at = row[4].as<std::string>();
+        metric.started_at = metric.completed_at;
+      } else {
+        metric.started_at = getCurrentTimestamp();
+        metric.completed_at = getCurrentTimestamp();
+      }
 
       metrics.push_back(metric);
     }
@@ -155,44 +174,39 @@ void MetricsCollector::collectPerformanceMetrics() {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
     pqxx::work txn(conn);
 
-    // Query para obtener métricas de rendimiento
-    std::string performanceQuery = "SELECT "
-                                   "schemaname,"
-                                   "relname,"
-                                   "n_tup_ins as inserts,"
-                                   "n_tup_upd as updates,"
-                                   "n_tup_del as deletes,"
-                                   "n_live_tup as live_tuples,"
-                                   "n_dead_tup as dead_tuples,"
-                                   "last_autoanalyze,"
-                                   "last_autovacuum "
-                                   "FROM pg_stat_user_tables "
-                                   "WHERE schemaname IN (SELECT DISTINCT "
-                                   "schema_name FROM metadata.catalog);";
+    std::string performanceQuery =
+        "SELECT "
+        "schemaname,"
+        "relname,"
+        "n_tup_ins as inserts,"
+        "n_tup_upd as updates,"
+        "n_tup_del as deletes,"
+        "n_live_tup as live_tuples,"
+        "n_dead_tup as dead_tuples,"
+        "last_autoanalyze,"
+        "last_autovacuum,"
+        "COALESCE(pg_total_relation_size(pg_class.oid), 0) as table_size_bytes "
+        "FROM pg_stat_user_tables "
+        "LEFT JOIN pg_class ON pg_stat_user_tables.relname = pg_class.relname "
+        "AND pg_stat_user_tables.schemaname = "
+        "pg_class.relnamespace::regnamespace::text "
+        "WHERE schemaname IN (SELECT DISTINCT schema_name FROM "
+        "metadata.catalog);";
 
     auto result = txn.exec(performanceQuery);
     txn.commit();
 
-    // Mapear métricas de rendimiento a nuestras métricas
     for (auto &metric : metrics) {
       for (const auto &row : result) {
         if (row[0].as<std::string>() == metric.schema_name &&
             row[1].as<std::string>() == metric.table_name) {
 
-          // Calcular métricas de rendimiento basadas en estadísticas
           long long total_operations = row[2].as<long long>() +
                                        row[3].as<long long>() +
                                        row[4].as<long long>();
-          metric.io_operations_per_second = static_cast<int>(
-              total_operations /
-              std::max(1.0, metric.transfer_duration_ms / 1000.0));
 
-          // Estimar uso de memoria basado en tamaño de tabla
-          metric.memory_used_mb = metric.bytes_transferred / (1024.0 * 1024.0);
-
-          // Estimar CPU basado en operaciones
-          metric.cpu_usage_percent =
-              std::min(100.0, (total_operations / 1000.0) * 10.0);
+          metric.io_operations_per_second = static_cast<int>(total_operations);
+          metric.memory_used_mb = row[9].as<long long>() / (1024.0 * 1024.0);
 
           break;
         }
@@ -271,7 +285,6 @@ void MetricsCollector::collectTimestampMetrics() {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
     pqxx::work txn(conn);
 
-    // Query para obtener timestamps
     std::string timestampQuery =
         "SELECT "
         "schema_name,"
@@ -284,7 +297,6 @@ void MetricsCollector::collectTimestampMetrics() {
     auto result = txn.exec(timestampQuery);
     txn.commit();
 
-    // Mapear timestamps a nuestras métricas
     for (auto &metric : metrics) {
       for (const auto &row : result) {
         if (row[0].as<std::string>() == metric.schema_name &&
@@ -292,20 +304,7 @@ void MetricsCollector::collectTimestampMetrics() {
             row[2].as<std::string>() == metric.db_engine) {
 
           metric.completed_at = row[3].as<std::string>();
-
-          // Estimar started_at basado en duración
-          if (metric.transfer_duration_ms > 0) {
-            auto completed = std::chrono::system_clock::from_time_t(
-                std::chrono::duration_cast<std::chrono::seconds>(
-                    std::chrono::milliseconds(metric.transfer_duration_ms))
-                    .count());
-            auto started = completed - std::chrono::milliseconds(
-                                           metric.transfer_duration_ms);
-            auto time_t = std::chrono::system_clock::to_time_t(started);
-            std::stringstream ss;
-            ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%d %H:%M:%S");
-            metric.started_at = ss.str();
-          }
+          metric.started_at = metric.completed_at;
 
           break;
         }
@@ -325,31 +324,27 @@ void MetricsCollector::collectLatencyMetrics() {
     pqxx::work txn(conn);
 
     for (auto &metric : metrics) {
-      std::vector<double> latencySamples;
-
       std::string latencyQuery = "SELECT "
                                  "EXTRACT(EPOCH FROM (completed_at - "
                                  "started_at)) * 1000 as latency_ms "
                                  "FROM metadata.transfer_metrics "
-                                 "WHERE schema_name = '" +
-                                 escapeSQL(metric.schema_name) +
-                                 "' "
-                                 "AND table_name = '" +
-                                 escapeSQL(metric.table_name) +
-                                 "' "
-                                 "AND db_engine = '" +
-                                 escapeSQL(metric.db_engine) +
-                                 "' "
+                                 "WHERE schema_name = $1 "
+                                 "AND table_name = $2 "
+                                 "AND db_engine = $3 "
                                  "AND completed_at IS NOT NULL "
                                  "AND started_at IS NOT NULL "
                                  "ORDER BY created_at DESC LIMIT 100;";
 
-      auto result = txn.exec(latencyQuery);
+      auto result = txn.exec_params(latencyQuery, metric.schema_name,
+                                    metric.table_name, metric.db_engine);
 
+      std::vector<double> latencySamples;
       for (const auto &row : result) {
         if (!row[0].is_null()) {
           double latency = row[0].as<double>();
-          latencySamples.push_back(latency);
+          if (latency > 0) {
+            latencySamples.push_back(latency);
+          }
         }
       }
 
@@ -387,68 +382,47 @@ void MetricsCollector::saveMetricsToDatabase() {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
     pqxx::work txn(conn);
 
-    for (const auto &metric : metrics) {
-      std::string insertQuery =
-          "INSERT INTO metadata.transfer_metrics ("
-          "schema_name, table_name, db_engine,"
-          "records_transferred, bytes_transferred, transfer_duration_ms, "
-          "transfer_rate_per_second,"
-          "chunk_size, memory_used_mb, cpu_usage_percent, "
-          "io_operations_per_second,"
-          "avg_latency_ms, min_latency_ms, max_latency_ms, "
-          "p95_latency_ms, p99_latency_ms, latency_samples,"
-          "transfer_type, status, error_message,"
-          "started_at, completed_at"
-          ") VALUES ("
-          "'" +
-          escapeSQL(metric.schema_name) + "', '" +
-          escapeSQL(metric.table_name) + "', '" + escapeSQL(metric.db_engine) +
-          "'," + std::to_string(metric.records_transferred) + ", " +
-          std::to_string(metric.bytes_transferred) + ", " +
-          std::to_string(metric.transfer_duration_ms) + ", " +
-          std::to_string(metric.transfer_rate_per_second) + "," +
-          std::to_string(metric.chunk_size) + ", " +
-          std::to_string(metric.memory_used_mb) + ", " +
-          std::to_string(metric.cpu_usage_percent) + ", " +
-          std::to_string(metric.io_operations_per_second) + "," +
-          std::to_string(metric.avg_latency_ms) + ", " +
-          std::to_string(metric.min_latency_ms) + ", " +
-          std::to_string(metric.max_latency_ms) + ", " +
-          std::to_string(metric.p95_latency_ms) + ", " +
-          std::to_string(metric.p99_latency_ms) + ", " +
-          std::to_string(metric.latency_samples) +
-          ","
-          "'" +
-          escapeSQL(metric.transfer_type) + "', '" + escapeSQL(metric.status) +
-          "', " +
-          (metric.error_message.empty()
-               ? "NULL"
-               : "'" + escapeSQL(metric.error_message) + "'") +
-          "," +
-          (metric.started_at.empty()
-               ? "NULL"
-               : "'" + escapeSQL(metric.started_at) + "'") +
-          ", " +
-          (metric.completed_at.empty()
-               ? "NULL"
-               : "'" + escapeSQL(metric.completed_at) + "'") +
-          ") ON CONFLICT (schema_name, table_name, db_engine, "
-          "created_date) DO UPDATE SET "
-          "records_transferred = EXCLUDED.records_transferred,"
-          "bytes_transferred = EXCLUDED.bytes_transferred,"
-          "transfer_duration_ms = EXCLUDED.transfer_duration_ms,"
-          "transfer_rate_per_second = EXCLUDED.transfer_rate_per_second,"
-          "chunk_size = EXCLUDED.chunk_size,"
-          "memory_used_mb = EXCLUDED.memory_used_mb,"
-          "cpu_usage_percent = EXCLUDED.cpu_usage_percent,"
-          "io_operations_per_second = EXCLUDED.io_operations_per_second,"
-          "transfer_type = EXCLUDED.transfer_type,"
-          "status = EXCLUDED.status,"
-          "error_message = EXCLUDED.error_message,"
-          "started_at = EXCLUDED.started_at,"
-          "completed_at = EXCLUDED.completed_at;";
+    std::string insertQuery =
+        "INSERT INTO metadata.transfer_metrics ("
+        "schema_name, table_name, db_engine,"
+        "records_transferred, bytes_transferred, memory_used_mb, "
+        "io_operations_per_second,"
+        "avg_latency_ms, min_latency_ms, max_latency_ms, "
+        "p95_latency_ms, p99_latency_ms, latency_samples,"
+        "transfer_type, status, error_message,"
+        "started_at, completed_at"
+        ") VALUES ("
+        "$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, "
+        "$16, $17"
+        ") ON CONFLICT (schema_name, table_name, db_engine, "
+        "created_date) DO UPDATE SET "
+        "records_transferred = EXCLUDED.records_transferred,"
+        "bytes_transferred = EXCLUDED.bytes_transferred,"
+        "memory_used_mb = EXCLUDED.memory_used_mb,"
+        "io_operations_per_second = EXCLUDED.io_operations_per_second,"
+        "avg_latency_ms = EXCLUDED.avg_latency_ms,"
+        "min_latency_ms = EXCLUDED.min_latency_ms,"
+        "max_latency_ms = EXCLUDED.max_latency_ms,"
+        "p95_latency_ms = EXCLUDED.p95_latency_ms,"
+        "p99_latency_ms = EXCLUDED.p99_latency_ms,"
+        "latency_samples = EXCLUDED.latency_samples,"
+        "transfer_type = EXCLUDED.transfer_type,"
+        "status = EXCLUDED.status,"
+        "error_message = EXCLUDED.error_message,"
+        "started_at = EXCLUDED.started_at,"
+        "completed_at = EXCLUDED.completed_at;";
 
-      txn.exec(insertQuery);
+    for (const auto &metric : metrics) {
+      txn.exec_params(
+          insertQuery, metric.schema_name, metric.table_name, metric.db_engine,
+          metric.records_transferred, metric.bytes_transferred,
+          metric.memory_used_mb, metric.io_operations_per_second,
+          metric.avg_latency_ms, metric.min_latency_ms, metric.max_latency_ms,
+          metric.p95_latency_ms, metric.p99_latency_ms, metric.latency_samples,
+          metric.transfer_type, metric.status,
+          metric.error_message.empty() ? nullptr : metric.error_message.c_str(),
+          metric.started_at.empty() ? nullptr : metric.started_at.c_str(),
+          metric.completed_at.empty() ? nullptr : metric.completed_at.c_str());
     }
 
     txn.commit();
@@ -471,10 +445,10 @@ void MetricsCollector::generateMetricsReport() {
         "COUNT(*) FILTER (WHERE status = 'SUCCESS') as successful_transfers,"
         "COUNT(*) FILTER (WHERE status = 'FAILED') as failed_transfers,"
         "COUNT(*) FILTER (WHERE status = 'PENDING') as pending_transfers,"
-        "AVG(transfer_rate_per_second) as avg_transfer_rate,"
         "SUM(records_transferred) as total_records_transferred,"
         "SUM(bytes_transferred) as total_bytes_transferred,"
-        "AVG(transfer_duration_ms) as avg_transfer_duration_ms,"
+        "AVG(memory_used_mb) as avg_memory_used_mb,"
+        "SUM(io_operations_per_second) as total_io_operations,"
         "AVG(avg_latency_ms) as avg_latency_ms,"
         "MIN(min_latency_ms) as min_latency_ms,"
         "MAX(max_latency_ms) as max_latency_ms,"
@@ -492,17 +466,18 @@ void MetricsCollector::generateMetricsReport() {
       int successfulTransfers = row[1].as<int>();
       int failedTransfers = row[2].as<int>();
       int pendingTransfers = row[3].as<int>();
-      double avgTransferRate = row[4].is_null() ? 0.0 : row[4].as<double>();
-      long long totalRecords = row[5].is_null() ? 0 : row[5].as<long long>();
-      long long totalBytes = row[6].is_null() ? 0 : row[6].as<long long>();
-      double avgDuration = row[7].is_null() ? 0.0 : row[7].as<double>();
+      long long totalRecords = row[4].is_null() ? 0 : row[4].as<long long>();
+      long long totalBytes = row[5].is_null() ? 0 : row[5].as<long long>();
+      double avgMemoryUsed = row[6].is_null() ? 0.0 : row[6].as<double>();
+      long long totalIOOperations =
+          row[7].is_null() ? 0 : row[7].as<long long>();
       double avgLatency = row[8].is_null() ? 0.0 : row[8].as<double>();
       double minLatency = row[9].is_null() ? 0.0 : row[9].as<double>();
       double maxLatency = row[10].is_null() ? 0.0 : row[10].as<double>();
       double avgP95Latency = row[11].is_null() ? 0.0 : row[11].as<double>();
       double avgP99Latency = row[12].is_null() ? 0.0 : row[12].as<double>();
 
-      Logger::info("MetricsCollector", "=== TRANSFER METRICS REPORT ===");
+      Logger::info("MetricsCollector", "=== DATABASE METRICS REPORT ===");
       Logger::info("MetricsCollector",
                    "Total Tables: " + std::to_string(totalTables));
       Logger::info("MetricsCollector", "Successful Transfers: " +
@@ -512,15 +487,14 @@ void MetricsCollector::generateMetricsReport() {
       Logger::info("MetricsCollector",
                    "Pending Transfers: " + std::to_string(pendingTransfers));
       Logger::info("MetricsCollector",
-                   "Average Transfer Rate: " + std::to_string(avgTransferRate) +
-                       " records/sec");
-      Logger::info("MetricsCollector", "Total Records Transferred: " +
-                                           std::to_string(totalRecords));
+                   "Total Records: " + std::to_string(totalRecords));
       Logger::info("MetricsCollector",
-                   "Total Bytes Transferred: " + std::to_string(totalBytes) +
-                       " bytes");
-      Logger::info("MetricsCollector", "Average Transfer Duration: " +
-                                           std::to_string(avgDuration) + " ms");
+                   "Total Bytes: " + std::to_string(totalBytes) + " bytes");
+      Logger::info("MetricsCollector",
+                   "Average Memory Used: " + std::to_string(avgMemoryUsed) +
+                       " MB");
+      Logger::info("MetricsCollector",
+                   "Total IO Operations: " + std::to_string(totalIOOperations));
       Logger::info("MetricsCollector", "=== LATENCY METRICS ===");
       Logger::info("MetricsCollector",
                    "Average Latency: " + std::to_string(avgLatency) + " ms");

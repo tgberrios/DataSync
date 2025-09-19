@@ -12,19 +12,13 @@ struct TransferMetrics {
   std::string table_name;
   std::string db_engine;
 
-  // Métricas de Transferencia
+  // Métricas Reales de la Base de Datos
   long long records_transferred = 0;
   long long bytes_transferred = 0;
-  int transfer_duration_ms = 0;
-  double transfer_rate_per_second = 0.0;
-
-  // Métricas de Rendimiento
-  int chunk_size = 0;
   double memory_used_mb = 0.0;
-  double cpu_usage_percent = 0.0;
   int io_operations_per_second = 0;
 
-  // Métricas de Latencia
+  // Métricas de Latencia (solo si hay datos históricos)
   double avg_latency_ms = 0.0;
   double min_latency_ms = 0.0;
   double max_latency_ms = 0.0;

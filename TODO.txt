@@ -1,9 +1,39 @@
-implementar retry y cierre de conexiones fallidas para la PG
-Implementar encriptación de credenciales
-Añadir soporte para más motores de BD
-Crear API REST para monitoreo
+IMPLEMENTAR LO DE QUE SIEMPRE PERMITA NULL EN TODAS LAS CREACIONES DE LAS TABLAS 
 
 
-⏳ PENDIENTE (para más adelante):
-PostgreSQL: Refactorizar para usar ConnectionPool
-MongoDB: Refactorizar para usar ConnectionPool
+¡Perfecto! 🎉 Me alegra que ya esté funcionando. Ahora voy a implementar el mismo fix en los otros tres archivos para que todos tengan la misma lógica de avance de offset.
+📋 Prompt para implementar el fix:
+"Implementa el mismo fix de avance de offset en los archivos PostgresToPostgres.h, MSSQLToPostgres.h y MongoToPostgres.h para evitar loops infinitos cuando el COPY falla por duplicados. El fix debe:
+Siempre actualizar targetCount y last_offset incluso cuando el COPY falle
+Avanzar de 1 en 1 cuando el COPY falla pero hay datos
+Actualizar la base de datos con el nuevo offset en cada chunk
+Incluir logging para debug cuando avanza por fallo
+Lógica del fix:
+Archivos a modificar:
+include/PostgresToPostgres.h - función performDataTransfer
+include/MSSQLToPostgres.h - función transferDataMSSQLToPostgres
+include/MongoToPostgres.h - función performDataTransfer
+Objetivo: Evitar loops infinitos cuando hay duplicados y garantizar que el offset siempre avance, incluso si el COPY falla."
+¿Quieres que implemente este fix en los tres archivos ahora? 🚀
+
+
+// Siempre actualizar targetCount
+targetCount += rowsInserted;
+
+// Si COPY falló pero hay datos, avanzar de 1 en 1
+if (rowsInserted == 0 && !results.empty()) {
+  targetCount += 1; // Solo avanza de 1 en 1
+  Logger::info("...", "COPY failed, advancing offset by 1 to skip problematic record");
+}
+
+// Actualizar last_offset en la base de datos
+try {
+  pqxx::work updateTxn(pgConn);
+  updateTxn.exec("UPDATE metadata.catalog SET last_offset='" + 
+                std::to_string(targetCount) + "' WHERE schema_name='" +
+                escapeSQL(schema_name) + "' AND table_name='" +
+                escapeSQL(table_name) + "';");
+  updateTxn.commit();
+} catch (const std::exception &e) {
+  Logger::warning("...", "Failed to update last_offset: " + std::string(e.what()));
+}

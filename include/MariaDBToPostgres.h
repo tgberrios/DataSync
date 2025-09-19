@@ -191,7 +191,7 @@ public:
           std::transform(colName.begin(), colName.end(), colName.begin(),
                          ::tolower);
           std::string dataType = col[1];
-          std::string nullable = (col[2] == "YES") ? "" : " NOT NULL";
+          std::string nullable = "";
           std::string columnKey = col[3];
           std::string extra = col[4];
           std::string maxLength = col[5];
@@ -420,7 +420,6 @@ public:
 
         std::vector<std::string> columnNames;
         std::vector<std::string> columnTypes;
-        std::vector<bool> columnNullable;
 
         for (const auto &col : columns) {
           if (col.size() < 6)
@@ -444,7 +443,6 @@ public:
           }
 
           columnTypes.push_back(pgType);
-          columnNullable.push_back(col[2] == "YES");
         }
 
         if (columnNames.empty()) {
@@ -557,35 +555,7 @@ public:
                 columnsStr += ",";
             }
 
-            std::stringstream csvData;
-            for (const auto &row : results) {
-              if (row.size() != columnNames.size()) {
-                continue;
-              }
-
-              for (size_t i = 0; i < row.size(); ++i) {
-                if (i > 0)
-                  csvData << "|";
-
-                std::string value = row[i];
-                if (value == "NULL" || value.empty()) {
-                  csvData << "\\N";
-                } else {
-                  // Con pipe como delimitador, solo necesitamos escapar pipes
-                  // en los datos
-                  std::string escapedValue = value;
-                  size_t pos = 0;
-                  while ((pos = escapedValue.find("|", pos)) !=
-                         std::string::npos) {
-                    escapedValue.replace(pos, 1, "\\|");
-                    pos += 2;
-                  }
-                  csvData << escapedValue;
-                }
-              }
-              csvData << "\n";
-              rowsInserted++;
-            }
+            rowsInserted = results.size();
 
             if (rowsInserted > 0) {
               try {
@@ -601,50 +571,7 @@ public:
                       std::vector<std::optional<std::string>> values;
                       for (size_t i = 0; i < row.size(); ++i) {
                         if (row[i] == "NULL" || row[i].empty()) {
-                          std::string columnType = columnTypes[i];
-                          std::transform(columnType.begin(), columnType.end(),
-                                         columnType.begin(), ::toupper);
-
-                          if (columnType.find("TIMESTAMP") !=
-                                  std::string::npos ||
-                              columnType.find("DATETIME") !=
-                                  std::string::npos) {
-                            values.push_back("1970-01-01 00:00:00");
-                          } else if (columnType.find("DATE") !=
-                                     std::string::npos) {
-                            values.push_back("1970-01-01");
-                          } else if (columnType.find("TIME") !=
-                                     std::string::npos) {
-                            values.push_back("00:00:00");
-                          } else if (columnType.find("INT") !=
-                                         std::string::npos ||
-                                     columnType.find("BIGINT") !=
-                                         std::string::npos ||
-                                     columnType.find("SMALLINT") !=
-                                         std::string::npos ||
-                                     columnType.find("TINYINT") !=
-                                         std::string::npos) {
-                            values.push_back("0");
-                          } else if (columnType.find("DECIMAL") !=
-                                         std::string::npos ||
-                                     columnType.find("NUMERIC") !=
-                                         std::string::npos ||
-                                     columnType.find("FLOAT") !=
-                                         std::string::npos ||
-                                     columnType.find("DOUBLE") !=
-                                         std::string::npos) {
-                            values.push_back("0.0");
-                          } else if (columnType.find("BOOLEAN") !=
-                                         std::string::npos ||
-                                     columnType.find("BOOL") !=
-                                         std::string::npos) {
-                            values.push_back("false");
-                          } else if (columnType.find("BIT") !=
-                                     std::string::npos) {
-                            values.push_back(std::nullopt);
-                          } else {
-                            values.push_back(std::nullopt);
-                          }
+                          values.push_back(std::nullopt);
                         } else {
                           std::string cleanValue = row[i];
                           std::string columnType = columnTypes[i];
@@ -652,11 +579,7 @@ public:
                                          columnType.begin(), ::toupper);
 
                           if (cleanValue.empty()) {
-                            if (columnType.find("BIT") != std::string::npos) {
-                              values.push_back(std::nullopt);
-                            } else {
-                              values.push_back(std::nullopt);
-                            }
+                            values.push_back(std::nullopt);
                             continue;
                           }
 
@@ -760,7 +683,34 @@ public:
                           "Error processing data: " + std::string(e.what()));
           }
 
+          // Always update targetCount and last_offset, even if COPY failed
+          // This prevents infinite loops when there are duplicate key violations
           targetCount += rowsInserted;
+          
+          // If COPY failed but we have data, advance the offset by 1
+          // to prevent infinite loops on duplicate key violations
+          if (rowsInserted == 0 && !results.empty()) {
+            targetCount += 1; // Advance by 1 to skip the problematic record
+            Logger::info("transferDataMariaDBToPostgres",
+                        "COPY failed, advancing offset by 1 to skip problematic record for " + 
+                        schema_name + "." + table_name);
+          }
+          
+          // Update last_offset in database to prevent infinite loops
+          try {
+            pqxx::work updateTxn(pgConn);
+            updateTxn.exec("UPDATE metadata.catalog SET last_offset='" + 
+                          std::to_string(targetCount) + "' WHERE schema_name='" +
+                          escapeSQL(schema_name) + "' AND table_name='" +
+                          escapeSQL(table_name) + "';");
+            updateTxn.commit();
+            Logger::debug("transferDataMariaDBToPostgres",
+                         "Updated last_offset to " + std::to_string(targetCount) + 
+                         " for " + schema_name + "." + table_name);
+          } catch (const std::exception &e) {
+            Logger::warning("transferDataMariaDBToPostgres",
+                           "Failed to update last_offset: " + std::string(e.what()));
+          }
 
           if (targetCount >= sourceCount) {
             hasMoreData = false;
