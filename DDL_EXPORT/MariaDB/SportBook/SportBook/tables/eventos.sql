@@ -1,7 +1,7 @@
 -- Table DDL for SportBook.eventos
 -- Engine: MariaDB
 -- Database: SportBook
--- Generated: 1758305961
+-- Generated: 1758307930
 
 CREATE TABLE `eventos` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
@@ -14,4 +14,4 @@ CREATE TABLE `eventos` (
   PRIMARY KEY (`id`),
   KEY `idx_eventos_nombre` (`nombre`),
   KEY `idx_eventos_fecha` (`fecha_evento`)
-) ENGINE=InnoDB AUTO_INCREMENT=10000 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+) ENGINE=InnoDB AUTO_INCREMENT=10001 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
