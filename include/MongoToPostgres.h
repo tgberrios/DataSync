@@ -277,6 +277,9 @@ private:
           break;
         }
 
+        // Siempre permitir NULL en todas las columnas
+        columnDef += "";
+
         columns.push_back(columnDef);
       }
     }
