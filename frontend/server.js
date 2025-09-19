@@ -12,11 +12,11 @@ app.use(cors());
 app.use(express.json());
 
 const pool = new Pool({
-  host: "10.12.240.40",
+  host: "localhost",
   port: 5432,
   database: "DataLake",
-  user: "Datalake_User",
-  password: "keepprofessional",
+  user: "tomy.berrios",
+  password: "Yucaquemada1",
 });
 
 // Test connection
@@ -177,29 +177,39 @@ app.get("/api/dashboard/stats", async (req, res) => {
 
     // Extract table names from COPY queries and get their counts
     const processingTablesWithCounts = [];
-    
+
     for (const row of activeQueries.rows) {
-      const copyMatch = row.query.match(/COPY\s+"?([^"]+)"?\."?([^"]+)"?\s+FROM\s+STDIN/i);
+      const copyMatch = row.query.match(
+        /COPY\s+"?([^"]+)"?\."?([^"]+)"?\s+FROM\s+STDIN/i
+      );
       if (copyMatch) {
         const schema = copyMatch[1];
         const table = copyMatch[2];
-        
+
         try {
           // Get count for this table
-          const countResult = await pool.query(`SELECT COUNT(*) as count FROM "${schema}"."${table}"`);
+          const countResult = await pool.query(
+            `SELECT COUNT(*) as count FROM "${schema}"."${table}"`
+          );
           const count = parseInt(countResult.rows[0].count);
-          processingTablesWithCounts.push(`${schema}.${table} (${count.toLocaleString()} records)`);
+          processingTablesWithCounts.push(
+            `${schema}.${table} (${count.toLocaleString()} records)`
+          );
         } catch (error) {
           // If count fails, just show table name
-          console.log(`Could not get count for ${schema}.${table}:`, error.message);
+          console.log(
+            `Could not get count for ${schema}.${table}:`,
+            error.message
+          );
           processingTablesWithCounts.push(`${schema}.${table}`);
         }
       }
     }
 
-    const currentProcessText = processingTablesWithCounts.length > 0 
-      ? processingTablesWithCounts.join(', ')
-      : 'No active transfers';
+    const currentProcessText =
+      processingTablesWithCounts.length > 0
+        ? processingTablesWithCounts.join(", ")
+        : "No active transfers";
 
     // 2. TRANSFER PERFORMANCE BY ENGINE
     const transferPerformance = await pool.query(`
@@ -775,53 +785,57 @@ app.delete("/api/config/:key", async (req, res) => {
 // Endpoint para leer logs
 app.get("/api/logs", async (req, res) => {
   try {
-    const { lines = 100, level = 'ALL' } = req.query;
-    const logFilePath = path.join(process.cwd(), '..', 'DataSync.log');
-    
+    const { lines = 100, level = "ALL" } = req.query;
+    const logFilePath = path.join(process.cwd(), "..", "DataSync.log");
+
     // Verificar si el archivo existe
     if (!fs.existsSync(logFilePath)) {
       return res.json({
         logs: [],
         totalLines: 0,
-        message: 'No log file found'
+        message: "No log file found",
       });
     }
 
     // Leer el archivo de logs
-    const logContent = fs.readFileSync(logFilePath, 'utf8');
-    const allLines = logContent.split('\n').filter(line => line.trim() !== '');
-    
+    const logContent = fs.readFileSync(logFilePath, "utf8");
+    const allLines = logContent
+      .split("\n")
+      .filter((line) => line.trim() !== "");
+
     // Filtrar por nivel si se especifica
     let filteredLines = allLines;
-    if (level !== 'ALL') {
-      filteredLines = allLines.filter(line => 
+    if (level !== "ALL") {
+      filteredLines = allLines.filter((line) =>
         line.includes(`[${level.toUpperCase()}]`)
       );
     }
-    
+
     // Obtener las últimas N líneas
     const lastLines = filteredLines.slice(-parseInt(lines));
-    
+
     // Parsear cada línea de log
     const parsedLogs = lastLines.map((line, index) => {
-      const logMatch = line.match(/^\[([^\]]+)\] \[([^\]]+)\](?: \[([^\]]+)\])? (.+)$/);
+      const logMatch = line.match(
+        /^\[([^\]]+)\] \[([^\]]+)\](?: \[([^\]]+)\])? (.+)$/
+      );
       if (logMatch) {
         return {
           id: index,
           timestamp: logMatch[1],
           level: logMatch[2],
-          function: logMatch[3] || '',
+          function: logMatch[3] || "",
           message: logMatch[4],
-          raw: line
+          raw: line,
         };
       }
       return {
         id: index,
-        timestamp: '',
-        level: 'UNKNOWN',
-        function: '',
+        timestamp: "",
+        level: "UNKNOWN",
+        function: "",
         message: line,
-        raw: line
+        raw: line,
       };
     });
 
@@ -829,9 +843,8 @@ app.get("/api/logs", async (req, res) => {
       logs: parsedLogs,
       totalLines: filteredLines.length,
       filePath: logFilePath,
-      lastModified: fs.statSync(logFilePath).mtime
+      lastModified: fs.statSync(logFilePath).mtime,
     });
-    
   } catch (err) {
     console.error("Error reading logs:", err);
     res.status(500).json({
@@ -844,28 +857,29 @@ app.get("/api/logs", async (req, res) => {
 // Endpoint para obtener información del archivo de logs
 app.get("/api/logs/info", async (req, res) => {
   try {
-    const logFilePath = path.join(process.cwd(), '..', 'DataSync.log');
-    
+    const logFilePath = path.join(process.cwd(), "..", "DataSync.log");
+
     if (!fs.existsSync(logFilePath)) {
       return res.json({
         exists: false,
-        message: 'No log file found'
+        message: "No log file found",
       });
     }
 
     const stats = fs.statSync(logFilePath);
-    const logContent = fs.readFileSync(logFilePath, 'utf8');
-    const totalLines = logContent.split('\n').filter(line => line.trim() !== '').length;
-    
+    const logContent = fs.readFileSync(logFilePath, "utf8");
+    const totalLines = logContent
+      .split("\n")
+      .filter((line) => line.trim() !== "").length;
+
     res.json({
       exists: true,
       filePath: logFilePath,
       size: stats.size,
       totalLines: totalLines,
       lastModified: stats.mtime,
-      created: stats.birthtime
+      created: stats.birthtime,
     });
-    
   } catch (err) {
     console.error("Error getting log info:", err);
     res.status(500).json({
