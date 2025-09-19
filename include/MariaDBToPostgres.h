@@ -684,32 +684,36 @@ public:
           }
 
           // Always update targetCount and last_offset, even if COPY failed
-          // This prevents infinite loops when there are duplicate key violations
+          // This prevents infinite loops when there are duplicate key
+          // violations
           targetCount += rowsInserted;
-          
+
           // If COPY failed but we have data, advance the offset by 1
           // to prevent infinite loops on duplicate key violations
           if (rowsInserted == 0 && !results.empty()) {
             targetCount += 1; // Advance by 1 to skip the problematic record
             Logger::info("transferDataMariaDBToPostgres",
-                        "COPY failed, advancing offset by 1 to skip problematic record for " + 
-                        schema_name + "." + table_name);
+                         "COPY failed, advancing offset by 1 to skip "
+                         "problematic record for " +
+                             schema_name + "." + table_name);
           }
-          
+
           // Update last_offset in database to prevent infinite loops
           try {
             pqxx::work updateTxn(pgConn);
-            updateTxn.exec("UPDATE metadata.catalog SET last_offset='" + 
-                          std::to_string(targetCount) + "' WHERE schema_name='" +
-                          escapeSQL(schema_name) + "' AND table_name='" +
-                          escapeSQL(table_name) + "';");
+            updateTxn.exec("UPDATE metadata.catalog SET last_offset='" +
+                           std::to_string(targetCount) +
+                           "' WHERE schema_name='" + escapeSQL(schema_name) +
+                           "' AND table_name='" + escapeSQL(table_name) + "';");
             updateTxn.commit();
             Logger::debug("transferDataMariaDBToPostgres",
-                         "Updated last_offset to " + std::to_string(targetCount) + 
-                         " for " + schema_name + "." + table_name);
+                          "Updated last_offset to " +
+                              std::to_string(targetCount) + " for " +
+                              schema_name + "." + table_name);
           } catch (const std::exception &e) {
             Logger::warning("transferDataMariaDBToPostgres",
-                           "Failed to update last_offset: " + std::string(e.what()));
+                            "Failed to update last_offset: " +
+                                std::string(e.what()));
           }
 
           if (targetCount >= sourceCount) {
