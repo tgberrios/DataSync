@@ -152,6 +152,69 @@ const PageButton = styled.button<{ active?: boolean }>`
   }
 `;
 
+const GovernanceList = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+`;
+
+const GovernanceItem = styled.div`
+  border: 1px solid #eee;
+  border-radius: 4px;
+  background-color: #fafafa;
+  overflow: hidden;
+  transition: all 0.2s ease;
+  
+  &:hover {
+    border-color: #ddd;
+    background-color: #f5f5f5;
+  }
+`;
+
+const GovernanceSummary = styled.div`
+  display: grid;
+  grid-template-columns: 200px 100px 120px 120px 100px 100px 80px 80px 80px 100px 150px;
+  align-items: center;
+  padding: 10px 15px;
+  cursor: pointer;
+  gap: 10px;
+  font-size: 0.9em;
+`;
+
+const GovernanceDetails = styled.div<{ $isOpen: boolean }>`
+  max-height: ${props => props.$isOpen ? '800px' : '0'};
+  opacity: ${props => props.$isOpen ? '1' : '0'};
+  transition: all 0.3s ease;
+  border-top: ${props => props.$isOpen ? '1px solid #eee' : 'none'};
+  background-color: white;
+  overflow: hidden;
+`;
+
+const DetailsGrid = styled.div`
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  padding: 15px;
+  gap: 15px;
+`;
+
+const DetailCard = styled.div`
+  background: white;
+  border: 1px solid #eee;
+  border-radius: 4px;
+  padding: 12px;
+`;
+
+const DetailLabel = styled.div`
+  color: #666;
+  font-size: 0.85em;
+  margin-bottom: 5px;
+`;
+
+const DetailValue = styled.div`
+  font-size: 1.1em;
+  font-weight: 500;
+`;
+
 const formatDate = (date: string) => {
   if (!date) return '-';
   return new Date(date).toLocaleString();
@@ -175,6 +238,7 @@ const Governance = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<any[]>([]);
+  const [openItemId, setOpenItemId] = useState<number | null>(null);
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({
     total: 0,
@@ -190,6 +254,10 @@ const Governance = () => {
     domain: '',
     sensitivity: ''
   });
+
+  const toggleItem = (id: number) => {
+    setOpenItemId(openItemId === id ? null : id);
+  };
 
   useEffect(() => {
     const fetchData = async () => {
@@ -207,8 +275,8 @@ const Governance = () => {
         setError(err instanceof Error ? err.message : 'Error loading governance data');
       } finally {
         setLoading(false);
-      }
-    };
+        }
+      };
 
     fetchData();
     const interval = setInterval(fetchData, 30000);
@@ -278,60 +346,264 @@ const Governance = () => {
 
       {!loading && !error && (
         <>
-          <Table>
-            <thead>
-              <tr>
-                <Th>Schema.Table</Th>
-                <Th>Engine</Th>
-                <Th>Category</Th>
-                <Th>Domain</Th>
-                <Th>Health</Th>
-                <Th>Sensitivity</Th>
-                <Th>Quality</Th>
-                <Th>Size</Th>
-                <Th>Rows</Th>
-                <Th>Access</Th>
-                <Th>Last Analyzed</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.map((item) => (
-                <tr key={item.id}>
-                  <Td>{item.schema_name}.{item.table_name}</Td>
-                  <Td>{item.inferred_source_engine}</Td>
-                  <Td>
-                    <Badge type={item.data_category}>
-                      {item.data_category}
-                    </Badge>
-                  </Td>
-                  <Td>{item.business_domain}</Td>
-                  <Td>
-                    <Badge type={item.health_status}>
-                      {item.health_status}
-                    </Badge>
-                  </Td>
-                  <Td>
-                    <Badge type={`${item.sensitivity_level}_SENSITIVITY`}>
-                      {item.sensitivity_level}
-                    </Badge>
-                  </Td>
-                  <Td>
-                    <QualityScore score={item.data_quality_score}>
-                      {item.data_quality_score}%
-                    </QualityScore>
-                  </Td>
-                  <Td>{formatSize(item.table_size_mb)}</Td>
-                  <Td>{formatNumber(item.total_rows)}</Td>
-                  <Td>
-                    <Badge type={item.access_frequency}>
-                      {item.access_frequency}
-                    </Badge>
-                  </Td>
-                  <Td>{formatDate(item.last_analyzed)}</Td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
+          <GovernanceList>
+            {data.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '20px', color: '#666' }}>
+                No governance data found
+              </div>
+            ) : (
+              data.map((item) => (
+                <GovernanceItem key={item.id}>
+                  <GovernanceSummary onClick={() => toggleItem(item.id)}>
+                    <div>{item.schema_name}.{item.table_name}</div>
+                    <div>{item.inferred_source_engine}</div>
+                    <div>
+                      <Badge type={item.data_category}>
+                        {item.data_category}
+                      </Badge>
+                    </div>
+                    <div>{item.business_domain}</div>
+                    <div>
+                      <Badge type={item.health_status}>
+                        {item.health_status}
+                      </Badge>
+                    </div>
+                    <div>
+                      <Badge type={`${item.sensitivity_level}_SENSITIVITY`}>
+                        {item.sensitivity_level}
+                      </Badge>
+                    </div>
+                    <div>
+                      <QualityScore score={item.data_quality_score}>
+                        {item.data_quality_score}%
+                      </QualityScore>
+                    </div>
+                    <div>{formatSize(item.table_size_mb)}</div>
+                    <div>{formatNumber(item.total_rows)}</div>
+                    <div>
+                      <Badge type={item.access_frequency}>
+                        {item.access_frequency}
+                      </Badge>
+                    </div>
+                    <div style={{ textAlign: 'right', color: '#666', fontSize: '0.85em' }}>
+                      {formatDate(item.last_analyzed)}
+                    </div>
+                  </GovernanceSummary>
+
+                  <GovernanceDetails $isOpen={openItemId === item.id}>
+                    <DetailsGrid>
+                      <DetailCard>
+                        <DetailLabel>Schema Name</DetailLabel>
+                        <DetailValue>{item.schema_name}</DetailValue>
+                      </DetailCard>
+                      <DetailCard>
+                        <DetailLabel>Table Name</DetailLabel>
+                        <DetailValue>{item.table_name}</DetailValue>
+                      </DetailCard>
+                      <DetailCard>
+                        <DetailLabel>Database Engine</DetailLabel>
+                        <DetailValue>{item.inferred_source_engine}</DetailValue>
+                      </DetailCard>
+                      <DetailCard>
+                        <DetailLabel>Data Category</DetailLabel>
+                        <DetailValue>
+                          <Badge type={item.data_category}>
+                            {item.data_category}
+                          </Badge>
+                        </DetailValue>
+                      </DetailCard>
+                      <DetailCard>
+                        <DetailLabel>Business Domain</DetailLabel>
+                        <DetailValue>{item.business_domain}</DetailValue>
+                      </DetailCard>
+                      <DetailCard>
+                        <DetailLabel>Health Status</DetailLabel>
+                        <DetailValue>
+                          <Badge type={item.health_status}>
+                            {item.health_status}
+                          </Badge>
+                        </DetailValue>
+                      </DetailCard>
+                      <DetailCard>
+                        <DetailLabel>Sensitivity Level</DetailLabel>
+                        <DetailValue>
+                          <Badge type={`${item.sensitivity_level}_SENSITIVITY`}>
+                            {item.sensitivity_level}
+                          </Badge>
+                        </DetailValue>
+                      </DetailCard>
+                      <DetailCard>
+                        <DetailLabel>Data Quality Score</DetailLabel>
+                        <DetailValue>
+                          <QualityScore score={item.data_quality_score}>
+                            {item.data_quality_score}%
+                          </QualityScore>
+                        </DetailValue>
+                      </DetailCard>
+                      <DetailCard>
+                        <DetailLabel>Table Size</DetailLabel>
+                        <DetailValue>{formatSize(item.table_size_mb)}</DetailValue>
+                      </DetailCard>
+                      <DetailCard>
+                        <DetailLabel>Total Rows</DetailLabel>
+                        <DetailValue>{formatNumber(item.total_rows)}</DetailValue>
+                      </DetailCard>
+                      <DetailCard>
+                        <DetailLabel>Access Frequency</DetailLabel>
+                        <DetailValue>
+                          <Badge type={item.access_frequency}>
+                            {item.access_frequency}
+                          </Badge>
+                        </DetailValue>
+                      </DetailCard>
+                      <DetailCard>
+                        <DetailLabel>Last Analyzed</DetailLabel>
+                        <DetailValue>{formatDate(item.last_analyzed)}</DetailValue>
+                      </DetailCard>
+                      {item.data_classification && (
+                        <DetailCard>
+                          <DetailLabel>Data Classification</DetailLabel>
+                          <DetailValue>{item.data_classification}</DetailValue>
+                        </DetailCard>
+                      )}
+                      {item.retention_policy && (
+                        <DetailCard>
+                          <DetailLabel>Retention Policy</DetailLabel>
+                          <DetailValue>{item.retention_policy}</DetailValue>
+                        </DetailCard>
+                      )}
+                      {item.owner && (
+                        <DetailCard>
+                          <DetailLabel>Data Owner</DetailLabel>
+                          <DetailValue>{item.owner}</DetailValue>
+                        </DetailCard>
+                      )}
+                      {item.compliance_requirements && (
+                        <DetailCard>
+                          <DetailLabel>Compliance Requirements</DetailLabel>
+                          <DetailValue>{item.compliance_requirements}</DetailValue>
+                        </DetailCard>
+                      )}
+                      {item.null_percentage != null && (
+                        <DetailCard>
+                          <DetailLabel>Null Percentage</DetailLabel>
+                          <DetailValue>{item.null_percentage}%</DetailValue>
+                        </DetailCard>
+                      )}
+                      {item.duplicate_percentage != null && (
+                        <DetailCard>
+                          <DetailLabel>Duplicate Percentage</DetailLabel>
+                          <DetailValue>{item.duplicate_percentage}%</DetailValue>
+                        </DetailCard>
+                      )}
+                      {item.fragmentation_percentage != null && (
+                        <DetailCard>
+                          <DetailLabel>Fragmentation Percentage</DetailLabel>
+                          <DetailValue>{item.fragmentation_percentage}%</DetailValue>
+                        </DetailCard>
+                      )}
+                      {item.query_count_daily != null && (
+                        <DetailCard>
+                          <DetailLabel>Daily Query Count</DetailLabel>
+                          <DetailValue>{formatNumber(item.query_count_daily)}</DetailValue>
+                        </DetailCard>
+                      )}
+                      {item.last_vacuum && (
+                        <DetailCard>
+                          <DetailLabel>Last Vacuum</DetailLabel>
+                          <DetailValue>{formatDate(item.last_vacuum)}</DetailValue>
+                        </DetailCard>
+                      )}
+                      {item.total_columns != null && (
+                        <DetailCard>
+                          <DetailLabel>Total Columns</DetailLabel>
+                          <DetailValue>{formatNumber(item.total_columns)}</DetailValue>
+                        </DetailCard>
+                      )}
+                      {item.index_count != null && (
+                        <DetailCard>
+                          <DetailLabel>Index Count</DetailLabel>
+                          <DetailValue>{formatNumber(item.index_count)}</DetailValue>
+                        </DetailCard>
+                      )}
+                      {item.constraint_count != null && (
+                        <DetailCard>
+                          <DetailLabel>Constraint Count</DetailLabel>
+                          <DetailValue>{formatNumber(item.constraint_count)}</DetailValue>
+                        </DetailCard>
+                      )}
+                      {item.primary_key_columns && (
+                        <DetailCard>
+                          <DetailLabel>Primary Key Columns</DetailLabel>
+                          <DetailValue>{item.primary_key_columns}</DetailValue>
+                        </DetailCard>
+                      )}
+                      {item.first_discovered && (
+                        <DetailCard>
+                          <DetailLabel>First Discovered</DetailLabel>
+                          <DetailValue>{formatDate(item.first_discovered)}</DetailValue>
+                        </DetailCard>
+                      )}
+                      {item.last_accessed && (
+                        <DetailCard>
+                          <DetailLabel>Last Accessed</DetailLabel>
+                          <DetailValue>{formatDate(item.last_accessed)}</DetailValue>
+                        </DetailCard>
+                      )}
+                    </DetailsGrid>
+                    
+                    {/* Critical Status Explanation */}
+                    {item.health_status === 'CRITICAL' && (
+                      <div style={{ 
+                        margin: '15px', 
+                        padding: '15px', 
+                        backgroundColor: '#ffebee', 
+                        border: '1px solid #f44336', 
+                        borderRadius: '4px' 
+                      }}>
+                        <div style={{ 
+                          fontWeight: 'bold', 
+                          color: '#c62828', 
+                          marginBottom: '10px',
+                          fontSize: '1.1em'
+                        }}>
+                          ■ CRITICAL STATUS REASONS:
+                        </div>
+                        <div style={{ color: '#333', lineHeight: '1.5' }}>
+                          {item.data_quality_score < 50 && (
+                            <div>• Low data quality score ({item.data_quality_score}%)</div>
+                          )}
+                          {item.null_percentage > 20 && (
+                            <div>• High null percentage ({item.null_percentage}%)</div>
+                          )}
+                          {item.duplicate_percentage > 10 && (
+                            <div>• High duplicate percentage ({item.duplicate_percentage}%)</div>
+                          )}
+                          {item.fragmentation_percentage > 30 && (
+                            <div>• High fragmentation ({item.fragmentation_percentage}%)</div>
+                          )}
+                          {item.query_count_daily === 0 && (
+                            <div>• No recent queries detected</div>
+                          )}
+                          {item.last_vacuum && (() => {
+                            const lastVacuum = new Date(item.last_vacuum);
+                            const daysSinceVacuum = Math.floor((Date.now() - lastVacuum.getTime()) / (1000 * 60 * 60 * 24));
+                            return daysSinceVacuum > 7 && <div>• No vacuum in {daysSinceVacuum} days</div>;
+                          })()}
+                          {(!item.null_percentage || item.null_percentage <= 20) && 
+                           (!item.duplicate_percentage || item.duplicate_percentage <= 10) && 
+                           (!item.fragmentation_percentage || item.fragmentation_percentage <= 30) && 
+                           item.data_quality_score >= 50 && (
+                            <div>• Manual classification or business rule violation</div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </GovernanceDetails>
+                </GovernanceItem>
+              ))
+            )}
+          </GovernanceList>
 
           <Pagination>
             <PageButton
@@ -347,7 +619,7 @@ const Governance = () => {
                 <React.Fragment key={p}>
                   {i > 0 && arr[i - 1] !== p - 1 && <span>...</span>}
                   <PageButton
-                    $active={p === page}
+                    active={p === page}
                     onClick={() => setPage(p)}
                   >
                     {p}

@@ -5,6 +5,7 @@ import Catalog from './components/Catalog'
 import Monitor from './components/Monitor'
 import Quality from './components/Quality'
 import Governance from './components/Governance'
+import Security from './components/Security'
 import LogsViewer from './components/LogsViewer'
 import Config from './components/Config'
 
@@ -17,9 +18,10 @@ function App() {
           <Route path="catalog" element={<Catalog />} />
           <Route path="monitor" element={<Monitor />} />
           <Route path="quality" element={<Quality />} />
-                <Route path="governance" element={<Governance />} />
-                <Route path="logs" element={<LogsViewer />} />
-                <Route path="config" element={<Config />} />
+          <Route path="governance" element={<Governance />} />
+          <Route path="security" element={<Security />} />
+          <Route path="logs" element={<LogsViewer />} />
+          <Route path="config" element={<Config />} />
         </Route>
       </Routes>
     </BrowserRouter>
