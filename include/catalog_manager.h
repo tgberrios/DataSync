@@ -675,7 +675,13 @@ private:
 
       auto results = executeQueryMSSQL(conn, query);
       if (!results.empty() && !results[0][0].empty()) {
+        Logger::debug("detectTimeColumnMSSQL",
+                      "Detected time column: " + results[0][0] + " for " +
+                          schema + "." + table);
         return results[0][0];
+      } else {
+        Logger::debug("detectTimeColumnMSSQL",
+                      "No time column found for " + schema + "." + table);
       }
     } catch (const std::exception &e) {
       Logger::error("detectTimeColumnMSSQL",
@@ -695,19 +701,31 @@ private:
           "' "
           "AND COLUMN_NAME IN ('updated_at', 'created_at', 'modified_at', "
           "'timestamp', 'last_modified', 'updated_time', 'created_time') "
-          "ORDER BY CASE COLUMN_NAME "
-          "  WHEN 'updated_at' THEN 1 "
-          "  WHEN 'modified_at' THEN 2 "
-          "  WHEN 'last_modified' THEN 3 "
-          "  WHEN 'updated_time' THEN 4 "
-          "  WHEN 'created_at' THEN 5 "
-          "  WHEN 'created_time' THEN 6 "
-          "  WHEN 'timestamp' THEN 7 "
-          "  ELSE 8 END;";
+          "ORDER BY FIELD(COLUMN_NAME, 'updated_at', 'modified_at', "
+          "'last_modified', 'updated_time', 'created_at', 'created_time', "
+          "'timestamp');";
 
       auto results = executeQueryMariaDB(conn, query);
+      Logger::debug("detectTimeColumnMariaDB",
+                    "Query returned " + std::to_string(results.size()) +
+                        " rows for " + schema + "." + table);
+
+      for (size_t i = 0; i < results.size(); ++i) {
+        if (!results[i].empty()) {
+          Logger::debug("detectTimeColumnMariaDB",
+                        "Row " + std::to_string(i) + ": " + results[i][0] +
+                            " for " + schema + "." + table);
+        }
+      }
+
       if (!results.empty() && !results[0][0].empty()) {
+        Logger::debug("detectTimeColumnMariaDB",
+                      "Selected time column: " + results[0][0] + " for " +
+                          schema + "." + table);
         return results[0][0];
+      } else {
+        Logger::debug("detectTimeColumnMariaDB",
+                      "No time column found for " + schema + "." + table);
       }
     } catch (const std::exception &e) {
       Logger::error("detectTimeColumnMariaDB",
@@ -743,7 +761,14 @@ private:
       txn.commit();
 
       if (!results.empty() && !results[0][0].is_null()) {
+        Logger::debug(
+            "detectTimeColumnPostgres",
+            "Detected time column: " + results[0][0].as<std::string>() +
+                " for " + schema + "." + table);
         return results[0][0].as<std::string>();
+      } else {
+        Logger::debug("detectTimeColumnPostgres",
+                      "No time column found for " + schema + "." + table);
       }
     } catch (const std::exception &e) {
       Logger::error("detectTimeColumnPostgres",
