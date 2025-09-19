@@ -270,28 +270,23 @@ public:
                 detectTimeColumnMSSQL(mssqlConn->dbc, schemaName, tableName);
 
             pqxx::work txn(pgConn);
-            // Verificar si la tabla ya existe con esta connection_string
-            // específica
+            // Verificar si la tabla ya existe (sin importar connection_string)
             auto existingCheck =
                 txn.exec("SELECT COUNT(*) FROM metadata.catalog "
                          "WHERE schema_name='" +
                          escapeSQL(schemaName) + "' AND table_name='" +
-                         escapeSQL(tableName) +
-                         "' AND db_engine='MSSQL' AND connection_string='" +
-                         escapeSQL(connStr) + "';");
+                         escapeSQL(tableName) + "' AND db_engine='MSSQL';");
 
             if (!existingCheck.empty() && existingCheck[0][0].as<int>() > 0) {
-              // Tabla ya existe con esta connection_string, actualizar
-              // timestamp y columna de tiempo
+              // Tabla ya existe, actualizar timestamp y columna de tiempo
               txn.exec("UPDATE metadata.catalog SET last_sync_time = NOW(), "
                        "last_sync_column = '" +
-                       escapeSQL(timeColumn) +
+                       escapeSQL(timeColumn) + "', connection_string = '" +
+                       escapeSQL(connStr) +
                        "' "
                        "WHERE schema_name='" +
                        escapeSQL(schemaName) + "' AND table_name='" +
-                       escapeSQL(tableName) +
-                       "' AND db_engine='MSSQL' AND connection_string='" +
-                       escapeSQL(connStr) + "';");
+                       escapeSQL(tableName) + "' AND db_engine='MSSQL';");
             } else {
               // Tabla nueva, insertar
               txn.exec("INSERT INTO metadata.catalog "
