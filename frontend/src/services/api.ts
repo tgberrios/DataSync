@@ -242,14 +242,16 @@ export const monitorApi = {
 
 export const catalogApi = {
   // Obtener entradas del catálogo con paginación, filtros y búsqueda
-  getCatalogEntries: async (params: {
-    page?: number;
-    limit?: number;
-    engine?: string;
-    status?: string;
-    active?: string;
-    search?: string;
-  } = {}) => {
+  getCatalogEntries: async (
+    params: {
+      page?: number;
+      limit?: number;
+      engine?: string;
+      status?: string;
+      active?: string;
+      search?: string;
+    } = {}
+  ) => {
     try {
       console.log("Fetching catalog entries with params:", params);
       const response = await api.get("/catalog", { params });
@@ -364,6 +366,25 @@ export const logsApi = {
       return response.data;
     } catch (error) {
       console.error("Error fetching log info:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+};
+
+export const securityApi = {
+  getSecurityData: async () => {
+    try {
+      const response = await api.get("/security/data");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching security data:", error);
       if (axios.isAxiosError(error) && error.response) {
         throw new Error(
           error.response.data.details ||

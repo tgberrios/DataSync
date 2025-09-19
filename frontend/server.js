@@ -216,9 +216,7 @@ app.get("/api/dashboard/stats", async (req, res) => {
       SELECT 
         db_engine,
         COUNT(*) FILTER (WHERE status = 'PROCESSING' AND completed_at IS NULL) as active_transfers,
-        ROUND(AVG(transfer_rate_per_second)::numeric, 2) as avg_transfer_rate,
         ROUND(AVG(memory_used_mb)::numeric, 2) as avg_memory_used,
-        ROUND(AVG(cpu_usage_percent)::numeric, 2) as avg_cpu_usage,
         ROUND(AVG(io_operations_per_second)::numeric, 2) as avg_iops,
         ROUND(AVG(avg_latency_ms)::numeric, 2) as avg_latency,
         SUM(bytes_transferred) as total_bytes
@@ -407,10 +405,10 @@ app.get("/api/dashboard/stats", async (req, res) => {
     stats.engineMetrics = {};
     transferPerformance.rows.forEach((metric) => {
       stats.engineMetrics[metric.db_engine] = {
-        recordsPerSecond: parseFloat(metric.avg_transfer_rate),
+        recordsPerSecond: 0,
         bytesTransferred: parseFloat(metric.total_bytes),
         avgLatencyMs: parseFloat(metric.avg_latency),
-        cpuUsage: parseFloat(metric.avg_cpu_usage),
+        cpuUsage: 0,
         memoryUsed: parseFloat(metric.avg_memory_used),
         iops: parseFloat(metric.avg_iops),
         activeTransfers: parseInt(metric.active_transfers),
@@ -884,6 +882,110 @@ app.get("/api/logs/info", async (req, res) => {
     console.error("Error getting log info:", err);
     res.status(500).json({
       error: "Error al obtener información de logs",
+      details: err.message,
+    });
+  }
+});
+
+// Endpoint para obtener datos de seguridad
+app.get("/api/security/data", async (req, res) => {
+  try {
+    console.log("Fetching security data...");
+
+    // 1. USER MANAGEMENT
+    const users = await pool.query(`
+      SELECT 
+        COUNT(*) as total_users,
+        COUNT(*) FILTER (WHERE rolcanlogin = true) as users_with_login,
+        COUNT(*) FILTER (WHERE rolsuper = true) as superusers
+      FROM pg_roles
+    `);
+
+    const activeUsersCount = await pool.query(`
+      SELECT COUNT(DISTINCT usename) as active_users
+      FROM pg_stat_activity
+      WHERE usename IS NOT NULL
+    `);
+
+    // 2. CONNECTION STATUS
+    const connections = await pool.query(`
+      SELECT 
+        COUNT(*) as current_connections,
+        (SELECT setting::int FROM pg_settings WHERE name = 'max_connections') as max_connections,
+        COUNT(*) FILTER (WHERE state = 'idle') as idle_connections,
+        COUNT(*) FILTER (WHERE state = 'active') as active_connections
+      FROM pg_stat_activity
+    `);
+
+    // 3. ACTIVE USERS
+    const activeUsers = await pool.query(`
+      SELECT 
+        usename as username,
+        CASE 
+          WHEN r.rolsuper THEN 'SUPERUSER'
+          WHEN r.rolcreatedb THEN 'CREATEDB'
+          WHEN r.rolcreaterole THEN 'CREATEROLE'
+          WHEN r.rolcanlogin THEN 'LOGIN'
+          ELSE 'OTHER'
+        END as role_type,
+        CASE 
+          WHEN sa.state = 'active' THEN 'ACTIVE'
+          WHEN sa.state = 'idle' THEN 'IDLE'
+          ELSE 'INACTIVE'
+        END as status,
+        COALESCE(sa.query_start, sa.backend_start) as last_activity,
+        sa.client_addr,
+        sa.application_name
+      FROM pg_stat_activity sa
+      JOIN pg_roles r ON sa.usename = r.rolname
+      WHERE sa.usename IS NOT NULL
+      ORDER BY last_activity DESC
+      LIMIT 20
+    `);
+
+    // 4. PERMISSIONS OVERVIEW
+    const permissionsOverview = await pool.query(`
+      SELECT 
+        COUNT(*) as total_grants,
+        COUNT(DISTINCT table_schema) as schemas_with_access,
+        COUNT(DISTINCT table_name) as tables_with_access
+      FROM information_schema.table_privileges
+      WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
+    `);
+
+    const securityData = {
+      summary: {
+        users: {
+          total: parseInt(users.rows[0]?.total_users || 0),
+          active: parseInt(activeUsersCount.rows[0]?.active_users || 0),
+          superusers: parseInt(users.rows[0]?.superusers || 0),
+          withLogin: parseInt(users.rows[0]?.users_with_login || 0),
+        },
+        connections: {
+          current: parseInt(connections.rows[0]?.current_connections || 0),
+          max: parseInt(connections.rows[0]?.max_connections || 0),
+          idle: parseInt(connections.rows[0]?.idle_connections || 0),
+          active: parseInt(connections.rows[0]?.active_connections || 0),
+        },
+        permissions: {
+          totalGrants: parseInt(permissionsOverview.rows[0]?.total_grants || 0),
+          schemasWithAccess: parseInt(
+            permissionsOverview.rows[0]?.schemas_with_access || 0
+          ),
+          tablesWithAccess: parseInt(
+            permissionsOverview.rows[0]?.tables_with_access || 0
+          ),
+        },
+      },
+      activeUsers: activeUsers.rows,
+    };
+
+    console.log("Sending security data");
+    res.json(securityData);
+  } catch (err) {
+    console.error("Error getting security data:", err);
+    res.status(500).json({
+      error: "Error al obtener datos de seguridad",
       details: err.message,
     });
   }
