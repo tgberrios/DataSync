@@ -1,6 +1,3 @@
-IMPLEMENTAR LO DE QUE SIEMPRE PERMITA NULL EN TODAS LAS CREACIONES DE LAS TABLAS 
-
-
 ¡Perfecto! 🎉 Me alegra que ya esté funcionando. Ahora voy a implementar el mismo fix en los otros tres archivos para que todos tengan la misma lógica de avance de offset.
 📋 Prompt para implementar el fix:
 "Implementa el mismo fix de avance de offset en los archivos PostgresToPostgres.h, MSSQLToPostgres.h y MongoToPostgres.h para evitar loops infinitos cuando el COPY falla por duplicados. El fix debe:

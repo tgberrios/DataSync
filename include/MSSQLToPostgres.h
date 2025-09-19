@@ -226,7 +226,8 @@ public:
           std::transform(colName.begin(), colName.end(), colName.begin(),
                          ::tolower);
           std::string dataType = col[1];
-          std::string nullable = (col[2] == "YES") ? "" : " NOT NULL";
+          std::string nullable =
+              ""; // Siempre permitir NULL en todas las columnas
           std::string isPrimaryKey = col[3];
           std::string maxLength = col[4];
           std::string numericPrecision = col[5];

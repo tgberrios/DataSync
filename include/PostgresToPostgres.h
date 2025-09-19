@@ -181,9 +181,10 @@ private:
 
         std::string columnDef = "\"" + colName + "\" " + mapDataType(dataType);
 
-        if (isNullable == "NO") {
-          columnDef += " NOT NULL";
-        }
+        // Siempre permitir NULL en todas las columnas
+        // if (isNullable == "NO") {
+        //   columnDef += " NOT NULL";
+        // }
 
         if (!defaultValue.empty() && defaultValue != "NULL") {
           columnDef += " DEFAULT " + defaultValue;
