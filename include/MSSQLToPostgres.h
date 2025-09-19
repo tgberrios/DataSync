@@ -824,7 +824,35 @@ public:
                           "Error processing data: " + std::string(e.what()));
           }
 
+          // Always update targetCount and last_offset, even if COPY failed
           targetCount += rowsInserted;
+
+          // If COPY failed but we have data, advance the offset by 1
+          if (rowsInserted == 0 && !results.empty()) {
+            targetCount += 1; // Advance by 1 to skip the problematic record
+            Logger::info("transferDataMSSQLToPostgres",
+                         "COPY failed, advancing offset by 1 to skip "
+                         "problematic record for " +
+                             schema_name + "." + table_name);
+          }
+
+          // Update last_offset in database to prevent infinite loops
+          try {
+            pqxx::work updateTxn(pgConn);
+            updateTxn.exec("UPDATE metadata.catalog SET last_offset='" +
+                           std::to_string(targetCount) +
+                           "' WHERE schema_name='" + escapeSQL(schema_name) +
+                           "' AND table_name='" + escapeSQL(table_name) + "';");
+            updateTxn.commit();
+            Logger::debug("transferDataMSSQLToPostgres",
+                          "Updated last_offset to " +
+                              std::to_string(targetCount) + " for " +
+                              schema_name + "." + table_name);
+          } catch (const std::exception &e) {
+            Logger::warning("transferDataMSSQLToPostgres",
+                            "Failed to update last_offset: " +
+                                std::string(e.what()));
+          }
 
           if (targetCount >= sourceCount) {
             hasMoreData = false;

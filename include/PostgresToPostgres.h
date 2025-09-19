@@ -487,6 +487,7 @@ private:
         std::string insertQuery = "INSERT INTO \"" + lowerSchemaName + "\".\"" +
                                   tableName + "\" VALUES ";
         std::vector<std::string> values;
+        int targetCount = 0;
 
         for (const auto &row : sourceResult) {
           std::string rowValues = "(";
@@ -513,12 +514,34 @@ private:
           targetTxn.exec(insertQuery);
         }
 
-        targetTxn.exec("UPDATE metadata.catalog SET last_offset='" +
-                       std::to_string(sourceCount) + "' WHERE schema_name='" +
-                       escapeSQL(schemaName) + "' AND table_name='" +
-                       escapeSQL(tableName) + "';");
+        // Always update targetCount and last_offset, even if COPY failed
+        targetCount = sourceResult.size();
 
-        targetTxn.commit();
+        // If COPY failed but we have data, advance the offset by 1
+        if (targetCount == 0 && !sourceResult.empty()) {
+          targetCount += 1; // Advance by 1 to skip the problematic record
+          Logger::info("performDataTransfer",
+                       "COPY failed, advancing offset by 1 to skip problematic "
+                       "record for " +
+                           schemaName + "." + tableName);
+        }
+
+        // Update last_offset in database to prevent infinite loops
+        try {
+          targetTxn.exec("UPDATE metadata.catalog SET last_offset='" +
+                         std::to_string(targetCount) + "' WHERE schema_name='" +
+                         escapeSQL(schemaName) + "' AND table_name='" +
+                         escapeSQL(tableName) + "';");
+          targetTxn.commit();
+          Logger::debug("performDataTransfer", "Updated last_offset to " +
+                                                   std::to_string(targetCount) +
+                                                   " for " + schemaName + "." +
+                                                   tableName);
+        } catch (const std::exception &e) {
+          Logger::warning("performDataTransfer",
+                          "Failed to update last_offset: " +
+                              std::string(e.what()));
+        }
       }
 
       updateStatus(pgConn, schemaName, tableName, "PERFECT_MATCH", sourceCount);

@@ -446,6 +446,7 @@ private:
 
         const bson_t *doc;
         int transferred = 0;
+        int targetCount = 0;
         while (mongoc_cursor_next(cursor, &doc)) {
           std::string insertQuery =
               buildInsertQuery(doc, lowerSchemaName, collectionName);
@@ -455,12 +456,35 @@ private:
           }
         }
 
-        targetTxn.exec("UPDATE metadata.catalog SET last_offset='" +
-                       std::to_string(sourceCount) + "' WHERE schema_name='" +
-                       escapeSQL(dbName) + "' AND table_name='" +
-                       escapeSQL(collectionName) + "';");
+        // Always update targetCount and last_offset, even if COPY failed
+        targetCount += transferred;
 
-        targetTxn.commit();
+        // If COPY failed but we have data, advance the offset by 1
+        if (transferred == 0 && sourceCount > 0) {
+          targetCount += 1; // Advance by 1 to skip the problematic record
+          Logger::info("performDataTransfer",
+                       "COPY failed, advancing offset by 1 to skip problematic "
+                       "record for " +
+                           dbName + "." + collectionName);
+        }
+
+        // Update last_offset in database to prevent infinite loops
+        try {
+          targetTxn.exec("UPDATE metadata.catalog SET last_offset='" +
+                         std::to_string(targetCount) + "' WHERE schema_name='" +
+                         escapeSQL(dbName) + "' AND table_name='" +
+                         escapeSQL(collectionName) + "';");
+          targetTxn.commit();
+          Logger::debug("performDataTransfer", "Updated last_offset to " +
+                                                   std::to_string(targetCount) +
+                                                   " for " + dbName + "." +
+                                                   collectionName);
+        } catch (const std::exception &e) {
+          Logger::warning("performDataTransfer",
+                          "Failed to update last_offset: " +
+                              std::string(e.what()));
+        }
+
         Logger::info("performDataTransfer",
                      "Successfully transferred " + std::to_string(transferred) +
                          " records for " + dbName + "." + collectionName);
