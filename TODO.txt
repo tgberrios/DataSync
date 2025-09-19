@@ -1,0 +1,44 @@
+PROMPT PARA IMPLEMENTAR SISTEMA DE DELTAS
+Necesito que implementes el mismo sistema de sincronización delta que funciona en MariaDBToPostgres.h y catalog_manager.h en los siguientes archivos:
+MongoToPostgres.h
+MSSQLToPostgres.h
+PostgresToPostgres.h
+🎯 FUNCIONALIDADES A IMPLEMENTAR
+✅ DELETES por Primary Key:
+Función processDeletesByPrimaryKey() que detecta registros eliminados
+Compara Primary Keys entre fuente y destino
+Elimina registros que ya no existen en la fuente
+Procesamiento en batches para eficiencia
+✅ UPDATES por Primary Key:
+Función processUpdatesByPrimaryKey() que detecta registros modificados
+Usa last_sync_column y last_sync_time para detectar cambios
+Compara registros y actualiza solo los que cambiaron
+Función compareAndUpdateRecord() para comparación inteligente
+✅ INTEGRACIÓN EN FLUJO PRINCIPAL:
+Modificar la función principal de transferencia de datos
+Cuando sourceCount == targetCount: procesar UPDATES
+Cuando sourceCount < targetCount: procesar DELETES
+Mantener lógica de INSERTS existente
+🔧 CAMBIOS ESPECÍFICOS REQUERIDOS
+1. En catalog_manager.h:
+NO sobrescribir last_sync_time con NOW()
+Solo actualizar last_sync_column cuando se detecte
+Permitir que MariaDBToPostgres.h maneje last_sync_time correctamente
+2. En cada archivo de transferencia:
+Agregar funciones helper para obtener Primary Keys
+Implementar detección de registros eliminados
+Implementar detección de registros modificados
+Integrar en el flujo principal de transferencia
+�� ESTRUCTURA DE FUNCIONES A CREAR
+// Para DELETES
+void processDeletesByPrimaryKey(...);
+std::vector<std::string> getPrimaryKeyColumns(...);
+std::vector<std::vector<std::string>> findDeletedPrimaryKeys(...);
+size_t deleteRecordsByPrimaryKey(...);
+
+// Para UPDATES  
+void processUpdatesByPrimaryKey(...);
+bool compareAndUpdateRecord(...);
+🎯 OBJETIVO FINAL
+Implementar sincronización delta completa (INSERT + UPDATE + DELETE) en los 3 archivos restantes, siguiendo exactamente el mismo patrón que ya funciona en MariaDBToPostgres.h.
+IMPORTANTE: Mantener la misma lógica, estructura y flujo que ya está funcionando perfectamente en MariaDBToPostgres.h. No crear nuevas funciones innecesarias, usar las existentes y seguir el principio KISS.
