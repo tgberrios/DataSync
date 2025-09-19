@@ -208,3 +208,8 @@
 -- UNIQUE constraint: nombre on table productos
 -- UNIQUE constraint: nombre on table productos
 -- UNIQUE constraint: nombre on table productos
+-- UNIQUE constraint: nombre on table productos
+-- UNIQUE constraint: nombre on table productos
+-- UNIQUE constraint: nombre on table productos
+-- UNIQUE constraint: nombre on table productos
+-- UNIQUE constraint: nombre on table productos
