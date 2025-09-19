@@ -55,6 +55,17 @@ export interface DashboardStats {
     failedConnections: number;
     lastCleanup: string;
   };
+  engineMetrics?: {
+    [engine: string]: {
+      recordsPerSecond: number;
+      bytesTransferred: number;
+      avgLatencyMs: number;
+      cpuUsage: number;
+      memoryUsed: number;
+      iops: number;
+      activeTransfers: number;
+    };
+  };
 }
 
 export const dashboardApi = {
@@ -297,6 +308,69 @@ export const catalogApi = {
       return response.data;
     } catch (error) {
       console.error("Error updating entry:", error);
+      throw error;
+    }
+  },
+};
+
+// Interfaces para logs
+export interface LogEntry {
+  id: number;
+  timestamp: string;
+  level: string;
+  function: string;
+  message: string;
+  raw: string;
+}
+
+export interface LogsResponse {
+  logs: LogEntry[];
+  totalLines: number;
+  filePath: string;
+  lastModified: string;
+}
+
+export interface LogInfo {
+  exists: boolean;
+  filePath?: string;
+  size?: number;
+  totalLines?: number;
+  lastModified?: string;
+  created?: string;
+  message?: string;
+}
+
+export const logsApi = {
+  getLogs: async (params: { lines?: number; level?: string } = {}) => {
+    try {
+      const response = await api.get<LogsResponse>("/logs", { params });
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching logs:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getLogInfo: async () => {
+    try {
+      const response = await api.get<LogInfo>("/logs/info");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching log info:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
       throw error;
     }
   },

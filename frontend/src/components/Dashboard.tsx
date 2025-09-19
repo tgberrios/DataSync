@@ -190,11 +190,6 @@ const Dashboard = () => {
             <Value style={{ marginTop: '20px' }}>► Currently Processing: {stats.syncStatus.currentProcess}</Value>
           </Section>
 
-          <Section>
-            <SectionTitle>▲ TRANSFER PERFORMANCE BY ENGINE</SectionTitle>
-            <Value>No active transfers</Value>
-            <Value style={{ marginTop: '10px' }}>System ready for synchronization</Value>
-          </Section>
 
           <Section>
             <SectionTitle>● SYSTEM RESOURCES</SectionTitle>

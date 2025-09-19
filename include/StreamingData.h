@@ -214,6 +214,10 @@ public:
         // Logger::debug("StreamingData", "Generating full report");
         reporter.generateFullReport(pgConn);
 
+        // Update metrics every cycle
+        MetricsCollector metricsCollector;
+        metricsCollector.collectAllMetrics();
+
         minutes_counter += 1;
         if (minutes_counter >= 2) {
           Logger::info("StreamingData",

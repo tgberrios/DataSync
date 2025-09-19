@@ -4,17 +4,19 @@ const { Pool } = pkg;
 import cors from "cors";
 import { spawn } from "child_process";
 import os from "os";
+import path from "path";
+import fs from "fs";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 const pool = new Pool({
-  host: "localhost",
+  host: "10.12.240.40",
   port: 5432,
   database: "DataLake",
-  user: "tomy.berrios",
-  password: "Yucaquemada1",
+  user: "Datalake_User",
+  password: "keepprofessional",
 });
 
 // Test connection
@@ -155,11 +157,49 @@ app.get("/api/dashboard/stats", async (req, res) => {
         COUNT(*) FILTER (WHERE active = false) as full_load_inactive,
         COUNT(*) FILTER (WHERE status = 'NO_DATA') as no_data,
         COUNT(*) FILTER (WHERE status = 'ERROR') as errors,
-        STRING_AGG(CASE WHEN status = 'PROCESSING' 
-          THEN schema_name || '.' || table_name || ' (' || status || ')'
-          ELSE NULL END, ', ') as current_process
+        '' as current_process
       FROM metadata.catalog
     `);
+
+    // Get currently processing tables from active queries
+    const activeQueries = await pool.query(`
+      SELECT 
+        query,
+        state,
+        query_start,
+        EXTRACT(EPOCH FROM (now() - query_start))::integer as duration_seconds
+      FROM pg_stat_activity 
+      WHERE state = 'active' 
+        AND query LIKE '%COPY%FROM STDIN%'
+        AND query NOT LIKE '%pg_stat_activity%'
+      ORDER BY query_start DESC
+    `);
+
+    // Extract table names from COPY queries and get their counts
+    const processingTablesWithCounts = [];
+    
+    for (const row of activeQueries.rows) {
+      const copyMatch = row.query.match(/COPY\s+"?([^"]+)"?\."?([^"]+)"?\s+FROM\s+STDIN/i);
+      if (copyMatch) {
+        const schema = copyMatch[1];
+        const table = copyMatch[2];
+        
+        try {
+          // Get count for this table
+          const countResult = await pool.query(`SELECT COUNT(*) as count FROM "${schema}"."${table}"`);
+          const count = parseInt(countResult.rows[0].count);
+          processingTablesWithCounts.push(`${schema}.${table} (${count.toLocaleString()} records)`);
+        } catch (error) {
+          // If count fails, just show table name
+          console.log(`Could not get count for ${schema}.${table}:`, error.message);
+          processingTablesWithCounts.push(`${schema}.${table}`);
+        }
+      }
+    }
+
+    const currentProcessText = processingTablesWithCounts.length > 0 
+      ? processingTablesWithCounts.join(', ')
+      : 'No active transfers';
 
     // 2. TRANSFER PERFORMANCE BY ENGINE
     const transferPerformance = await pool.query(`
@@ -281,7 +321,7 @@ app.get("/api/dashboard/stats", async (req, res) => {
         fullLoadInactive: parseInt(syncStatus.rows[0]?.full_load_inactive || 0),
         noData: parseInt(syncStatus.rows[0]?.no_data || 0),
         errors: parseInt(syncStatus.rows[0]?.errors || 0),
-        currentProcess: syncStatus.rows[0]?.current_process || "",
+        currentProcess: currentProcessText,
       },
       systemResources: {
         cpuUsage:
@@ -727,6 +767,109 @@ app.delete("/api/config/:key", async (req, res) => {
     console.error("Error deleting configuration:", err);
     res.status(500).json({
       error: "Error al eliminar configuración",
+      details: err.message,
+    });
+  }
+});
+
+// Endpoint para leer logs
+app.get("/api/logs", async (req, res) => {
+  try {
+    const { lines = 100, level = 'ALL' } = req.query;
+    const logFilePath = path.join(process.cwd(), '..', 'DataSync.log');
+    
+    // Verificar si el archivo existe
+    if (!fs.existsSync(logFilePath)) {
+      return res.json({
+        logs: [],
+        totalLines: 0,
+        message: 'No log file found'
+      });
+    }
+
+    // Leer el archivo de logs
+    const logContent = fs.readFileSync(logFilePath, 'utf8');
+    const allLines = logContent.split('\n').filter(line => line.trim() !== '');
+    
+    // Filtrar por nivel si se especifica
+    let filteredLines = allLines;
+    if (level !== 'ALL') {
+      filteredLines = allLines.filter(line => 
+        line.includes(`[${level.toUpperCase()}]`)
+      );
+    }
+    
+    // Obtener las últimas N líneas
+    const lastLines = filteredLines.slice(-parseInt(lines));
+    
+    // Parsear cada línea de log
+    const parsedLogs = lastLines.map((line, index) => {
+      const logMatch = line.match(/^\[([^\]]+)\] \[([^\]]+)\](?: \[([^\]]+)\])? (.+)$/);
+      if (logMatch) {
+        return {
+          id: index,
+          timestamp: logMatch[1],
+          level: logMatch[2],
+          function: logMatch[3] || '',
+          message: logMatch[4],
+          raw: line
+        };
+      }
+      return {
+        id: index,
+        timestamp: '',
+        level: 'UNKNOWN',
+        function: '',
+        message: line,
+        raw: line
+      };
+    });
+
+    res.json({
+      logs: parsedLogs,
+      totalLines: filteredLines.length,
+      filePath: logFilePath,
+      lastModified: fs.statSync(logFilePath).mtime
+    });
+    
+  } catch (err) {
+    console.error("Error reading logs:", err);
+    res.status(500).json({
+      error: "Error al leer logs",
+      details: err.message,
+    });
+  }
+});
+
+// Endpoint para obtener información del archivo de logs
+app.get("/api/logs/info", async (req, res) => {
+  try {
+    const logFilePath = path.join(process.cwd(), '..', 'DataSync.log');
+    
+    if (!fs.existsSync(logFilePath)) {
+      return res.json({
+        exists: false,
+        message: 'No log file found'
+      });
+    }
+
+    const stats = fs.statSync(logFilePath);
+    const logContent = fs.readFileSync(logFilePath, 'utf8');
+    const totalLines = logContent.split('\n').filter(line => line.trim() !== '').length;
+    
+    res.json({
+      exists: true,
+      filePath: logFilePath,
+      size: stats.size,
+      totalLines: totalLines,
+      lastModified: stats.mtime,
+      created: stats.birthtime
+    });
+    
+  } catch (err) {
+    console.error("Error getting log info:", err);
+    res.status(500).json({
+      error: "Error al obtener información de logs",
       details: err.message,
     });
   }
