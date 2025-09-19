@@ -1,7 +1,7 @@
 -- Table DDL for testdb;.ventas
 -- Engine: MongoDB
 -- Database: testdb;
--- Generated: 1758302666
+-- Generated: 1758304757
 
 -- MongoDB View: ventas
 -- Schema: testdb;

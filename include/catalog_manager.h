@@ -141,20 +141,19 @@ public:
                 detectTimeColumnMariaDB(mariaConn.get(), schemaName, tableName);
 
             pqxx::work txn(pgConn);
-            txn.exec(
-                "INSERT INTO metadata.catalog "
-                "(schema_name, table_name, cluster_name, db_engine, "
-                "connection_string, "
-                "last_sync_time, last_sync_column, status, "
-                "last_offset, active) "
-                "VALUES ('" +
-                escapeSQL(schemaName) + "', '" + escapeSQL(tableName) +
-                "', '', 'MariaDB', '" + escapeSQL(connStr) + "', NOW(), '" +
-                escapeSQL(timeColumn) +
-                "', 'PENDING', '0', false) "
-                "ON CONFLICT (schema_name, table_name, db_engine) "
-                "DO UPDATE SET last_sync_time = NOW(), last_sync_column = '" +
-                escapeSQL(timeColumn) + "';");
+            txn.exec("INSERT INTO metadata.catalog "
+                     "(schema_name, table_name, cluster_name, db_engine, "
+                     "connection_string, "
+                     "last_sync_time, last_sync_column, status, "
+                     "last_offset, active) "
+                     "VALUES ('" +
+                     escapeSQL(schemaName) + "', '" + escapeSQL(tableName) +
+                     "', '', 'MariaDB', '" + escapeSQL(connStr) +
+                     "', NOW(), '" + escapeSQL(timeColumn) +
+                     "', 'PENDING', '0', false) "
+                     "ON CONFLICT (schema_name, table_name, db_engine) "
+                     "DO UPDATE SET last_sync_column = '" +
+                     escapeSQL(timeColumn) + "';");
             txn.commit();
           }
         }
@@ -279,7 +278,7 @@ public:
 
             if (!existingCheck.empty() && existingCheck[0][0].as<int>() > 0) {
               // Tabla ya existe, actualizar timestamp y columna de tiempo
-              txn.exec("UPDATE metadata.catalog SET last_sync_time = NOW(), "
+              txn.exec("UPDATE metadata.catalog SET "
                        "last_sync_column = '" +
                        escapeSQL(timeColumn) + "', connection_string = '" +
                        escapeSQL(connStr) +
@@ -409,20 +408,19 @@ public:
                 detectTimeColumnPostgres(*sourcePgConn, schemaName, tableName);
 
             pqxx::work txn(pgConn);
-            txn.exec(
-                "INSERT INTO metadata.catalog "
-                "(schema_name, table_name, cluster_name, db_engine, "
-                "connection_string, "
-                "last_sync_time, last_sync_column, status, "
-                "last_offset, active) "
-                "VALUES ('" +
-                escapeSQL(schemaName) + "', '" + escapeSQL(tableName) +
-                "', '', 'PostgreSQL', '" + escapeSQL(connStr) + "', NOW(), '" +
-                escapeSQL(timeColumn) +
-                "', 'PENDING', '0', false) "
-                "ON CONFLICT (schema_name, table_name, db_engine) "
-                "DO UPDATE SET last_sync_time = NOW(), last_sync_column = '" +
-                escapeSQL(timeColumn) + "';");
+            txn.exec("INSERT INTO metadata.catalog "
+                     "(schema_name, table_name, cluster_name, db_engine, "
+                     "connection_string, "
+                     "last_sync_time, last_sync_column, status, "
+                     "last_offset, active) "
+                     "VALUES ('" +
+                     escapeSQL(schemaName) + "', '" + escapeSQL(tableName) +
+                     "', '', 'PostgreSQL', '" + escapeSQL(connStr) +
+                     "', NOW(), '" + escapeSQL(timeColumn) +
+                     "', 'PENDING', '0', false) "
+                     "ON CONFLICT (schema_name, table_name, db_engine) "
+                     "DO UPDATE SET last_sync_column = '" +
+                     escapeSQL(timeColumn) + "';");
             txn.commit();
           }
         }
@@ -620,7 +618,7 @@ public:
                                 "', NOW(), '', 'PENDING', '0', false) "
                                 "ON CONFLICT (schema_name, table_name, "
                                 "db_engine) "
-                                "DO UPDATE SET last_sync_time = NOW();");
+                                "DO NOTHING;");
                             txn.commit();
                           }
                         }
