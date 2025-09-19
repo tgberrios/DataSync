@@ -94,8 +94,8 @@ void SyncReporter::collectPerformanceMetrics(pqxx::connection &pgConn,
         "c.status = 'ERROR') as error_count,"
         "         COUNT(DISTINCT (c.schema_name, c.table_name)) FILTER (WHERE "
         "c.active = true) as active_transfers,"
-        "         AVG(tm.transfer_duration_ms) as avg_duration,"
-        "         MAX(tm.transfer_duration_ms) as max_duration,"
+        "         0 as avg_duration,"
+        "         0 as max_duration,"
         "         SUM(tm.records_transferred) as rows_transferred,"
         "         SUM(tm.bytes_transferred) as bytes_transferred,"
         "         MAX(tm.error_message) as last_error"
@@ -142,11 +142,7 @@ void SyncReporter::collectPerformanceMetrics(pqxx::connection &pgConn,
                  "       CEIL(tm.records_transferred::float / " +
                  std::to_string(SyncConfig::getChunkSize()) +
                  ") as current_chunk, "
-                 "       CASE WHEN tm.started_at IS NOT NULL AND "
-                 "tm.transfer_duration_ms IS NOT NULL "
-                 "            THEN tm.records_transferred / "
-                 "NULLIF(tm.transfer_duration_ms / 1000.0, 0) "
-                 "            ELSE 0 END as rows_per_second "
+                 "       0 as rows_per_second "
                  "FROM metadata.catalog c "
                  "LEFT JOIN metadata.transfer_metrics tm ON c.schema_name = "
                  "tm.schema_name AND c.table_name = tm.table_name "
