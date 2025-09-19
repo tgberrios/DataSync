@@ -431,76 +431,155 @@ private:
       mongoc_collection_t *collection = mongoc_client_get_collection(
           &mongoClient, dbName.c_str(), collectionName.c_str());
 
-      bson_t *query = bson_new();
-      mongoc_cursor_t *cursor =
-          mongoc_collection_find_with_opts(collection, query, NULL, NULL);
+      // Procesar en lotes pequeños para evitar crashes del driver
+      const int BATCH_SIZE = 10; // Procesar máximo 10 registros por lote
+      int skip = 0;
+      int totalTransferred = 0;
+      bool hasMoreData = true;
 
-      {
-        pqxx::connection targetConn(
-            DatabaseConfig::getPostgresConnectionString());
-        pqxx::work targetTxn(targetConn);
-
-        std::string truncateQuery = "TRUNCATE TABLE \"" + lowerSchemaName +
-                                    "\".\"" + collectionName + "\" CASCADE;";
-        targetTxn.exec(truncateQuery);
-
-        const bson_t *doc;
-        int transferred = 0;
-        int targetCount = 0;
-        while (mongoc_cursor_next(cursor, &doc)) {
-          std::string insertQuery =
-              buildInsertQuery(doc, lowerSchemaName, collectionName);
-          if (!insertQuery.empty()) {
-            targetTxn.exec(insertQuery);
-            transferred++;
-          }
-        }
-
-        // Always update targetCount and last_offset, even if COPY failed
-        targetCount += transferred;
-
-        // If COPY failed but we have data, advance the offset by 1
-        if (transferred == 0 && sourceCount > 0) {
-          targetCount += 1; // Advance by 1 to skip the problematic record
-          Logger::info("performDataTransfer",
-                       "COPY failed, advancing offset by 1 to skip problematic "
-                       "record for " +
-                           dbName + "." + collectionName);
-        }
-
-        // Update last_offset in database to prevent infinite loops
+      while (hasMoreData) {
         try {
-          targetTxn.exec("UPDATE metadata.catalog SET last_offset='" +
-                         std::to_string(targetCount) + "' WHERE schema_name='" +
-                         escapeSQL(dbName) + "' AND table_name='" +
-                         escapeSQL(collectionName) + "';");
-          targetTxn.commit();
-          Logger::debug("performDataTransfer", "Updated last_offset to " +
-                                                   std::to_string(targetCount) +
-                                                   " for " + dbName + "." +
-                                                   collectionName);
-        } catch (const std::exception &e) {
-          Logger::warning("performDataTransfer",
-                          "Failed to update last_offset: " +
-                              std::string(e.what()));
-        }
+          bson_t *query = bson_new();
+          bson_t *opts = BCON_NEW("limit", BCON_INT32(BATCH_SIZE), "skip",
+                                  BCON_INT32(skip));
 
-        Logger::info("performDataTransfer",
-                     "Successfully transferred " + std::to_string(transferred) +
-                         " records for " + dbName + "." + collectionName);
+          mongoc_cursor_t *cursor =
+              mongoc_collection_find_with_opts(collection, query, opts, NULL);
+
+          {
+            pqxx::connection targetConn(
+                DatabaseConfig::getPostgresConnectionString());
+            pqxx::work targetTxn(targetConn);
+
+            // Solo truncar en el primer lote
+            if (skip == 0) {
+              std::string truncateQuery = "TRUNCATE TABLE \"" +
+                                          lowerSchemaName + "\".\"" +
+                                          collectionName + "\" CASCADE;";
+              targetTxn.exec(truncateQuery);
+              Logger::debug("performDataTransfer",
+                            "Table truncated for batch processing");
+            }
+
+            const bson_t *doc;
+            int batchTransferred = 0;
+            int batchProcessed = 0;
+
+            while (mongoc_cursor_next(cursor, &doc) &&
+                   batchProcessed < BATCH_SIZE) {
+              try {
+                std::string insertQuery =
+                    buildInsertQuerySafe(doc, lowerSchemaName, collectionName);
+                if (!insertQuery.empty()) {
+                  targetTxn.exec(insertQuery);
+                  batchTransferred++;
+                }
+                batchProcessed++;
+              } catch (const std::exception &e) {
+                Logger::warning("performDataTransfer",
+                                "Error processing document in batch: " +
+                                    std::string(e.what()) +
+                                    " - skipping document");
+                batchProcessed++; // Continuar con el siguiente documento
+              }
+            }
+
+            totalTransferred += batchTransferred;
+
+            // Verificar si hay más datos
+            hasMoreData = (batchProcessed == BATCH_SIZE);
+
+            // Actualizar offset solo si se procesaron documentos
+            if (batchTransferred > 0 || batchProcessed > 0) {
+              try {
+                targetTxn.exec("UPDATE metadata.catalog SET last_offset='" +
+                               std::to_string(totalTransferred) +
+                               "' WHERE schema_name='" + escapeSQL(dbName) +
+                               "' AND table_name='" +
+                               escapeSQL(collectionName) + "';");
+                targetTxn.commit();
+                Logger::debug(
+                    "performDataTransfer",
+                    "Batch " + std::to_string(skip / BATCH_SIZE + 1) +
+                        " completed: " + std::to_string(batchTransferred) +
+                        " records transferred");
+              } catch (const std::exception &e) {
+                Logger::warning("performDataTransfer",
+                                "Failed to update offset: " +
+                                    std::string(e.what()));
+              }
+            } else {
+              targetTxn.commit();
+            }
+
+            mongoc_cursor_destroy(cursor);
+            bson_destroy(query);
+            bson_destroy(opts);
+
+            // Si no se procesaron documentos, salir del bucle
+            if (batchProcessed == 0) {
+              hasMoreData = false;
+            }
+
+            skip += BATCH_SIZE;
+          }
+
+        } catch (const std::exception &e) {
+          Logger::error("performDataTransfer",
+                        "Error in batch processing: " + std::string(e.what()));
+          hasMoreData = false; // Salir del bucle en caso de error
+        }
       }
 
-      mongoc_cursor_destroy(cursor);
-      bson_destroy(query);
       mongoc_collection_destroy(collection);
 
       updateStatus(pgConn, dbName, collectionName, "PERFECT_MATCH",
-                   sourceCount);
+                   totalTransferred);
+
+      Logger::info("performDataTransfer", "Successfully transferred " +
+                                              std::to_string(totalTransferred) +
+                                              " records for " + dbName + "." +
+                                              collectionName);
 
     } catch (const std::exception &e) {
       Logger::error("performDataTransfer",
                     "Error transferring data: " + std::string(e.what()));
       updateStatus(pgConn, dbName, collectionName, "ERROR", 0);
+    }
+  }
+
+  std::string buildInsertQuerySafe(const bson_t *doc,
+                                   const std::string &schemaName,
+                                   const std::string &tableName) {
+    try {
+      std::string cleanSchemaName = cleanSchemaNameForPostgres(schemaName);
+      std::string insertQuery = "INSERT INTO \"" + cleanSchemaName + "\".\"" +
+                                tableName + "\" VALUES (";
+      std::vector<std::string> values;
+
+      bson_iter_t iter;
+      if (bson_iter_init(&iter, doc)) {
+        while (bson_iter_next(&iter)) {
+          const char *key = bson_iter_key(&iter);
+          std::string value = getBsonValueAsStringSafe(&iter);
+          values.push_back("'" + escapeSQL(value) + "'");
+        }
+      }
+
+      if (values.empty())
+        return "";
+
+      insertQuery += values[0];
+      for (size_t i = 1; i < values.size(); ++i) {
+        insertQuery += ", " + values[i];
+      }
+      insertQuery += ");";
+
+      return insertQuery;
+    } catch (const std::exception &e) {
+      Logger::error("buildInsertQuerySafe",
+                    "Error building insert query: " + std::string(e.what()));
+      return "";
     }
   }
 
@@ -535,6 +614,73 @@ private:
       Logger::error("buildInsertQuery",
                     "Error building insert query: " + std::string(e.what()));
       return "";
+    }
+  }
+
+  std::string getBsonValueAsStringSafe(bson_iter_t *iter) {
+    try {
+      switch (bson_iter_type(iter)) {
+      case BSON_TYPE_UTF8:
+        return bson_iter_utf8(iter, NULL);
+      case BSON_TYPE_INT32:
+        return std::to_string(bson_iter_int32(iter));
+      case BSON_TYPE_INT64:
+        return std::to_string(bson_iter_int64(iter));
+      case BSON_TYPE_DOUBLE:
+        return std::to_string(bson_iter_double(iter));
+      case BSON_TYPE_BOOL:
+        return bson_iter_bool(iter) ? "true" : "false";
+      case BSON_TYPE_OID: {
+        char oid_str[25];
+        bson_oid_to_string(bson_iter_oid(iter), oid_str);
+        return std::string(oid_str);
+      }
+      case BSON_TYPE_DATE_TIME: {
+        int64_t datetime = bson_iter_date_time(iter);
+        // Convert to PostgreSQL timestamp format
+        time_t time = datetime / 1000;
+        struct tm *tm_info = localtime(&time);
+        char buffer[30];
+        strftime(buffer, 30, "%Y-%m-%d %H:%M:%S", tm_info);
+        return std::string(buffer);
+      }
+      case BSON_TYPE_DOCUMENT:
+      case BSON_TYPE_ARRAY: {
+        // Convert to JSON string with error handling
+        uint32_t doc_len;
+        const uint8_t *doc_data;
+        bson_iter_document(iter, &doc_len, &doc_data);
+
+        // Verificar que los datos no sean nulos y tengan tamaño válido
+        if (doc_data == NULL || doc_len == 0) {
+          return "{}";
+        }
+
+        try {
+          bson_t bson;
+          if (bson_init_static(&bson, doc_data, doc_len)) {
+            char *json = bson_as_canonical_extended_json(&bson, NULL);
+            if (json) {
+              std::string result(json);
+              bson_free(json);
+              return result;
+            } else {
+              return "{}";
+            }
+          } else {
+            return "{}";
+          }
+        } catch (...) {
+          return "{}"; // Retornar JSON vacío en caso de error
+        }
+      }
+      default:
+        return "NULL";
+      }
+    } catch (const std::exception &e) {
+      Logger::warning("getBsonValueAsStringSafe",
+                      "Error converting BSON value: " + std::string(e.what()));
+      return "NULL";
     }
   }
 
