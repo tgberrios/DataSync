@@ -1,8 +1,5 @@
 JOB DE AIRFLOW PARA HACERLO DE MONGO EL UPDATE CADA DOMINGO 
 
-ARREGLAR DATA GOVERNANCE PARA QUE ME DE MAS DOMINIOS DE CATEGORIZACION EN LA CASA
-
-
 2. TIENE QUE HABER UNA MEJOR FORMA DE HACER LOS INCREMENTALES ESTO NO ES LO MEJOR DE SUBIR DE UNO EN UNO O ALGO ASI 
 4. Si da un segmentacion fault como puedo lograr que el archivo vuelva a estar up digamos ? porque puede cromar por cualquier cosa inclusive por errores no en el codigo como lo recupero en esos fallos ?
 Analiza todos los archivos del proyecto (excluyendo la carpeta frontend) y crea un diagrama completo de la arquitectura del sistema DataSync. 

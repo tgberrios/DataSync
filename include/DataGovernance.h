@@ -19,9 +19,17 @@ struct TableMetadata {
   int index_count = 0;
   int constraint_count = 0;
 
+  // Enhanced data quality attributes
   double data_quality_score = 0.0;
   double null_percentage = 0.0;
   double duplicate_percentage = 0.0;
+  double completeness_score = 0.0;
+  double accuracy_score = 0.0;
+  double consistency_score = 0.0;
+  double validity_score = 0.0;
+  double timeliness_score = 0.0;
+  double uniqueness_score = 0.0;
+  double integrity_score = 0.0;
 
   std::string inferred_source_engine;
   std::string last_analyzed;
@@ -30,13 +38,25 @@ struct TableMetadata {
   std::string access_frequency;
   int query_count_daily = 0;
 
+  // Expanded categorization
   std::string data_category;
   std::string business_domain;
   std::string sensitivity_level;
+  std::string data_classification;
+  std::string retention_policy;
+  std::string backup_frequency;
 
   std::string health_status;
   std::string last_vacuum;
   double fragmentation_percentage = 0.0;
+
+  // Additional metadata
+  std::string table_owner;
+  std::string creation_date;
+  std::string last_modified;
+  std::string table_comment;
+  std::string data_lineage;
+  std::string compliance_requirements;
 };
 
 class DataGovernance {
@@ -85,6 +105,24 @@ private:
                                       const std::string &schema_name);
   std::string determineSensitivityLevel(const std::string &table_name,
                                         const std::string &schema_name);
+  std::string determineDataClassification(const std::string &table_name,
+                                          const std::string &schema_name);
+  std::string determineRetentionPolicy(const std::string &data_category,
+                                       const std::string &sensitivity_level);
+  std::string determineBackupFrequency(const std::string &data_category,
+                                       const std::string &access_frequency);
+  std::string
+  determineComplianceRequirements(const std::string &sensitivity_level,
+                                  const std::string &business_domain);
+
+  // Enhanced quality analysis functions
+  double calculateCompletenessScore(const TableMetadata &metadata);
+  double calculateAccuracyScore(const TableMetadata &metadata);
+  double calculateConsistencyScore(const TableMetadata &metadata);
+  double calculateValidityScore(const TableMetadata &metadata);
+  double calculateTimelinessScore(const TableMetadata &metadata);
+  double calculateUniquenessScore(const TableMetadata &metadata);
+  double calculateIntegrityScore(const TableMetadata &metadata);
 };
 
 #endif // DATAGOVERNANCE_H

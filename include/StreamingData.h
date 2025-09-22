@@ -39,8 +39,8 @@ public:
 
     // Initialize connection pool
     Logger::info("StreamingData", "Initializing connection pool");
-    connectionPool = std::make_unique<ConnectionPool>();
-    connectionPool->initialize();
+    g_connectionPool = std::make_unique<ConnectionPool>();
+    g_connectionPool->initialize();
 
     // Add database configurations
     Logger::info("StreamingData", "Configuring PostgreSQL connection");
@@ -49,11 +49,11 @@ public:
     pgConfig.connectionString = DatabaseConfig::getPostgresConnectionString();
     pgConfig.minConnections = 2;
     pgConfig.maxConnections = 5;
-    connectionPool->addDatabaseConfig(pgConfig);
+    g_connectionPool->addDatabaseConfig(pgConfig);
 
     // Print pool status
     Logger::info("StreamingData", "Connection pool configured");
-    connectionPool->printPoolStatus();
+    g_connectionPool->printPoolStatus();
 
     Logger::info("StreamingData",
                  "System initialization completed successfully");
@@ -115,10 +115,10 @@ public:
     Logger::info("StreamingData", "All threads finished successfully");
 
     // Cleanup connection pool
-    if (connectionPool) {
+    if (g_connectionPool) {
       Logger::info("StreamingData", "Shutting down connection pool");
-      connectionPool->shutdown();
-      connectionPool.reset();
+      g_connectionPool->shutdown();
+      g_connectionPool.reset();
     }
 
     // Cleanup MongoDB
@@ -136,7 +136,6 @@ private:
   std::condition_variable configCV;
 
   // Database objects
-  std::unique_ptr<ConnectionPool> connectionPool;
   MariaDBToPostgres mariaToPg;
   MSSQLToPostgres mssqlToPg;
   PostgresToPostgres pgToPg;
