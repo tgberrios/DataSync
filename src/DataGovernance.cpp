@@ -30,6 +30,13 @@ void DataGovernance::createGovernanceTable() {
         "data_quality_score DECIMAL(5,2),"
         "null_percentage DECIMAL(5,2),"
         "duplicate_percentage DECIMAL(5,2),"
+        "completeness_score DECIMAL(5,2),"
+        "accuracy_score DECIMAL(5,2),"
+        "consistency_score DECIMAL(5,2),"
+        "validity_score DECIMAL(5,2),"
+        "timeliness_score DECIMAL(5,2),"
+        "uniqueness_score DECIMAL(5,2),"
+        "integrity_score DECIMAL(5,2),"
         "inferred_source_engine VARCHAR(50),"
         "first_discovered TIMESTAMP DEFAULT NOW(),"
         "last_analyzed TIMESTAMP,"
@@ -39,9 +46,18 @@ void DataGovernance::createGovernanceTable() {
         "data_category VARCHAR(50),"
         "business_domain VARCHAR(100),"
         "sensitivity_level VARCHAR(20),"
+        "data_classification VARCHAR(50),"
+        "retention_policy VARCHAR(50),"
+        "backup_frequency VARCHAR(20),"
         "health_status VARCHAR(20),"
         "last_vacuum TIMESTAMP,"
         "fragmentation_percentage DECIMAL(5,2),"
+        "table_owner VARCHAR(100),"
+        "creation_date TIMESTAMP,"
+        "last_modified TIMESTAMP,"
+        "table_comment TEXT,"
+        "data_lineage TEXT,"
+        "compliance_requirements TEXT,"
         "created_at TIMESTAMP DEFAULT NOW(),"
         "updated_at TIMESTAMP DEFAULT NOW(),"
         "CONSTRAINT unique_table UNIQUE (schema_name, table_name)"
@@ -155,6 +171,15 @@ DataGovernance::extractTableMetadata(const std::string &schema_name,
 
     classifyTable(metadata);
     inferSourceEngine(metadata);
+
+    // Calculate enhanced quality scores
+    metadata.completeness_score = calculateCompletenessScore(metadata);
+    metadata.accuracy_score = calculateAccuracyScore(metadata);
+    metadata.consistency_score = calculateConsistencyScore(metadata);
+    metadata.validity_score = calculateValidityScore(metadata);
+    metadata.timeliness_score = calculateTimelinessScore(metadata);
+    metadata.uniqueness_score = calculateUniquenessScore(metadata);
+    metadata.integrity_score = calculateIntegrityScore(metadata);
 
     metadata.data_quality_score = calculateDataQualityScore(metadata);
     metadata.last_analyzed = getCurrentTimestamp();
@@ -411,6 +436,14 @@ void DataGovernance::classifyTable(TableMetadata &metadata) {
       determineBusinessDomain(metadata.table_name, metadata.schema_name);
   metadata.sensitivity_level =
       determineSensitivityLevel(metadata.table_name, metadata.schema_name);
+  metadata.data_classification =
+      determineDataClassification(metadata.table_name, metadata.schema_name);
+  metadata.retention_policy = determineRetentionPolicy(
+      metadata.data_category, metadata.sensitivity_level);
+  metadata.backup_frequency = determineBackupFrequency(
+      metadata.data_category, metadata.access_frequency);
+  metadata.compliance_requirements = determineComplianceRequirements(
+      metadata.sensitivity_level, metadata.business_domain);
 }
 
 void DataGovernance::inferSourceEngine(TableMetadata &metadata) {
@@ -686,22 +719,36 @@ DataGovernance::calculateDataQualityScore(const TableMetadata &metadata) {
 }
 
 std::string DataGovernance::determineAccessFrequency(int query_count) {
+  if (query_count > 10000)
+    return "REAL_TIME";
   if (query_count > 1000)
     return "HIGH";
   if (query_count > 100)
     return "MEDIUM";
-  return "LOW";
+  if (query_count > 10)
+    return "LOW";
+  if (query_count > 0)
+    return "RARE";
+  return "ARCHIVED";
 }
 
 std::string
 DataGovernance::determineHealthStatus(const TableMetadata &metadata) {
+  if (metadata.fragmentation_percentage > 80.0 ||
+      metadata.duplicate_percentage > 50.0 || metadata.null_percentage > 70.0) {
+    return "EMERGENCY";
+  }
   if (metadata.fragmentation_percentage > 50.0 ||
-      metadata.duplicate_percentage > 20.0) {
+      metadata.duplicate_percentage > 20.0 || metadata.null_percentage > 50.0) {
     return "CRITICAL";
   }
   if (metadata.fragmentation_percentage > 20.0 ||
       metadata.duplicate_percentage > 10.0 || metadata.null_percentage > 30.0) {
     return "WARNING";
+  }
+  if (metadata.fragmentation_percentage == 0.0 &&
+      metadata.duplicate_percentage == 0.0 && metadata.null_percentage < 5.0) {
+    return "EXCELLENT";
   }
   return "HEALTHY";
 }
@@ -712,18 +759,94 @@ DataGovernance::determineDataCategory(const std::string &table_name,
   std::string name = table_name;
   std::transform(name.begin(), name.end(), name.begin(), ::tolower);
 
+  // ANALYTICAL - Logs, metrics, analytics
   if (name.find("log") != std::string::npos ||
       name.find("audit") != std::string::npos ||
       name.find("history") != std::string::npos ||
-      name.find("archive") != std::string::npos) {
+      name.find("archive") != std::string::npos ||
+      name.find("metrics") != std::string::npos ||
+      name.find("analytics") != std::string::npos ||
+      name.find("stats") != std::string::npos) {
     return "ANALYTICAL";
   }
+
+  // REFERENCE - Lookup tables, configurations
   if (name.find("ref") != std::string::npos ||
       name.find("lookup") != std::string::npos ||
       name.find("config") != std::string::npos ||
-      name.find("master") != std::string::npos) {
+      name.find("master") != std::string::npos ||
+      name.find("dictionary") != std::string::npos ||
+      name.find("catalog") != std::string::npos) {
     return "REFERENCE";
   }
+
+  // MASTER_DATA - Core business entities
+  if (name.find("customer") != std::string::npos ||
+      name.find("product") != std::string::npos ||
+      name.find("supplier") != std::string::npos ||
+      name.find("location") != std::string::npos ||
+      name.find("employee") != std::string::npos ||
+      name.find("user") != std::string::npos) {
+    return "MASTER_DATA";
+  }
+
+  // OPERATIONAL - Workflows, processes, states
+  if (name.find("session") != std::string::npos ||
+      name.find("workflow") != std::string::npos ||
+      name.find("process") != std::string::npos ||
+      name.find("state") != std::string::npos ||
+      name.find("status") != std::string::npos ||
+      name.find("queue") != std::string::npos) {
+    return "OPERATIONAL";
+  }
+
+  // TEMPORAL - Time-based data
+  if (name.find("schedule") != std::string::npos ||
+      name.find("event") != std::string::npos ||
+      name.find("appointment") != std::string::npos ||
+      name.find("deadline") != std::string::npos ||
+      name.find("calendar") != std::string::npos) {
+    return "TEMPORAL";
+  }
+
+  // GEOSPATIAL - Location data
+  if (name.find("coordinate") != std::string::npos ||
+      name.find("address") != std::string::npos ||
+      name.find("region") != std::string::npos ||
+      name.find("zone") != std::string::npos ||
+      name.find("location") != std::string::npos ||
+      name.find("geo") != std::string::npos) {
+    return "GEOSPATIAL";
+  }
+
+  // FINANCIAL - Financial data
+  if (name.find("account") != std::string::npos ||
+      name.find("budget") != std::string::npos ||
+      name.find("forecast") != std::string::npos ||
+      name.find("report") != std::string::npos ||
+      name.find("invoice") != std::string::npos ||
+      name.find("payment") != std::string::npos) {
+    return "FINANCIAL";
+  }
+
+  // COMPLIANCE - Regulatory data
+  if (name.find("gdpr") != std::string::npos ||
+      name.find("sox") != std::string::npos ||
+      name.find("pci") != std::string::npos ||
+      name.find("regulation") != std::string::npos ||
+      name.find("compliance") != std::string::npos) {
+    return "COMPLIANCE";
+  }
+
+  // TECHNICAL - System data
+  if (name.find("system") != std::string::npos ||
+      name.find("infrastructure") != std::string::npos ||
+      name.find("monitoring") != std::string::npos ||
+      name.find("alert") != std::string::npos ||
+      name.find("error") != std::string::npos) {
+    return "TECHNICAL";
+  }
+
   return "TRANSACTIONAL";
 }
 
@@ -733,31 +856,176 @@ DataGovernance::determineBusinessDomain(const std::string &table_name,
   std::string name = table_name;
   std::transform(name.begin(), name.end(), name.begin(), ::tolower);
 
+  // CUSTOMER - Customer related data
   if (name.find("user") != std::string::npos ||
       name.find("customer") != std::string::npos ||
-      name.find("client") != std::string::npos) {
+      name.find("client") != std::string::npos ||
+      name.find("profile") != std::string::npos ||
+      name.find("preference") != std::string::npos) {
     return "CUSTOMER";
   }
+
+  // SALES - Sales and revenue data
   if (name.find("order") != std::string::npos ||
       name.find("sale") != std::string::npos ||
-      name.find("transaction") != std::string::npos) {
+      name.find("transaction") != std::string::npos ||
+      name.find("deal") != std::string::npos ||
+      name.find("opportunity") != std::string::npos ||
+      name.find("quote") != std::string::npos) {
     return "SALES";
   }
+
+  // MARKETING - Marketing campaigns and leads
+  if (name.find("campaign") != std::string::npos ||
+      name.find("lead") != std::string::npos ||
+      name.find("segment") != std::string::npos ||
+      name.find("promotion") != std::string::npos ||
+      name.find("marketing") != std::string::npos) {
+    return "MARKETING";
+  }
+
+  // HR - Human resources
   if (name.find("employee") != std::string::npos ||
       name.find("hr") != std::string::npos ||
-      name.find("payroll") != std::string::npos) {
+      name.find("payroll") != std::string::npos ||
+      name.find("benefit") != std::string::npos ||
+      name.find("performance") != std::string::npos ||
+      name.find("training") != std::string::npos) {
     return "HR";
   }
+
+  // FINANCE - Financial data
   if (name.find("finance") != std::string::npos ||
       name.find("account") != std::string::npos ||
-      name.find("payment") != std::string::npos) {
+      name.find("payment") != std::string::npos ||
+      name.find("budget") != std::string::npos ||
+      name.find("invoice") != std::string::npos) {
     return "FINANCE";
   }
+
+  // INVENTORY - Product and inventory management
   if (name.find("product") != std::string::npos ||
       name.find("inventory") != std::string::npos ||
-      name.find("stock") != std::string::npos) {
+      name.find("stock") != std::string::npos ||
+      name.find("supplier") != std::string::npos ||
+      name.find("warehouse") != std::string::npos) {
     return "INVENTORY";
   }
+
+  // OPERATIONS - Business operations
+  if (name.find("process") != std::string::npos ||
+      name.find("workflow") != std::string::npos ||
+      name.find("task") != std::string::npos ||
+      name.find("schedule") != std::string::npos ||
+      name.find("operation") != std::string::npos) {
+    return "OPERATIONS";
+  }
+
+  // SUPPORT - Customer support
+  if (name.find("ticket") != std::string::npos ||
+      name.find("case") != std::string::npos ||
+      name.find("knowledge") != std::string::npos ||
+      name.find("faq") != std::string::npos ||
+      name.find("support") != std::string::npos) {
+    return "SUPPORT";
+  }
+
+  // SECURITY - Security and access control
+  if (name.find("access") != std::string::npos ||
+      name.find("permission") != std::string::npos ||
+      name.find("audit") != std::string::npos ||
+      name.find("compliance") != std::string::npos ||
+      name.find("security") != std::string::npos) {
+    return "SECURITY";
+  }
+
+  // ANALYTICS - Analytics and reporting
+  if (name.find("report") != std::string::npos ||
+      name.find("dashboard") != std::string::npos ||
+      name.find("metric") != std::string::npos ||
+      name.find("kpi") != std::string::npos ||
+      name.find("analytics") != std::string::npos) {
+    return "ANALYTICS";
+  }
+
+  // COMMUNICATION - Messages and notifications
+  if (name.find("message") != std::string::npos ||
+      name.find("notification") != std::string::npos ||
+      name.find("alert") != std::string::npos ||
+      name.find("communication") != std::string::npos) {
+    return "COMMUNICATION";
+  }
+
+  // LEGAL - Legal and contracts
+  if (name.find("contract") != std::string::npos ||
+      name.find("agreement") != std::string::npos ||
+      name.find("policy") != std::string::npos ||
+      name.find("terms") != std::string::npos ||
+      name.find("legal") != std::string::npos) {
+    return "LEGAL";
+  }
+
+  // RESEARCH - Research and development
+  if (name.find("study") != std::string::npos ||
+      name.find("experiment") != std::string::npos ||
+      name.find("survey") != std::string::npos ||
+      name.find("research") != std::string::npos) {
+    return "RESEARCH";
+  }
+
+  // MANUFACTURING - Production and manufacturing
+  if (name.find("production") != std::string::npos ||
+      name.find("quality") != std::string::npos ||
+      name.find("material") != std::string::npos ||
+      name.find("manufacturing") != std::string::npos) {
+    return "MANUFACTURING";
+  }
+
+  // LOGISTICS - Shipping and logistics
+  if (name.find("shipping") != std::string::npos ||
+      name.find("tracking") != std::string::npos ||
+      name.find("delivery") != std::string::npos ||
+      name.find("route") != std::string::npos ||
+      name.find("logistics") != std::string::npos) {
+    return "LOGISTICS";
+  }
+
+  // HEALTHCARE - Healthcare data
+  if (name.find("patient") != std::string::npos ||
+      name.find("record") != std::string::npos ||
+      name.find("treatment") != std::string::npos ||
+      name.find("drug") != std::string::npos ||
+      name.find("healthcare") != std::string::npos) {
+    return "HEALTHCARE";
+  }
+
+  // EDUCATION - Educational data
+  if (name.find("student") != std::string::npos ||
+      name.find("course") != std::string::npos ||
+      name.find("grade") != std::string::npos ||
+      name.find("curriculum") != std::string::npos ||
+      name.find("education") != std::string::npos) {
+    return "EDUCATION";
+  }
+
+  // REAL_ESTATE - Real estate data
+  if (name.find("property") != std::string::npos ||
+      name.find("lease") != std::string::npos ||
+      name.find("tenant") != std::string::npos ||
+      name.find("maintenance") != std::string::npos ||
+      name.find("real_estate") != std::string::npos) {
+    return "REAL_ESTATE";
+  }
+
+  // INSURANCE - Insurance data
+  if (name.find("policy") != std::string::npos ||
+      name.find("claim") != std::string::npos ||
+      name.find("coverage") != std::string::npos ||
+      name.find("risk") != std::string::npos ||
+      name.find("insurance") != std::string::npos) {
+    return "INSURANCE";
+  }
+
   return "GENERAL";
 }
 
@@ -767,17 +1035,158 @@ DataGovernance::determineSensitivityLevel(const std::string &table_name,
   std::string name = table_name;
   std::transform(name.begin(), name.end(), name.begin(), ::tolower);
 
+  // CRITICAL - Highly sensitive data
   if (name.find("password") != std::string::npos ||
       name.find("ssn") != std::string::npos ||
       name.find("credit") != std::string::npos ||
-      name.find("bank") != std::string::npos) {
-    return "HIGH";
+      name.find("bank") != std::string::npos ||
+      name.find("medical") != std::string::npos ||
+      name.find("biometric") != std::string::npos ||
+      name.find("secret") != std::string::npos ||
+      name.find("private_key") != std::string::npos) {
+    return "CRITICAL";
   }
+
+  // HIGH - Sensitive personal data
   if (name.find("email") != std::string::npos ||
       name.find("phone") != std::string::npos ||
       name.find("address") != std::string::npos ||
-      name.find("personal") != std::string::npos) {
+      name.find("personal") != std::string::npos ||
+      name.find("financial") != std::string::npos ||
+      name.find("salary") != std::string::npos ||
+      name.find("social") != std::string::npos ||
+      name.find("identity") != std::string::npos) {
+    return "HIGH";
+  }
+
+  // MEDIUM - Business sensitive data
+  if (name.find("name") != std::string::npos ||
+      name.find("age") != std::string::npos ||
+      name.find("preference") != std::string::npos ||
+      name.find("business") != std::string::npos ||
+      name.find("internal") != std::string::npos ||
+      name.find("confidential") != std::string::npos) {
     return "MEDIUM";
   }
+
+  // PUBLIC - Public information
+  if (name.find("marketing") != std::string::npos ||
+      name.find("public") != std::string::npos ||
+      name.find("announcement") != std::string::npos ||
+      name.find("general") != std::string::npos ||
+      name.find("catalog") != std::string::npos ||
+      name.find("reference") != std::string::npos) {
+    return "PUBLIC";
+  }
+
   return "LOW";
+}
+
+// New classification functions
+std::string
+DataGovernance::determineDataClassification(const std::string &table_name,
+                                            const std::string &schema_name) {
+  std::string name = table_name;
+  std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+
+  if (name.find("confidential") != std::string::npos ||
+      name.find("secret") != std::string::npos ||
+      name.find("private") != std::string::npos) {
+    return "CONFIDENTIAL";
+  }
+  if (name.find("internal") != std::string::npos ||
+      name.find("restricted") != std::string::npos) {
+    return "INTERNAL";
+  }
+  if (name.find("public") != std::string::npos ||
+      name.find("open") != std::string::npos) {
+    return "PUBLIC";
+  }
+  return "INTERNAL";
+}
+
+std::string
+DataGovernance::determineRetentionPolicy(const std::string &data_category,
+                                         const std::string &sensitivity_level) {
+  if (sensitivity_level == "CRITICAL") {
+    return "7_YEARS";
+  }
+  if (sensitivity_level == "HIGH") {
+    return "5_YEARS";
+  }
+  if (data_category == "ANALYTICAL") {
+    return "3_YEARS";
+  }
+  if (data_category == "TRANSACTIONAL") {
+    return "2_YEARS";
+  }
+  return "1_YEAR";
+}
+
+std::string
+DataGovernance::determineBackupFrequency(const std::string &data_category,
+                                         const std::string &access_frequency) {
+  if (access_frequency == "REAL_TIME" || access_frequency == "HIGH") {
+    return "HOURLY";
+  }
+  if (data_category == "TRANSACTIONAL" || data_category == "MASTER_DATA") {
+    return "DAILY";
+  }
+  if (data_category == "ANALYTICAL") {
+    return "WEEKLY";
+  }
+  return "MONTHLY";
+}
+
+std::string DataGovernance::determineComplianceRequirements(
+    const std::string &sensitivity_level, const std::string &business_domain) {
+  if (sensitivity_level == "CRITICAL" || sensitivity_level == "HIGH") {
+    if (business_domain == "HEALTHCARE") {
+      return "HIPAA";
+    }
+    if (business_domain == "FINANCE") {
+      return "SOX,PCI";
+    }
+    return "GDPR";
+  }
+  if (business_domain == "HEALTHCARE") {
+    return "HIPAA";
+  }
+  if (business_domain == "FINANCE") {
+    return "SOX";
+  }
+  return "GDPR";
+}
+
+// Enhanced quality analysis functions
+double
+DataGovernance::calculateCompletenessScore(const TableMetadata &metadata) {
+  if (metadata.total_columns == 0)
+    return 0.0;
+  return 100.0 - (metadata.null_percentage * 0.1);
+}
+
+double DataGovernance::calculateAccuracyScore(const TableMetadata &metadata) {
+  return 100.0 - (metadata.duplicate_percentage * 0.5);
+}
+
+double
+DataGovernance::calculateConsistencyScore(const TableMetadata &metadata) {
+  return 100.0 - (metadata.fragmentation_percentage * 0.2);
+}
+
+double DataGovernance::calculateValidityScore(const TableMetadata &metadata) {
+  return 100.0 - (metadata.null_percentage * 0.3);
+}
+
+double DataGovernance::calculateTimelinessScore(const TableMetadata &metadata) {
+  return 100.0 - (metadata.fragmentation_percentage * 0.1);
+}
+
+double DataGovernance::calculateUniquenessScore(const TableMetadata &metadata) {
+  return 100.0 - (metadata.duplicate_percentage * 0.8);
+}
+
+double DataGovernance::calculateIntegrityScore(const TableMetadata &metadata) {
+  return 100.0 - (metadata.fragmentation_percentage * 0.3);
 }
