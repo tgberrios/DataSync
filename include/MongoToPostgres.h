@@ -829,7 +829,7 @@ private:
           for (size_t i = 1; i < values.size(); ++i) {
             batchQuery += ", " + values[i];
           }
-          
+
           if (!pkColumns.empty()) {
             batchQuery += conflictClause;
           } else {
@@ -926,19 +926,22 @@ private:
     return query;
   }
 
-  std::string buildUpsertConflictClause(const std::vector<std::string> &columnNames,
-                                       const std::vector<std::string> &pkColumns) {
+  std::string
+  buildUpsertConflictClause(const std::vector<std::string> &columnNames,
+                            const std::vector<std::string> &pkColumns) {
     std::string conflictClause = " ON CONFLICT (";
-    
+
     for (size_t i = 0; i < pkColumns.size(); ++i) {
-      if (i > 0) conflictClause += ", ";
+      if (i > 0)
+        conflictClause += ", ";
       conflictClause += "\"" + pkColumns[i] + "\"";
     }
     conflictClause += ") DO UPDATE SET ";
 
     // Construir SET clause para UPDATE
     for (size_t i = 0; i < columnNames.size(); ++i) {
-      if (i > 0) conflictClause += ", ";
+      if (i > 0)
+        conflictClause += ", ";
       conflictClause +=
           "\"" + columnNames[i] + "\" = EXCLUDED.\"" + columnNames[i] + "\"";
     }
