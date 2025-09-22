@@ -123,12 +123,13 @@ void ConnectionPool::loadConfigFromDatabase() {
     }
 
     // Load MariaDB connections from catalog
-    auto mariaResult = txn.exec(
-        "SELECT DISTINCT connection_string FROM metadata.catalog WHERE db_engine = 'MariaDB' AND active = true");
+    auto mariaResult =
+        txn.exec("SELECT DISTINCT connection_string FROM metadata.catalog "
+                 "WHERE db_engine = 'MariaDB' AND active = true");
 
     for (const auto &row : mariaResult) {
       std::string connStr = row[0].as<std::string>();
-      
+
       ConnectionConfig mariaConfig;
       mariaConfig.type = DatabaseType::MARIADB;
       mariaConfig.connectionString = connStr;
@@ -136,18 +137,19 @@ void ConnectionPool::loadConfigFromDatabase() {
       mariaConfig.maxConnections = 3;
       mariaConfig.maxIdleTime = 300;
       mariaConfig.autoReconnect = true;
-      
+
       configs.push_back(mariaConfig);
       Logger::debug("ConnectionPool", "Added MariaDB config from catalog");
     }
 
     // Load MSSQL connections from catalog
-    auto mssqlResult = txn.exec(
-        "SELECT DISTINCT connection_string FROM metadata.catalog WHERE db_engine = 'MSSQL' AND active = true");
+    auto mssqlResult =
+        txn.exec("SELECT DISTINCT connection_string FROM metadata.catalog "
+                 "WHERE db_engine = 'MSSQL' AND active = true");
 
     for (const auto &row : mssqlResult) {
       std::string connStr = row[0].as<std::string>();
-      
+
       ConnectionConfig mssqlConfig;
       mssqlConfig.type = DatabaseType::MSSQL;
       mssqlConfig.connectionString = connStr;
@@ -155,7 +157,7 @@ void ConnectionPool::loadConfigFromDatabase() {
       mssqlConfig.maxConnections = 3;
       mssqlConfig.maxIdleTime = 300;
       mssqlConfig.autoReconnect = true;
-      
+
       configs.push_back(mssqlConfig);
       Logger::debug("ConnectionPool", "Added MSSQL config from catalog");
     }
@@ -188,11 +190,11 @@ ConnectionPool::getConnection(DatabaseType type) {
   // Find connection of the correct type
   std::shared_ptr<PooledConnection> conn = nullptr;
   std::queue<std::shared_ptr<PooledConnection>> tempQueue;
-  
+
   while (!availableConnections.empty()) {
     auto candidate = availableConnections.front();
     availableConnections.pop();
-    
+
     if (candidate->type == type) {
       conn = candidate;
       break;
@@ -200,15 +202,17 @@ ConnectionPool::getConnection(DatabaseType type) {
       tempQueue.push(candidate);
     }
   }
-  
+
   // Put back connections that weren't the right type
   while (!tempQueue.empty()) {
     availableConnections.push(tempQueue.front());
     tempQueue.pop();
   }
-  
+
   if (!conn) {
-    Logger::error("ConnectionPool", "No available " + databaseTypeToString(type) + " connection found");
+    Logger::error("ConnectionPool", "No available " +
+                                        databaseTypeToString(type) +
+                                        " connection found");
     return nullptr;
   }
 
@@ -241,8 +245,11 @@ ConnectionPool::getConnection(DatabaseType type) {
   conn->lastUsed = std::chrono::steady_clock::now();
   activeConnections[conn->connectionId] = conn;
 
+  // Update stats safely
+  if (stats.idleConnections > 0) {
+    stats.idleConnections--;
+  }
   stats.activeConnections++;
-  stats.idleConnections--;
 
   Logger::debug(
       "ConnectionPool",
@@ -270,12 +277,17 @@ void ConnectionPool::returnConnection(std::shared_ptr<PooledConnection> conn) {
 
   // Remove from active connections
   activeConnections.erase(conn->connectionId);
-  stats.activeConnections--;
+
+  // Update stats safely
+  if (stats.activeConnections > 0) {
+    stats.activeConnections--;
+  }
 
   // Validate before returning to pool
   if (validateConnection(conn)) {
     conn->isActive = false;
     conn->lastUsed = std::chrono::steady_clock::now();
+    conn->isValid = true;
     availableConnections.push(conn);
     stats.idleConnections++;
 
@@ -298,6 +310,7 @@ void ConnectionPool::returnConnection(std::shared_ptr<PooledConnection> conn) {
             "Connection validation failed, closing connection - Type: ") +
             databaseTypeToString(conn->type) +
             ", ID: " + std::to_string(conn->connectionId));
+    conn->isValid = false;
     closeConnection(conn);
   }
 
@@ -316,14 +329,18 @@ void ConnectionPool::closeConnection(std::shared_ptr<PooledConnection> conn) {
   case DatabaseType::MONGODB:
   case DatabaseType::MSSQL:
   case DatabaseType::MARIADB:
-    // All connections use custom deleters in shared_ptr, no manual cleanup needed
+    // All connections use custom deleters in shared_ptr, no manual cleanup
+    // needed
     break;
   }
 
-  stats.totalConnections--;
-  if (conn->isActive) {
+  // Update stats safely
+  if (stats.totalConnections > 0) {
+    stats.totalConnections--;
+  }
+  if (conn->isActive && stats.activeConnections > 0) {
     stats.activeConnections--;
-  } else {
+  } else if (!conn->isActive && stats.idleConnections > 0) {
     stats.idleConnections--;
   }
 }
@@ -547,7 +564,7 @@ ConnectionPool::createMariaDBConnection(const ConnectionConfig &config) {
 
 bool ConnectionPool::validateConnection(
     std::shared_ptr<PooledConnection> conn) {
-  if (!conn || !conn->connection)
+  if (!conn || !conn->connection || !conn->isValid)
     return false;
 
   try {
@@ -555,6 +572,8 @@ bool ConnectionPool::validateConnection(
     case DatabaseType::POSTGRESQL: {
       auto pgConn =
           std::static_pointer_cast<pqxx::connection>(conn->connection);
+      if (!pgConn)
+        return false;
       pqxx::work txn(*pgConn);
       txn.exec("SELECT 1");
       txn.commit();
@@ -562,11 +581,15 @@ bool ConnectionPool::validateConnection(
     }
     case DatabaseType::MONGODB: {
       auto client = std::static_pointer_cast<mongoc_client_t>(conn->connection);
+      if (!client)
+        return false;
       // Simple ping to validate MongoDB connection
       return mongoc_client_get_database_names(client.get(), nullptr);
     }
     case DatabaseType::MSSQL: {
       auto handles = static_cast<ODBCHandles *>(conn->connection.get());
+      if (!handles)
+        return false;
       SQLHSTMT stmt;
       SQLRETURN ret;
 
@@ -582,6 +605,8 @@ bool ConnectionPool::validateConnection(
     }
     case DatabaseType::MARIADB: {
       auto mysql = static_cast<MYSQL *>(conn->connection.get());
+      if (!mysql)
+        return false;
       return mysql_ping(mysql) == 0;
     }
     default:
@@ -612,6 +637,8 @@ void ConnectionPool::cleanupIdleConnections() {
 
   // Find idle connections to close
   std::queue<std::shared_ptr<PooledConnection>> tempQueue;
+  int closedCount = 0;
+
   while (!availableConnections.empty()) {
     auto conn = availableConnections.front();
     availableConnections.pop();
@@ -621,6 +648,7 @@ void ConnectionPool::cleanupIdleConnections() {
           std::chrono::duration_cast<std::chrono::seconds>(now - conn->lastUsed)
               .count();
       closeConnection(conn);
+      closedCount++;
       Logger::debug("ConnectionPool",
                     std::string("Closed idle connection - Type: ") +
                         databaseTypeToString(conn->type) +
@@ -635,6 +663,12 @@ void ConnectionPool::cleanupIdleConnections() {
   // Put remaining connections back
   availableConnections = std::move(tempQueue);
   stats.lastCleanup = now;
+
+  if (closedCount > 0) {
+    Logger::debug("ConnectionPool", "Cleanup completed - closed " +
+                                        std::to_string(closedCount) +
+                                        " idle connections");
+  }
 }
 
 void ConnectionPool::startCleanupThread() {
