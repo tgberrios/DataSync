@@ -309,20 +309,14 @@ void ConnectionPool::closeConnection(std::shared_ptr<PooledConnection> conn) {
     return;
 
   // Close connection based on type
+  // All connections are automatically closed by their custom deleters
+  // when shared_ptr is destroyed, so no manual cleanup needed here
   switch (conn->type) {
   case DatabaseType::POSTGRESQL:
-    // PostgreSQL connections are automatically closed when shared_ptr is
-    // destroyed
-    break;
   case DatabaseType::MONGODB:
-    if (conn->connection) {
-      auto client = std::static_pointer_cast<mongoc_client_t>(conn->connection);
-      mongoc_client_destroy(client.get());
-    }
-    break;
   case DatabaseType::MSSQL:
   case DatabaseType::MARIADB:
-    // These would need specific cleanup
+    // All connections use custom deleters in shared_ptr, no manual cleanup needed
     break;
   }
 

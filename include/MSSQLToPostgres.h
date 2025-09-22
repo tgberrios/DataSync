@@ -49,7 +49,7 @@ public:
                    "connection_string, last_sync_time, last_sync_column, "
                    "status, last_offset "
                    "FROM metadata.catalog "
-                   "WHERE active=true AND db_engine='MSSQL' "
+                   "WHERE active=true AND db_engine='MSSQL' AND status != 'NO_DATA' "
                    "ORDER BY schema_name, table_name;");
       txn.commit();
 
@@ -362,6 +362,7 @@ public:
       for (auto &table : tables) {
         if (table.db_engine != "MSSQL")
           continue;
+
 
         // Actualizar tabla actualmente procesando para el dashboard
         SyncReporter::currentProcessingTable = table.schema_name + "." +

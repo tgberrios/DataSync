@@ -273,7 +273,11 @@ const LogsViewer = () => {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [lines, setLines] = useState(100);
   const [level, setLevel] = useState('ALL');
+  const [functionFilter, setFunctionFilter] = useState('ALL');
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
+  const [showClearDialog, setShowClearDialog] = useState(false);
+  const [refreshCountdown, setRefreshCountdown] = useState(5);
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
@@ -281,6 +285,7 @@ const LogsViewer = () => {
   const [allLogs, setAllLogs] = useState<LogEntry[]>([]);
   
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const fetchLogs = async () => {
     try {
@@ -289,22 +294,23 @@ const LogsViewer = () => {
       
       // Fetch more logs for pagination (get 1000 lines)
       const [logsData, infoData] = await Promise.all([
-        logsApi.getLogs({ lines: 1000, level }),
+        logsApi.getLogs({ lines: 1000, level, function: functionFilter }),
         logsApi.getLogInfo()
       ]);
       
       setAllLogs(logsData.logs);
       setLogInfo(infoData);
       
-      // Calculate pagination
+      // Calculate pagination - Page 1 shows most recent logs
       const logsPerPage = 50;
       const totalPages = Math.ceil(logsData.logs.length / logsPerPage);
       setTotalPages(totalPages);
       
-      // Set current page logs
+      // Reverse logs so most recent appear first, then paginate
+      const reversedLogs = [...logsData.logs].reverse();
       const startIndex = (currentPage - 1) * logsPerPage;
       const endIndex = startIndex + logsPerPage;
-      setLogs(logsData.logs.slice(startIndex, endIndex));
+      setLogs(reversedLogs.slice(startIndex, endIndex));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error loading logs');
     } finally {
@@ -321,9 +327,11 @@ const LogsViewer = () => {
     if (page >= 1 && page <= totalPages) {
       setCurrentPage(page);
       const logsPerPage = 50;
+      // Reverse logs so most recent appear first, then paginate
+      const reversedLogs = [...allLogs].reverse();
       const startIndex = (page - 1) * logsPerPage;
       const endIndex = startIndex + logsPerPage;
-      setLogs(allLogs.slice(startIndex, endIndex));
+      setLogs(reversedLogs.slice(startIndex, endIndex));
     }
   };
 
@@ -332,24 +340,76 @@ const LogsViewer = () => {
   const goToPreviousPage = () => goToPage(currentPage - 1);
   const goToNextPage = () => goToPage(currentPage + 1);
 
-  useEffect(() => {
-    fetchLogs();
-  }, [lines, level]);
+  const handleClearLogs = async () => {
+    try {
+      setIsClearing(true);
+      setError(null);
+      
+      await logsApi.clearLogs();
+      
+      setShowClearDialog(false);
+      setCurrentPage(1);
+      await fetchLogs();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error clearing logs');
+    } finally {
+      setIsClearing(false);
+    }
+  };
 
   useEffect(() => {
-    if (autoRefresh) {
-      const interval = setInterval(fetchLogs, 5000); // Refresh every 5 seconds
-      return () => clearInterval(interval);
+    fetchLogs();
+  }, [lines, level, functionFilter]);
+
+  useEffect(() => {
+    // Clear any existing countdown interval
+    if (countdownIntervalRef.current) {
+      clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = null;
     }
-  }, [autoRefresh, lines, level]);
+
+    if (autoRefresh) {
+      setRefreshCountdown(5);
+      
+      // Countdown timer
+      countdownIntervalRef.current = setInterval(() => {
+        setRefreshCountdown(prev => {
+          if (prev <= 1) {
+            return 5; // Reset to 5 when it reaches 0
+          }
+          return prev - 1;
+        });
+      }, 1000);
+
+      // Auto refresh timer
+      const refreshInterval = setInterval(() => {
+        fetchLogs();
+        // Auto-follow: always go to page 1 (most recent logs) when auto-refreshing
+        setCurrentPage(1);
+        setRefreshCountdown(5); // Reset countdown after refresh
+      }, 5000); // Refresh every 5 seconds
+
+      return () => {
+        clearInterval(refreshInterval);
+        if (countdownIntervalRef.current) {
+          clearInterval(countdownIntervalRef.current);
+          countdownIntervalRef.current = null;
+        }
+      };
+    } else {
+      setRefreshCountdown(5);
+    }
+  }, [autoRefresh, lines, level, functionFilter]);
 
   // Update logs when allLogs or currentPage changes
   useEffect(() => {
     if (allLogs.length > 0) {
       const logsPerPage = 50;
+      // Reverse logs so most recent appear first, then paginate
+      const reversedLogs = [...allLogs].reverse();
       const startIndex = (currentPage - 1) * logsPerPage;
       const endIndex = startIndex + logsPerPage;
-      setLogs(allLogs.slice(startIndex, endIndex));
+      setLogs(reversedLogs.slice(startIndex, endIndex));
     }
   }, [allLogs, currentPage]);
 
@@ -364,6 +424,15 @@ const LogsViewer = () => {
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleString();
   };
+
+  // Cleanup countdown on unmount
+  useEffect(() => {
+    return () => {
+      if (countdownIntervalRef.current) {
+        clearInterval(countdownIntervalRef.current);
+      }
+    };
+  }, []);
 
   if (loading) {
     return (
@@ -435,6 +504,27 @@ const LogsViewer = () => {
           </ControlGroup>
           
           <ControlGroup>
+            <Label>Function/Module:</Label>
+            <Select value={functionFilter} onChange={(e) => setFunctionFilter(e.target.value)}>
+              <option value="ALL">All Functions</option>
+              <option value="ConnectionPool">ConnectionPool</option>
+              <option value="Catalog">Catalog</option>
+              <option value="DataGovernance">DataGovernance</option>
+              <option value="DataQuality">DataQuality</option>
+              <option value="DDLExporter">DDLExporter</option>
+              <option value="MariaDBToPostgres">MariaDBToPostgres</option>
+              <option value="MongoToPostgres">MongoToPostgres</option>
+              <option value="MSSQLToPostgres">MSSQLToPostgres</option>
+              <option value="PostgresToPostgres">PostgresToPostgres</option>
+              <option value="StreamingData">StreamingData</option>
+              <option value="SyncReporter">SyncReporter</option>
+              <option value="MetricsCollector">MetricsCollector</option>
+              <option value="Config">Config</option>
+              <option value="Logger">Logger</option>
+            </Select>
+          </ControlGroup>
+          
+          <ControlGroup>
             <Label>Auto Refresh:</Label>
             <Button
               $variant={autoRefresh ? 'secondary' : 'primary'}
@@ -445,12 +535,44 @@ const LogsViewer = () => {
             </Button>
           </ControlGroup>
           
+          {autoRefresh && (
+            <ControlGroup>
+              <Label>Next Refresh:</Label>
+              <div style={{
+                padding: '8px 12px',
+                border: '1px solid #ddd',
+                borderRadius: '4px',
+                backgroundColor: '#f8f9fa',
+                textAlign: 'center',
+                fontFamily: 'monospace',
+                fontSize: '1em',
+                color: '#333',
+                minWidth: '60px'
+              }}>
+                {refreshCountdown}s
+              </div>
+            </ControlGroup>
+          )}
+          
           <Button onClick={fetchLogs} disabled={isRefreshing}>
             {isRefreshing ? 'Refreshing...' : 'Refresh Now'}
           </Button>
           
           <Button $variant="secondary" onClick={scrollToBottom}>
             Scroll to Bottom
+          </Button>
+          
+          <Button $variant="secondary" onClick={() => goToPage(1)}>
+            Go to Latest
+          </Button>
+          
+          <Button 
+            $variant="secondary" 
+            onClick={() => setShowClearDialog(true)}
+            disabled={isClearing || isRefreshing}
+            style={{ backgroundColor: '#ff6b6b', color: 'white' }}
+          >
+            {isClearing ? 'Clearing...' : 'Clear Logs'}
           </Button>
         </Controls>
       </Section>
@@ -512,7 +634,7 @@ const LogsViewer = () => {
         <SectionTitle>■ LOG FILE STATUS</SectionTitle>
         <StatusBar>
           <StatusItem>
-            Showing {logs.length} of {logInfo.totalLines} log entries
+            Showing {logs.length} of {logInfo.totalLines} log entries (Page {currentPage} - Most Recent First)
           </StatusItem>
           <StatusItem>
             File: {logInfo.filePath}
@@ -524,10 +646,64 @@ const LogsViewer = () => {
             Last modified: {logInfo.lastModified ? formatDate(logInfo.lastModified) : 'Unknown'}
           </StatusItem>
           <StatusItem>
-            Auto refresh: {autoRefresh ? 'ON' : 'OFF'}
+            Auto refresh: {autoRefresh ? `ON (Next: ${refreshCountdown}s)` : 'OFF'}
           </StatusItem>
         </StatusBar>
       </Section>
+
+      {showClearDialog && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 1000
+        }}>
+          <div style={{
+            backgroundColor: 'white',
+            padding: '30px',
+            borderRadius: '8px',
+            border: '2px solid #333',
+            maxWidth: '500px',
+            textAlign: 'center',
+            fontFamily: 'monospace'
+          }}>
+            <h3 style={{ marginBottom: '20px', color: '#ff6b6b' }}>
+              ⚠️ CLEAR LOGS CONFIRMATION
+            </h3>
+            <p style={{ marginBottom: '25px', lineHeight: '1.5' }}>
+              This action will permanently delete:
+              <br />
+              • All entries from DataSync.log file
+              <br />
+              • All rotated log files (DataSync.log.1, .2, .3, etc.)
+              <br />
+              <strong>This operation cannot be undone!</strong>
+            </p>
+            <div style={{ display: 'flex', gap: '15px', justifyContent: 'center' }}>
+              <Button
+                onClick={() => setShowClearDialog(false)}
+                disabled={isClearing}
+                style={{ backgroundColor: '#666', color: 'white' }}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleClearLogs}
+                disabled={isClearing}
+                style={{ backgroundColor: '#ff6b6b', color: 'white' }}
+              >
+                {isClearing ? 'Clearing...' : 'Clear Logs'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </LogsContainer>
   );
 };

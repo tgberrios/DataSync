@@ -48,7 +48,7 @@ public:
                    "connection_string, last_sync_time, last_sync_column, "
                    "status, last_offset "
                    "FROM metadata.catalog "
-                   "WHERE active=true AND db_engine='MariaDB' "
+                   "WHERE active=true AND db_engine='MariaDB' AND status != 'NO_DATA' "
                    "ORDER BY schema_name, table_name;");
       txn.commit();
 
@@ -102,10 +102,7 @@ public:
       std::transform(columnName.begin(), columnName.end(), columnName.begin(),
                      ::tolower);
 
-      std::string createQuery = "CREATE ";
-      if (nonUnique == "0")
-        createQuery += "UNIQUE ";
-      createQuery += "INDEX IF NOT EXISTS \"" + indexName + "\" ON \"" +
+      std::string createQuery = "CREATE INDEX IF NOT EXISTS \"" + indexName + "\" ON \"" +
                      lowerSchemaName + "\".\"" + table_name + "\" (\"" +
                      columnName + "\");";
 
@@ -449,10 +446,26 @@ public:
 
           if (i > 0)
             whereClause += " AND ";
+          std::string pkValue = record[pkIndex];
+          
+          // Limpiar caracteres de control invisibles
+          for (char &c : pkValue) {
+            if (static_cast<unsigned char>(c) > 127) {
+              c = '?';
+            }
+          }
+          
+          pkValue.erase(std::remove_if(pkValue.begin(),
+                                      pkValue.end(),
+                                      [](unsigned char c) {
+                                        return c < 32 && c != 9 && c != 10 && c != 13;
+                                      }),
+                       pkValue.end());
+          
           whereClause += "\"" + pkColumns[i] + "\" = " +
-                         (record[pkIndex].empty()
+                         (pkValue.empty() || pkValue == "NULL"
                               ? "NULL"
-                              : "'" + escapeSQL(record[pkIndex]) + "'");
+                              : "'" + escapeSQL(pkValue) + "'");
         }
 
         // Verificar si el registro existe en PostgreSQL
@@ -527,9 +540,30 @@ public:
 
         // Comparar valores (normalizar para comparación)
         if (currentValue != newValue) {
-          updateFields.push_back(
-              "\"" + columnName + "\" = " +
-              (newValue.empty() ? "NULL" : "'" + escapeSQL(newValue) + "'"));
+          std::string cleanNewValue = newValue;
+          
+          // Limpiar caracteres de control invisibles
+          for (char &c : cleanNewValue) {
+            if (static_cast<unsigned char>(c) > 127) {
+              c = '?';
+            }
+          }
+          
+          cleanNewValue.erase(std::remove_if(cleanNewValue.begin(),
+                                            cleanNewValue.end(),
+                                            [](unsigned char c) {
+                                              return c < 32 && c != 9 && c != 10 && c != 13;
+                                            }),
+                             cleanNewValue.end());
+          
+          std::string valueToSet;
+          if (cleanNewValue.empty() || cleanNewValue == "NULL") {
+            valueToSet = "NULL";
+          } else {
+            valueToSet = "'" + escapeSQL(cleanNewValue) + "'";
+          }
+          
+          updateFields.push_back("\"" + columnName + "\" = " + valueToSet);
           hasChanges = true;
         }
       }
@@ -577,6 +611,7 @@ public:
       for (auto &table : tables) {
         if (table.db_engine != "MariaDB")
           continue;
+
 
         // Actualizar tabla actualmente procesando para el dashboard
         SyncReporter::currentProcessingTable = table.schema_name + "." +
@@ -1111,6 +1146,7 @@ public:
   }
 
 private:
+
   std::vector<std::string> getPrimaryKeyColumns(MYSQL *mariadbConn,
                                                 const std::string &schema_name,
                                                 const std::string &table_name) {

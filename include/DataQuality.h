@@ -25,7 +25,6 @@ public:
     size_t total_rows{0};
     size_t null_count{0};
     size_t duplicate_count{0};
-    std::string data_checksum;
 
     // Type Validation
     size_t invalid_type_count{0};
@@ -62,9 +61,6 @@ private:
   bool checkNullCounts(pqxx::connection &conn, QualityMetrics &metrics);
   bool checkDuplicates(pqxx::connection &conn, QualityMetrics &metrics);
   bool checkConstraints(pqxx::connection &conn, QualityMetrics &metrics);
-  std::string calculateChecksum(pqxx::connection &conn,
-                                const std::string &schema,
-                                const std::string &table);
 
   // Helper functions
   void calculateQualityScore(QualityMetrics &metrics);

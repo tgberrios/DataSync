@@ -47,6 +47,45 @@ public:
     }
   }
 
+  void deactivateNoDataTables() {
+    try {
+      Logger::info("deactivateNoDataTables",
+                   "Starting deactivation of NO_DATA tables");
+      pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
+
+      pqxx::work txn(pgConn);
+
+      // Contar tablas NO_DATA antes de desactivar
+      auto countResult = txn.exec("SELECT COUNT(*) FROM metadata.catalog WHERE "
+                                  "status = 'NO_DATA' AND active = true");
+      int noDataCount = countResult[0][0].as<int>();
+
+      if (noDataCount == 0) {
+        Logger::info("deactivateNoDataTables",
+                     "No NO_DATA tables found to deactivate");
+        txn.commit();
+        return;
+      }
+
+      // Desactivar tablas NO_DATA
+      auto updateResult =
+          txn.exec("UPDATE metadata.catalog SET active = false WHERE status = "
+                   "'NO_DATA' AND active = true");
+
+      txn.commit();
+
+      Logger::info("deactivateNoDataTables",
+                   "Successfully deactivated " +
+                       std::to_string(updateResult.affected_rows()) +
+                       " NO_DATA tables");
+
+    } catch (const std::exception &e) {
+      Logger::error("deactivateNoDataTables",
+                    "Error deactivating NO_DATA tables: " +
+                        std::string(e.what()));
+    }
+  }
+
   void syncCatalogMariaDBToPostgres() {
     try {
       Logger::info("syncCatalogMariaDBToPostgres",
@@ -223,9 +262,8 @@ public:
         Logger::debug("syncCatalogMSSQLToPostgres",
                       "Connecting to MSSQL: " + connStr);
 
-        // Usar ConnectionPool para obtener conexión MSSQL
-        ConnectionGuard mssqlGuard(g_connectionPool.get(), DatabaseType::MSSQL);
-        auto mssqlConn = mssqlGuard.get<ODBCHandles>();
+        // Conectar directamente a MSSQL
+        auto mssqlConn = connectMSSQL(connStr);
         if (!mssqlConn) {
           Logger::error("syncCatalogMSSQLToPostgres",
                         "Failed to connect to MSSQL with connection: " +
@@ -958,8 +996,7 @@ private:
         std::string connection_string = connRow[0].as<std::string>();
 
         // Conectar una vez por connection_string
-        ConnectionGuard mssqlGuard(g_connectionPool.get(), DatabaseType::MSSQL);
-        auto mssqlConn = mssqlGuard.get<ODBCHandles>();
+        auto mssqlConn = connectMSSQL(connection_string);
         if (!mssqlConn) {
           Logger::warning(
               "cleanNonExistentMSSQLTables",
@@ -1146,6 +1183,68 @@ private:
                     "Connection failed: " + std::string(e.what()));
       return nullptr;
     }
+  }
+
+  std::unique_ptr<ODBCHandles, void (*)(ODBCHandles *)>
+  connectMSSQL(const std::string &connStr) {
+    SQLHENV env;
+    SQLHDBC dbc;
+    SQLRETURN ret;
+
+    ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env);
+    if (!SQL_SUCCEEDED(ret)) {
+      Logger::error("connectMSSQL",
+                    "Failed to allocate ODBC environment handle");
+      return std::unique_ptr<ODBCHandles, void (*)(ODBCHandles *)>(
+          nullptr, [](ODBCHandles *) {});
+    }
+
+    ret =
+        SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION, (SQLPOINTER)SQL_OV_ODBC3, 0);
+    if (!SQL_SUCCEEDED(ret)) {
+      SQLFreeHandle(SQL_HANDLE_ENV, env);
+      Logger::error("connectMSSQL", "Failed to set ODBC version");
+      return std::unique_ptr<ODBCHandles, void (*)(ODBCHandles *)>(
+          nullptr, [](ODBCHandles *) {});
+    }
+
+    ret = SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc);
+    if (!SQL_SUCCEEDED(ret)) {
+      SQLFreeHandle(SQL_HANDLE_ENV, env);
+      Logger::error("connectMSSQL",
+                    "Failed to allocate ODBC connection handle");
+      return std::unique_ptr<ODBCHandles, void (*)(ODBCHandles *)>(
+          nullptr, [](ODBCHandles *) {});
+    }
+
+    ret = SQLDriverConnect(dbc, NULL, (SQLCHAR *)connStr.c_str(), SQL_NTS, NULL,
+                           0, NULL, SQL_DRIVER_NOPROMPT);
+
+    if (!SQL_SUCCEEDED(ret)) {
+      SQLCHAR sqlState[6], msg[SQL_MAX_MESSAGE_LENGTH];
+      SQLINTEGER nativeError;
+      SQLSMALLINT msgLen;
+      SQLGetDiagRec(SQL_HANDLE_DBC, dbc, 1, sqlState, &nativeError, msg,
+                    sizeof(msg), &msgLen);
+
+      SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+      SQLFreeHandle(SQL_HANDLE_ENV, env);
+      Logger::error("connectMSSQL",
+                    "Failed to connect to MSSQL: " + std::string((char *)msg));
+      return std::unique_ptr<ODBCHandles, void (*)(ODBCHandles *)>(
+          nullptr, [](ODBCHandles *) {});
+    }
+
+    auto handles = new ODBCHandles{env, dbc};
+    return std::unique_ptr<ODBCHandles, void (*)(ODBCHandles *)>(
+        handles, [](ODBCHandles *h) {
+          if (h) {
+            SQLDisconnect(h->dbc);
+            SQLFreeHandle(SQL_HANDLE_DBC, h->dbc);
+            SQLFreeHandle(SQL_HANDLE_ENV, h->env);
+            delete h;
+          }
+        });
   }
 
   std::vector<std::vector<std::string>>

@@ -87,7 +87,7 @@ public:
         auto results =
             txn.exec("SELECT schema_name, table_name, connection_string, "
                      "last_offset, status FROM metadata.catalog "
-                     "WHERE db_engine='MongoDB' AND active=true;");
+                     "WHERE db_engine='MongoDB' AND active=true AND status != 'NO_DATA';");
 
         for (const auto &row : results) {
           if (row.size() < 5)
@@ -98,6 +98,7 @@ public:
           std::string mongoConnStr = row[2].as<std::string>();
           std::string lastOffset = row[3].as<std::string>();
           std::string status = row[4].as<std::string>();
+
 
           Logger::debug("transferDataMongoToPostgres",
                         "Processing table: " + schemaName + "." + tableName +

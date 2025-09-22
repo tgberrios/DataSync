@@ -1,6 +1,6 @@
 -- Table DDL for dbo.test_performance
 -- Engine: PostgreSQL
 -- Database: dbo
--- Generated: 1758322950
+-- Generated: 1758510943
 
 CREATE TABLE "dbo"."test_performance" (id integer NOT NULL, data character varying, timestamp timestamp without time zone, value numeric);
