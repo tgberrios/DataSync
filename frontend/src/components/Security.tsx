@@ -120,6 +120,85 @@ const Badge = styled.span<{ type: string }>`
   }};
 `;
 
+const ExpandableRow = styled.tr<{ expanded: boolean }>`
+  cursor: pointer;
+  background-color: ${props => props.expanded ? '#f8f9fa' : 'white'};
+  
+  &:hover {
+    background-color: #f5f5f5;
+  }
+`;
+
+const ExpandableTd = styled.td`
+  padding: 12px;
+  border-bottom: 1px solid #eee;
+  vertical-align: middle;
+  position: relative;
+`;
+
+const ExpandIcon = styled.span<{ expanded: boolean }>`
+  margin-left: 8px;
+  font-size: 0.8em;
+  color: #666;
+  transition: transform 0.2s ease;
+  transform: ${props => props.expanded ? 'rotate(90deg)' : 'rotate(0deg)'};
+`;
+
+const ConnectionCount = styled.span`
+  background: #e3f2fd;
+  color: #1565c0;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.8em;
+  font-weight: 500;
+  margin-left: 8px;
+`;
+
+const StatusSummary = styled.div`
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+`;
+
+const ExpandedRow = styled.tr`
+  background-color: #fafafa;
+`;
+
+const ExpandedTd = styled.td`
+  padding: 0;
+  border-bottom: 1px solid #eee;
+  background-color: #fafafa;
+`;
+
+const ExpandedContent = styled.div`
+  padding: 15px 20px;
+  border-left: 3px solid #e3f2fd;
+  margin-left: 20px;
+`;
+
+const DetailRow = styled.div`
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+  gap: 15px;
+  padding: 8px 0;
+  border-bottom: 1px solid #f0f0f0;
+  font-size: 0.9em;
+  
+  &:last-child {
+    border-bottom: none;
+  }
+`;
+
+const DetailLabel = styled.div`
+  font-weight: 500;
+  color: #666;
+`;
+
+const DetailValue = styled.div`
+  color: #333;
+`;
+
 const formatDate = (date: string) => {
   if (!date) return '-';
   return new Date(date).toLocaleString();
@@ -127,6 +206,42 @@ const formatDate = (date: string) => {
 
 const formatNumber = (num: number) => {
   return num?.toLocaleString() || '0';
+};
+
+const groupUsersByUsername = (users: any[]) => {
+  const grouped = users.reduce((acc, user) => {
+    const username = user.username;
+    if (!acc[username]) {
+      acc[username] = {
+        username,
+        role_type: user.role_type,
+        connections: [],
+        mostRecentActivity: user.last_activity,
+        statusCounts: {},
+        expanded: false
+      };
+    }
+    
+    acc[username].connections.push({
+      status: user.status,
+      last_activity: user.last_activity,
+      client_addr: user.client_addr,
+      application_name: user.application_name
+    });
+    
+    // Update most recent activity
+    if (user.last_activity && (!acc[username].mostRecentActivity || 
+        new Date(user.last_activity) > new Date(acc[username].mostRecentActivity))) {
+      acc[username].mostRecentActivity = user.last_activity;
+    }
+    
+    // Count statuses
+    acc[username].statusCounts[user.status] = (acc[username].statusCounts[user.status] || 0) + 1;
+    
+    return acc;
+  }, {});
+  
+  return Object.values(grouped);
 };
 
 const Security = () => {
@@ -152,6 +267,19 @@ const Security = () => {
     }
   });
   const [activeUsers, setActiveUsers] = useState<any[]>([]);
+  const [expandedUsers, setExpandedUsers] = useState<Set<string>>(new Set());
+
+  const toggleUserExpansion = (username: string) => {
+    setExpandedUsers(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(username)) {
+        newSet.delete(username);
+      } else {
+        newSet.add(username);
+      }
+      return newSet;
+    });
+  };
 
   useEffect(() => {
     const fetchSecurityData = async () => {
@@ -244,24 +372,70 @@ const Security = () => {
                 </tr>
               </thead>
               <tbody>
-                {activeUsers.map((user, index) => (
-                  <tr key={index}>
-                    <Td>{user.username}</Td>
-                    <Td>
-                      <Badge type={user.role_type}>
-                        {user.role_type}
-                      </Badge>
-                    </Td>
-                    <Td>
-                      <Badge type={user.status}>
-                        {user.status}
-                      </Badge>
-                    </Td>
-                    <Td>{formatDate(user.last_activity)}</Td>
-                    <Td>{user.client_addr || '-'}</Td>
-                    <Td>{user.application_name || '-'}</Td>
-                  </tr>
-                ))}
+                {groupUsersByUsername(activeUsers).map((user: any, index) => {
+                  const isExpanded = expandedUsers.has(user.username);
+                  return (
+                    <React.Fragment key={index}>
+                      <ExpandableRow 
+                        expanded={isExpanded}
+                        onClick={() => toggleUserExpansion(user.username)}
+                      >
+                        <ExpandableTd>
+                          {user.username}
+                          <ConnectionCount>
+                            {user.connections.length}
+                          </ConnectionCount>
+                        </ExpandableTd>
+                        <ExpandableTd>
+                          <Badge type={user.role_type}>
+                            {user.role_type}
+                          </Badge>
+                        </ExpandableTd>
+                        <ExpandableTd>
+                          <StatusSummary>
+                            {Object.entries(user.statusCounts).map(([status, count]) => (
+                              <Badge key={status} type={status}>
+                                {status}: {count}
+                              </Badge>
+                            ))}
+                          </StatusSummary>
+                        </ExpandableTd>
+                        <ExpandableTd>{formatDate(user.mostRecentActivity)}</ExpandableTd>
+                        <ExpandableTd>
+                          {user.connections.length > 0 ? user.connections[0].client_addr || '-' : '-'}
+                        </ExpandableTd>
+                        <ExpandableTd>
+                          {user.connections.length > 0 ? user.connections[0].application_name || '-' : '-'}
+                        </ExpandableTd>
+                      </ExpandableRow>
+                      {isExpanded && (
+                        <ExpandedRow>
+                          <ExpandedTd colSpan={6}>
+                            <ExpandedContent>
+                              <div style={{ marginBottom: '15px', fontWeight: '500', color: '#666' }}>
+                                All Connections for {user.username}
+                              </div>
+                              {user.connections.map((conn: any, connIndex: number) => (
+                                <DetailRow key={connIndex}>
+                                  <DetailLabel>Status:</DetailLabel>
+                                  <DetailValue>
+                                    <Badge type={conn.status}>{conn.status}</Badge>
+                                  </DetailValue>
+                                  <DetailLabel>IP:</DetailLabel>
+                                  <DetailValue>{conn.client_addr || '-'}</DetailValue>
+                                  <DetailLabel>App:</DetailLabel>
+                                  <DetailValue>{conn.application_name || '-'}</DetailValue>
+                                  <DetailLabel>Activity:</DetailLabel>
+                                  <DetailValue>{formatDate(conn.last_activity)}</DetailValue>
+                                </DetailRow>
+                              ))}
+                            </ExpandedContent>
+                          </ExpandedTd>
+                        </ExpandedRow>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
               </tbody>
             </Table>
           </Section>
