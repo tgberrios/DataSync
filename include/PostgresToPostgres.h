@@ -81,7 +81,8 @@ public:
             txn.exec("SELECT schema_name, table_name, connection_string, "
                      "last_offset, status, last_sync_column, last_sync_time "
                      "FROM metadata.catalog "
-                     "WHERE db_engine='PostgreSQL' AND active=true AND status != 'NO_DATA';");
+                     "WHERE db_engine='PostgreSQL' AND active=true AND status "
+                     "!= 'NO_DATA';");
 
         for (const auto &row : results) {
           if (row.size() < 7)
@@ -96,7 +97,6 @@ public:
               row[5].is_null() ? "" : row[5].as<std::string>();
           std::string lastSyncTime =
               row[6].is_null() ? "" : row[6].as<std::string>();
-
 
           Logger::debug("transferDataPostgresToPostgres",
                         "Processing table: " + schemaName + "." + tableName +
@@ -577,42 +577,38 @@ private:
                          std::to_string(sourceResult.size()) + " rows for " +
                          schemaName + "." + tableName);
 
-        // Insertar datos en el destino
+        // Insertar datos en el destino usando UPSERT
         {
           pqxx::connection targetConn(
               DatabaseConfig::getPostgresConnectionString());
-          pqxx::work targetTxn(targetConn);
 
-          std::string insertQuery = "INSERT INTO \"" + lowerSchemaName +
-                                    "\".\"" + tableName + "\" VALUES ";
-          std::vector<std::string> values;
+          // Convertir pqxx::result a vector<vector<string>> para usar con
+          // performBulkUpsert
+          std::vector<std::vector<std::string>> results;
+          std::vector<std::string> columnNames;
 
+          // Obtener nombres de columnas
+          if (!sourceResult.empty()) {
+            for (size_t i = 0; i < sourceResult[0].size(); ++i) {
+              columnNames.push_back(sourceResult[0][i].name());
+            }
+          }
+
+          // Convertir datos
           for (const auto &row : sourceResult) {
-            std::string rowValues = "(";
+            std::vector<std::string> rowData;
             for (size_t i = 0; i < row.size(); ++i) {
-              if (i > 0)
-                rowValues += ", ";
-              if (row[i].is_null()) {
-                rowValues += "NULL";
-              } else {
-                rowValues += "'" + escapeSQL(row[i].as<std::string>()) + "'";
-              }
+              rowData.push_back(row[i].is_null() ? "NULL"
+                                                 : row[i].as<std::string>());
             }
-            rowValues += ")";
-            values.push_back(rowValues);
+            results.push_back(rowData);
           }
 
-          if (!values.empty()) {
-            insertQuery += values[0];
-            for (size_t i = 1; i < values.size(); ++i) {
-              insertQuery += ", " + values[i];
-            }
-            insertQuery += ";";
+          // Obtener tipos de columnas (asumir TEXT por defecto)
+          std::vector<std::string> columnTypes(columnNames.size(), "TEXT");
 
-            targetTxn.exec(insertQuery);
-          }
-
-          targetTxn.commit();
+          performBulkUpsert(targetConn, results, columnNames, columnTypes,
+                            lowerSchemaName, tableName, schemaName);
         }
 
         totalProcessed += sourceResult.size();
@@ -1146,6 +1142,277 @@ private:
                         std::string(e.what()));
       return false;
     }
+  }
+
+  void performBulkUpsert(pqxx::connection &pgConn,
+                         const std::vector<std::vector<std::string>> &results,
+                         const std::vector<std::string> &columnNames,
+                         const std::vector<std::string> &columnTypes,
+                         const std::string &lowerSchemaName,
+                         const std::string &tableName,
+                         const std::string &sourceSchemaName) {
+    try {
+      // Obtener columnas de primary key para el UPSERT
+      std::vector<std::string> pkColumns =
+          getPrimaryKeyColumnsFromPostgres(pgConn, lowerSchemaName, tableName);
+
+      if (pkColumns.empty()) {
+        // Si no hay PK, usar INSERT simple
+        performBulkInsert(pgConn, results, columnNames, columnTypes,
+                          lowerSchemaName, tableName);
+        return;
+      }
+
+      // Construir query UPSERT
+      std::string upsertQuery =
+          buildUpsertQuery(columnNames, pkColumns, lowerSchemaName, tableName);
+      std::string conflictClause = buildUpsertConflictClause(columnNames, pkColumns);
+
+      pqxx::work txn(pgConn);
+      txn.exec("SET statement_timeout = '300s'");
+
+      // Procesar en batches para evitar queries muy largas
+      const size_t BATCH_SIZE = 500;
+      size_t totalProcessed = 0;
+
+      for (size_t batchStart = 0; batchStart < results.size();
+           batchStart += BATCH_SIZE) {
+        size_t batchEnd = std::min(batchStart + BATCH_SIZE, results.size());
+
+        std::string batchQuery = upsertQuery;
+        std::vector<std::string> values;
+
+        for (size_t i = batchStart; i < batchEnd; ++i) {
+          const auto &row = results[i];
+          if (row.size() != columnNames.size())
+            continue;
+
+          std::string rowValues = "(";
+          for (size_t j = 0; j < row.size(); ++j) {
+            if (j > 0)
+              rowValues += ", ";
+
+            if (row[j] == "NULL" || row[j].empty()) {
+              rowValues += "NULL";
+            } else {
+              std::string cleanValue =
+                  cleanValueForPostgres(row[j], columnTypes[j]);
+              rowValues += "'" + escapeSQL(cleanValue) + "'";
+            }
+          }
+          rowValues += ")";
+          values.push_back(rowValues);
+        }
+
+        if (!values.empty()) {
+          batchQuery += values[0];
+          for (size_t i = 1; i < values.size(); ++i) {
+            batchQuery += ", " + values[i];
+          }
+          batchQuery += conflictClause;
+
+          txn.exec(batchQuery);
+          totalProcessed += values.size();
+        }
+      }
+
+      txn.commit();
+      Logger::debug("performBulkUpsert",
+                    "Processed " + std::to_string(totalProcessed) +
+                        " rows with UPSERT for " + sourceSchemaName + "." +
+                        tableName);
+
+    } catch (const std::exception &e) {
+      Logger::error("performBulkUpsert",
+                    "Error in bulk upsert: " + std::string(e.what()));
+      throw;
+    }
+  }
+
+  void performBulkInsert(pqxx::connection &pgConn,
+                         const std::vector<std::vector<std::string>> &results,
+                         const std::vector<std::string> &columnNames,
+                         const std::vector<std::string> &columnTypes,
+                         const std::string &lowerSchemaName,
+                         const std::string &tableName) {
+    try {
+      std::string insertQuery =
+          "INSERT INTO \"" + lowerSchemaName + "\".\"" + tableName + "\" (";
+
+      // Construir lista de columnas
+      for (size_t i = 0; i < columnNames.size(); ++i) {
+        if (i > 0)
+          insertQuery += ", ";
+        insertQuery += "\"" + columnNames[i] + "\"";
+      }
+      insertQuery += ") VALUES ";
+
+      pqxx::work txn(pgConn);
+      txn.exec("SET statement_timeout = '300s'");
+
+      // Procesar en batches
+      const size_t BATCH_SIZE = 1000;
+      size_t totalProcessed = 0;
+
+      for (size_t batchStart = 0; batchStart < results.size();
+           batchStart += BATCH_SIZE) {
+        size_t batchEnd = std::min(batchStart + BATCH_SIZE, results.size());
+
+        std::string batchQuery = insertQuery;
+        std::vector<std::string> values;
+
+        for (size_t i = batchStart; i < batchEnd; ++i) {
+          const auto &row = results[i];
+          if (row.size() != columnNames.size())
+            continue;
+
+          std::string rowValues = "(";
+          for (size_t j = 0; j < row.size(); ++j) {
+            if (j > 0)
+              rowValues += ", ";
+
+            if (row[j] == "NULL" || row[j].empty()) {
+              rowValues += "NULL";
+            } else {
+              std::string cleanValue =
+                  cleanValueForPostgres(row[j], columnTypes[j]);
+              rowValues += "'" + escapeSQL(cleanValue) + "'";
+            }
+          }
+          rowValues += ")";
+          values.push_back(rowValues);
+        }
+
+        if (!values.empty()) {
+          batchQuery += values[0];
+          for (size_t i = 1; i < values.size(); ++i) {
+            batchQuery += ", " + values[i];
+          }
+          batchQuery += ";";
+
+          txn.exec(batchQuery);
+          totalProcessed += values.size();
+        }
+      }
+
+      txn.commit();
+      Logger::debug("performBulkInsert", "Processed " +
+                                             std::to_string(totalProcessed) +
+                                             " rows with INSERT for " +
+                                             lowerSchemaName + "." + tableName);
+
+    } catch (const std::exception &e) {
+      Logger::error("performBulkInsert",
+                    "Error in bulk insert: " + std::string(e.what()));
+      throw;
+    }
+  }
+
+  std::vector<std::string>
+  getPrimaryKeyColumnsFromPostgres(pqxx::connection &pgConn,
+                                   const std::string &schemaName,
+                                   const std::string &tableName) {
+    std::vector<std::string> pkColumns;
+
+    try {
+      pqxx::work txn(pgConn);
+      std::string query = "SELECT kcu.column_name "
+                          "FROM information_schema.table_constraints tc "
+                          "JOIN information_schema.key_column_usage kcu "
+                          "ON tc.constraint_name = kcu.constraint_name "
+                          "AND tc.table_schema = kcu.table_schema "
+                          "WHERE tc.constraint_type = 'PRIMARY KEY' "
+                          "AND tc.table_schema = '" +
+                          schemaName +
+                          "' "
+                          "AND tc.table_name = '" +
+                          tableName +
+                          "' "
+                          "ORDER BY kcu.ordinal_position;";
+
+      auto results = txn.exec(query);
+      txn.commit();
+
+      for (const auto &row : results) {
+        if (!row[0].is_null()) {
+          std::string colName = row[0].as<std::string>();
+          std::transform(colName.begin(), colName.end(), colName.begin(),
+                         ::tolower);
+          pkColumns.push_back(colName);
+        }
+      }
+    } catch (const std::exception &e) {
+      Logger::error("getPrimaryKeyColumnsFromPostgres",
+                    "Error getting PK columns: " + std::string(e.what()));
+    }
+
+    return pkColumns;
+  }
+
+  std::string buildUpsertQuery(const std::vector<std::string> &columnNames,
+                               const std::vector<std::string> &pkColumns,
+                               const std::string &schemaName,
+                               const std::string &tableName) {
+    std::string query =
+        "INSERT INTO \"" + schemaName + "\".\"" + tableName + "\" (";
+
+    // Lista de columnas
+    for (size_t i = 0; i < columnNames.size(); ++i) {
+      if (i > 0)
+        query += ", ";
+      query += "\"" + columnNames[i] + "\"";
+    }
+    query += ") VALUES ";
+
+    return query;
+  }
+
+  std::string buildUpsertConflictClause(const std::vector<std::string> &columnNames,
+                                       const std::vector<std::string> &pkColumns) {
+    std::string conflictClause = " ON CONFLICT (";
+    
+    for (size_t i = 0; i < pkColumns.size(); ++i) {
+      if (i > 0) conflictClause += ", ";
+      conflictClause += "\"" + pkColumns[i] + "\"";
+    }
+    conflictClause += ") DO UPDATE SET ";
+
+    // Construir SET clause para UPDATE
+    for (size_t i = 0; i < columnNames.size(); ++i) {
+      if (i > 0) conflictClause += ", ";
+      conflictClause +=
+          "\"" + columnNames[i] + "\" = EXCLUDED.\"" + columnNames[i] + "\"";
+    }
+
+    return conflictClause;
+  }
+
+  std::string cleanValueForPostgres(const std::string &value,
+                                    const std::string &columnType) {
+    std::string cleanValue = value;
+    std::string upperType = columnType;
+    std::transform(upperType.begin(), upperType.end(), upperType.begin(),
+                   ::toupper);
+
+    if (cleanValue.empty()) {
+      return "NULL";
+    }
+
+    // Limpiar caracteres de control
+    for (char &c : cleanValue) {
+      if (static_cast<unsigned char>(c) > 127) {
+        c = '?';
+      }
+    }
+
+    cleanValue.erase(std::remove_if(cleanValue.begin(), cleanValue.end(),
+                                    [](unsigned char c) {
+                                      return c < 32 && c != 9 && c != 10 &&
+                                             c != 13;
+                                    }),
+                     cleanValue.end());
+
+    return cleanValue;
   }
 };
 

@@ -87,7 +87,8 @@ public:
         auto results =
             txn.exec("SELECT schema_name, table_name, connection_string, "
                      "last_offset, status FROM metadata.catalog "
-                     "WHERE db_engine='MongoDB' AND active=true AND status != 'NO_DATA';");
+                     "WHERE db_engine='MongoDB' AND active=true AND status != "
+                     "'NO_DATA';");
 
         for (const auto &row : results) {
           if (row.size() < 5)
@@ -98,7 +99,6 @@ public:
           std::string mongoConnStr = row[2].as<std::string>();
           std::string lastOffset = row[3].as<std::string>();
           std::string status = row[4].as<std::string>();
-
 
           Logger::debug("transferDataMongoToPostgres",
                         "Processing table: " + schemaName + "." + tableName +
@@ -466,22 +466,24 @@ private:
             int batchTransferred = 0;
             int batchProcessed = 0;
 
+            // Recopilar documentos para procesamiento en lote
+            std::vector<const bson_t *> batchDocs;
             while (mongoc_cursor_next(cursor, &doc) &&
                    batchProcessed < BATCH_SIZE) {
+              batchDocs.push_back(doc);
+              batchProcessed++;
+            }
+
+            if (!batchDocs.empty()) {
               try {
-                std::string insertQuery =
-                    buildInsertQuerySafe(doc, lowerSchemaName, collectionName);
-                if (!insertQuery.empty()) {
-                  targetTxn.exec(insertQuery);
-                  batchTransferred++;
-                }
-                batchProcessed++;
+                performBulkUpsertMongo(targetTxn, batchDocs, lowerSchemaName,
+                                       collectionName);
+                batchTransferred += batchDocs.size();
               } catch (const std::exception &e) {
-                Logger::warning("performDataTransfer",
-                                "Error processing document in batch: " +
-                                    std::string(e.what()) +
-                                    " - skipping document");
-                batchProcessed++; // Continuar con el siguiente documento
+                Logger::warning(
+                    "performDataTransfer",
+                    "Error processing batch: " + std::string(e.what()) +
+                        " - skipping batch");
               }
             }
 
@@ -758,6 +760,220 @@ private:
       pos += 2;
     }
     return escaped;
+  }
+
+  void performBulkUpsertMongo(pqxx::work &txn,
+                              const std::vector<const bson_t *> &batchDocs,
+                              const std::string &lowerSchemaName,
+                              const std::string &collectionName) {
+    try {
+      if (batchDocs.empty())
+        return;
+
+      // Obtener columnas de primary key para el UPSERT
+      std::vector<std::string> pkColumns = getPrimaryKeyColumnsFromPostgres(
+          txn.conn(), lowerSchemaName, collectionName);
+
+      // Obtener nombres de columnas del primer documento
+      std::vector<std::string> columnNames;
+      if (!batchDocs.empty()) {
+        bson_iter_t iter;
+        if (bson_iter_init(&iter, batchDocs[0])) {
+          while (bson_iter_next(&iter)) {
+            columnNames.push_back(bson_iter_key(&iter));
+          }
+        }
+      }
+
+      if (columnNames.empty())
+        return;
+
+      // Construir query UPSERT o INSERT
+      std::string query;
+      std::string conflictClause;
+      if (pkColumns.empty()) {
+        query =
+            buildBulkInsertQuery(columnNames, lowerSchemaName, collectionName);
+      } else {
+        query = buildBulkUpsertQuery(columnNames, pkColumns, lowerSchemaName,
+                                     collectionName);
+        conflictClause = buildUpsertConflictClause(columnNames, pkColumns);
+      }
+
+      // Procesar documentos en lotes más pequeños para evitar queries muy
+      // largas
+      const size_t SUB_BATCH_SIZE = 100;
+      for (size_t start = 0; start < batchDocs.size();
+           start += SUB_BATCH_SIZE) {
+        size_t end = std::min(start + SUB_BATCH_SIZE, batchDocs.size());
+
+        std::string batchQuery = query;
+        std::vector<std::string> values;
+
+        for (size_t i = start; i < end; ++i) {
+          std::string rowValues = "(";
+          std::vector<std::string> docValues =
+              extractDocumentValues(batchDocs[i], columnNames);
+
+          for (size_t j = 0; j < docValues.size(); ++j) {
+            if (j > 0)
+              rowValues += ", ";
+            rowValues += "'" + escapeSQL(docValues[j]) + "'";
+          }
+          rowValues += ")";
+          values.push_back(rowValues);
+        }
+
+        if (!values.empty()) {
+          batchQuery += values[0];
+          for (size_t i = 1; i < values.size(); ++i) {
+            batchQuery += ", " + values[i];
+          }
+          
+          if (!pkColumns.empty()) {
+            batchQuery += conflictClause;
+          } else {
+            batchQuery += ";";
+          }
+
+          txn.exec(batchQuery);
+        }
+      }
+
+      Logger::debug("performBulkUpsertMongo",
+                    "Processed " + std::to_string(batchDocs.size()) +
+                        " documents with UPSERT for " + lowerSchemaName + "." +
+                        collectionName);
+
+    } catch (const std::exception &e) {
+      Logger::error("performBulkUpsertMongo",
+                    "Error in bulk upsert: " + std::string(e.what()));
+      throw;
+    }
+  }
+
+  std::vector<std::string>
+  getPrimaryKeyColumnsFromPostgres(pqxx::connection &pgConn,
+                                   const std::string &schemaName,
+                                   const std::string &tableName) {
+    std::vector<std::string> pkColumns;
+
+    try {
+      pqxx::work txn(pgConn);
+      std::string query = "SELECT kcu.column_name "
+                          "FROM information_schema.table_constraints tc "
+                          "JOIN information_schema.key_column_usage kcu "
+                          "ON tc.constraint_name = kcu.constraint_name "
+                          "AND tc.table_schema = kcu.table_schema "
+                          "WHERE tc.constraint_type = 'PRIMARY KEY' "
+                          "AND tc.table_schema = '" +
+                          schemaName +
+                          "' "
+                          "AND tc.table_name = '" +
+                          tableName +
+                          "' "
+                          "ORDER BY kcu.ordinal_position;";
+
+      auto results = txn.exec(query);
+      txn.commit();
+
+      for (const auto &row : results) {
+        if (!row[0].is_null()) {
+          std::string colName = row[0].as<std::string>();
+          std::transform(colName.begin(), colName.end(), colName.begin(),
+                         ::tolower);
+          pkColumns.push_back(colName);
+        }
+      }
+    } catch (const std::exception &e) {
+      Logger::error("getPrimaryKeyColumnsFromPostgres",
+                    "Error getting PK columns: " + std::string(e.what()));
+    }
+
+    return pkColumns;
+  }
+
+  std::string buildBulkInsertQuery(const std::vector<std::string> &columnNames,
+                                   const std::string &schemaName,
+                                   const std::string &tableName) {
+    std::string query =
+        "INSERT INTO \"" + schemaName + "\".\"" + tableName + "\" (";
+
+    for (size_t i = 0; i < columnNames.size(); ++i) {
+      if (i > 0)
+        query += ", ";
+      query += "\"" + columnNames[i] + "\"";
+    }
+    query += ") VALUES ";
+
+    return query;
+  }
+
+  std::string buildBulkUpsertQuery(const std::vector<std::string> &columnNames,
+                                   const std::vector<std::string> &pkColumns,
+                                   const std::string &schemaName,
+                                   const std::string &tableName) {
+    std::string query =
+        "INSERT INTO \"" + schemaName + "\".\"" + tableName + "\" (";
+
+    for (size_t i = 0; i < columnNames.size(); ++i) {
+      if (i > 0)
+        query += ", ";
+      query += "\"" + columnNames[i] + "\"";
+    }
+    query += ") VALUES ";
+
+    return query;
+  }
+
+  std::string buildUpsertConflictClause(const std::vector<std::string> &columnNames,
+                                       const std::vector<std::string> &pkColumns) {
+    std::string conflictClause = " ON CONFLICT (";
+    
+    for (size_t i = 0; i < pkColumns.size(); ++i) {
+      if (i > 0) conflictClause += ", ";
+      conflictClause += "\"" + pkColumns[i] + "\"";
+    }
+    conflictClause += ") DO UPDATE SET ";
+
+    // Construir SET clause para UPDATE
+    for (size_t i = 0; i < columnNames.size(); ++i) {
+      if (i > 0) conflictClause += ", ";
+      conflictClause +=
+          "\"" + columnNames[i] + "\" = EXCLUDED.\"" + columnNames[i] + "\"";
+    }
+
+    return conflictClause;
+  }
+
+  std::vector<std::string>
+  extractDocumentValues(const bson_t *doc,
+                        const std::vector<std::string> &columnNames) {
+    std::vector<std::string> values;
+    values.reserve(columnNames.size());
+
+    // Crear un mapa de valores del documento
+    std::unordered_map<std::string, std::string> docValues;
+    bson_iter_t iter;
+    if (bson_iter_init(&iter, doc)) {
+      while (bson_iter_next(&iter)) {
+        const char *key = bson_iter_key(&iter);
+        std::string value = getBsonValueAsStringSafe(&iter);
+        docValues[key] = value;
+      }
+    }
+
+    // Extraer valores en el orden de las columnas
+    for (const auto &columnName : columnNames) {
+      auto it = docValues.find(columnName);
+      if (it != docValues.end()) {
+        values.push_back(it->second);
+      } else {
+        values.push_back("NULL");
+      }
+    }
+
+    return values;
   }
 };
 

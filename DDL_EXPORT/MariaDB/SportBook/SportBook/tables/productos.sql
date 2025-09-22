@@ -1,7 +1,7 @@
 -- Table DDL for SportBook.productos
 -- Engine: MariaDB
 -- Database: SportBook
--- Generated: 1758515548
+-- Generated: 1758517692
 
 CREATE TABLE `productos` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
@@ -12,4 +12,4 @@ CREATE TABLE `productos` (
   `fecha_creacion` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `nombre` (`nombre`)
-) ENGINE=InnoDB AUTO_INCREMENT=129 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+) ENGINE=InnoDB AUTO_INCREMENT=1000 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci

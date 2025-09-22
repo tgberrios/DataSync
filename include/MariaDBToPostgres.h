@@ -899,121 +899,15 @@ public:
 
             if (rowsInserted > 0) {
               try {
-                pqxx::work txn(pgConn);
-                txn.exec("SET statement_timeout = '300s'");
-                std::string tableName =
-                    "\"" + lowerSchemaName + "\".\"" + table_name + "\"";
-                pqxx::stream_to stream(txn, tableName);
-
-                try {
-                  for (const auto &row : results) {
-                    if (row.size() == columnNames.size()) {
-                      std::vector<std::optional<std::string>> values;
-                      for (size_t i = 0; i < row.size(); ++i) {
-                        if (row[i] == "NULL" || row[i].empty()) {
-                          values.push_back(std::nullopt);
-                        } else {
-                          std::string cleanValue = row[i];
-                          std::string columnType = columnTypes[i];
-                          std::transform(columnType.begin(), columnType.end(),
-                                         columnType.begin(), ::toupper);
-
-                          if (cleanValue.empty()) {
-                            values.push_back(std::nullopt);
-                            continue;
-                          }
-
-                          if (columnType.find("BOOLEAN") != std::string::npos ||
-                              columnType.find("BOOL") != std::string::npos) {
-                            if (cleanValue == "N" || cleanValue == "0" ||
-                                cleanValue == "false" ||
-                                cleanValue == "FALSE") {
-                              cleanValue = "false";
-                            } else if (cleanValue == "Y" || cleanValue == "1" ||
-                                       cleanValue == "true" ||
-                                       cleanValue == "TRUE") {
-                              cleanValue = "true";
-                            }
-                          } else if (columnType.find("BIT") !=
-                                     std::string::npos) {
-                            if (cleanValue == "0" || cleanValue == "false" ||
-                                cleanValue == "FALSE" || cleanValue.empty()) {
-                              values.push_back(std::nullopt);
-                              continue;
-                            } else if (cleanValue == "1" ||
-                                       cleanValue == "true" ||
-                                       cleanValue == "TRUE") {
-                              cleanValue = "1";
-                            } else {
-                              values.push_back(std::nullopt);
-                              continue;
-                            }
-                          }
-
-                          if (columnType.find("TIMESTAMP") !=
-                                  std::string::npos ||
-                              columnType.find("DATETIME") !=
-                                  std::string::npos ||
-                              columnType.find("DATE") != std::string::npos) {
-                            if (cleanValue == "0000-00-00 00:00:00" ||
-                                cleanValue == "0000-00-00") {
-                              cleanValue = "1970-01-01 00:00:00";
-                            } else if (cleanValue.find("0000-00-00") !=
-                                       std::string::npos) {
-                              cleanValue = "1970-01-01 00:00:00";
-                            } else if (cleanValue.find("-00 00:00:00") !=
-                                       std::string::npos) {
-                              size_t pos = cleanValue.find("-00 00:00:00");
-                              if (pos != std::string::npos) {
-                                cleanValue.replace(pos, 3, "-01");
-                              }
-                            } else if (cleanValue.find("-00") !=
-                                       std::string::npos) {
-                              size_t pos = cleanValue.find("-00");
-                              if (pos != std::string::npos) {
-                                cleanValue.replace(pos, 3, "-01");
-                              }
-                            }
-                          }
-
-                          for (char &c : cleanValue) {
-                            if (static_cast<unsigned char>(c) > 127) {
-                              c = '?';
-                            }
-                          }
-
-                          cleanValue.erase(std::remove_if(cleanValue.begin(),
-                                                          cleanValue.end(),
-                                                          [](unsigned char c) {
-                                                            return c < 32 &&
-                                                                   c != 9 &&
-                                                                   c != 10 &&
-                                                                   c != 13;
-                                                          }),
-                                           cleanValue.end());
-
-                          values.push_back(cleanValue);
-                        }
-                      }
-                      stream << values;
-                    }
-                  }
-                  stream.complete();
-                  txn.commit();
-                  Logger::info("transferDataMariaDBToPostgres",
-                               "Successfully copied " +
-                                   std::to_string(rowsInserted) + " rows to " +
-                                   schema_name + "." + table_name);
-                } catch (const std::exception &e) {
-                  try {
-                    stream.complete();
-                  } catch (...) {
-                  }
-                  throw;
-                }
+                performBulkUpsert(pgConn, results, columnNames, columnTypes,
+                                  lowerSchemaName, table_name, schema_name);
+                Logger::info("transferDataMariaDBToPostgres",
+                             "Successfully processed " +
+                                 std::to_string(rowsInserted) + " rows for " +
+                                 schema_name + "." + table_name);
               } catch (const std::exception &e) {
                 Logger::error("transferDataMariaDBToPostgres",
-                              "COPY failed: " + std::string(e.what()));
+                              "Bulk upsert failed: " + std::string(e.what()));
                 rowsInserted = 0;
               }
             }
@@ -1023,20 +917,8 @@ public:
                           "Error processing data: " + std::string(e.what()));
           }
 
-          // Always update targetCount and last_offset, even if COPY failed
-          // This prevents infinite loops when there are duplicate key
-          // violations
+          // Update targetCount and last_offset based on actual processed rows
           targetCount += rowsInserted;
-
-          // If COPY failed but we have data, advance the offset by 1
-          // to prevent infinite loops on duplicate key violations
-          if (rowsInserted == 0 && !results.empty()) {
-            targetCount += 1; // Advance by 1 to skip the problematic record
-            Logger::info("transferDataMariaDBToPostgres",
-                         "COPY failed, advancing offset by 1 to skip "
-                         "problematic record for " +
-                             schema_name + "." + table_name);
-          }
 
           // Update last_offset in database to prevent infinite loops
           try {
@@ -1350,6 +1232,320 @@ private:
     }
     mysql_free_result(res);
     return results;
+  }
+
+  void performBulkUpsert(pqxx::connection &pgConn,
+                         const std::vector<std::vector<std::string>> &results,
+                         const std::vector<std::string> &columnNames,
+                         const std::vector<std::string> &columnTypes,
+                         const std::string &lowerSchemaName,
+                         const std::string &tableName,
+                         const std::string &sourceSchemaName) {
+    try {
+      // Obtener columnas de primary key para el UPSERT
+      std::vector<std::string> pkColumns =
+          getPrimaryKeyColumnsFromPostgres(pgConn, lowerSchemaName, tableName);
+
+      if (pkColumns.empty()) {
+        // Si no hay PK, usar INSERT simple
+        performBulkInsert(pgConn, results, columnNames, columnTypes,
+                          lowerSchemaName, tableName);
+        return;
+      }
+
+      // Construir query UPSERT
+      std::string upsertQuery =
+          buildUpsertQuery(columnNames, pkColumns, lowerSchemaName, tableName);
+      std::string conflictClause =
+          buildUpsertConflictClause(columnNames, pkColumns);
+
+      pqxx::work txn(pgConn);
+      txn.exec("SET statement_timeout = '300s'");
+
+      // Procesar en batches para evitar queries muy largas
+      const size_t BATCH_SIZE = 500;
+      size_t totalProcessed = 0;
+
+      for (size_t batchStart = 0; batchStart < results.size();
+           batchStart += BATCH_SIZE) {
+        size_t batchEnd = std::min(batchStart + BATCH_SIZE, results.size());
+
+        std::string batchQuery = upsertQuery;
+        std::vector<std::string> values;
+
+        for (size_t i = batchStart; i < batchEnd; ++i) {
+          const auto &row = results[i];
+          if (row.size() != columnNames.size())
+            continue;
+
+          std::string rowValues = "(";
+          for (size_t j = 0; j < row.size(); ++j) {
+            if (j > 0)
+              rowValues += ", ";
+
+            if (row[j] == "NULL" || row[j].empty()) {
+              rowValues += "NULL";
+            } else {
+              std::string cleanValue =
+                  cleanValueForPostgres(row[j], columnTypes[j]);
+              rowValues += "'" + escapeSQL(cleanValue) + "'";
+            }
+          }
+          rowValues += ")";
+          values.push_back(rowValues);
+        }
+
+        if (!values.empty()) {
+          batchQuery += values[0];
+          for (size_t i = 1; i < values.size(); ++i) {
+            batchQuery += ", " + values[i];
+          }
+          batchQuery += conflictClause;
+
+          txn.exec(batchQuery);
+          totalProcessed += values.size();
+        }
+      }
+
+      txn.commit();
+      Logger::debug("performBulkUpsert",
+                    "Processed " + std::to_string(totalProcessed) +
+                        " rows with UPSERT for " + sourceSchemaName + "." +
+                        tableName);
+
+    } catch (const std::exception &e) {
+      Logger::error("performBulkUpsert",
+                    "Error in bulk upsert: " + std::string(e.what()));
+      throw;
+    }
+  }
+
+  void performBulkInsert(pqxx::connection &pgConn,
+                         const std::vector<std::vector<std::string>> &results,
+                         const std::vector<std::string> &columnNames,
+                         const std::vector<std::string> &columnTypes,
+                         const std::string &lowerSchemaName,
+                         const std::string &tableName) {
+    try {
+      std::string insertQuery =
+          "INSERT INTO \"" + lowerSchemaName + "\".\"" + tableName + "\" (";
+
+      // Construir lista de columnas
+      for (size_t i = 0; i < columnNames.size(); ++i) {
+        if (i > 0)
+          insertQuery += ", ";
+        insertQuery += "\"" + columnNames[i] + "\"";
+      }
+      insertQuery += ") VALUES ";
+
+      pqxx::work txn(pgConn);
+      txn.exec("SET statement_timeout = '300s'");
+
+      // Procesar en batches
+      const size_t BATCH_SIZE = 1000;
+      size_t totalProcessed = 0;
+
+      for (size_t batchStart = 0; batchStart < results.size();
+           batchStart += BATCH_SIZE) {
+        size_t batchEnd = std::min(batchStart + BATCH_SIZE, results.size());
+
+        std::string batchQuery = insertQuery;
+        std::vector<std::string> values;
+
+        for (size_t i = batchStart; i < batchEnd; ++i) {
+          const auto &row = results[i];
+          if (row.size() != columnNames.size())
+            continue;
+
+          std::string rowValues = "(";
+          for (size_t j = 0; j < row.size(); ++j) {
+            if (j > 0)
+              rowValues += ", ";
+
+            if (row[j] == "NULL" || row[j].empty()) {
+              rowValues += "NULL";
+            } else {
+              std::string cleanValue =
+                  cleanValueForPostgres(row[j], columnTypes[j]);
+              rowValues += "'" + escapeSQL(cleanValue) + "'";
+            }
+          }
+          rowValues += ")";
+          values.push_back(rowValues);
+        }
+
+        if (!values.empty()) {
+          batchQuery += values[0];
+          for (size_t i = 1; i < values.size(); ++i) {
+            batchQuery += ", " + values[i];
+          }
+
+          txn.exec(batchQuery);
+          totalProcessed += values.size();
+        }
+      }
+
+      txn.commit();
+      Logger::debug("performBulkInsert", "Processed " +
+                                             std::to_string(totalProcessed) +
+                                             " rows with INSERT for " +
+                                             lowerSchemaName + "." + tableName);
+
+    } catch (const std::exception &e) {
+      Logger::error("performBulkInsert",
+                    "Error in bulk insert: " + std::string(e.what()));
+      throw;
+    }
+  }
+
+  std::vector<std::string>
+  getPrimaryKeyColumnsFromPostgres(pqxx::connection &pgConn,
+                                   const std::string &schemaName,
+                                   const std::string &tableName) {
+    std::vector<std::string> pkColumns;
+
+    try {
+      pqxx::work txn(pgConn);
+      std::string query = "SELECT kcu.column_name "
+                          "FROM information_schema.table_constraints tc "
+                          "JOIN information_schema.key_column_usage kcu "
+                          "ON tc.constraint_name = kcu.constraint_name "
+                          "AND tc.table_schema = kcu.table_schema "
+                          "WHERE tc.constraint_type = 'PRIMARY KEY' "
+                          "AND tc.table_schema = '" +
+                          schemaName +
+                          "' "
+                          "AND tc.table_name = '" +
+                          tableName +
+                          "' "
+                          "ORDER BY kcu.ordinal_position;";
+
+      auto results = txn.exec(query);
+      txn.commit();
+
+      for (const auto &row : results) {
+        if (!row[0].is_null()) {
+          std::string colName = row[0].as<std::string>();
+          std::transform(colName.begin(), colName.end(), colName.begin(),
+                         ::tolower);
+          pkColumns.push_back(colName);
+        }
+      }
+    } catch (const std::exception &e) {
+      Logger::error("getPrimaryKeyColumnsFromPostgres",
+                    "Error getting PK columns: " + std::string(e.what()));
+    }
+
+    return pkColumns;
+  }
+
+  std::string buildUpsertQuery(const std::vector<std::string> &columnNames,
+                               const std::vector<std::string> &pkColumns,
+                               const std::string &schemaName,
+                               const std::string &tableName) {
+    std::string query =
+        "INSERT INTO \"" + schemaName + "\".\"" + tableName + "\" (";
+
+    // Lista de columnas
+    for (size_t i = 0; i < columnNames.size(); ++i) {
+      if (i > 0)
+        query += ", ";
+      query += "\"" + columnNames[i] + "\"";
+    }
+    query += ") VALUES ";
+
+    return query;
+  }
+
+  std::string
+  buildUpsertConflictClause(const std::vector<std::string> &columnNames,
+                            const std::vector<std::string> &pkColumns) {
+    std::string conflictClause = " ON CONFLICT (";
+
+    for (size_t i = 0; i < pkColumns.size(); ++i) {
+      if (i > 0)
+        conflictClause += ", ";
+      conflictClause += "\"" + pkColumns[i] + "\"";
+    }
+    conflictClause += ") DO UPDATE SET ";
+
+    // Construir SET clause para UPDATE
+    for (size_t i = 0; i < columnNames.size(); ++i) {
+      if (i > 0)
+        conflictClause += ", ";
+      conflictClause +=
+          "\"" + columnNames[i] + "\" = EXCLUDED.\"" + columnNames[i] + "\"";
+    }
+
+    return conflictClause;
+  }
+
+  std::string cleanValueForPostgres(const std::string &value,
+                                    const std::string &columnType) {
+    std::string cleanValue = value;
+    std::string upperType = columnType;
+    std::transform(upperType.begin(), upperType.end(), upperType.begin(),
+                   ::toupper);
+
+    if (cleanValue.empty()) {
+      return "NULL";
+    }
+
+    // Limpiar caracteres de control
+    for (char &c : cleanValue) {
+      if (static_cast<unsigned char>(c) > 127) {
+        c = '?';
+      }
+    }
+
+    cleanValue.erase(std::remove_if(cleanValue.begin(), cleanValue.end(),
+                                    [](unsigned char c) {
+                                      return c < 32 && c != 9 && c != 10 &&
+                                             c != 13;
+                                    }),
+                     cleanValue.end());
+
+    // Manejar tipos específicos
+    if (upperType.find("BOOLEAN") != std::string::npos ||
+        upperType.find("BOOL") != std::string::npos) {
+      if (cleanValue == "N" || cleanValue == "0" || cleanValue == "false" ||
+          cleanValue == "FALSE") {
+        cleanValue = "false";
+      } else if (cleanValue == "Y" || cleanValue == "1" ||
+                 cleanValue == "true" || cleanValue == "TRUE") {
+        cleanValue = "true";
+      }
+    } else if (upperType.find("BIT") != std::string::npos) {
+      if (cleanValue == "0" || cleanValue == "false" || cleanValue == "FALSE" ||
+          cleanValue.empty()) {
+        return "NULL";
+      } else if (cleanValue == "1" || cleanValue == "true" ||
+                 cleanValue == "TRUE") {
+        cleanValue = "1";
+      } else {
+        return "NULL";
+      }
+    } else if (upperType.find("TIMESTAMP") != std::string::npos ||
+               upperType.find("DATETIME") != std::string::npos ||
+               upperType.find("DATE") != std::string::npos) {
+      if (cleanValue == "0000-00-00 00:00:00" || cleanValue == "0000-00-00") {
+        cleanValue = "1970-01-01 00:00:00";
+      } else if (cleanValue.find("0000-00-00") != std::string::npos) {
+        cleanValue = "1970-01-01 00:00:00";
+      } else if (cleanValue.find("-00 00:00:00") != std::string::npos) {
+        size_t pos = cleanValue.find("-00 00:00:00");
+        if (pos != std::string::npos) {
+          cleanValue.replace(pos, 3, "-01");
+        }
+      } else if (cleanValue.find("-00") != std::string::npos) {
+        size_t pos = cleanValue.find("-00");
+        if (pos != std::string::npos) {
+          cleanValue.replace(pos, 3, "-01");
+        }
+      }
+    }
+
+    return cleanValue;
   }
 };
 
