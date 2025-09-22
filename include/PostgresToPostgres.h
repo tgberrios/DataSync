@@ -81,7 +81,7 @@ public:
             txn.exec("SELECT schema_name, table_name, connection_string, "
                      "last_offset, status, last_sync_column, last_sync_time "
                      "FROM metadata.catalog "
-                     "WHERE db_engine='PostgreSQL' AND active=true;");
+                     "WHERE db_engine='PostgreSQL' AND active=true AND status != 'NO_DATA';");
 
         for (const auto &row : results) {
           if (row.size() < 7)
@@ -96,6 +96,7 @@ public:
               row[5].is_null() ? "" : row[5].as<std::string>();
           std::string lastSyncTime =
               row[6].is_null() ? "" : row[6].as<std::string>();
+
 
           Logger::debug("transferDataPostgresToPostgres",
                         "Processing table: " + schemaName + "." + tableName +

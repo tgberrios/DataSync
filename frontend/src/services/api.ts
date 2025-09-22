@@ -343,7 +343,7 @@ export interface LogInfo {
 }
 
 export const logsApi = {
-  getLogs: async (params: { lines?: number; level?: string } = {}) => {
+  getLogs: async (params: { lines?: number; level?: string; function?: string } = {}) => {
     try {
       const response = await api.get<LogsResponse>("/logs", { params });
       return response.data;
@@ -366,6 +366,23 @@ export const logsApi = {
       return response.data;
     } catch (error) {
       console.error("Error fetching log info:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  clearLogs: async () => {
+    try {
+      const response = await api.delete("/logs");
+      return response.data;
+    } catch (error) {
+      console.error("Error clearing logs:", error);
       if (axios.isAxiosError(error) && error.response) {
         throw new Error(
           error.response.data.details ||

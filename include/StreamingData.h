@@ -243,6 +243,9 @@ public:
           // Logger::debug("StreamingData", "Cleaning catalog");
           catalogManager.cleanCatalog();
 
+          // Logger::debug("StreamingData", "Deactivating NO_DATA tables");
+          catalogManager.deactivateNoDataTables();
+
           minutes_counter = 0;
           Logger::info("StreamingData", "Periodic maintenance completed");
         }

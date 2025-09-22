@@ -148,15 +148,15 @@ app.get("/api/dashboard/stats", async (req, res) => {
   try {
     console.log("Fetching dashboard stats...");
 
-    // 1. SYNCHRONIZATION STATUS
+    // 1. SYNCHRONIZATION STATUS - solo contar registros activos
     const syncStatus = await pool.query(`
       SELECT 
-        COUNT(*) FILTER (WHERE status = 'PERFECT_MATCH') as perfect_match,
-        COUNT(*) FILTER (WHERE status = 'LISTENING_CHANGES') as listening_changes,
-        COUNT(*) FILTER (WHERE active = true) as full_load_active,
-        COUNT(*) FILTER (WHERE active = false) as full_load_inactive,
-        COUNT(*) FILTER (WHERE status = 'NO_DATA') as no_data,
-        COUNT(*) FILTER (WHERE status = 'ERROR') as errors,
+        COUNT(*) FILTER (WHERE active = true AND status = 'PERFECT_MATCH') as perfect_match,
+        COUNT(*) FILTER (WHERE active = true AND status = 'LISTENING_CHANGES') as listening_changes,
+        COUNT(*) FILTER (WHERE active = true AND status = 'FULL_LOAD_ACTIVE') as full_load_active,
+        COUNT(*) FILTER (WHERE active = true AND status = 'FULL_LOAD_INACTIVE') as full_load_inactive,
+        COUNT(*) FILTER (WHERE active = true AND status = 'NO_DATA') as no_data,
+        COUNT(*) FILTER (WHERE active = true AND status = 'ERROR') as errors,
         '' as current_process
       FROM metadata.catalog
     `);
@@ -383,23 +383,45 @@ app.get("/api/dashboard/stats", async (req, res) => {
       },
     };
 
-    // Calcular progreso total
+    // Calcular progreso total - solo contar registros activos
     const total =
       stats.syncStatus.perfectMatch +
       stats.syncStatus.listeningChanges +
       stats.syncStatus.fullLoadActive +
       stats.syncStatus.fullLoadInactive +
-      stats.syncStatus.noData;
+      stats.syncStatus.noData +
+      stats.syncStatus.errors;
 
+    // El progreso se calcula como: (Perfect Match + Listening Changes + No Data) / Total * 100
+    // NO_DATA también es un estado exitoso (no hay datos que sincronizar)
     stats.syncStatus.progress =
       total > 0
         ? Math.round(
             ((stats.syncStatus.perfectMatch +
-              stats.syncStatus.listeningChanges) /
+              stats.syncStatus.listeningChanges +
+              stats.syncStatus.noData) /
               total) *
               100
           )
         : 0;
+
+    console.log("Progress calculation:", {
+      perfectMatch: stats.syncStatus.perfectMatch,
+      listeningChanges: stats.syncStatus.listeningChanges,
+      noData: stats.syncStatus.noData,
+      fullLoadActive: stats.syncStatus.fullLoadActive,
+      fullLoadInactive: stats.syncStatus.fullLoadInactive,
+      errors: stats.syncStatus.errors,
+      total: total,
+      successfulStates:
+        stats.syncStatus.perfectMatch +
+        stats.syncStatus.listeningChanges +
+        stats.syncStatus.noData,
+      progress: stats.syncStatus.progress + "%",
+    });
+
+    // Debug: Verificar datos de la consulta original
+    console.log("Raw sync status query result:", syncStatus.rows[0]);
 
     // Agregar métricas por motor
     stats.engineMetrics = {};
@@ -545,7 +567,6 @@ app.get("/api/quality/metrics", async (req, res) => {
           total_rows,
           null_count,
           duplicate_count,
-          data_checksum,
           invalid_type_count,
           type_mismatch_details,
           out_of_range_count,
@@ -783,7 +804,11 @@ app.delete("/api/config/:key", async (req, res) => {
 // Endpoint para leer logs
 app.get("/api/logs", async (req, res) => {
   try {
-    const { lines = 100, level = "ALL" } = req.query;
+    const {
+      lines = 100,
+      level = "ALL",
+      function: functionFilter = "ALL",
+    } = req.query;
     const logFilePath = path.join(process.cwd(), "..", "DataSync.log");
 
     // Verificar si el archivo existe
@@ -801,11 +826,16 @@ app.get("/api/logs", async (req, res) => {
       .split("\n")
       .filter((line) => line.trim() !== "");
 
-    // Filtrar por nivel si se especifica
+    // Filtrar por nivel y función si se especifica
     let filteredLines = allLines;
     if (level !== "ALL") {
-      filteredLines = allLines.filter((line) =>
+      filteredLines = filteredLines.filter((line) =>
         line.includes(`[${level.toUpperCase()}]`)
+      );
+    }
+    if (functionFilter !== "ALL") {
+      filteredLines = filteredLines.filter((line) =>
+        line.includes(`[${functionFilter}]`)
       );
     }
 
@@ -882,6 +912,57 @@ app.get("/api/logs/info", async (req, res) => {
     console.error("Error getting log info:", err);
     res.status(500).json({
       error: "Error al obtener información de logs",
+      details: err.message,
+    });
+  }
+});
+
+// Endpoint para limpiar logs
+app.delete("/api/logs", async (req, res) => {
+  try {
+    const logDir = path.join(process.cwd(), "..");
+    const logFilePath = path.join(logDir, "DataSync.log");
+
+    let totalClearedSize = 0;
+    let clearedFiles = [];
+
+    // Clear the main log file
+    if (fs.existsSync(logFilePath)) {
+      const stats = fs.statSync(logFilePath);
+      totalClearedSize += stats.size;
+      clearedFiles.push("DataSync.log");
+      fs.writeFileSync(logFilePath, "");
+    }
+
+    // Find and delete rotated log files (DataSync.log.1, DataSync.log.2, etc.)
+    const files = fs.readdirSync(logDir);
+    const rotatedLogFiles = files.filter((file) =>
+      file.match(/^DataSync\.log\.\d+$/)
+    );
+
+    for (const rotatedFile of rotatedLogFiles) {
+      const rotatedFilePath = path.join(logDir, rotatedFile);
+      try {
+        const stats = fs.statSync(rotatedFilePath);
+        totalClearedSize += stats.size;
+        clearedFiles.push(rotatedFile);
+        fs.unlinkSync(rotatedFilePath);
+      } catch (err) {
+        console.warn(`Warning: Could not delete ${rotatedFile}:`, err.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: "Logs cleared successfully",
+      clearedFiles: clearedFiles,
+      totalClearedSize: totalClearedSize,
+      clearedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error("Error clearing logs:", err);
+    res.status(500).json({
+      error: "Error clearing logs",
       details: err.message,
     });
   }

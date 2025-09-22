@@ -72,8 +72,6 @@ DataQuality::collectMetrics(pqxx::connection &conn, const std::string &schema,
     // Check constraints
     checkConstraints(conn, metrics);
 
-    // Calculate checksum
-    metrics.data_checksum = calculateChecksum(conn, schema, table);
 
     // Calculate final quality score
     calculateQualityScore(metrics);
@@ -251,41 +249,6 @@ bool DataQuality::checkConstraints(pqxx::connection &conn,
   }
 }
 
-std::string DataQuality::calculateChecksum(pqxx::connection &conn,
-                                           const std::string &schema,
-                                           const std::string &table) {
-  try {
-    pqxx::work txn(conn);
-
-    // Check if table exists first
-    std::string cleanSchema = cleanSchemaNameForPostgres(schema);
-    auto tableExists = txn.exec(
-        "SELECT COUNT(*) FROM information_schema.tables "
-        "WHERE table_schema = " +
-        txn.quote(cleanSchema) + " AND table_name = " + txn.quote(table));
-
-    if (tableExists[0][0].as<int>() == 0) {
-      Logger::debug("DataQuality",
-                    "Table " + cleanSchema + "." + table +
-                        " does not exist, skipping checksum calculation");
-      txn.commit();
-      return "";
-    }
-
-    // Calculate MD5 hash of the entire table content
-    auto result =
-        txn.exec("SELECT MD5(CAST((SELECT string_agg(CAST(t AS text), '') "
-                 "FROM (SELECT * FROM \"" +
-                 cleanSchema + "\".\"" + table + "\" ORDER BY 1) t) AS text))");
-
-    txn.commit();
-    return result[0][0].is_null() ? "" : result[0][0].as<std::string>();
-  } catch (const std::exception &e) {
-    Logger::error("DataQuality",
-                  "Error calculating checksum: " + std::string(e.what()));
-    return "";
-  }
-}
 
 void DataQuality::calculateQualityScore(QualityMetrics &metrics) {
   double score = 100.0;
@@ -335,17 +298,17 @@ bool DataQuality::saveMetrics(pqxx::connection &conn,
     txn.exec_params(
         "INSERT INTO metadata.data_quality ("
         "schema_name, table_name, source_db_engine, "
-        "total_rows, null_count, duplicate_count, data_checksum, "
+        "total_rows, null_count, duplicate_count, "
         "invalid_type_count, type_mismatch_details, out_of_range_count, "
         "referential_integrity_errors, constraint_violation_count, "
         "integrity_check_details, "
         "validation_status, error_details, quality_score, check_duration_ms"
-        ") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, "
-        "$14, $15, $16, $17)",
+        ") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, "
+        "$13, $14, $15, $16)",
         metrics.schema_name, metrics.table_name, metrics.source_db_engine,
         static_cast<int64_t>(metrics.total_rows),
         static_cast<int64_t>(metrics.null_count),
-        static_cast<int64_t>(metrics.duplicate_count), metrics.data_checksum,
+        static_cast<int64_t>(metrics.duplicate_count),
         static_cast<int64_t>(metrics.invalid_type_count),
         metrics.type_mismatch_details.dump(),
         static_cast<int64_t>(metrics.out_of_range_count),
@@ -377,7 +340,7 @@ DataQuality::getLatestMetrics(pqxx::connection &conn,
         "WITH latest_checks AS ("
         "  SELECT DISTINCT ON (schema_name, table_name) "
         "    schema_name, table_name, source_db_engine, "
-        "    total_rows, null_count, duplicate_count, data_checksum, "
+        "    total_rows, null_count, duplicate_count, "
         "    invalid_type_count, type_mismatch_details, out_of_range_count, "
         "    referential_integrity_errors, constraint_violation_count, "
         "    integrity_check_details, validation_status, error_details, "
@@ -402,7 +365,6 @@ DataQuality::getLatestMetrics(pqxx::connection &conn,
       metrics.total_rows = row["total_rows"].as<size_t>();
       metrics.null_count = row["null_count"].as<size_t>();
       metrics.duplicate_count = row["duplicate_count"].as<size_t>();
-      metrics.data_checksum = row["data_checksum"].as<std::string>();
       metrics.invalid_type_count = row["invalid_type_count"].as<size_t>();
       metrics.type_mismatch_details =
           json::parse(row["type_mismatch_details"].as<std::string>());
