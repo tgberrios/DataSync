@@ -56,6 +56,7 @@ public:
     std::chrono::steady_clock::time_point lastUsed;
     bool isActive = false;
     int connectionId = 0;
+    bool isValid = true; // Add validation flag
   };
 
 private:
@@ -127,10 +128,15 @@ public:
   ~ConnectionGuard();
 
   template <typename T> std::shared_ptr<T> get() const {
+    if (!connection || !connection->connection || !connection->isValid) {
+      return nullptr;
+    }
     return std::static_pointer_cast<T>(connection->connection);
   }
 
-  bool isValid() const { return connection && connection->isActive; }
+  bool isValid() const {
+    return connection && connection->isActive && connection->isValid;
+  }
   int getConnectionId() const {
     return connection ? connection->connectionId : -1;
   }
