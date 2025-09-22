@@ -4,12 +4,7 @@ ARREGLAR DATA GOVERNANCE PARA QUE ME DE MAS DOMINIOS DE CATEGORIZACION EN LA CAS
 
 
 2. TIENE QUE HABER UNA MEJOR FORMA DE HACER LOS INCREMENTALES ESTO NO ES LO MEJOR DE SUBIR DE UNO EN UNO O ALGO ASI 
-3. ALGUNAS COSAS EN STREAMING DATA DEBERIAN RUNEAR EN THREADS SEPARADOS PERO EN ORDEN PARA QUE NO LEERDEEN LA EJECUSION DE LA APP ME PARECE 
 4. Si da un segmentacion fault como puedo lograr que el archivo vuelva a estar up digamos ? porque puede cromar por cualquier cosa inclusive por errores no en el codigo como lo recupero en esos fallos ?
-5. ARREGLAR LA PARTE DE SECURITY
-
-
-
 Analiza todos los archivos del proyecto (excluyendo la carpeta frontend) y crea un diagrama completo de la arquitectura del sistema DataSync. 
 
 INSTRUCCIONES:
@@ -111,35 +106,6 @@ BUGS:
 [UNKNOWN] - Total connections: 6
 [UNKNOWN] - Active connections: 0
 [UNKNOWN] - Idle connections: 5
-
-
-
-
-
-
-● ACTIVE USERS
-Username	Role	Status	Last Activity	Client IP	Application
-Datalake_User	SUPERUSER	ACTIVE	-	10.12.240.40	-
-Datalake_User	SUPERUSER	IDLE	-	127.0.0.1	-
-Datalake_User	SUPERUSER	IDLE	-	127.0.0.1	-
-Datalake_User	SUPERUSER	IDLE	-	127.0.0.1	-
-Datalake_User	SUPERUSER	IDLE	-	10.0.160.45	Redgate Monitor - Monitoring
-Datalake_User	SUPERUSER	IDLE	-	10.0.160.45	Redgate Monitor - Monitoring
-Datalake_User	SUPERUSER	IDLE	-	10.0.160.45	Redgate Monitor - Monitoring
-Datalake_User	SUPERUSER	IDLE	-	10.0.160.45	Redgate Monitor - Monitoring
-Datalake_User	SUPERUSER	IDLE	-	10.0.160.45	Redgate Monitor - Monitoring
-Datalake_User	SUPERUSER	IDLE	-	10.0.160.45	Redgate Monitor - Monitoring
-Datalake_User	SUPERUSER	IDLE	-	10.0.160.45	Redgate Monitor - Monitoring
-Datalake_User	SUPERUSER	ACTIVE	-	10.12.240.40	-
-Datalake_User	SUPERUSER	IDLE	-	10.0.89.89	DataGrip 2024.3.5
-Datalake_User	SUPERUSER	IDLE	-	10.0.89.89	DataGrip 2024.3.5
-Datalake_User	SUPERUSER	IDLE	-	10.0.89.89	DataGrip 2024.3.5
-Datalake_User	SUPERUSER	IDLE	-	10.0.89.89	DataGrip 2024.3.5
-change_management	SUPERUSER	IDLE	-	10.5.160.41	-
-change_management	SUPERUSER	IDLE	-	10.5.160.41	-
-Datalake_User	SUPERUSER	IDLE	-	10.0.89.89	DataGrip 2024.3.5
-Datalake_User	SUPERUSER	IDLE	-	10.0.89.89	DataGrip 2024.3.5
-
 
 
 gcc -g -O0 -o DataSync main.c
