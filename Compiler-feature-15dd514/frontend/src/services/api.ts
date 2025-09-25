@@ -1,0 +1,409 @@
+import axios from "axios";
+
+const api = axios.create({
+  baseURL: "/api", // Esto usará el proxy de Vite
+  headers: {
+    "Content-Type": "application/json",
+  },
+  timeout: 60000, // 60 segundos timeout
+});
+
+export interface CatalogEntry {
+  schema_name: string;
+  table_name: string;
+  db_engine: string;
+  connection_string: string;
+  active: boolean;
+  status: string;
+  last_sync_time: string;
+  last_sync_column: string;
+  last_offset: number;
+  cluster_name: string;
+  updated_at: string;
+}
+
+export interface DashboardStats {
+  syncStatus: {
+    progress: number;
+    perfectMatch: number;
+    listeningChanges: number;
+    fullLoadActive: number;
+    fullLoadInactive: number;
+    noData: number;
+    errors: number;
+    currentProcess: string;
+  };
+  systemResources: {
+    cpuUsage: string;
+    memoryUsed: string;
+    memoryTotal: string;
+    memoryPercentage: string;
+    rss: string;
+    virtual: string;
+  };
+  dbHealth: {
+    activeConnections: string;
+    responseTime: string;
+    bufferHitRate: string;
+    cacheHitRate: string;
+    status: string;
+  };
+  // Connection pooling removed - using direct connections now
+  engineMetrics?: {
+    [engine: string]: {
+      recordsPerSecond: number;
+      bytesTransferred: number;
+      avgLatencyMs: number;
+      cpuUsage: number;
+      memoryUsed: number;
+      iops: number;
+      activeTransfers: number;
+    };
+  };
+}
+
+export const dashboardApi = {
+  getDashboardStats: async () => {
+    try {
+      const response = await api.get<DashboardStats>("/dashboard/stats");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching dashboard stats:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        console.error("Server error details:", error.response.data);
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+};
+
+export interface ConfigEntry {
+  key: string;
+  value: string;
+  description: string | null;
+  updated_at: string;
+}
+
+export const configApi = {
+  getConfigs: async () => {
+    try {
+      const response = await api.get<ConfigEntry[]>("/config");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching configurations:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  createConfig: async (config: ConfigEntry) => {
+    try {
+      const response = await api.post<ConfigEntry>("/config", config);
+      return response.data;
+    } catch (error) {
+      console.error("Error creating configuration:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  updateConfig: async (config: ConfigEntry) => {
+    try {
+      const response = await api.put<ConfigEntry>(
+        `/config/${config.key}`,
+        config
+      );
+      return response.data;
+    } catch (error) {
+      console.error("Error updating configuration:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  deleteConfig: async (key: string) => {
+    try {
+      const response = await api.delete(`/config/${key}`);
+      return response.data;
+    } catch (error) {
+      console.error("Error deleting configuration:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+};
+
+export const governanceApi = {
+  getGovernanceData: async (params: {
+    page?: number;
+    limit?: number;
+    engine?: string;
+    category?: string;
+    health?: string;
+    domain?: string;
+    sensitivity?: string;
+  }) => {
+    try {
+      const response = await api.get("/governance/data", { params });
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching governance data:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+};
+
+export const qualityApi = {
+  getQualityMetrics: async (params: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    status?: string;
+    minScore?: number;
+    maxScore?: number;
+  }) => {
+    try {
+      const response = await api.get("/quality/metrics", { params });
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching quality metrics:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+};
+
+export const monitorApi = {
+  getActiveQueries: async () => {
+    try {
+      const response = await api.get("/monitor/queries");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching active queries:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+};
+
+export const catalogApi = {
+  // Obtener entradas del catálogo con paginación, filtros y búsqueda
+  getCatalogEntries: async (
+    params: {
+      page?: number;
+      limit?: number;
+      engine?: string;
+      status?: string;
+      active?: string;
+      search?: string;
+    } = {}
+  ) => {
+    try {
+      console.log("Fetching catalog entries with params:", params);
+      const response = await api.get("/catalog", { params });
+      console.log("Received catalog data:", response.data);
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching catalog:", error);
+      throw error;
+    }
+  },
+
+  // Actualizar el estado activo de una entrada
+  updateEntryStatus: async (
+    schema_name: string,
+    table_name: string,
+    db_engine: string,
+    active: boolean
+  ) => {
+    try {
+      const response = await api.patch<CatalogEntry>("/catalog/status", {
+        schema_name,
+        table_name,
+        db_engine,
+        active,
+      });
+      return response.data;
+    } catch (error) {
+      console.error("Error updating status:", error);
+      throw error;
+    }
+  },
+
+  // Forzar una sincronización completa
+  triggerFullSync: async (
+    schema_name: string,
+    table_name: string,
+    db_engine: string
+  ) => {
+    try {
+      const response = await api.post<CatalogEntry>("/catalog/sync", {
+        schema_name,
+        table_name,
+        db_engine,
+      });
+      return response.data;
+    } catch (error) {
+      console.error("Error triggering sync:", error);
+      throw error;
+    }
+  },
+
+  // Actualizar una entrada del catálogo
+  updateEntry: async (entry: CatalogEntry) => {
+    try {
+      const response = await api.put<CatalogEntry>("/catalog", entry);
+      return response.data;
+    } catch (error) {
+      console.error("Error updating entry:", error);
+      throw error;
+    }
+  },
+};
+
+// Interfaces para logs
+export interface LogEntry {
+  id: number;
+  timestamp: string;
+  level: string;
+  function: string;
+  message: string;
+  raw: string;
+}
+
+export interface LogsResponse {
+  logs: LogEntry[];
+  totalLines: number;
+  filePath: string;
+  lastModified: string;
+}
+
+export interface LogInfo {
+  exists: boolean;
+  filePath?: string;
+  size?: number;
+  totalLines?: number;
+  lastModified?: string;
+  created?: string;
+  message?: string;
+}
+
+export const logsApi = {
+  getLogs: async (params: { lines?: number; level?: string; function?: string } = {}) => {
+    try {
+      const response = await api.get<LogsResponse>("/logs", { params });
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching logs:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getLogInfo: async () => {
+    try {
+      const response = await api.get<LogInfo>("/logs/info");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching log info:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  clearLogs: async () => {
+    try {
+      const response = await api.delete("/logs");
+      return response.data;
+    } catch (error) {
+      console.error("Error clearing logs:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+};
+
+export const securityApi = {
+  getSecurityData: async () => {
+    try {
+      const response = await api.get("/security/data");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching security data:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+};
