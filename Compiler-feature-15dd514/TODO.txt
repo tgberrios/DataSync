@@ -1,0 +1,18 @@
+revisar commits en todos los archivos
+revisar esto de los NULL en todos los archivos
+revisar abrir y cerrar conexiones
+remover sync reporter ahora que tengo DASHBOARD WEB
+porque dura tanto en seguir con la proxima tabla full_load ? 
+
+
+2025-09-23 23:00:27.807[ERROR][transferDataMariaDBToPostgres]Bulk upsert failed: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
+2025-09-23 23:00:27.806[ERROR][performBulkUpsert]Error in bulk upsert: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
+2025-09-23 23:00:27.587[ERROR][transferDataMariaDBToPostgres]Bulk upsert failed: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
+2025-09-23 23:00:27.587[ERROR][performBulkUpsert]Error in bulk upsert: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
+2025-09-23 23:00:27.370[ERROR][transferDataMariaDBToPostgres]Bulk upsert failed: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
+2025-09-23 23:00:27.370[ERROR][performBulkUpsert]Error in bulk upsert: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
+2025-09-23 23:00:27.155[ERROR][transferDataMariaDBToPostgres]Bulk upsert failed: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
+2025-09-23 23:00:27.155[ERROR][performBulkUpsert]Error in bulk upsert: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
+2025-09-23 23:00:26.942[ERROR][transferDataMariaDBToPostgres]Bulk upsert failed: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
+2025-09-23 23:00:26.942[ERROR][performBulkUpsert]Error in bulk upsert: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
+2025-09-23 23:00:26.730[ERROR][transferDataMariaDBToPostgres]Bulk upsert failed: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
