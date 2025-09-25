@@ -1,0 +1,52 @@
+timeouts hay que arreglarlos en todos los archivos
+
+✅ Timeouts Optimizados para Tablas Grandes
+Cambios Implementados:
+Timeout de Conexión Principal:
+Antes: 30 segundos
+Después: 300 segundos (5 minutos)
+Timeouts Adicionales para MariaDB:
+wait_timeout = 300 (5 minutos)
+interactive_timeout = 300 (5 minutos)
+net_read_timeout = 600 (10 minutos)
+net_write_timeout = 600 (10 minutos)
+Explicación de los Timeouts:
+wait_timeout: Tiempo que el servidor espera antes de cerrar una conexión inactiva
+interactive_timeout: Similar a wait_timeout pero para conexiones interactivas
+net_read_timeout: Tiempo máximo para leer datos del servidor (10 min)
+net_write_timeout: Tiempo máximo para escribir datos al servidor (10 min)
+Beneficios para Tablas Grandes:
+Transferencias Largas: Las queries que procesan billones de registros no se cortarán
+Conexiones Estables: Las conexiones permanecen abiertas durante operaciones largas
+Red Robusta: Timeouts de red más altos para transferencias de datos masivas
+Sin Pérdida de Conexión: Evita el error "Lost connection to MySQL server during query"
+Aplicado en:
+
+
+eso mismo para los otros
+
+
+
+
+
+- Connection handling: Replaced the shared `MYSQL*` with per-operation/per-table connections via `getMariaDBConnection(...)` and explicit `closeMariaDBConnection(...)` after use. This removed race conditions and null-pointer crashes.
+- Null-safety: Guarded all MariaDB queries (`executeQueryMariaDB`) against null connections and improved error logging with `mysql_error`.
+- Timeouts: Set MariaDB session timeouts upon connect to handle large/slow tables.
+- Deletes/Updates by PK: `processDeletesByPrimaryKey` and `processUpdatesByPrimaryKey` now take `connection_string`, open their own MariaDB connection, and close it reliably.
+- Transfer loop connections: `transferDataMariaDBToPostgres` now opens one MariaDB connection per table and closes it at the end of each table’s processing.
+- Hardcoded limit removed: Replaced `std::min(SyncConfig::getChunkSize(), 10000)` with `SyncConfig::getChunkSize()` so your configured 25,000 batch is respected.
+- Safer value handling: Normalized/cleaned control chars, invalid MariaDB dates, and booleans before inserting/upserting into PostgreSQL.
+- Upsert/Insert batching: Kept batch UPSERT/INSERT logic with conflict handling and statement timeouts; batches sized off your config (and for UPSERT, internal safe caps).
+- Catalog optimization: In `catalog_manager.h`, added in-memory time-column cache (TTL), batch detection of time columns across tables, batch writes (transactions per group), and periodic cache cleanup with lightweight stats logs.
+- Status updates: Refined `updateStatus(...)` to set `last_sync_time` safely and to update `last_offset` during transfer to avoid loops.
+- Index sync: `syncIndexesAndConstraints` opens/closes its own MariaDB connection and creates missing indexes in PostgreSQL using lowercase schema names.
+- Robust schema/table setup: `setupTableTargetMariaDBToPostgres` reads source columns once per table, maps types, creates schema/table if needed, and closes the MariaDB connection immediately after metadata retrieval.
+
+These together fixed the crash, removed threading hazards, respected your configured batch size, reduced query chatter, and improved overall throughput and stability.
+
+
+creo que la transferencia podria ser mucho mas rapida !
+
+
+
+yo se que depende del io pero deberiamos hacer algo para que vaya volado 
