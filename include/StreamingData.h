@@ -10,7 +10,6 @@
 #include "MetricsCollector.h"
 #include "MongoToPostgres.h"
 #include "PostgresToPostgres.h"
-#include "SyncReporter.h"
 #include "catalog_manager.h"
 #include "logger.h"
 #include <atomic>
@@ -37,7 +36,8 @@ public:
     Logger::info("StreamingData", "MongoDB driver initialized successfully");
 
     // Database connections will be created as needed
-    Logger::info("StreamingData", "Database connections will be created as needed");
+    Logger::info("StreamingData",
+                 "Database connections will be created as needed");
 
     Logger::info("StreamingData",
                  "System initialization completed successfully");
@@ -119,7 +119,6 @@ private:
   MSSQLToPostgres mssqlToPg;
   PostgresToPostgres pgToPg;
   MongoToPostgres mongoToPg;
-  SyncReporter reporter;
   CatalogManager catalogManager;
   DataQuality dataQuality;
 
@@ -495,10 +494,9 @@ private:
         loadConfigFromDatabase(pgConn);
         Logger::debug("monitoringThread", "Configuration loaded successfully");
 
-        // Generate report
-        Logger::debug("monitoringThread", "Generating full report");
-        reporter.generateFullReport(pgConn);
-        Logger::debug("monitoringThread", "Full report generated successfully");
+        // Report generation removed - using web dashboard instead
+        Logger::debug("monitoringThread",
+                      "Monitoring active - web dashboard available");
 
         Logger::info("monitoringThread",
                      "Monitoring cycle completed successfully");
