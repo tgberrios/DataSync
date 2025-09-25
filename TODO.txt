@@ -1,7 +1,6 @@
 mejorar performance!
 DDL Exporter podemos ordenar las carpetas por hostname como lo hacemos en Maria
 
-
 creo que algo relantiza mi app en @maria siento que va muy muy lento indagar al maximo
 
 logger.h revisarlo
