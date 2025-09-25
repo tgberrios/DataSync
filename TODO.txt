@@ -1,18 +1,12 @@
+cambiar la ui para que el batch config se vea mejor ! 
 
-revisar esto de los NULL en todos los archivos
 
 porque dura tanto en seguir con la proxima tabla full_load ? 
 
 que configs tengo que eliminar ahora que quitamos connection pool 
 
+confirmar la creacion de las tablas en todos los archivos que se creen sin nulos 
 
-
-MUST ALWAYS REVIEW
-
-Commit apropiado en casos de éxito
-Abort/Rollback en casos de error
-Cierre de conexiones en todos los casos
-Liberación de recursos apropiada
 
 
 2025-09-23 23:00:27.807[ERROR][transferDataMariaDBToPostgres]Bulk upsert failed: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint

@@ -1410,6 +1410,72 @@ private:
     }
   }
 
+  std::string cleanValueForPostgres(const std::string &value,
+                                    const std::string &columnType) {
+    std::string cleanValue = value;
+    std::string upperType = columnType;
+    std::transform(upperType.begin(), upperType.end(), upperType.begin(),
+                   ::toupper);
+
+    if (cleanValue.empty()) {
+      return "NULL";
+    }
+
+    // Limpiar caracteres de control
+    for (char &c : cleanValue) {
+      if (static_cast<unsigned char>(c) > 127) {
+        c = '?';
+      }
+    }
+
+    cleanValue.erase(std::remove_if(cleanValue.begin(), cleanValue.end(),
+                                    [](unsigned char c) {
+                                      return c < 32 && c != 9 && c != 10 &&
+                                             c != 13;
+                                    }),
+                     cleanValue.end());
+
+    // Manejar tipos específicos
+    if (upperType.find("BOOLEAN") != std::string::npos ||
+        upperType.find("BOOL") != std::string::npos) {
+      if (cleanValue == "N" || cleanValue == "0" || cleanValue == "false" ||
+          cleanValue == "FALSE") {
+        cleanValue = "false";
+      } else if (cleanValue == "Y" || cleanValue == "1" ||
+                 cleanValue == "true" || cleanValue == "TRUE") {
+        cleanValue = "true";
+      }
+    } else if (upperType.find("BIT") != std::string::npos) {
+      if (cleanValue == "0" || cleanValue == "false" || cleanValue == "FALSE" ||
+          cleanValue.empty()) {
+        return "NULL";
+      } else if (cleanValue == "1" || cleanValue == "true" ||
+                 cleanValue == "TRUE") {
+        cleanValue = "1";
+      } else {
+        return "NULL";
+      }
+    } else if (upperType.find("TIMESTAMP") != std::string::npos ||
+               upperType.find("DATETIME") != std::string::npos ||
+               upperType.find("DATE") != std::string::npos) {
+      // Convertir fechas inválidas a NULL para PostgreSQL
+      if (cleanValue == "0000-00-00 00:00:00" || cleanValue == "0000-00-00" ||
+          cleanValue == "0000-01-01" || cleanValue == "0000-01-01 00:00:00") {
+        return "NULL";
+      } else if (cleanValue.find("0000-00-00") != std::string::npos) {
+        return "NULL";
+      } else if (cleanValue.find("0000-01-01") != std::string::npos) {
+        return "NULL";
+      } else if (cleanValue.find("-00 00:00:00") != std::string::npos) {
+        return "NULL";
+      } else if (cleanValue.find("-00") != std::string::npos) {
+        return "NULL";
+      }
+    }
+
+    return cleanValue;
+  }
+
   std::vector<std::string>
   getPrimaryKeyColumnsFromPostgres(pqxx::connection &pgConn,
                                    const std::string &schemaName,
@@ -1490,34 +1556,6 @@ private:
     }
 
     return conflictClause;
-  }
-
-  std::string cleanValueForPostgres(const std::string &value,
-                                    const std::string &columnType) {
-    std::string cleanValue = value;
-    std::string upperType = columnType;
-    std::transform(upperType.begin(), upperType.end(), upperType.begin(),
-                   ::toupper);
-
-    if (cleanValue.empty()) {
-      return "NULL";
-    }
-
-    // Limpiar caracteres de control
-    for (char &c : cleanValue) {
-      if (static_cast<unsigned char>(c) > 127) {
-        c = '?';
-      }
-    }
-
-    cleanValue.erase(std::remove_if(cleanValue.begin(), cleanValue.end(),
-                                    [](unsigned char c) {
-                                      return c < 32 && c != 9 && c != 10 &&
-                                             c != 13;
-                                    }),
-                     cleanValue.end());
-
-    return cleanValue;
   }
 };
 
