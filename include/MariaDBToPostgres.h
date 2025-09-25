@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cctype>
 #include <iostream>
+#include <mutex>
 #include <mysql/mysql.h>
 #include <pqxx/pqxx>
 #include <set>
@@ -18,9 +19,19 @@
 #include <vector>
 
 class MariaDBToPostgres {
+private:
+  MYSQL *mariadbConn = nullptr;
+  std::string currentConnectionString;
+  std::mutex connectionMutex;
+
 public:
   MariaDBToPostgres() = default;
-  ~MariaDBToPostgres() = default;
+  ~MariaDBToPostgres() {
+    if (mariadbConn) {
+      mysql_close(mariadbConn);
+      mariadbConn = nullptr;
+    }
+  }
 
   static std::unordered_map<std::string, std::string> dataTypeMap;
   static std::unordered_map<std::string, std::string> collationMap;
@@ -36,6 +47,77 @@ public:
     std::string status;
     std::string last_offset;
   };
+
+  MYSQL *getMariaDBConnection(const std::string &connectionString) {
+    std::lock_guard<std::mutex> lock(connectionMutex);
+
+    // Si ya tenemos una conexión para esta connection string, la reutilizamos
+    if (mariadbConn && currentConnectionString == connectionString) {
+      return mariadbConn;
+    }
+
+    // Si tenemos una conexión diferente, la cerramos
+    if (mariadbConn) {
+      mysql_close(mariadbConn);
+      mariadbConn = nullptr;
+    }
+
+    // Parsear connection string
+    std::string host, user, password, db, port;
+    std::istringstream ss(connectionString);
+    std::string token;
+    while (std::getline(ss, token, ';')) {
+      auto pos = token.find('=');
+      if (pos == std::string::npos)
+        continue;
+      std::string key = token.substr(0, pos);
+      std::string value = token.substr(pos + 1);
+      key.erase(0, key.find_first_not_of(" \t\r\n"));
+      key.erase(key.find_last_not_of(" \t\r\n") + 1);
+      value.erase(0, value.find_first_not_of(" \t\r\n"));
+      value.erase(value.find_last_not_of(" \t\r\n") + 1);
+      if (key == "host")
+        host = value;
+      else if (key == "user")
+        user = value;
+      else if (key == "password")
+        password = value;
+      else if (key == "db")
+        db = value;
+      else if (key == "port")
+        port = value;
+    }
+
+    // Crear nueva conexión
+    mariadbConn = mysql_init(nullptr);
+    if (!mariadbConn) {
+      Logger::error("getMariaDBConnection", "mysql_init() failed");
+      return nullptr;
+    }
+
+    unsigned int portNum = 3306;
+    if (!port.empty()) {
+      try {
+        portNum = std::stoul(port);
+      } catch (...) {
+        portNum = 3306;
+      }
+    }
+
+    if (mysql_real_connect(mariadbConn, host.c_str(), user.c_str(),
+                           password.c_str(), db.c_str(), portNum, nullptr,
+                           0) == nullptr) {
+      Logger::error("getMariaDBConnection",
+                    "MariaDB connection failed: " +
+                        std::string(mysql_error(mariadbConn)));
+      mysql_close(mariadbConn);
+      mariadbConn = nullptr;
+      return nullptr;
+    }
+
+    currentConnectionString = connectionString;
+    return mariadbConn;
+  }
 
   std::vector<TableInfo> getActiveTables(pqxx::connection &pgConn) {
     std::vector<TableInfo> data;
@@ -80,54 +162,10 @@ public:
                                  pqxx::connection &pgConn,
                                  const std::string &lowerSchemaName,
                                  const std::string &connection_string) {
-    // Connect directly to MariaDB
-    std::string host, user, password, db, port;
-    std::istringstream ss(connection_string);
-    std::string token;
-    while (std::getline(ss, token, ';')) {
-      auto pos = token.find('=');
-      if (pos == std::string::npos)
-        continue;
-      std::string key = token.substr(0, pos);
-      std::string value = token.substr(pos + 1);
-      key.erase(0, key.find_first_not_of(" \t\r\n"));
-      key.erase(key.find_last_not_of(" \t\r\n") + 1);
-      value.erase(0, value.find_first_not_of(" \t\r\n"));
-      value.erase(value.find_last_not_of(" \t\r\n") + 1);
-      if (key == "host")
-        host = value;
-      else if (key == "user")
-        user = value;
-      else if (key == "password")
-        password = value;
-      else if (key == "db")
-        db = value;
-      else if (key == "port")
-        port = value;
-    }
-
-    MYSQL *mariadbConn = mysql_init(nullptr);
+    MYSQL *mariadbConn = getMariaDBConnection(connection_string);
     if (!mariadbConn) {
-      Logger::error("syncIndexesAndConstraints", "mysql_init() failed");
-      return;
-    }
-
-    unsigned int portNum = 3306;
-    if (!port.empty()) {
-      try {
-        portNum = std::stoul(port);
-      } catch (...) {
-        portNum = 3306;
-      }
-    }
-
-    if (mysql_real_connect(mariadbConn, host.c_str(), user.c_str(),
-                           password.c_str(), db.c_str(), portNum, nullptr,
-                           0) == nullptr) {
       Logger::error("syncIndexesAndConstraints",
-                    "MariaDB connection failed: " +
-                        std::string(mysql_error(mariadbConn)));
-      mysql_close(mariadbConn);
+                    "Failed to get MariaDB connection");
       return;
     }
 
@@ -165,9 +203,6 @@ public:
                           "': " + std::string(e.what()));
       }
     }
-
-    // Close MariaDB connection
-    mysql_close(mariadbConn);
   }
 
   void setupTableTargetMariaDBToPostgres() {
@@ -218,62 +253,12 @@ public:
         if (table.db_engine != "MariaDB")
           continue;
 
-        // std::cerr << "Processing table: " << table.schema_name << "." <<
-        // table.table_name
-        //           << " (status: " << table.status << ")" << std::endl;
-
-        // Connect directly to MariaDB
-        std::string host, user, password, db, port;
-        std::istringstream ss(table.connection_string);
-        std::string token;
-        while (std::getline(ss, token, ';')) {
-          auto pos = token.find('=');
-          if (pos == std::string::npos)
-            continue;
-          std::string key = token.substr(0, pos);
-          std::string value = token.substr(pos + 1);
-          key.erase(0, key.find_first_not_of(" \t\r\n"));
-          key.erase(key.find_last_not_of(" \t\r\n") + 1);
-          value.erase(0, value.find_first_not_of(" \t\r\n"));
-          value.erase(value.find_last_not_of(" \t\r\n") + 1);
-          if (key == "host")
-            host = value;
-          else if (key == "user")
-            user = value;
-          else if (key == "password")
-            password = value;
-          else if (key == "db")
-            db = value;
-          else if (key == "port")
-            port = value;
-        }
-
-        MYSQL *mariadbConn = mysql_init(nullptr);
+        MYSQL *mariadbConn = getMariaDBConnection(table.connection_string);
         if (!mariadbConn) {
           Logger::error("setupTableTargetMariaDBToPostgres",
-                        "mysql_init() failed");
+                        "Failed to get MariaDB connection");
           continue;
         }
-
-        unsigned int portNum = 3306;
-        if (!port.empty()) {
-          try {
-            portNum = std::stoul(port);
-          } catch (...) {
-            portNum = 3306;
-          }
-        }
-
-        if (mysql_real_connect(mariadbConn, host.c_str(), user.c_str(),
-                               password.c_str(), db.c_str(), portNum, nullptr,
-                               0) == nullptr) {
-          Logger::error("setupTableTargetMariaDBToPostgres",
-                        "MariaDB connection failed: " +
-                            std::string(mysql_error(mariadbConn)));
-          mysql_close(mariadbConn);
-          continue;
-        }
-        // std::cerr << "Connected to MariaDB successfully" << std::endl;
 
         std::string query = "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, "
                             "COLUMN_KEY, EXTRA, CHARACTER_MAXIMUM_LENGTH "
@@ -370,8 +355,6 @@ public:
 
         // No actualizar la columna de tiempo aquí - ya fue detectada
         // correctamente en catalog_manager.h
-        // Close MariaDB connection
-        mysql_close(mariadbConn);
       }
     } catch (const std::exception &e) {
       Logger::error("setupTableTargetMariaDBToPostgres",
@@ -780,58 +763,10 @@ public:
         if (table.db_engine != "MariaDB")
           continue;
 
-        // Tabla procesando: table.schema_name + "." + table.table_name + " (" +
-        // table.status + ")"
-
-        // Connect directly to MariaDB
-        std::string host, user, password, db, port;
-        std::istringstream ss(table.connection_string);
-        std::string token;
-        while (std::getline(ss, token, ';')) {
-          auto pos = token.find('=');
-          if (pos == std::string::npos)
-            continue;
-          std::string key = token.substr(0, pos);
-          std::string value = token.substr(pos + 1);
-          key.erase(0, key.find_first_not_of(" \t\r\n"));
-          key.erase(key.find_last_not_of(" \t\r\n") + 1);
-          value.erase(0, value.find_first_not_of(" \t\r\n"));
-          value.erase(value.find_last_not_of(" \t\r\n") + 1);
-          if (key == "host")
-            host = value;
-          else if (key == "user")
-            user = value;
-          else if (key == "password")
-            password = value;
-          else if (key == "db")
-            db = value;
-          else if (key == "port")
-            port = value;
-        }
-
-        MYSQL *mariadbConn = mysql_init(nullptr);
+        MYSQL *mariadbConn = getMariaDBConnection(table.connection_string);
         if (!mariadbConn) {
-          Logger::error("transferDataMariaDBToPostgres", "mysql_init() failed");
-          updateStatus(pgConn, table.schema_name, table.table_name, "ERROR");
-          continue;
-        }
-
-        unsigned int portNum = 3306;
-        if (!port.empty()) {
-          try {
-            portNum = std::stoul(port);
-          } catch (...) {
-            portNum = 3306;
-          }
-        }
-
-        if (mysql_real_connect(mariadbConn, host.c_str(), user.c_str(),
-                               password.c_str(), db.c_str(), portNum, nullptr,
-                               0) == nullptr) {
           Logger::error("transferDataMariaDBToPostgres",
-                        "MariaDB connection failed: " +
-                            std::string(mysql_error(mariadbConn)));
-          mysql_close(mariadbConn);
+                        "Failed to get MariaDB connection");
           updateStatus(pgConn, table.schema_name, table.table_name, "ERROR");
           continue;
         }
@@ -1169,9 +1104,6 @@ public:
         }
 
         // Tabla procesada completamente
-
-        // Close MariaDB connection
-        mysql_close(mariadbConn);
       }
     } catch (const std::exception &e) {
       Logger::error("transferDataMariaDBToPostgres",
