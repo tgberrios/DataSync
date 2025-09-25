@@ -333,17 +333,20 @@ public:
         std::vector<std::string> columnDefinitions;
 
         for (const std::vector<std::string> &col : columns) {
-          if (col.size() < 6)
+          if (col.size() < 1)
             continue;
 
           std::string colName = col[0];
+          if (colName.empty())
+            continue;
+
           std::transform(colName.begin(), colName.end(), colName.begin(),
                          ::tolower);
-          std::string dataType = col[1];
+          std::string dataType = col.size() > 1 ? col[1] : "varchar";
           std::string nullable = "";
-          std::string columnKey = col[3];
-          std::string extra = col[4];
-          std::string maxLength = col[5];
+          std::string columnKey = col.size() > 3 ? col[3] : "";
+          std::string extra = col.size() > 4 ? col[4] : "";
+          std::string maxLength = col.size() > 5 ? col[5] : "";
 
           std::string pgType = "TEXT";
           if (extra == "auto_increment") {
@@ -424,8 +427,15 @@ public:
           getPrimaryKeyColumns(mariadbConn, schema_name, table_name);
 
       if (pkColumns.empty()) {
+        Logger::info(LogCategory::TRANSFER,
+                     "No primary key columns found for " + schema_name + "." +
+                         table_name + " - skipping delete processing");
         return;
       }
+
+      Logger::info(LogCategory::TRANSFER,
+                   "Found " + std::to_string(pkColumns.size()) +
+                       " PK columns for " + schema_name + "." + table_name);
 
       // 2. Obtener todas las PKs de PostgreSQL en batches
       const size_t BATCH_SIZE = SyncConfig::getChunkSize();
@@ -438,6 +448,16 @@ public:
         for (size_t i = 0; i < pkColumns.size(); ++i) {
           if (i > 0)
             pkSelectQuery += ", ";
+          // Validate column name is not empty and not a number
+          if (pkColumns[i].empty() ||
+              std::all_of(pkColumns[i].begin(), pkColumns[i].end(),
+                          ::isdigit)) {
+            Logger::error(LogCategory::TRANSFER,
+                          "Invalid PK column name: '" + pkColumns[i] +
+                              "' for table " + schema_name + "." + table_name +
+                              " - skipping delete processing");
+            return;
+          }
           pkSelectQuery += "\"" + pkColumns[i] + "\"";
         }
         pkSelectQuery +=
@@ -559,9 +579,9 @@ public:
       std::vector<std::vector<std::string>> columnNames =
           executeQueryMariaDB(mariadbConn, columnQuery);
       if (columnNames.empty() || columnNames[0].empty()) {
-        Logger::error(LogCategory::TRANSFER, "Could not get column names for " +
-                                                 schema_name + "." +
-                                                 table_name);
+        Logger::warning(LogCategory::TRANSFER,
+                        "Could not get column names for " + schema_name + "." +
+                            table_name + " - skipping update processing");
         return;
       }
 
@@ -827,25 +847,35 @@ public:
             mariadbConn,
             "SELECT COUNT(*) FROM `" + schema_name + "`.`" + table_name + "`;");
         size_t sourceCount = 0;
-        if (!countRes.empty() && !countRes[0][0].empty()) {
+        if (!countRes.empty() && !countRes[0].empty() &&
+            !countRes[0][0].empty()) {
           try {
-            sourceCount = std::stoul(countRes[0][0]);
-            Logger::info(LogCategory::TRANSFER,
-                         "Source table " + schema_name + "." + table_name +
-                             " has " + std::to_string(sourceCount) +
-                             " records");
+            std::string countStr = countRes[0][0];
+            if (!countStr.empty() &&
+                std::all_of(countStr.begin(), countStr.end(), ::isdigit)) {
+              sourceCount = std::stoul(countStr);
+              Logger::info(LogCategory::TRANSFER,
+                           "Source table " + schema_name + "." + table_name +
+                               " has " + std::to_string(sourceCount) +
+                               " records");
+            } else {
+              Logger::warning(LogCategory::TRANSFER,
+                              "Invalid count value for table " + schema_name +
+                                  "." + table_name + " - using 0");
+              sourceCount = 0;
+            }
           } catch (const std::exception &e) {
-            Logger::error(LogCategory::TRANSFER,
-                          "ERROR parsing source count for table " +
-                              schema_name + "." + table_name + ": " +
-                              std::string(e.what()));
+            Logger::warning(LogCategory::TRANSFER,
+                            "Could not parse source count for table " +
+                                schema_name + "." + table_name +
+                                " - using 0: " + std::string(e.what()));
             sourceCount = 0;
           }
         } else {
-          Logger::error(LogCategory::TRANSFER,
-                        "ERROR: Could not get source count for table " +
-                            schema_name + "." + table_name +
-                            " - count query returned no results");
+          Logger::warning(LogCategory::TRANSFER,
+                          "Could not get source count for table " +
+                              schema_name + "." + table_name + " - using 0");
+          sourceCount = 0;
         }
         // Obtener conteo de registros en la tabla destino
 
@@ -891,11 +921,12 @@ public:
                 "Both source and target are empty - marking as NO_DATA");
             updateStatus(pgConn, schema_name, table_name, "NO_DATA", 0);
           } else {
-            Logger::error(LogCategory::TRANSFER,
-                          "Source is empty but target has " +
-                              std::to_string(targetCount) +
-                              " records - marking as ERROR");
-            updateStatus(pgConn, schema_name, table_name, "ERROR", 0);
+            Logger::warning(LogCategory::TRANSFER,
+                            "Source is empty but target has " +
+                                std::to_string(targetCount) +
+                                " records - marking as LISTENING_CHANGES");
+            updateStatus(pgConn, schema_name, table_name, "LISTENING_CHANGES",
+                         0);
           }
           continue;
         }
@@ -1710,22 +1741,24 @@ private:
   executeQueryMariaDB(MYSQL *conn, const std::string &query) {
     std::vector<std::vector<std::string>> results;
     if (!conn) {
-      Logger::error(LogCategory::TRANSFER, "No valid MariaDB connection");
+      Logger::warning(LogCategory::TRANSFER, "No valid MariaDB connection");
       return results;
     }
 
     if (mysql_query(conn, query.c_str())) {
-      Logger::error(LogCategory::TRANSFER, "Query execution failed: " +
-                                               std::string(mysql_error(conn)));
+      Logger::warning(
+          LogCategory::TRANSFER,
+          "Query execution failed: " + std::string(mysql_error(conn)) +
+              " for query: " + query.substr(0, 100) + "...");
       return results;
     }
 
     MYSQL_RES *res = mysql_store_result(conn);
     if (!res) {
       if (mysql_field_count(conn) > 0) {
-        Logger::error(LogCategory::TRANSFER,
-                      "mysql_store_result() failed: " +
-                          std::string(mysql_error(conn)));
+        Logger::warning(LogCategory::TRANSFER,
+                        "mysql_store_result() failed: " +
+                            std::string(mysql_error(conn)));
       }
       return results;
     }
