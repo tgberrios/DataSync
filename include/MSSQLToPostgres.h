@@ -1868,7 +1868,7 @@ private:
           buildUpsertConflictClause(columnNames, pkColumns);
 
       pqxx::work txn(pgConn);
-      txn.exec("SET statement_timeout = '300s'");
+      txn.exec("SET statement_timeout = '600s'");
 
       // Procesar en batches para evitar queries muy largas
       const size_t BATCH_SIZE =
@@ -1944,7 +1944,7 @@ private:
       insertQuery += ") VALUES ";
 
       pqxx::work txn(pgConn);
-      txn.exec("SET statement_timeout = '300s'");
+      txn.exec("SET statement_timeout = '600s'");
 
       // Procesar en batches
       const size_t BATCH_SIZE = SyncConfig::getChunkSize();

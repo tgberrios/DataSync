@@ -116,14 +116,15 @@ public:
       return nullptr;
     }
 
-    // Set connection timeouts for large tables
+    // Set connection timeouts for large tables - OPTIMIZED
     {
       std::string timeoutQuery =
-          "SET SESSION wait_timeout = " +
-          std::to_string(SyncConfig::getConnectionTimeout()) +
-          ", interactive_timeout = " +
-          std::to_string(SyncConfig::getConnectionTimeout()) +
-          ", net_read_timeout = 600" + ", net_write_timeout = 600";
+          "SET SESSION wait_timeout = 600" +                // 10 minutos
+          std::string(", interactive_timeout = 600") +      // 10 minutos
+          std::string(", net_read_timeout = 600") +         // 10 minutos
+          std::string(", net_write_timeout = 600") +        // 10 minutos
+          std::string(", innodb_lock_wait_timeout = 600") + // 10 minutos
+          std::string(", lock_wait_timeout = 600");         // 10 minutos
       mysql_query(mariadbConn, timeoutQuery.c_str());
     }
 
@@ -1769,7 +1770,7 @@ private:
           buildUpsertConflictClause(columnNames, pkColumns);
 
       pqxx::work txn(pgConn);
-      txn.exec("SET statement_timeout = '300s'");
+      txn.exec("SET statement_timeout = '600s'");
 
       // Procesar en batches para evitar queries muy largas
       const size_t BATCH_SIZE =
@@ -1849,7 +1850,7 @@ private:
       insertQuery += ") VALUES ";
 
       pqxx::work txn(pgConn);
-      txn.exec("SET statement_timeout = '300s'");
+      txn.exec("SET statement_timeout = '600s'");
 
       // Procesar en batches
       const size_t BATCH_SIZE = SyncConfig::getChunkSize();

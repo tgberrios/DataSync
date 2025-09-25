@@ -226,14 +226,15 @@ public:
           continue;
         }
 
-        // Set connection timeouts for large tables
+        // Set connection timeouts for large tables - OPTIMIZED
         {
           std::string timeoutQuery =
-              "SET SESSION wait_timeout = " +
-              std::to_string(SyncConfig::getConnectionTimeout()) +
-              ", interactive_timeout = " +
-              std::to_string(SyncConfig::getConnectionTimeout()) +
-              ", net_read_timeout = 600" + ", net_write_timeout = 600";
+              "SET SESSION wait_timeout = 600" +                // 10 minutos
+              std::string(", interactive_timeout = 600") +      // 10 minutos
+              std::string(", net_read_timeout = 600") +         // 10 minutos
+              std::string(", net_write_timeout = 600") +        // 10 minutos
+              std::string(", innodb_lock_wait_timeout = 600") + // 10 minutos
+              std::string(", lock_wait_timeout = 600");         // 10 minutos
           mysql_query(mariaConn, timeoutQuery.c_str());
         }
 
@@ -1389,12 +1390,12 @@ private:
         // Set connection timeouts for large tables - OPTIMIZED
         {
           std::string timeoutQuery =
-              "SET SESSION wait_timeout = 86400" +              // 24 horas
-              std::string(", interactive_timeout = 86400") +    // 24 horas
-              std::string(", net_read_timeout = 3600") +        // 1 hora
-              std::string(", net_write_timeout = 3600") +       // 1 hora
-              std::string(", innodb_lock_wait_timeout = 300") + // 5 minutos
-              std::string(", lock_wait_timeout = 300");         // 5 minutos
+              "SET SESSION wait_timeout = 600" +                // 10 minutos
+              std::string(", interactive_timeout = 600") +      // 10 minutos
+              std::string(", net_read_timeout = 600") +         // 10 minutos
+              std::string(", net_write_timeout = 600") +        // 10 minutos
+              std::string(", innodb_lock_wait_timeout = 600") + // 10 minutos
+              std::string(", lock_wait_timeout = 600");         // 10 minutos
           mysql_query(conn, timeoutQuery.c_str());
         }
         auto res = executeQueryMariaDB(conn, "SELECT @@hostname;");
@@ -1700,12 +1701,12 @@ private:
         // Set connection timeouts for large tables - OPTIMIZED
         {
           std::string timeoutQuery =
-              "SET SESSION wait_timeout = 86400" +              // 24 horas
-              std::string(", interactive_timeout = 86400") +    // 24 horas
-              std::string(", net_read_timeout = 3600") +        // 1 hora
-              std::string(", net_write_timeout = 3600") +       // 1 hora
-              std::string(", innodb_lock_wait_timeout = 300") + // 5 minutos
-              std::string(", lock_wait_timeout = 300");         // 5 minutos
+              "SET SESSION wait_timeout = 600" +                // 10 minutos
+              std::string(", interactive_timeout = 600") +      // 10 minutos
+              std::string(", net_read_timeout = 600") +         // 10 minutos
+              std::string(", net_write_timeout = 600") +        // 10 minutos
+              std::string(", innodb_lock_wait_timeout = 600") + // 10 minutos
+              std::string(", lock_wait_timeout = 600");         // 10 minutos
           mysql_query(mariadbConn, timeoutQuery.c_str());
         }
 
