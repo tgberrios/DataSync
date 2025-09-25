@@ -254,6 +254,14 @@ public:
           continue;
         }
 
+        // Set connection timeout
+        {
+          std::string timeoutQuery =
+              "SET SESSION wait_timeout = " +
+              std::to_string(SyncConfig::getConnectionTimeout());
+          mysql_query(mariaConn, timeoutQuery.c_str());
+        }
+
         std::string discoverQuery =
             "SELECT table_schema, table_name "
             "FROM information_schema.tables "
@@ -840,6 +848,14 @@ private:
           mysql_close(conn);
           return "";
         }
+
+        // Set connection timeout
+        {
+          std::string timeoutQuery =
+              "SET SESSION wait_timeout = " +
+              std::to_string(SyncConfig::getConnectionTimeout());
+          mysql_query(conn, timeoutQuery.c_str());
+        }
         auto res = executeQueryMariaDB(conn, "SELECT @@hostname;");
         mysql_close(conn);
         if (!res.empty() && !res[0].empty() && !res[0][0].empty()) {
@@ -1143,6 +1159,14 @@ private:
                               std::string(mysql_error(mariadbConn)));
           mysql_close(mariadbConn);
           continue;
+        }
+
+        // Set connection timeout
+        {
+          std::string timeoutQuery =
+              "SET SESSION wait_timeout = " +
+              std::to_string(SyncConfig::getConnectionTimeout());
+          mysql_query(mariadbConn, timeoutQuery.c_str());
         }
 
         // Obtener todas las tablas para este connection_string

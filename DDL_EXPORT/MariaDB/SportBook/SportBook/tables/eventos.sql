@@ -1,7 +1,7 @@
 -- Table DDL for SportBook.eventos
 -- Engine: MariaDB
 -- Database: SportBook
--- Generated: 1758780923
+-- Generated: 1758817958
 
 CREATE TABLE `eventos` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
