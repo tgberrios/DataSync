@@ -31,7 +31,6 @@ add_executable(DataSync
     src/DDLExporter.cpp 
     src/MetricsCollector.cpp 
     src/SyncReporter.cpp 
-    src/ConnectionPool.cpp
     src/DataQuality.cpp
 )
 

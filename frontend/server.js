@@ -161,54 +161,20 @@ app.get("/api/dashboard/stats", async (req, res) => {
       FROM metadata.catalog
     `);
 
-    // Get currently processing tables from active queries
-    const activeQueries = await pool.query(`
-      SELECT 
-        query,
-        state,
-        query_start,
-        EXTRACT(EPOCH FROM (now() - query_start))::integer as duration_seconds
-      FROM pg_stat_activity 
-      WHERE state = 'active' 
-        AND query LIKE '%COPY%FROM STDIN%'
-        AND query NOT LIKE '%pg_stat_activity%'
-      ORDER BY query_start DESC
+    // Get currently processing table using the new query
+    const currentProcessingTable = await pool.query(`
+      SELECT t.*
+      FROM metadata.catalog t
+      WHERE status = 'FULL_LOAD'
+      ORDER BY last_offset desc
+      LIMIT 1
     `);
 
-    // Extract table names from COPY queries and get their counts
-    const processingTablesWithCounts = [];
-
-    for (const row of activeQueries.rows) {
-      const copyMatch = row.query.match(
-        /COPY\s+"?([^"]+)"?\."?([^"]+)"?\s+FROM\s+STDIN/i
-      );
-      if (copyMatch) {
-        const schema = copyMatch[1];
-        const table = copyMatch[2];
-
-        try {
-          // Get count for this table
-          const countResult = await pool.query(
-            `SELECT COUNT(*) as count FROM "${schema}"."${table}"`
-          );
-          const count = parseInt(countResult.rows[0].count);
-          processingTablesWithCounts.push(
-            `${schema}.${table} (${count.toLocaleString()} records)`
-          );
-        } catch (error) {
-          // If count fails, just show table name
-          console.log(
-            `Could not get count for ${schema}.${table}:`,
-            error.message
-          );
-          processingTablesWithCounts.push(`${schema}.${table}`);
-        }
-      }
-    }
-
     const currentProcessText =
-      processingTablesWithCounts.length > 0
-        ? processingTablesWithCounts.join(", ")
+      currentProcessingTable.rows.length > 0
+        ? `${currentProcessingTable.rows[0].schema_name}.${
+            currentProcessingTable.rows[0].table_name
+          } (${currentProcessingTable.rows[0].last_offset || 0} records)`
         : "No active transfers";
 
     // 2. TRANSFER PERFORMANCE BY ENGINE
@@ -295,16 +261,7 @@ app.get("/api/dashboard/stats", async (req, res) => {
         ) as cache_stats
     `);
 
-    // 5. CONNECTION POOLING
-    const connectionPool = await pool.query(`
-      SELECT 
-        COUNT(DISTINCT db_engine) as total_pools,
-        COUNT(*) FILTER (WHERE status = 'PROCESSING') as active_connections,
-        COUNT(*) FILTER (WHERE status != 'PROCESSING' AND active = true) as idle_connections,
-        COUNT(*) FILTER (WHERE status = 'ERROR') as failed_connections,
-        MAX(last_sync_time) as last_update
-      FROM metadata.catalog
-    `);
+    // Connection pooling removed - using direct connections now
 
     // 6. RECENT ACTIVITY
     const recentActivity = await pool.query(`
@@ -362,25 +319,7 @@ app.get("/api/dashboard/stats", async (req, res) => {
         ).toFixed(1),
         status: dbHealth.rows[0] ? "Healthy" : "Unknown",
       },
-      connectionPool: {
-        totalPools: parseInt(connectionPool.rows[0]?.total_pools || 0),
-        activeConnections: parseInt(
-          connectionPool.rows[0]?.active_connections || 0
-        ),
-        idleConnections: parseInt(
-          connectionPool.rows[0]?.idle_connections || 0
-        ),
-        failedConnections: parseInt(
-          connectionPool.rows[0]?.failed_connections || 0
-        ),
-        lastCleanup: connectionPool.rows[0]?.last_update
-          ? formatUptime(
-              (Date.now() -
-                new Date(connectionPool.rows[0].last_update).getTime()) /
-                1000
-            )
-          : "0m",
-      },
+      // Connection pooling removed - using direct connections now
     };
 
     // Calcular progreso total - solo contar registros activos

@@ -3,6 +3,7 @@
 
 #include "Config.h"
 #include "logger.h"
+#include "catalog_manager.h"
 #include <algorithm>
 #include <bson/bson.h>
 #include <json/json.h>
@@ -24,16 +25,47 @@ public:
 
       pqxx::work txn(pgConn);
       auto results = txn.exec("SELECT schema_name, table_name, "
-                              "connection_string FROM metadata.catalog "
+                              "connection_string, status FROM metadata.catalog "
                               "WHERE db_engine='MongoDB' AND active=true;");
 
+      // Sort tables by priority: FULL_LOAD, RESET, PERFECT_MATCH, LISTENING_CHANGES
+      std::vector<std::tuple<std::string, std::string, std::string, std::string>> tables;
       for (const auto &row : results) {
-        if (row.size() < 3)
-          continue;
+        if (row.size() < 4) continue;
+        tables.emplace_back(
+          row[0].as<std::string>(), // schema_name
+          row[1].as<std::string>(), // table_name
+          row[2].as<std::string>(), // connection_string
+          row[3].as<std::string>()  // status
+        );
+      }
 
-        std::string schemaName = row[0].as<std::string>();
-        std::string tableName = row[1].as<std::string>();
-        std::string mongoConnStr = row[2].as<std::string>();
+      std::sort(tables.begin(), tables.end(), [](const auto &a, const auto &b) {
+        std::string statusA = std::get<3>(a);
+        std::string statusB = std::get<3>(b);
+        if (statusA == "FULL_LOAD" && statusB != "FULL_LOAD") return true;
+        if (statusA != "FULL_LOAD" && statusB == "FULL_LOAD") return false;
+        if (statusA == "RESET" && statusB != "RESET") return true;
+        if (statusA != "RESET" && statusB == "RESET") return false;
+        if (statusA == "PERFECT_MATCH" && statusB != "PERFECT_MATCH") return true;
+        if (statusA != "PERFECT_MATCH" && statusB == "PERFECT_MATCH") return false;
+        if (statusA == "LISTENING_CHANGES" && statusB != "LISTENING_CHANGES") return true;
+        if (statusA != "LISTENING_CHANGES" && statusB == "LISTENING_CHANGES") return false;
+        return false;
+      });
+
+      Logger::info("setupTableTargetMongoToPostgres", 
+                   "Processing " + std::to_string(tables.size()) + " MongoDB tables in priority order");
+      for (size_t i = 0; i < tables.size(); ++i) {
+        Logger::info("setupTableTargetMongoToPostgres", 
+                     "[" + std::to_string(i+1) + "/" + std::to_string(tables.size()) + "] " + 
+                     std::get<0>(tables[i]) + "." + std::get<1>(tables[i]) + " (status: " + std::get<3>(tables[i]) + ")");
+      }
+
+      for (const auto &table : tables) {
+        std::string schemaName = std::get<0>(table);
+        std::string tableName = std::get<1>(table);
+        std::string mongoConnStr = std::get<2>(table);
 
         Logger::debug("setupTableTargetMongoToPostgres",
                       "Setting up table: " + schemaName + "." + tableName);
@@ -78,8 +110,6 @@ public:
 
   void transferDataMongoToPostgres() {
     try {
-      // Logger::debug("transferDataMongoToPostgres",
-      //               "Starting MongoDB to PostgreSQL transfer");
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
 
       {
@@ -90,15 +120,47 @@ public:
                      "WHERE db_engine='MongoDB' AND active=true AND status != "
                      "'NO_DATA';");
 
+        // Sort tables by priority: FULL_LOAD, RESET, PERFECT_MATCH, LISTENING_CHANGES
+        std::vector<std::tuple<std::string, std::string, std::string, std::string, std::string>> tables;
         for (const auto &row : results) {
-          if (row.size() < 5)
-            continue;
+          if (row.size() < 5) continue;
+          tables.emplace_back(
+            row[0].as<std::string>(), // schema_name
+            row[1].as<std::string>(), // table_name
+            row[2].as<std::string>(), // connection_string
+            row[3].as<std::string>(), // last_offset
+            row[4].as<std::string>()  // status
+          );
+        }
 
-          std::string schemaName = row[0].as<std::string>();
-          std::string tableName = row[1].as<std::string>();
-          std::string mongoConnStr = row[2].as<std::string>();
-          std::string lastOffset = row[3].as<std::string>();
-          std::string status = row[4].as<std::string>();
+        std::sort(tables.begin(), tables.end(), [](const auto &a, const auto &b) {
+          std::string statusA = std::get<4>(a);
+          std::string statusB = std::get<4>(b);
+          if (statusA == "FULL_LOAD" && statusB != "FULL_LOAD") return true;
+          if (statusA != "FULL_LOAD" && statusB == "FULL_LOAD") return false;
+          if (statusA == "RESET" && statusB != "RESET") return true;
+          if (statusA != "RESET" && statusB == "RESET") return false;
+          if (statusA == "PERFECT_MATCH" && statusB != "PERFECT_MATCH") return true;
+          if (statusA != "PERFECT_MATCH" && statusB == "PERFECT_MATCH") return false;
+          if (statusA == "LISTENING_CHANGES" && statusB != "LISTENING_CHANGES") return true;
+          if (statusA != "LISTENING_CHANGES" && statusB == "LISTENING_CHANGES") return false;
+          return false;
+        });
+
+        Logger::info("transferDataMongoToPostgres", 
+                     "Processing " + std::to_string(tables.size()) + " MongoDB tables in priority order");
+        for (size_t i = 0; i < tables.size(); ++i) {
+          Logger::info("transferDataMongoToPostgres", 
+                       "[" + std::to_string(i+1) + "/" + std::to_string(tables.size()) + "] " + 
+                       std::get<0>(tables[i]) + "." + std::get<1>(tables[i]) + " (status: " + std::get<4>(tables[i]) + ")");
+        }
+
+        for (const auto &table : tables) {
+          std::string schemaName = std::get<0>(table);
+          std::string tableName = std::get<1>(table);
+          std::string mongoConnStr = std::get<2>(table);
+          std::string lastOffset = std::get<3>(table);
+          std::string status = std::get<4>(table);
 
           Logger::debug("transferDataMongoToPostgres",
                         "Processing table: " + schemaName + "." + tableName +

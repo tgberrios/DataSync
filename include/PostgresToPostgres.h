@@ -3,6 +3,7 @@
 
 #include "Config.h"
 #include "logger.h"
+#include "catalog_manager.h"
 #include <pqxx/pqxx>
 #include <string>
 #include <vector>
@@ -20,16 +21,47 @@ public:
 
       pqxx::work txn(pgConn);
       auto results = txn.exec("SELECT schema_name, table_name, "
-                              "connection_string FROM metadata.catalog "
+                              "connection_string, status FROM metadata.catalog "
                               "WHERE db_engine='PostgreSQL' AND active=true;");
 
+      // Sort tables by priority: FULL_LOAD, RESET, PERFECT_MATCH, LISTENING_CHANGES
+      std::vector<std::tuple<std::string, std::string, std::string, std::string>> tables;
       for (const auto &row : results) {
-        if (row.size() < 3)
-          continue;
+        if (row.size() < 4) continue;
+        tables.emplace_back(
+          row[0].as<std::string>(), // schema_name
+          row[1].as<std::string>(), // table_name
+          row[2].as<std::string>(), // connection_string
+          row[3].as<std::string>()  // status
+        );
+      }
 
-        std::string schemaName = row[0].as<std::string>();
-        std::string tableName = row[1].as<std::string>();
-        std::string sourceConnStr = row[2].as<std::string>();
+      std::sort(tables.begin(), tables.end(), [](const auto &a, const auto &b) {
+        std::string statusA = std::get<3>(a);
+        std::string statusB = std::get<3>(b);
+        if (statusA == "FULL_LOAD" && statusB != "FULL_LOAD") return true;
+        if (statusA != "FULL_LOAD" && statusB == "FULL_LOAD") return false;
+        if (statusA == "RESET" && statusB != "RESET") return true;
+        if (statusA != "RESET" && statusB == "RESET") return false;
+        if (statusA == "PERFECT_MATCH" && statusB != "PERFECT_MATCH") return true;
+        if (statusA != "PERFECT_MATCH" && statusB == "PERFECT_MATCH") return false;
+        if (statusA == "LISTENING_CHANGES" && statusB != "LISTENING_CHANGES") return true;
+        if (statusA != "LISTENING_CHANGES" && statusB == "LISTENING_CHANGES") return false;
+        return false;
+      });
+
+      Logger::info("setupTableTargetPostgresToPostgres", 
+                   "Processing " + std::to_string(tables.size()) + " PostgreSQL tables in priority order");
+      for (size_t i = 0; i < tables.size(); ++i) {
+        Logger::info("setupTableTargetPostgresToPostgres", 
+                     "[" + std::to_string(i+1) + "/" + std::to_string(tables.size()) + "] " + 
+                     std::get<0>(tables[i]) + "." + std::get<1>(tables[i]) + " (status: " + std::get<3>(tables[i]) + ")");
+      }
+
+      for (const auto &table : tables) {
+        std::string schemaName = std::get<0>(table);
+        std::string tableName = std::get<1>(table);
+        std::string sourceConnStr = std::get<2>(table);
 
         Logger::debug("setupTableTargetPostgresToPostgres",
                       "Setting up table: " + schemaName + "." + tableName);
@@ -84,19 +116,51 @@ public:
                      "WHERE db_engine='PostgreSQL' AND active=true AND status "
                      "!= 'NO_DATA';");
 
+        // Sort tables by priority: FULL_LOAD, RESET, PERFECT_MATCH, LISTENING_CHANGES
+        std::vector<std::tuple<std::string, std::string, std::string, std::string, std::string, std::string, std::string>> tables;
         for (const auto &row : results) {
-          if (row.size() < 7)
-            continue;
+          if (row.size() < 7) continue;
+          tables.emplace_back(
+            row[0].as<std::string>(), // schema_name
+            row[1].as<std::string>(), // table_name
+            row[2].as<std::string>(), // connection_string
+            row[3].as<std::string>(), // last_offset
+            row[4].as<std::string>(), // status
+            row[5].is_null() ? "" : row[5].as<std::string>(), // last_sync_column
+            row[6].is_null() ? "" : row[6].as<std::string>()  // last_sync_time
+          );
+        }
 
-          std::string schemaName = row[0].as<std::string>();
-          std::string tableName = row[1].as<std::string>();
-          std::string sourceConnStr = row[2].as<std::string>();
-          std::string lastOffset = row[3].as<std::string>();
-          std::string status = row[4].as<std::string>();
-          std::string lastSyncColumn =
-              row[5].is_null() ? "" : row[5].as<std::string>();
-          std::string lastSyncTime =
-              row[6].is_null() ? "" : row[6].as<std::string>();
+        std::sort(tables.begin(), tables.end(), [](const auto &a, const auto &b) {
+          std::string statusA = std::get<4>(a);
+          std::string statusB = std::get<4>(b);
+          if (statusA == "FULL_LOAD" && statusB != "FULL_LOAD") return true;
+          if (statusA != "FULL_LOAD" && statusB == "FULL_LOAD") return false;
+          if (statusA == "RESET" && statusB != "RESET") return true;
+          if (statusA != "RESET" && statusB == "RESET") return false;
+          if (statusA == "PERFECT_MATCH" && statusB != "PERFECT_MATCH") return true;
+          if (statusA != "PERFECT_MATCH" && statusB == "PERFECT_MATCH") return false;
+          if (statusA == "LISTENING_CHANGES" && statusB != "LISTENING_CHANGES") return true;
+          if (statusA != "LISTENING_CHANGES" && statusB == "LISTENING_CHANGES") return false;
+          return false;
+        });
+
+        Logger::info("transferDataPostgresToPostgres", 
+                     "Processing " + std::to_string(tables.size()) + " PostgreSQL tables in priority order");
+        for (size_t i = 0; i < tables.size(); ++i) {
+          Logger::info("transferDataPostgresToPostgres", 
+                       "[" + std::to_string(i+1) + "/" + std::to_string(tables.size()) + "] " + 
+                       std::get<0>(tables[i]) + "." + std::get<1>(tables[i]) + " (status: " + std::get<4>(tables[i]) + ")");
+        }
+
+        for (const auto &table : tables) {
+          std::string schemaName = std::get<0>(table);
+          std::string tableName = std::get<1>(table);
+          std::string sourceConnStr = std::get<2>(table);
+          std::string lastOffset = std::get<3>(table);
+          std::string status = std::get<4>(table);
+          std::string lastSyncColumn = std::get<5>(table);
+          std::string lastSyncTime = std::get<6>(table);
 
           Logger::debug("transferDataPostgresToPostgres",
                         "Processing table: " + schemaName + "." + tableName +

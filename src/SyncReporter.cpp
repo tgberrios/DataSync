@@ -651,20 +651,11 @@ void SyncReporter::printDashboard(const std::vector<TableStatus> &tables,
 }
 
 void SyncReporter::collectConnectionPoolMetrics(SyncStats &stats) {
-  if (g_connectionPool) {
-    auto poolStats = g_connectionPool->getStats();
-    stats.poolMetrics.totalPools = 4; // PG, MSSQL, MariaDB, MongoDB
-    stats.poolMetrics.activeConnections = poolStats.activeConnections;
-    stats.poolMetrics.idleConnections = poolStats.idleConnections;
-    stats.poolMetrics.failedConnections = poolStats.failedConnections;
-
-    // Format last cleanup time
-    auto now = std::chrono::steady_clock::now();
-    auto cleanupDiff = std::chrono::duration_cast<std::chrono::minutes>(
-                           now - poolStats.lastCleanup)
-                           .count();
-    stats.poolMetrics.lastCleanup = std::to_string(cleanupDiff) + "m ago";
-  }
+  stats.poolMetrics.totalPools = 0;
+  stats.poolMetrics.activeConnections = 0;
+  stats.poolMetrics.idleConnections = 0;
+  stats.poolMetrics.failedConnections = 0;
+  stats.poolMetrics.lastCleanup = "N/A";
 }
 
 void SyncReporter::generateFullReport(pqxx::connection &pgConn) {
