@@ -8,7 +8,6 @@
 #include "MSSQLToPostgres.h"
 #include "MariaDBToPostgres.h"
 #include "MetricsCollector.h"
-#include "MongoToPostgres.h"
 #include "PostgresToPostgres.h"
 #include "catalog_manager.h"
 #include "logger.h"
@@ -29,11 +28,6 @@ public:
 
   void initialize() {
     Logger::info("StreamingData", "Initializing DataSync system components");
-
-    // Initialize MongoDB
-    Logger::info("StreamingData", "Initializing MongoDB driver");
-    mongoc_init();
-    Logger::info("StreamingData", "MongoDB driver initialized successfully");
 
     // Database connections will be created as needed
     Logger::info("StreamingData",
@@ -63,13 +57,11 @@ public:
     std::this_thread::sleep_for(std::chrono::seconds(60));
 
     // Launch transfer threads after initialization
-    Logger::info(
-        "StreamingData",
-        "Launching transfer threads (MariaDB, MSSQL, PostgreSQL, MongoDB)");
+    Logger::info("StreamingData",
+                 "Launching transfer threads (MariaDB, MSSQL, PostgreSQL)");
     threads.emplace_back(&StreamingData::mariaTransferThread, this);
     threads.emplace_back(&StreamingData::mssqlTransferThread, this);
     threads.emplace_back(&StreamingData::postgresTransferThread, this);
-    threads.emplace_back(&StreamingData::mongoTransferThread, this);
     Logger::info("StreamingData", "Transfer threads launched successfully");
 
     Logger::info("StreamingData",
@@ -100,10 +92,6 @@ public:
 
     // Database connections are cleaned up automatically
 
-    // Cleanup MongoDB
-    Logger::info("StreamingData", "Cleaning up MongoDB driver");
-    mongoc_cleanup();
-
     Logger::info("StreamingData", "Shutdown completed successfully");
   }
 
@@ -118,7 +106,6 @@ private:
   MariaDBToPostgres mariaToPg;
   MSSQLToPostgres mssqlToPg;
   PostgresToPostgres pgToPg;
-  MongoToPostgres mongoToPg;
   CatalogManager catalogManager;
   DataQuality dataQuality;
 
@@ -185,7 +172,6 @@ private:
       mariaToPg.setupTableTargetMariaDBToPostgres();
       mssqlToPg.setupTableTargetMSSQLToPostgres();
       pgToPg.setupTableTargetPostgresToPostgres();
-      mongoToPg.setupTableTargetMongoToPostgres();
 
       Logger::info("initializationThread", "Initialization completed");
     } catch (const std::exception &e) {
@@ -211,10 +197,6 @@ private:
         Logger::debug("catalogSyncThread", "Syncing PostgreSQL catalog");
         catalogManager.syncCatalogPostgresToPostgres();
         Logger::debug("catalogSyncThread", "PostgreSQL catalog sync completed");
-
-        Logger::debug("catalogSyncThread", "Syncing MongoDB catalog");
-        catalogManager.syncCatalogMongoToPostgres();
-        Logger::debug("catalogSyncThread", "MongoDB catalog sync completed");
 
         Logger::debug("catalogSyncThread", "Cleaning catalog");
         catalogManager.cleanCatalog();
@@ -311,29 +293,6 @@ private:
                  "PostgreSQL transfer thread stopped");
   }
 
-  void mongoTransferThread() {
-    Logger::info("mongoTransferThread", "MongoDB transfer thread started");
-    while (running) {
-      try {
-        Logger::info("mongoTransferThread", "Starting MongoDB transfer cycle");
-        mongoToPg.transferDataMongoToPostgres();
-        Logger::info("mongoTransferThread",
-                     "MongoDB transfer cycle completed successfully");
-      } catch (const std::exception &e) {
-        Logger::error("mongoTransferThread",
-                      "Error in MongoDB transfer: " + std::string(e.what()));
-      }
-
-      Logger::debug("mongoTransferThread",
-                    "Sleeping for " +
-                        std::to_string(SyncConfig::getSyncInterval()) +
-                        " seconds");
-      std::this_thread::sleep_for(
-          std::chrono::seconds(SyncConfig::getSyncInterval()));
-    }
-    Logger::info("mongoTransferThread", "MongoDB transfer thread stopped");
-  }
-
   void qualityThread() {
     Logger::info("qualityThread", "Data quality thread started");
     while (running) {
@@ -394,23 +353,6 @@ private:
         Logger::debug("qualityThread",
                       "PostgreSQL tables validation completed");
 
-        // Validate MongoDB tables
-        Logger::debug("qualityThread", "Validating MongoDB tables");
-        {
-          pqxx::work txn(pgConn);
-          auto mongoTables = txn.exec(
-              "SELECT schema_name, table_name FROM metadata.catalog WHERE "
-              "db_engine = 'MongoDB' AND status = 'PERFECT_MATCH'");
-          txn.commit();
-
-          for (const auto &row : mongoTables) {
-            std::string schema = row[0].as<std::string>();
-            std::string table = row[1].as<std::string>();
-            dataQuality.validateTable(pgConn, schema, table, "MongoDB");
-          }
-        }
-        Logger::debug("qualityThread", "MongoDB tables validation completed");
-
         Logger::info("qualityThread",
                      "Data quality validation cycle completed successfully");
       } catch (const std::exception &e) {
@@ -445,10 +387,6 @@ private:
         Logger::debug("maintenanceThread", "Syncing PostgreSQL catalog");
         catalogManager.syncCatalogPostgresToPostgres();
         Logger::debug("maintenanceThread", "PostgreSQL catalog sync completed");
-
-        Logger::debug("maintenanceThread", "Syncing MongoDB catalog");
-        catalogManager.syncCatalogMongoToPostgres();
-        Logger::debug("maintenanceThread", "MongoDB catalog sync completed");
 
         // Cleanup
         Logger::debug("maintenanceThread", "Cleaning catalog");
