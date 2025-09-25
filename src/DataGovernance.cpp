@@ -847,6 +847,48 @@ DataGovernance::determineDataCategory(const std::string &table_name,
     return "TECHNICAL";
   }
 
+  // SPORTS - Sports and betting data
+  if (name.find("sport") != std::string::npos ||
+      name.find("bet") != std::string::npos ||
+      name.find("betting") != std::string::npos ||
+      name.find("odds") != std::string::npos ||
+      name.find("match") != std::string::npos ||
+      name.find("game") != std::string::npos ||
+      name.find("team") != std::string::npos ||
+      name.find("player") != std::string::npos ||
+      name.find("league") != std::string::npos ||
+      name.find("tournament") != std::string::npos ||
+      name.find("championship") != std::string::npos ||
+      name.find("season") != std::string::npos ||
+      name.find("fixture") != std::string::npos ||
+      name.find("result") != std::string::npos ||
+      name.find("score") != std::string::npos ||
+      name.find("statistic") != std::string::npos ||
+      name.find("performance") != std::string::npos ||
+      name.find("ranking") != std::string::npos ||
+      name.find("standings") != std::string::npos ||
+      name.find("bookmaker") != std::string::npos ||
+      name.find("bookie") != std::string::npos ||
+      name.find("stake") != std::string::npos ||
+      name.find("wager") != std::string::npos ||
+      name.find("payout") != std::string::npos ||
+      name.find("winner") != std::string::npos ||
+      name.find("loser") != std::string::npos ||
+      name.find("draw") != std::string::npos ||
+      name.find("handicap") != std::string::npos ||
+      name.find("spread") != std::string::npos ||
+      name.find("over_under") != std::string::npos ||
+      name.find("live_bet") != std::string::npos ||
+      name.find("in_play") != std::string::npos ||
+      name.find("pre_match") != std::string::npos ||
+      name.find("outcome") != std::string::npos ||
+      name.find("event") != std::string::npos ||
+      name.find("competition") != std::string::npos ||
+      name.find("sportbook") != std::string::npos ||
+      name.find("sportsbook") != std::string::npos) {
+    return "SPORTS";
+  }
+
   return "TRANSACTIONAL";
 }
 
@@ -1026,6 +1068,48 @@ DataGovernance::determineBusinessDomain(const std::string &table_name,
     return "INSURANCE";
   }
 
+  // SPORTS - Sports and sportbooks data
+  if (name.find("sport") != std::string::npos ||
+      name.find("bet") != std::string::npos ||
+      name.find("betting") != std::string::npos ||
+      name.find("odds") != std::string::npos ||
+      name.find("match") != std::string::npos ||
+      name.find("game") != std::string::npos ||
+      name.find("team") != std::string::npos ||
+      name.find("player") != std::string::npos ||
+      name.find("league") != std::string::npos ||
+      name.find("tournament") != std::string::npos ||
+      name.find("championship") != std::string::npos ||
+      name.find("season") != std::string::npos ||
+      name.find("fixture") != std::string::npos ||
+      name.find("result") != std::string::npos ||
+      name.find("score") != std::string::npos ||
+      name.find("statistic") != std::string::npos ||
+      name.find("performance") != std::string::npos ||
+      name.find("ranking") != std::string::npos ||
+      name.find("standings") != std::string::npos ||
+      name.find("bookmaker") != std::string::npos ||
+      name.find("bookie") != std::string::npos ||
+      name.find("stake") != std::string::npos ||
+      name.find("wager") != std::string::npos ||
+      name.find("payout") != std::string::npos ||
+      name.find("winner") != std::string::npos ||
+      name.find("loser") != std::string::npos ||
+      name.find("draw") != std::string::npos ||
+      name.find("handicap") != std::string::npos ||
+      name.find("spread") != std::string::npos ||
+      name.find("over_under") != std::string::npos ||
+      name.find("live_bet") != std::string::npos ||
+      name.find("in_play") != std::string::npos ||
+      name.find("pre_match") != std::string::npos ||
+      name.find("outcome") != std::string::npos ||
+      name.find("event") != std::string::npos ||
+      name.find("competition") != std::string::npos ||
+      name.find("sportbook") != std::string::npos ||
+      name.find("sportsbook") != std::string::npos) {
+    return "SPORTS";
+  }
+
   return "GENERAL";
 }
 
@@ -1079,6 +1163,19 @@ DataGovernance::determineSensitivityLevel(const std::string &table_name,
     return "PUBLIC";
   }
 
+  // SPORTS - Sports betting sensitivity levels
+  if (name.find("bet") != std::string::npos ||
+      name.find("betting") != std::string::npos ||
+      name.find("wager") != std::string::npos ||
+      name.find("stake") != std::string::npos ||
+      name.find("payout") != std::string::npos ||
+      name.find("bookmaker") != std::string::npos ||
+      name.find("bookie") != std::string::npos ||
+      name.find("sportbook") != std::string::npos ||
+      name.find("sportsbook") != std::string::npos) {
+    return "HIGH"; // Betting data is highly sensitive
+  }
+
   return "LOW";
 }
 
@@ -1102,6 +1199,20 @@ DataGovernance::determineDataClassification(const std::string &table_name,
       name.find("open") != std::string::npos) {
     return "PUBLIC";
   }
+
+  // SPORTS - Sports betting classification
+  if (name.find("bet") != std::string::npos ||
+      name.find("betting") != std::string::npos ||
+      name.find("wager") != std::string::npos ||
+      name.find("stake") != std::string::npos ||
+      name.find("payout") != std::string::npos ||
+      name.find("bookmaker") != std::string::npos ||
+      name.find("bookie") != std::string::npos ||
+      name.find("sportbook") != std::string::npos ||
+      name.find("sportsbook") != std::string::npos) {
+    return "CONFIDENTIAL"; // Betting data is confidential
+  }
+
   return "INTERNAL";
 }
 
@@ -1120,6 +1231,9 @@ DataGovernance::determineRetentionPolicy(const std::string &data_category,
   if (data_category == "TRANSACTIONAL") {
     return "2_YEARS";
   }
+  if (data_category == "SPORTS") {
+    return "3_YEARS"; // Sports data requires longer retention for compliance
+  }
   return "1_YEAR";
 }
 
@@ -1135,6 +1249,9 @@ DataGovernance::determineBackupFrequency(const std::string &data_category,
   if (data_category == "ANALYTICAL") {
     return "WEEKLY";
   }
+  if (data_category == "SPORTS") {
+    return "DAILY"; // Sports data requires frequent backups due to high value
+  }
   return "MONTHLY";
 }
 
@@ -1147,6 +1264,10 @@ std::string DataGovernance::determineComplianceRequirements(
     if (business_domain == "FINANCE") {
       return "SOX,PCI";
     }
+    if (business_domain == "SPORTS") {
+      return "GDPR,PCI,AML"; // Sports betting requires GDPR, PCI, and AML
+                             // compliance
+    }
     return "GDPR";
   }
   if (business_domain == "HEALTHCARE") {
@@ -1154,6 +1275,9 @@ std::string DataGovernance::determineComplianceRequirements(
   }
   if (business_domain == "FINANCE") {
     return "SOX";
+  }
+  if (business_domain == "SPORTS") {
+    return "GDPR,AML"; // Sports betting requires GDPR and AML compliance
   }
   return "GDPR";
 }

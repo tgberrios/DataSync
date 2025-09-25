@@ -1,8 +1,0 @@
-
-
-que configs tengo que eliminar ahora que quitamos connection pool 
-
-METER MAS LOGGER EN LUGARES CRITICOS E IMPORTANTES MAS INFORMATIVOS 
-
-que primero se ejecuten los threads de transferencia en streaming data
-porque dura tanto en seguir con la proxima tabla full_load ? 
