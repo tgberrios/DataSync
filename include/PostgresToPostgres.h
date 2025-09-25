@@ -23,7 +23,7 @@ public:
     }
   }
 
-  pqxx::connection* getPostgresConnection(const std::string &connectionString) {
+  pqxx::connection *getPostgresConnection(const std::string &connectionString) {
     std::lock_guard<std::mutex> lock(connectionMutex);
 
     // Si ya tenemos una conexión para esta connection string, la reutilizamos
@@ -43,12 +43,12 @@ public:
         currentConnectionString = connectionString;
         return postgresConn.get();
       } else {
-        Logger::error("getPostgresConnection", "Failed to open PostgreSQL connection");
+        Logger::error("Failed to open PostgreSQL connection");
         postgresConn.reset();
         return nullptr;
       }
     } catch (const std::exception &e) {
-      Logger::error("getPostgresConnection", "Connection failed: " + std::string(e.what()));
+      Logger::error("Connection failed: " + std::string(e.what()));
       postgresConn.reset();
       return nullptr;
     }
@@ -56,8 +56,7 @@ public:
 
   void setupTableTargetPostgresToPostgres() {
     try {
-      Logger::info("setupTableTargetPostgresToPostgres",
-                   "Starting PostgreSQL target table setup");
+      Logger::info("Starting PostgreSQL target table setup");
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
 
       pqxx::work txn(pgConn);
@@ -102,15 +101,13 @@ public:
         return false;
       });
 
-      Logger::info("setupTableTargetPostgresToPostgres",
-                   "Processing " + std::to_string(tables.size()) +
-                       " PostgreSQL tables in priority order");
+      Logger::info("Processing " + std::to_string(tables.size()) +
+                   " PostgreSQL tables in priority order");
       for (size_t i = 0; i < tables.size(); ++i) {
-        Logger::info("setupTableTargetPostgresToPostgres",
-                     "[" + std::to_string(i + 1) + "/" +
-                         std::to_string(tables.size()) + "] " +
-                         std::get<0>(tables[i]) + "." + std::get<1>(tables[i]) +
-                         " (status: " + std::get<3>(tables[i]) + ")");
+        Logger::info("[" + std::to_string(i + 1) + "/" +
+                     std::to_string(tables.size()) + "] " +
+                     std::get<0>(tables[i]) + "." + std::get<1>(tables[i]) +
+                     " (status: " + std::get<3>(tables[i]) + ")");
       }
 
       for (const auto &table : tables) {
@@ -118,14 +115,10 @@ public:
         std::string tableName = std::get<1>(table);
         std::string sourceConnStr = std::get<2>(table);
 
-        Logger::debug("setupTableTargetPostgresToPostgres",
-                      "Setting up table: " + schemaName + "." + tableName);
-
         try {
           auto sourceConn = getPostgresConnection(sourceConnStr);
           if (!sourceConn) {
-            Logger::error("setupTableTargetPostgresToPostgres",
-                          "Failed to connect to source PostgreSQL");
+            Logger::error("Failed to connect to source PostgreSQL");
             continue;
           }
 
@@ -136,25 +129,21 @@ public:
               *sourceConn, schemaName, tableName, lowerSchemaName);
           if (!createTableQuery.empty()) {
             txn.exec(createTableQuery);
-            Logger::info("setupTableTargetPostgresToPostgres",
-                         "Created target table: " + lowerSchemaName + "." +
-                             tableName);
+            Logger::info("Created target table: " + lowerSchemaName + "." +
+                         tableName);
           }
 
         } catch (const std::exception &e) {
-          Logger::error("setupTableTargetPostgresToPostgres",
-                        "Error setting up table " + schemaName + "." +
-                            tableName + ": " + e.what());
+          Logger::error("Error setting up table " + schemaName + "." +
+                        tableName + ": " + e.what());
         }
       }
 
       txn.commit();
-      Logger::info("setupTableTargetPostgresToPostgres",
-                   "Target table setup completed");
+      Logger::info("Target table setup completed");
     } catch (const std::exception &e) {
-      Logger::error("setupTableTargetPostgresToPostgres",
-                    "Error in setupTableTargetPostgresToPostgres: " +
-                        std::string(e.what()));
+      Logger::error("Error in setupTableTargetPostgresToPostgres: " +
+                    std::string(e.what()));
     }
   }
 

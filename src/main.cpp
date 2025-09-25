@@ -3,7 +3,7 @@
 
 int main() {
   Logger::initialize();
-  Logger::info("MAIN", "Starting DataLake Synchronizer System :) ");
+  Logger::info("DataSync started");
 
   std::cout << "Running... :)" << std::endl;
 

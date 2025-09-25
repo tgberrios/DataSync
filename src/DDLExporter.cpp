@@ -7,42 +7,35 @@
 #include <sstream>
 
 void DDLExporter::exportAllDDL() {
-  Logger::info("DDLExporter", "Starting DDL export process");
 
   try {
     createFolderStructure();
     getSchemasFromCatalog();
 
-    Logger::info("DDLExporter", "Found " + std::to_string(schemas.size()) +
-                                    " schemas to export");
+    Logger::info("Found " + std::to_string(schemas.size()) +
+                 " schemas to export");
 
     for (const auto &schema : schemas) {
       try {
-        // Logger::info("DDLExporter",
-        //"Exporting DDL for schema: " + schema.schema_name + " (" +
-        // schema.db_engine + ")");
         exportSchemaDDL(schema);
       } catch (const std::exception &e) {
-        Logger::error("DDLExporter", "Error exporting schema " +
-                                         schema.schema_name + ": " +
-                                         std::string(e.what()));
+        Logger::error("Error exporting schema " + schema.schema_name + ": " +
+                      std::string(e.what()));
       }
     }
 
-    Logger::info("DDLExporter", "DDL export process completed successfully");
+    Logger::info("DDL export process completed");
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter",
-                  "Error in DDL export process: " + std::string(e.what()));
+    Logger::error("Error in DDL export process: " + std::string(e.what()));
   }
 }
 
 void DDLExporter::createFolderStructure() {
   try {
     std::filesystem::create_directories(exportPath);
-    Logger::info("DDLExporter", "Created base export directory: " + exportPath);
+    Logger::info("Created base export directory: " + exportPath);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter",
-                  "Error creating folder structure: " + std::string(e.what()));
+    Logger::error("Error creating folder structure: " + std::string(e.what()));
   }
 }
 
@@ -71,11 +64,11 @@ void DDLExporter::getSchemasFromCatalog() {
       schemas.push_back(schema);
     }
 
-    Logger::info("DDLExporter", "Retrieved " + std::to_string(schemas.size()) +
-                                    " schemas from catalog");
+    Logger::info("Retrieved " + std::to_string(schemas.size()) +
+                 " schemas from catalog");
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter", "Error getting schemas from catalog: " +
-                                     std::string(e.what()));
+    Logger::error("Error getting schemas from catalog: " +
+                  std::string(e.what()));
   }
 }
 

@@ -5,10 +5,8 @@
 #include <sstream>
 
 void DataGovernance::initialize() {
-  Logger::info("DataGovernance", "Initializing Data Governance system");
   createGovernanceTable();
-  Logger::info("DataGovernance",
-               "Data Governance system initialized successfully");
+  Logger::info("Data Governance system initialized");
 }
 
 void DataGovernance::createGovernanceTable() {
@@ -76,8 +74,6 @@ void DataGovernance::createGovernanceTable() {
     txn.exec(createIndexesSQL);
     txn.commit();
 
-    // Logger::info("createGovernanceTable",
-    //"Data governance catalog table created successfully");
   } catch (const std::exception &e) {
     Logger::error("createGovernanceTable",
                   "Error creating governance table: " + std::string(e.what()));
@@ -85,32 +81,23 @@ void DataGovernance::createGovernanceTable() {
 }
 
 void DataGovernance::runDiscovery() {
-  // Logger::info("DataGovernance", "Starting data governance discovery
-  // process");
 
   try {
     std::vector<TableMetadata> tables = discoverTables();
-    Logger::info("DataGovernance",
-                 "Discovered " + std::to_string(tables.size()) + " tables");
+    Logger::info("Discovered " + std::to_string(tables.size()) + " tables");
 
     for (const auto &table : tables) {
       try {
         storeMetadata(table);
-        // Logger::debug("DataGovernance",
-        //"Processed table: " + table.schema_name + "." +
-        // table.table_name);
       } catch (const std::exception &e) {
-        Logger::error("DataGovernance",
-                      "Error processing table " + table.schema_name + "." +
-                          table.table_name + ": " + std::string(e.what()));
+        Logger::error("Error processing table " + table.schema_name + "." +
+                      table.table_name + ": " + std::string(e.what()));
       }
     }
 
-    Logger::info("DataGovernance",
-                 "Data governance discovery completed successfully");
+    Logger::info("Data governance discovery completed");
   } catch (const std::exception &e) {
-    Logger::error("DataGovernance",
-                  "Error in discovery process: " + std::string(e.what()));
+    Logger::error("Error in discovery process: " + std::string(e.what()));
   }
 }
 
@@ -136,19 +123,14 @@ std::vector<TableMetadata> DataGovernance::discoverTables() {
       std::string schema_name = row[0].as<std::string>();
       std::string table_name = row[1].as<std::string>();
 
-      // Logger::debug("discoverTables",
-      //"Discovering table: " + schema_name + "." + table_name);
-
       TableMetadata metadata = extractTableMetadata(schema_name, table_name);
       tables.push_back(metadata);
     }
 
-    Logger::info("discoverTables", "Discovered " +
-                                       std::to_string(tables.size()) +
-                                       " tables from DataLake");
+    Logger::info("Discovered " + std::to_string(tables.size()) +
+                 " tables from DataLake");
   } catch (const std::exception &e) {
-    Logger::error("discoverTables",
-                  "Error discovering tables: " + std::string(e.what()));
+    Logger::error("Error discovering tables: " + std::string(e.what()));
   }
 
   return tables;
@@ -184,12 +166,9 @@ DataGovernance::extractTableMetadata(const std::string &schema_name,
     metadata.data_quality_score = calculateDataQualityScore(metadata);
     metadata.last_analyzed = getCurrentTimestamp();
 
-    // Logger::debug("extractTableMetadata",
-    //"Extracted metadata for " + schema_name + "." + table_name);
   } catch (const std::exception &e) {
-    Logger::error("extractTableMetadata", "Error extracting metadata for " +
-                                              schema_name + "." + table_name +
-                                              ": " + std::string(e.what()));
+    Logger::error("Error extracting metadata for " + schema_name + "." +
+                  table_name + ": " + std::string(e.what()));
   }
 
   return metadata;
@@ -271,8 +250,7 @@ void DataGovernance::analyzeTableStructure(pqxx::connection &conn,
 
     txn.commit();
   } catch (const std::exception &e) {
-    Logger::error("analyzeTableStructure",
-                  "Error analyzing table structure: " + std::string(e.what()));
+    Logger::error("Error analyzing table structure: " + std::string(e.what()));
   }
 }
 
@@ -319,8 +297,7 @@ void DataGovernance::analyzeDataQuality(pqxx::connection &conn,
 
     txn.commit();
   } catch (const std::exception &e) {
-    Logger::error("analyzeDataQuality",
-                  "Error analyzing data quality: " + std::string(e.what()));
+    Logger::error("Error analyzing data quality: " + std::string(e.what()));
   }
 }
 
@@ -379,8 +356,7 @@ void DataGovernance::analyzeUsageStatistics(pqxx::connection &conn,
 
     txn.commit();
   } catch (const std::exception &e) {
-    Logger::error("analyzeUsageStatistics",
-                  "Error analyzing usage statistics: " + std::string(e.what()));
+    Logger::error("Error analyzing usage statistics: " + std::string(e.what()));
   }
 }
 
@@ -424,8 +400,7 @@ void DataGovernance::analyzeHealthStatus(pqxx::connection &conn,
 
     txn.commit();
   } catch (const std::exception &e) {
-    Logger::error("analyzeHealthStatus",
-                  "Error analyzing health status: " + std::string(e.what()));
+    Logger::error("Error analyzing health status: " + std::string(e.what()));
   }
 }
 
@@ -532,12 +507,8 @@ void DataGovernance::storeMetadata(const TableMetadata &metadata) {
     }
 
     txn.commit();
-    // Logger::debug("storeMetadata", "Stored metadata for " +
-    // metadata.schema_name + "." +
-    // metadata.table_name);
   } catch (const std::exception &e) {
-    Logger::error("storeMetadata",
-                  "Error storing metadata: " + std::string(e.what()));
+    Logger::error("Error storing metadata: " + std::string(e.what()));
   }
 }
 
@@ -620,17 +591,12 @@ void DataGovernance::updateExistingMetadata(const TableMetadata &metadata) {
     txn.exec(updateQuery);
     txn.commit();
 
-    // Logger::debug("updateExistingMetadata", "Updated metadata for " +
-    // metadata.schema_name + "." +
-    // metadata.table_name);
   } catch (const std::exception &e) {
-    Logger::error("updateExistingMetadata",
-                  "Error updating metadata: " + std::string(e.what()));
+    Logger::error("Error updating metadata: " + std::string(e.what()));
   }
 }
 
 void DataGovernance::generateReport() {
-  // Logger::info("DataGovernance", "Generating data governance report");
 
   try {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
@@ -660,27 +626,9 @@ void DataGovernance::generateReport() {
       long long totalRows =
           row[5].is_null() ? 0 : static_cast<long long>(row[5].as<double>());
       double totalSize = row[6].is_null() ? 0.0 : row[6].as<double>();
-
-      // Logger::info("DataGovernance", "=== DATA GOVERNANCE REPORT ===");
-      // Logger::info("DataGovernance",
-      //"Total Tables: " + std::to_string(totalTables));
-      // Logger::info("DataGovernance",
-      //"Healthy Tables: " + std::to_string(healthyTables));
-      // Logger::info("DataGovernance",
-      //"Warning Tables: " + std::to_string(warningTables));
-      // Logger::info("DataGovernance",
-      //"Critical Tables: " + std::to_string(criticalTables));
-      // Logger::info("DataGovernance",
-      //"Average Quality Score: " + std::to_string(avgQuality));
-      // Logger::info("DataGovernance",
-      //"Total Rows: " + std::to_string(totalRows));
-      // Logger::info("DataGovernance",
-      //"Total Size: " + std::to_string(totalSize) + " MB");
-      // Logger::info("DataGovernance", "==============================");
     }
   } catch (const std::exception &e) {
-    Logger::error("DataGovernance",
-                  "Error generating report: " + std::string(e.what()));
+    Logger::error("Error generating report: " + std::string(e.what()));
   }
 }
 
