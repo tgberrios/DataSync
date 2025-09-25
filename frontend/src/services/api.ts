@@ -332,6 +332,32 @@ export const catalogApi = {
       throw error;
     }
   },
+
+  // Obtener todos los schemas únicos
+  getSchemas: async () => {
+    try {
+      const response = await api.get<string[]>("/catalog/schemas");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching schemas:", error);
+      throw error;
+    }
+  },
+
+  // Desactivar schema completo
+  deactivateSchema: async (schema_name: string) => {
+    try {
+      const response = await api.patch<{
+        message: string;
+        affectedRows: number;
+        rows: CatalogEntry[];
+      }>("/catalog/deactivate-schema", { schema_name });
+      return response.data;
+    } catch (error) {
+      console.error("Error deactivating schema:", error);
+      throw error;
+    }
+  },
 };
 
 // Interfaces para logs
