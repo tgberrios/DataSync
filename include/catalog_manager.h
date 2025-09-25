@@ -165,7 +165,7 @@ public:
         return;
       }
 
-      for (const auto &connStr : mariaConnStrings) {
+      for (auto &connStr : mariaConnStrings) {
         {
           pqxx::work txn(pgConn);
           // REMOVED: Time-based filter that was preventing PK detection updates
@@ -219,11 +219,77 @@ public:
         if (mysql_real_connect(mariaConn, host.c_str(), user.c_str(),
                                password.c_str(), db.c_str(), portNum, nullptr,
                                0) == nullptr) {
-          Logger::error(LogCategory::DATABASE, "syncCatalogMariaDBToPostgres",
-                        "MariaDB connection failed: " +
-                            std::string(mysql_error(mariaConn)));
-          mysql_close(mariaConn);
-          continue;
+          Logger::warning(LogCategory::DATABASE, "syncCatalogMariaDBToPostgres",
+                          "MariaDB connection failed for database '" + db +
+                              "': " + std::string(mysql_error(mariaConn)));
+
+          // Try to connect without specific database to find correct database
+          MYSQL *tempConn = mysql_init(nullptr);
+          if (mysql_real_connect(tempConn, host.c_str(), user.c_str(),
+                                 password.c_str(), nullptr, portNum, nullptr,
+                                 0)) {
+            // Credentials OK, find database that contains our tables
+            std::string correctDb =
+                findCorrectMariaDBDatabase(tempConn, connStr);
+            if (!correctDb.empty() && correctDb != db) {
+              Logger::info(LogCategory::DATABASE,
+                           "syncCatalogMariaDBToPostgres",
+                           "Auto-correcting database from '" + db + "' to '" +
+                               correctDb + "'");
+
+              // Update connection string and retry
+              std::string correctedConnStr = connStr;
+              size_t dbPos = correctedConnStr.find("db=");
+              if (dbPos != std::string::npos) {
+                size_t endPos = correctedConnStr.find(";", dbPos);
+                if (endPos == std::string::npos)
+                  endPos = correctedConnStr.length();
+                correctedConnStr.replace(dbPos, endPos - dbPos,
+                                         "db=" + correctDb);
+
+                // Try connection with corrected database
+                mysql_close(mariaConn);
+                mariaConn = mysql_init(nullptr);
+                if (mysql_real_connect(mariaConn, host.c_str(), user.c_str(),
+                                       password.c_str(), correctDb.c_str(),
+                                       portNum, nullptr, 0)) {
+                  Logger::info(
+                      LogCategory::DATABASE, "syncCatalogMariaDBToPostgres",
+                      "Successfully connected to corrected database '" +
+                          correctDb + "'");
+                  // Update the connection string for future reference
+                  connStr = correctedConnStr;
+                } else {
+                  Logger::error(
+                      LogCategory::DATABASE, "syncCatalogMariaDBToPostgres",
+                      "Still failed to connect even with corrected database");
+                  mysql_close(mariaConn);
+                  mysql_close(tempConn);
+                  continue;
+                }
+              } else {
+                Logger::error(
+                    LogCategory::DATABASE, "syncCatalogMariaDBToPostgres",
+                    "Could not find 'db=' parameter in connection string");
+                mysql_close(mariaConn);
+                mysql_close(tempConn);
+                continue;
+              }
+            } else {
+              Logger::error(
+                  LogCategory::DATABASE, "syncCatalogMariaDBToPostgres",
+                  "Could not find correct database containing expected tables");
+              mysql_close(mariaConn);
+              mysql_close(tempConn);
+              continue;
+            }
+          } else {
+            Logger::error(LogCategory::DATABASE, "syncCatalogMariaDBToPostgres",
+                          "Failed to connect even without specific database");
+            mysql_close(mariaConn);
+            continue;
+          }
+          mysql_close(tempConn);
         }
 
         // Set connection timeouts for large tables - OPTIMIZED
@@ -415,7 +481,7 @@ public:
         return;
       }
 
-      for (const auto &connStr : mssqlConnStrings) {
+      for (auto &connStr : mssqlConnStrings) {
         {
           pqxx::work txn(pgConn);
           // REMOVED: Time-based filter that was preventing PK detection updates
@@ -463,12 +529,103 @@ public:
           SQLSMALLINT msgLen;
           SQLGetDiagRec(SQL_HANDLE_DBC, dbc, 1, sqlState, &nativeError, msg,
                         sizeof(msg), &msgLen);
-          SQLFreeHandle(SQL_HANDLE_DBC, dbc);
-          SQLFreeHandle(SQL_HANDLE_ENV, env);
-          Logger::error(LogCategory::DATABASE, "syncCatalogMSSQLToPostgres",
-                        "Failed to connect to MSSQL: " +
-                            std::string((char *)msg));
-          continue;
+
+          Logger::warning(LogCategory::DATABASE, "syncCatalogMSSQLToPostgres",
+                          "Failed to connect to MSSQL: " +
+                              std::string((char *)msg));
+
+          // Try to connect to master database to find correct database
+          std::string masterConnStr = connStr;
+          size_t dbPos = masterConnStr.find("DATABASE=");
+          if (dbPos != std::string::npos) {
+            size_t endPos = masterConnStr.find(";", dbPos);
+            if (endPos == std::string::npos)
+              endPos = masterConnStr.length();
+            masterConnStr.replace(dbPos, endPos - dbPos, "DATABASE=master");
+
+            SQLHDBC masterDbc;
+            ret = SQLAllocHandle(SQL_HANDLE_DBC, env, &masterDbc);
+            if (SQL_SUCCEEDED(ret)) {
+              SQLCHAR masterOutConnStr[1024];
+              SQLSMALLINT masterOutConnStrLen;
+              ret = SQLDriverConnect(masterDbc, nullptr,
+                                     (SQLCHAR *)masterConnStr.c_str(), SQL_NTS,
+                                     masterOutConnStr, sizeof(masterOutConnStr),
+                                     &masterOutConnStrLen, SQL_DRIVER_NOPROMPT);
+              if (SQL_SUCCEEDED(ret)) {
+                // Find correct database that contains our expected tables
+                std::string correctDb =
+                    findCorrectMSSQLDatabase(masterDbc, connStr);
+                if (!correctDb.empty()) {
+                  Logger::info(
+                      LogCategory::DATABASE, "syncCatalogMSSQLToPostgres",
+                      "Auto-correcting database to '" + correctDb + "'");
+
+                  // Update connection string and retry
+                  std::string correctedConnStr = connStr;
+                  dbPos = correctedConnStr.find("DATABASE=");
+                  if (dbPos != std::string::npos) {
+                    endPos = correctedConnStr.find(";", dbPos);
+                    if (endPos == std::string::npos)
+                      endPos = correctedConnStr.length();
+                    correctedConnStr.replace(dbPos, endPos - dbPos,
+                                             "DATABASE=" + correctDb);
+
+                    // Try connection with corrected database
+                    SQLDisconnect(dbc);
+                    SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+                    ret = SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc);
+                    if (SQL_SUCCEEDED(ret)) {
+                      ret = SQLDriverConnect(
+                          dbc, nullptr, (SQLCHAR *)correctedConnStr.c_str(),
+                          SQL_NTS, outConnStr, sizeof(outConnStr),
+                          &outConnStrLen, SQL_DRIVER_NOPROMPT);
+                      if (SQL_SUCCEEDED(ret)) {
+                        Logger::info(
+                            LogCategory::DATABASE, "syncCatalogMSSQLToPostgres",
+                            "Successfully connected to corrected database '" +
+                                correctDb + "'");
+                        // Update the connection string for future reference
+                        connStr = correctedConnStr;
+                      } else {
+                        Logger::error(LogCategory::DATABASE,
+                                      "syncCatalogMSSQLToPostgres",
+                                      "Still failed to connect even with "
+                                      "corrected database");
+                        SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+                        SQLFreeHandle(SQL_HANDLE_ENV, env);
+                        SQLDisconnect(masterDbc);
+                        SQLFreeHandle(SQL_HANDLE_DBC, masterDbc);
+                        continue;
+                      }
+                    }
+                  }
+                } else {
+                  Logger::error(LogCategory::DATABASE,
+                                "syncCatalogMSSQLToPostgres",
+                                "Could not find correct database containing "
+                                "expected tables");
+                  SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+                  SQLFreeHandle(SQL_HANDLE_ENV, env);
+                  SQLDisconnect(masterDbc);
+                  SQLFreeHandle(SQL_HANDLE_DBC, masterDbc);
+                  continue;
+                }
+                SQLDisconnect(masterDbc);
+              }
+              SQLFreeHandle(SQL_HANDLE_DBC, masterDbc);
+            }
+          }
+
+          if (!SQL_SUCCEEDED(ret)) {
+            SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+            SQLFreeHandle(SQL_HANDLE_ENV, env);
+            Logger::error(
+                LogCategory::DATABASE, "syncCatalogMSSQLToPostgres",
+                "Failed to connect to MSSQL with connection string: " +
+                    connStr + " - Error: " + std::string((char *)msg));
+            continue;
+          }
         }
 
         std::string discoverQuery =
@@ -663,7 +820,9 @@ public:
         pqxx::connection sourcePgConn(connStr);
         if (!sourcePgConn.is_open()) {
           Logger::error(LogCategory::DATABASE, "syncCatalogPostgresToPostgres",
-                        "Failed to connect to source PostgreSQL");
+                        "Failed to connect to source PostgreSQL with "
+                        "connection string: " +
+                            connStr);
           continue;
         }
 
@@ -819,6 +978,159 @@ public:
 
 private:
   // NUEVAS FUNCIONES PARA DETECCIÓN DE PK Y COLUMNAS CANDIDATAS
+
+  std::string findCorrectMariaDBDatabase(MYSQL *conn,
+                                         const std::string &connectionString) {
+    try {
+      // Get tables expected from catalog for this connection
+      pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
+      pqxx::work txn(pgConn);
+      auto results =
+          txn.exec("SELECT schema_name, table_name FROM metadata.catalog "
+                   "WHERE connection_string = '" +
+                   escapeSQL(connectionString) + "';");
+      txn.commit();
+
+      if (results.empty()) {
+        return "";
+      }
+
+      // Get all available databases
+      auto allDbs = executeQueryMariaDB(conn, "SHOW DATABASES;");
+      std::vector<std::string> availableDbs;
+      for (const auto &dbRow : allDbs) {
+        if (!dbRow.empty() && dbRow[0] != "information_schema" &&
+            dbRow[0] != "mysql" && dbRow[0] != "performance_schema" &&
+            dbRow[0] != "sys") {
+          availableDbs.push_back(dbRow[0]);
+        }
+      }
+
+      // For each available database, check if it contains our expected tables
+      for (const std::string &testDb : availableDbs) {
+        int matchCount = 0;
+        for (const auto &row : results) {
+          std::string expectedSchema = row[0].as<std::string>();
+          std::string expectedTable = row[1].as<std::string>();
+
+          // Check if this table exists in the test database
+          std::string checkQuery =
+              "SELECT COUNT(*) FROM information_schema.tables "
+              "WHERE table_schema = '" +
+              escapeSQL(expectedSchema) +
+              "' "
+              "AND table_name = '" +
+              escapeSQL(expectedTable) + "'";
+
+          auto checkResults = executeQueryMariaDB(conn, checkQuery);
+          if (!checkResults.empty() && !checkResults[0].empty()) {
+            try {
+              int count = std::stoi(checkResults[0][0]);
+              if (count > 0) {
+                matchCount++;
+              }
+            } catch (...) {
+              // Ignore parsing errors
+            }
+          }
+        }
+
+        // If this database contains most of our expected tables, it's likely
+        // correct
+        if (matchCount > 0 && matchCount >= results.size() / 2) {
+          Logger::info(LogCategory::DATABASE, "findCorrectMariaDBDatabase",
+                       "Found database '" + testDb + "' with " +
+                           std::to_string(matchCount) + "/" +
+                           std::to_string(results.size()) + " expected tables");
+          return testDb;
+        }
+      }
+
+      return "";
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::DATABASE, "findCorrectMariaDBDatabase",
+                    "Error finding correct database: " + std::string(e.what()));
+      return "";
+    }
+  }
+
+  std::string findCorrectMSSQLDatabase(SQLHDBC masterConn,
+                                       const std::string &connectionString) {
+    try {
+      // Get tables expected from catalog for this connection
+      pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
+      pqxx::work txn(pgConn);
+      auto results =
+          txn.exec("SELECT schema_name, table_name FROM metadata.catalog "
+                   "WHERE connection_string = '" +
+                   escapeSQL(connectionString) + "';");
+      txn.commit();
+
+      if (results.empty()) {
+        return "";
+      }
+
+      // Get all available databases
+      auto allDbs = executeQueryMSSQL(
+          masterConn, "SELECT name FROM sys.databases WHERE database_id > 4;");
+      std::vector<std::string> availableDbs;
+      for (const auto &dbRow : allDbs) {
+        if (!dbRow.empty()) {
+          availableDbs.push_back(dbRow[0]);
+        }
+      }
+
+      // For each available database, check if it contains our expected tables
+      for (const std::string &testDb : availableDbs) {
+        int matchCount = 0;
+        for (const auto &row : results) {
+          std::string expectedSchema = row[0].as<std::string>();
+          std::string expectedTable = row[1].as<std::string>();
+
+          // Check if this table exists in the test database
+          std::string checkQuery =
+              "SELECT COUNT(*) FROM [" + testDb +
+              "].sys.tables t "
+              "INNER JOIN [" +
+              testDb +
+              "].sys.schemas s ON t.schema_id = s.schema_id "
+              "WHERE s.name = '" +
+              escapeSQL(expectedSchema) +
+              "' "
+              "AND t.name = '" +
+              escapeSQL(expectedTable) + "'";
+
+          auto checkResults = executeQueryMSSQL(masterConn, checkQuery);
+          if (!checkResults.empty() && !checkResults[0].empty()) {
+            try {
+              int count = std::stoi(checkResults[0][0]);
+              if (count > 0) {
+                matchCount++;
+              }
+            } catch (...) {
+              // Ignore parsing errors
+            }
+          }
+        }
+
+        // If this database contains most of our expected tables, it's likely
+        // correct
+        if (matchCount > 0 && matchCount >= results.size() / 2) {
+          Logger::info(LogCategory::DATABASE, "findCorrectMSSQLDatabase",
+                       "Found database '" + testDb + "' with " +
+                           std::to_string(matchCount) + "/" +
+                           std::to_string(results.size()) + " expected tables");
+          return testDb;
+        }
+      }
+
+      return "";
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::DATABASE, "findCorrectMSSQLDatabase",
+                    "Error finding correct database: " + std::string(e.what()));
+      return "";
+    }
+  }
 
   std::vector<std::string> detectPrimaryKeyColumns(MYSQL *conn,
                                                    const std::string &schema,
@@ -1330,13 +1642,20 @@ private:
         continue;
       std::string key = token.substr(0, pos);
       std::string value = token.substr(pos + 1);
-      if (key == "DATABASE") {
+      // Clean whitespace
+      key.erase(0, key.find_first_not_of(" \t\r\n"));
+      key.erase(key.find_last_not_of(" \t\r\n") + 1);
+      value.erase(0, value.find_first_not_of(" \t\r\n"));
+      value.erase(value.find_last_not_of(" \t\r\n") + 1);
+
+      if (key == "DATABASE" || key == "Database" || key == "database") {
         return value;
       }
     }
     Logger::warning(
+        LogCategory::DATABASE, "extractDatabaseName",
         "No DATABASE found in connection string, using master fallback");
-    return "master"; // fallback
+    return "master";
   }
 
   std::string resolveClusterName(const std::string &connectionString,
