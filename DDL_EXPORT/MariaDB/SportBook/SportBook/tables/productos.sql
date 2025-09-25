@@ -1,7 +1,7 @@
 -- Table DDL for SportBook.productos
 -- Engine: MariaDB
 -- Database: SportBook
--- Generated: 1758776757
+-- Generated: 1758779377
 
 CREATE TABLE `productos` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
