@@ -23,7 +23,7 @@ struct SyncConfig {
   static size_t CONNECTION_TIMEOUT_SECONDS;
   static constexpr size_t DEFAULT_CHUNK_SIZE = 25000;
   static constexpr size_t DEFAULT_SYNC_INTERVAL = 30;
-  static constexpr size_t DEFAULT_CONNECTION_TIMEOUT = 30;
+  static constexpr size_t DEFAULT_CONNECTION_TIMEOUT = 300;
 
   static void setChunkSize(size_t newSize) { CHUNK_SIZE = newSize; }
 

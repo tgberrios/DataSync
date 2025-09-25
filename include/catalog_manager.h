@@ -254,11 +254,14 @@ public:
           continue;
         }
 
-        // Set connection timeout
+        // Set connection timeouts for large tables
         {
           std::string timeoutQuery =
               "SET SESSION wait_timeout = " +
-              std::to_string(SyncConfig::getConnectionTimeout());
+              std::to_string(SyncConfig::getConnectionTimeout()) +
+              ", interactive_timeout = " +
+              std::to_string(SyncConfig::getConnectionTimeout()) +
+              ", net_read_timeout = 600" + ", net_write_timeout = 600";
           mysql_query(mariaConn, timeoutQuery.c_str());
         }
 
@@ -290,19 +293,36 @@ public:
                 detectTimeColumnMariaDB(mariaConn, schemaName, tableName);
 
             pqxx::work txn(pgConn);
-            txn.exec("INSERT INTO metadata.catalog "
-                     "(schema_name, table_name, cluster_name, db_engine, "
-                     "connection_string, "
-                     "last_sync_time, last_sync_column, status, "
-                     "last_offset, active) "
-                     "VALUES ('" +
-                     escapeSQL(schemaName) + "', '" + escapeSQL(tableName) +
-                     "', '', 'MariaDB', '" + escapeSQL(connStr) +
-                     "', NOW(), '" + escapeSQL(timeColumn) +
-                     "', 'PENDING', '0', false) "
-                     "ON CONFLICT (schema_name, table_name, db_engine) "
-                     "DO UPDATE SET last_sync_column = '" +
-                     escapeSQL(timeColumn) + "';");
+            // Check if table already exists
+            auto existingCheck =
+                txn.exec("SELECT last_sync_column FROM metadata.catalog "
+                         "WHERE schema_name='" +
+                         escapeSQL(schemaName) + "' AND table_name='" +
+                         escapeSQL(tableName) + "' AND db_engine='MariaDB';");
+
+            if (!existingCheck.empty()) {
+              // Table exists, only update if timeColumn changed
+              std::string currentTimeColumn =
+                  existingCheck[0][0].as<std::string>();
+              if (currentTimeColumn != timeColumn) {
+                txn.exec("UPDATE metadata.catalog SET last_sync_column = '" +
+                         escapeSQL(timeColumn) + "' WHERE schema_name='" +
+                         escapeSQL(schemaName) + "' AND table_name='" +
+                         escapeSQL(tableName) + "' AND db_engine='MariaDB';");
+              }
+            } else {
+              // New table, insert
+              txn.exec("INSERT INTO metadata.catalog "
+                       "(schema_name, table_name, cluster_name, db_engine, "
+                       "connection_string, "
+                       "last_sync_time, last_sync_column, status, "
+                       "last_offset, active) "
+                       "VALUES ('" +
+                       escapeSQL(schemaName) + "', '" + escapeSQL(tableName) +
+                       "', '', 'MariaDB', '" + escapeSQL(connStr) +
+                       "', NOW(), '" + escapeSQL(timeColumn) +
+                       "', 'PENDING', '0', false);");
+            }
             txn.commit();
           }
         }
@@ -469,15 +489,23 @@ public:
                          escapeSQL(tableName) + "' AND db_engine='MSSQL';");
 
             if (!existingCheck.empty() && existingCheck[0][0].as<int>() > 0) {
-              // Tabla ya existe, actualizar timestamp y columna de tiempo
-              txn.exec("UPDATE metadata.catalog SET "
-                       "last_sync_column = '" +
-                       escapeSQL(timeColumn) + "', connection_string = '" +
-                       escapeSQL(connStr) +
-                       "' "
-                       "WHERE schema_name='" +
-                       escapeSQL(schemaName) + "' AND table_name='" +
-                       escapeSQL(tableName) + "' AND db_engine='MSSQL';");
+              // Tabla ya existe, verificar si timeColumn cambió
+              auto timeColumnCheck =
+                  txn.exec("SELECT last_sync_column FROM metadata.catalog "
+                           "WHERE schema_name='" +
+                           escapeSQL(schemaName) + "' AND table_name='" +
+                           escapeSQL(tableName) + "' AND db_engine='MSSQL';");
+
+              if (!timeColumnCheck.empty()) {
+                std::string currentTimeColumn =
+                    timeColumnCheck[0][0].as<std::string>();
+                if (currentTimeColumn != timeColumn) {
+                  txn.exec("UPDATE metadata.catalog SET last_sync_column = '" +
+                           escapeSQL(timeColumn) + "' WHERE schema_name='" +
+                           escapeSQL(schemaName) + "' AND table_name='" +
+                           escapeSQL(tableName) + "' AND db_engine='MSSQL';");
+                }
+              }
             } else {
               // Tabla nueva, insertar
               txn.exec("INSERT INTO metadata.catalog "
@@ -610,19 +638,37 @@ public:
                 detectTimeColumnPostgres(sourcePgConn, schemaName, tableName);
 
             pqxx::work txn(pgConn);
-            txn.exec("INSERT INTO metadata.catalog "
-                     "(schema_name, table_name, cluster_name, db_engine, "
-                     "connection_string, "
-                     "last_sync_time, last_sync_column, status, "
-                     "last_offset, active) "
-                     "VALUES ('" +
-                     escapeSQL(schemaName) + "', '" + escapeSQL(tableName) +
-                     "', '', 'PostgreSQL', '" + escapeSQL(connStr) +
-                     "', NOW(), '" + escapeSQL(timeColumn) +
-                     "', 'PENDING', '0', false) "
-                     "ON CONFLICT (schema_name, table_name, db_engine) "
-                     "DO UPDATE SET last_sync_column = '" +
-                     escapeSQL(timeColumn) + "';");
+            // Check if table already exists
+            auto existingCheck = txn.exec(
+                "SELECT last_sync_column FROM metadata.catalog "
+                "WHERE schema_name='" +
+                escapeSQL(schemaName) + "' AND table_name='" +
+                escapeSQL(tableName) + "' AND db_engine='PostgreSQL';");
+
+            if (!existingCheck.empty()) {
+              // Table exists, only update if timeColumn changed
+              std::string currentTimeColumn =
+                  existingCheck[0][0].as<std::string>();
+              if (currentTimeColumn != timeColumn) {
+                txn.exec("UPDATE metadata.catalog SET last_sync_column = '" +
+                         escapeSQL(timeColumn) + "' WHERE schema_name='" +
+                         escapeSQL(schemaName) + "' AND table_name='" +
+                         escapeSQL(tableName) +
+                         "' AND db_engine='PostgreSQL';");
+              }
+            } else {
+              // New table, insert
+              txn.exec("INSERT INTO metadata.catalog "
+                       "(schema_name, table_name, cluster_name, db_engine, "
+                       "connection_string, "
+                       "last_sync_time, last_sync_column, status, "
+                       "last_offset, active) "
+                       "VALUES ('" +
+                       escapeSQL(schemaName) + "', '" + escapeSQL(tableName) +
+                       "', '', 'PostgreSQL', '" + escapeSQL(connStr) +
+                       "', NOW(), '" + escapeSQL(timeColumn) +
+                       "', 'PENDING', '0', false);");
+            }
             txn.commit();
           }
         }
@@ -849,11 +895,14 @@ private:
           return "";
         }
 
-        // Set connection timeout
+        // Set connection timeouts for large tables
         {
           std::string timeoutQuery =
               "SET SESSION wait_timeout = " +
-              std::to_string(SyncConfig::getConnectionTimeout());
+              std::to_string(SyncConfig::getConnectionTimeout()) +
+              ", interactive_timeout = " +
+              std::to_string(SyncConfig::getConnectionTimeout()) +
+              ", net_read_timeout = 600" + ", net_write_timeout = 600";
           mysql_query(conn, timeoutQuery.c_str());
         }
         auto res = executeQueryMariaDB(conn, "SELECT @@hostname;");
@@ -1161,11 +1210,14 @@ private:
           continue;
         }
 
-        // Set connection timeout
+        // Set connection timeouts for large tables
         {
           std::string timeoutQuery =
               "SET SESSION wait_timeout = " +
-              std::to_string(SyncConfig::getConnectionTimeout());
+              std::to_string(SyncConfig::getConnectionTimeout()) +
+              ", interactive_timeout = " +
+              std::to_string(SyncConfig::getConnectionTimeout()) +
+              ", net_read_timeout = 600" + ", net_write_timeout = 600";
           mysql_query(mariadbConn, timeoutQuery.c_str());
         }
 

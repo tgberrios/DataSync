@@ -1,1 +1,26 @@
 timeouts hay que arreglarlos en todos los archivos
+
+✅ Timeouts Optimizados para Tablas Grandes
+Cambios Implementados:
+Timeout de Conexión Principal:
+Antes: 30 segundos
+Después: 300 segundos (5 minutos)
+Timeouts Adicionales para MariaDB:
+wait_timeout = 300 (5 minutos)
+interactive_timeout = 300 (5 minutos)
+net_read_timeout = 600 (10 minutos)
+net_write_timeout = 600 (10 minutos)
+Explicación de los Timeouts:
+wait_timeout: Tiempo que el servidor espera antes de cerrar una conexión inactiva
+interactive_timeout: Similar a wait_timeout pero para conexiones interactivas
+net_read_timeout: Tiempo máximo para leer datos del servidor (10 min)
+net_write_timeout: Tiempo máximo para escribir datos al servidor (10 min)
+Beneficios para Tablas Grandes:
+Transferencias Largas: Las queries que procesan billones de registros no se cortarán
+Conexiones Estables: Las conexiones permanecen abiertas durante operaciones largas
+Red Robusta: Timeouts de red más altos para transferencias de datos masivas
+Sin Pérdida de Conexión: Evita el error "Lost connection to MySQL server during query"
+Aplicado en:
+
+
+eso mismo para los otros
