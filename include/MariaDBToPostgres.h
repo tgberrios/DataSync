@@ -1805,9 +1805,8 @@ private:
       pqxx::work txn(pgConn);
       txn.exec("SET statement_timeout = '600s'");
 
-      // Procesar en batches para evitar queries muy largas
-      const size_t BATCH_SIZE =
-          std::min(SyncConfig::getChunkSize() / 2, static_cast<size_t>(500));
+      // Procesar el chunk completo como MariaDB
+      const size_t BATCH_SIZE = SyncConfig::getChunkSize();
       size_t totalProcessed = 0;
 
       for (size_t batchStart = 0; batchStart < results.size();

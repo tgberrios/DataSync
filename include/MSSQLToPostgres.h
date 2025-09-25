@@ -666,6 +666,14 @@ public:
           continue;
         }
 
+        // Skip PERFECT_MATCH tables
+        if (table.status == "PERFECT_MATCH") {
+          Logger::info(LogCategory::TRANSFER,
+                       "Skipping PERFECT_MATCH table: " + schema_name + "." +
+                           table_name);
+          continue;
+        }
+
         // Si sourceCount = targetCount, verificar si hay cambios incrementales
         if (sourceCount == targetCount) {
           // Procesar UPDATEs si hay columna de tiempo y last_sync_time
@@ -701,11 +709,12 @@ public:
           if (lastOffset >= sourceCount) {
             updateStatus(pgConn, schema_name, table_name, "PERFECT_MATCH",
                          targetCount);
+            continue; // Skip PERFECT_MATCH tables
           } else {
             updateStatus(pgConn, schema_name, table_name, "LISTENING_CHANGES",
                          targetCount);
+            continue; // Skip LISTENING_CHANGES tables for now
           }
-          continue;
         }
 
         // Si sourceCount < targetCount, hay registros eliminados en el origen
@@ -1870,9 +1879,8 @@ private:
       pqxx::work txn(pgConn);
       txn.exec("SET statement_timeout = '600s'");
 
-      // Procesar en batches para evitar queries muy largas
-      const size_t BATCH_SIZE =
-          std::min(SyncConfig::getChunkSize() / 2, static_cast<size_t>(500));
+      // Procesar el chunk completo como MariaDB
+      const size_t BATCH_SIZE = SyncConfig::getChunkSize();
       size_t totalProcessed = 0;
 
       for (size_t batchStart = 0; batchStart < results.size();
@@ -1946,7 +1954,7 @@ private:
       pqxx::work txn(pgConn);
       txn.exec("SET statement_timeout = '600s'");
 
-      // Procesar en batches
+      // Procesar el chunk completo como MariaDB
       const size_t BATCH_SIZE = SyncConfig::getChunkSize();
       size_t totalProcessed = 0;
 
