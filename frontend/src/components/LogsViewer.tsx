@@ -278,6 +278,8 @@ const LogsViewer = () => {
   const [isClearing, setIsClearing] = useState(false);
   const [showClearDialog, setShowClearDialog] = useState(false);
   const [refreshCountdown, setRefreshCountdown] = useState(5);
+  const [isCopying, setIsCopying] = useState(false);
+  const [copySuccess, setCopySuccess] = useState(false);
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
@@ -354,6 +356,48 @@ const LogsViewer = () => {
       setError(err instanceof Error ? err.message : 'Error clearing logs');
     } finally {
       setIsClearing(false);
+    }
+  };
+
+  const handleCopyAllLogs = async () => {
+    try {
+      setIsCopying(true);
+      setCopySuccess(false);
+      
+      // Get all logs (not just current page)
+      const allLogsData = await logsApi.getLogs({ lines: 10000, level, function: functionFilter });
+      
+      // Format logs for copying
+      const logsText = allLogsData.logs.map(log => {
+        const timestamp = log.timestamp;
+        const level = `[${log.level}]`;
+        const func = log.function ? `[${log.function}]` : '';
+        const message = log.message;
+        return `${timestamp} ${level} ${func} ${message}`.trim();
+      }).join('\n');
+      
+      // Add header information
+      const header = `DataSync Logs - ${new Date().toLocaleString()}\n` +
+                    `Total Entries: ${allLogsData.logs.length}\n` +
+                    `Level Filter: ${level}\n` +
+                    `Function Filter: ${functionFilter}\n` +
+                    `File: ${logInfo?.filePath || 'Unknown'}\n` +
+                    `Size: ${logInfo ? formatFileSize(logInfo.size || 0) : 'Unknown'}\n` +
+                    `Last Modified: ${logInfo?.lastModified ? formatDate(logInfo.lastModified) : 'Unknown'}\n` +
+                    `${'='.repeat(80)}\n\n`;
+      
+      const fullText = header + logsText;
+      
+      // Copy to clipboard
+      await navigator.clipboard.writeText(fullText);
+      
+      setCopySuccess(true);
+      setTimeout(() => setCopySuccess(false), 3000); // Hide success message after 3 seconds
+      
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error copying logs');
+    } finally {
+      setIsCopying(false);
     }
   };
 
@@ -566,6 +610,14 @@ const LogsViewer = () => {
           
           <Button 
             $variant="secondary" 
+            onClick={handleCopyAllLogs}
+            disabled={isCopying || isRefreshing}
+          >
+            {isCopying ? 'Copying...' : 'Copy Logs'}
+          </Button>
+          
+          <Button 
+            $variant="secondary" 
             onClick={() => setShowClearDialog(true)}
             disabled={isClearing || isRefreshing}
             style={{ backgroundColor: '#ff6b6b', color: 'white' }}
@@ -573,6 +625,22 @@ const LogsViewer = () => {
             {isClearing ? 'Clearing...' : 'Clear Logs'}
           </Button>
         </Controls>
+        
+        {copySuccess && (
+          <div style={{
+            marginTop: '15px',
+            padding: '10px 15px',
+            backgroundColor: '#e8f5e9',
+            border: '1px solid #4caf50',
+            borderRadius: '4px',
+            color: '#2e7d32',
+            textAlign: 'center',
+            fontFamily: 'monospace',
+            fontSize: '0.9em'
+          }}>
+            ✅ Logs copied to clipboard successfully!
+          </div>
+        )}
       </Section>
 
       <Section>

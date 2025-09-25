@@ -4,14 +4,55 @@
 #include "Config.h"
 #include "catalog_manager.h"
 #include "logger.h"
+#include <mutex>
 #include <pqxx/pqxx>
 #include <string>
 #include <vector>
 
 class PostgresToPostgres {
+private:
+  std::unique_ptr<pqxx::connection> postgresConn = nullptr;
+  std::string currentConnectionString;
+  std::mutex connectionMutex;
+
 public:
   PostgresToPostgres() = default;
-  ~PostgresToPostgres() = default;
+  ~PostgresToPostgres() {
+    if (postgresConn) {
+      postgresConn.reset();
+    }
+  }
+
+  pqxx::connection* getPostgresConnection(const std::string &connectionString) {
+    std::lock_guard<std::mutex> lock(connectionMutex);
+
+    // Si ya tenemos una conexión para esta connection string, la reutilizamos
+    if (postgresConn && currentConnectionString == connectionString) {
+      return postgresConn.get();
+    }
+
+    // Si tenemos una conexión diferente, la cerramos
+    if (postgresConn) {
+      postgresConn.reset();
+    }
+
+    // Crear nueva conexión
+    try {
+      postgresConn = std::make_unique<pqxx::connection>(connectionString);
+      if (postgresConn->is_open()) {
+        currentConnectionString = connectionString;
+        return postgresConn.get();
+      } else {
+        Logger::error("getPostgresConnection", "Failed to open PostgreSQL connection");
+        postgresConn.reset();
+        return nullptr;
+      }
+    } catch (const std::exception &e) {
+      Logger::error("getPostgresConnection", "Connection failed: " + std::string(e.what()));
+      postgresConn.reset();
+      return nullptr;
+    }
+  }
 
   void setupTableTargetPostgresToPostgres() {
     try {
@@ -81,7 +122,7 @@ public:
                       "Setting up table: " + schemaName + "." + tableName);
 
         try {
-          auto sourceConn = connectPostgres(sourceConnStr);
+          auto sourceConn = getPostgresConnection(sourceConnStr);
           if (!sourceConn) {
             Logger::error("setupTableTargetPostgresToPostgres",
                           "Failed to connect to source PostgreSQL");
@@ -223,23 +264,7 @@ public:
   }
 
 private:
-  std::unique_ptr<pqxx::connection>
-  connectPostgres(const std::string &connStr) {
-    try {
-      auto conn = std::make_unique<pqxx::connection>(connStr);
-      if (conn->is_open()) {
-        return conn;
-      } else {
-        Logger::error("connectPostgres",
-                      "Failed to open PostgreSQL connection");
-        return nullptr;
-      }
-    } catch (const std::exception &e) {
-      Logger::error("connectPostgres",
-                    "Connection failed: " + std::string(e.what()));
-      return nullptr;
-    }
-  }
+  // connectPostgres method removed - using getPostgresConnection instead
 
   std::string toLowerCase(const std::string &str) {
     std::string result = str;
@@ -379,7 +404,7 @@ private:
       }
     }
 
-    auto sourceConn = connectPostgres(sourceConnStr);
+    auto sourceConn = getPostgresConnection(sourceConnStr);
     if (!sourceConn) {
       updateStatus(pgConn, schemaName, tableName, "ERROR", 0);
       return;
@@ -510,7 +535,7 @@ private:
       txn.commit();
     }
 
-    auto sourceConn = connectPostgres(sourceConnStr);
+    auto sourceConn = getPostgresConnection(sourceConnStr);
     if (!sourceConn) {
       updateStatus(pgConn, schemaName, tableName, "ERROR", 0);
       return;
