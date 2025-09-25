@@ -8,3 +8,5 @@ const std::string DatabaseConfig::POSTGRES_PORT = "5432";
 
 size_t SyncConfig::CHUNK_SIZE = SyncConfig::DEFAULT_CHUNK_SIZE;
 size_t SyncConfig::SYNC_INTERVAL_SECONDS = SyncConfig::DEFAULT_SYNC_INTERVAL;
+size_t SyncConfig::CONNECTION_TIMEOUT_SECONDS =
+    SyncConfig::DEFAULT_CONNECTION_TIMEOUT;

@@ -20,8 +20,10 @@ struct DatabaseConfig {
 struct SyncConfig {
   static size_t CHUNK_SIZE;
   static size_t SYNC_INTERVAL_SECONDS;
+  static size_t CONNECTION_TIMEOUT_SECONDS;
   static constexpr size_t DEFAULT_CHUNK_SIZE = 25000;
   static constexpr size_t DEFAULT_SYNC_INTERVAL = 30;
+  static constexpr size_t DEFAULT_CONNECTION_TIMEOUT = 30;
 
   static void setChunkSize(size_t newSize) { CHUNK_SIZE = newSize; }
 
@@ -32,6 +34,12 @@ struct SyncConfig {
   }
 
   static size_t getSyncInterval() { return SYNC_INTERVAL_SECONDS; }
+
+  static void setConnectionTimeout(size_t newTimeout) {
+    CONNECTION_TIMEOUT_SECONDS = newTimeout;
+  }
+
+  static size_t getConnectionTimeout() { return CONNECTION_TIMEOUT_SECONDS; }
 };
 
 // Variables estáticas definidas en .cpp para evitar múltiples definiciones

@@ -115,6 +115,14 @@ public:
       return nullptr;
     }
 
+    // Set connection timeout
+    {
+      std::string timeoutQuery =
+          "SET SESSION wait_timeout = " +
+          std::to_string(SyncConfig::getConnectionTimeout());
+      mysql_query(mariadbConn, timeoutQuery.c_str());
+    }
+
     currentConnectionString = connectionString;
     return mariadbConn;
   }
@@ -294,6 +302,8 @@ public:
                                   "\" (";
         std::vector<std::string> primaryKeys;
 
+        std::vector<std::string> columnDefinitions;
+
         for (const std::vector<std::string> &col : columns) {
           if (col.size() < 6)
             continue;
@@ -306,10 +316,6 @@ public:
           std::string columnKey = col[3];
           std::string extra = col[4];
           std::string maxLength = col[5];
-
-          // std::cerr << "Column: " << colName << " | Type: " << dataType << "
-          // | Nullable: " << col[2] << " | Nullable SQL: " << nullable <<
-          // std::endl;
 
           std::string pgType = "TEXT";
           if (extra == "auto_increment") {
@@ -328,22 +334,35 @@ public:
             pgType = dataTypeMap[dataType];
           }
 
-          createQuery += "\"" + colName + "\" " + pgType + nullable;
+          std::string columnDef = "\"" + colName + "\" " + pgType + nullable;
+          columnDefinitions.push_back(columnDef);
+
           if (columnKey == "PRI")
             primaryKeys.push_back(colName);
-          createQuery += ", ";
+        }
+
+        if (columnDefinitions.empty()) {
+          Logger::error("setupTableTargetMariaDBToPostgres",
+                        "No valid columns found for table " +
+                            table.schema_name + "." + table.table_name +
+                            " - skipping");
+          continue;
+        }
+
+        for (size_t i = 0; i < columnDefinitions.size(); ++i) {
+          if (i > 0)
+            createQuery += ", ";
+          createQuery += columnDefinitions[i];
         }
 
         if (!primaryKeys.empty()) {
-          createQuery += "PRIMARY KEY (";
+          createQuery += ", PRIMARY KEY (";
           for (size_t i = 0; i < primaryKeys.size(); ++i) {
-            createQuery += "\"" + primaryKeys[i] + "\"";
-            if (i < primaryKeys.size() - 1)
+            if (i > 0)
               createQuery += ", ";
+            createQuery += "\"" + primaryKeys[i] + "\"";
           }
           createQuery += ")";
-        } else {
-          createQuery.erase(createQuery.size() - 2, 2);
         }
         createQuery += ");";
 
