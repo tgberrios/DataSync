@@ -4,9 +4,7 @@ mejorar performance!
 
 📊 IMPACTO ESTIMADO DE OPTIMIZACIONES:
 Optimización	Mejora de Velocidad	Complejidad
-✅ Cursor-based pagination	10-100x	Media - COMPLETADO
 IN clause para deletes	5-10x	Baja
 Batch sizes adaptativos	2-5x	Baja
-Timeouts optimizados	Previene fallos	Baja 600 segundos en todos!
 Multi-row INSERTs	3-5x	Media
 Índices apropiados	5-20x	Alta
