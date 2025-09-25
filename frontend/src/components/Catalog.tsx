@@ -227,6 +227,35 @@ const ClearSearchButton = styled.button`
   }
 `;
 
+const SchemaActionSelect = styled.select`
+  padding: 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: white;
+  color: #333;
+  font-family: monospace;
+  cursor: pointer;
+  
+  &:hover {
+    background: #f5f5f5;
+  }
+  
+  &:focus {
+    outline: none;
+    border-color: #666;
+  }
+  
+  option {
+    background: white;
+    color: #333;
+  }
+  
+  option[value=""] {
+    color: #666;
+    font-style: italic;
+  }
+`;
+
 const Catalog = () => {
   const [filter, setFilter] = useState({
     engine: '',
@@ -236,6 +265,7 @@ const Catalog = () => {
 
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
+  const [availableSchemas, setAvailableSchemas] = useState<string[]>([]);
 
   const [data, setData] = useState<CatalogEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -248,6 +278,20 @@ const Catalog = () => {
     currentPage: 1,
     limit: 10
   });
+
+  // Cargar schemas únicos
+  useEffect(() => {
+    const fetchSchemas = async () => {
+      try {
+        const schemas = await catalogApi.getSchemas();
+        setAvailableSchemas(schemas);
+      } catch (err) {
+        console.error('Error loading schemas:', err);
+      }
+    };
+
+    fetchSchemas();
+  }, []);
 
   // Cargar datos del catálogo
   useEffect(() => {
@@ -356,6 +400,42 @@ const Catalog = () => {
     }
   };
 
+  const handleSchemaAction = async (value: string) => {
+    if (!value || value === '') return;
+    
+    // Mostrar confirmación inmediatamente
+    if (!confirm(`Are you sure you want to deactivate ALL tables in schema "${value}"?\n\nThis will change status to 'SKIPPED' and reset offsets to 0.\n\nThis action CANNOT be undone.`)) {
+      // Si cancela, resetear el dropdown
+      const select = document.querySelector('select[data-schema-action]') as HTMLSelectElement;
+      if (select) select.value = '';
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const result = await catalogApi.deactivateSchema(value);
+      
+      // Recargar datos después de la desactivación
+      const response = await catalogApi.getCatalogEntries({
+        page,
+        limit: 10,
+        ...filter,
+        search
+      });
+      setData(response.data);
+      setPagination(response.pagination);
+      
+      alert(`Schema "${value}" deactivated successfully.\n${result.affectedRows} tables affected.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error deactivating schema');
+    } finally {
+      setLoading(false);
+      // Resetear el dropdown después de la acción
+      const select = document.querySelector('select[data-schema-action]') as HTMLSelectElement;
+      if (select) select.value = '';
+    }
+  };
+
   return (
     <CatalogContainer>
       {loading && <LoadingOverlay>Loading...</LoadingOverlay>}
@@ -436,6 +516,17 @@ const Catalog = () => {
         }}>
           Reset All
         </ResetButton>
+
+        <SchemaActionSelect
+          defaultValue=""
+          data-schema-action
+          onChange={(e) => handleSchemaAction(e.target.value)}
+        >
+          <option value="">Deactivate Schema</option>
+          {availableSchemas.map(schema => (
+            <option key={schema} value={schema}>Deactivate {schema}</option>
+          ))}
+        </SchemaActionSelect>
       </FiltersContainer>
 
       <PaginationInfo>

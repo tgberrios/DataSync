@@ -162,7 +162,7 @@ const Config = () => {
     const newConfig: ConfigEntry = {
       key: '',
       value: '',
-      description: '',
+      description: null,
       updated_at: new Date().toISOString()
     };
     setEditingKey('new');
@@ -184,7 +184,7 @@ const Config = () => {
 
   return (
     <ConfigContainer>
-      <Header>System Configuration</Header>
+      <Header>Configuration</Header>
 
       {error && (
         <div style={{ color: 'red', padding: '20px', textAlign: 'center' }}>
@@ -199,7 +199,7 @@ const Config = () => {
           <tr>
             <Th>Key</Th>
             <Th>Value</Th>
-            <Th>Description</Th>
+            <Th>Current Batch</Th>
             <Th>Last Updated</Th>
             <Th>Actions</Th>
           </tr>
@@ -221,13 +221,7 @@ const Config = () => {
                   placeholder="Enter value..."
                 />
               </Td>
-              <Td>
-                <TextArea
-                  value={editForm.description || ''}
-                  onChange={e => setEditForm({ ...editForm, description: e.target.value })}
-                  placeholder="Enter description..."
-                />
-              </Td>
+              <Td>-</Td>
               <Td>-</Td>
               <ActionCell>
                 <Button onClick={handleCreate}>Save</Button>
@@ -261,14 +255,7 @@ const Config = () => {
                 )}
               </Td>
               <Td>
-                {editingKey === config.key ? (
-                  <TextArea
-                    value={editForm?.description || ''}
-                    onChange={e => setEditForm(prev => prev ? { ...prev, description: e.target.value } : null)}
-                  />
-                ) : (
-                  config.description || '-'
-                )}
+                {config.key === 'batch_size' ? config.value : '-'}
               </Td>
               <Td>{new Date(config.updated_at).toLocaleString()}</Td>
               <ActionCell>

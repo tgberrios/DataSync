@@ -142,6 +142,41 @@ app.post("/api/catalog/sync", async (req, res) => {
   }
 });
 
+// Obtener todos los schemas únicos
+app.get("/api/catalog/schemas", async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT DISTINCT schema_name FROM metadata.catalog ORDER BY schema_name`
+    );
+    res.json(result.rows.map((row) => row.schema_name));
+  } catch (err) {
+    console.error("Database error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Desactivar schema completo
+app.patch("/api/catalog/deactivate-schema", async (req, res) => {
+  const { schema_name } = req.body;
+  try {
+    const result = await pool.query(
+      `UPDATE metadata.catalog 
+       SET status = 'SKIPPED', last_offset = 0
+       WHERE schema_name = $1
+       RETURNING *`,
+      [schema_name]
+    );
+    res.json({
+      message: `Schema ${schema_name} deactivated successfully`,
+      affectedRows: result.rows.length,
+      rows: result.rows,
+    });
+  } catch (err) {
+    console.error("Database error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = 3000;
 // Obtener estadísticas del dashboard
 app.get("/api/dashboard/stats", async (req, res) => {

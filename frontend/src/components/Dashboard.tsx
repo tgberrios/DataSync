@@ -217,10 +217,9 @@ const Dashboard = () => {
           </Section>
 
           <Section>
-            <SectionTitle>⚙️ BATCH CONFIGURATION</SectionTitle>
+            <SectionTitle>⚙️ CONFIGURATION</SectionTitle>
             <Grid>
-              <Value>Current Batch Size: {batchConfig.value}</Value>
-              <Value>Description: {batchConfig.description}</Value>
+              <Value>Current Batch: {batchConfig.value}</Value>
               <Value>Last Updated: {new Date(batchConfig.updated_at).toLocaleString()}</Value>
             </Grid>
           </Section>
