@@ -1,8 +1,4 @@
 mejorar performance!
-DDL Exporter podemos ordenar las carpetas por hostname como lo hacemos en Maria
-
 creo que algo relantiza mi app en @maria siento que va muy muy lento indagar al maximo
 
-logger.h revisarlo
-
-que los logger error sea muy detallados y expresivos con su respectivo e.what o lo que sea que nos diga directamente porque fallo
+logger.h revisarlo improvewments y tambien a la web

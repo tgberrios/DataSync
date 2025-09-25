@@ -45,10 +45,11 @@ void DDLExporter::getSchemasFromCatalog() {
     pqxx::work txn(conn);
 
     std::string query =
-        "SELECT DISTINCT schema_name, db_engine, connection_string "
+        "SELECT DISTINCT schema_name, db_engine, connection_string, "
+        "cluster_name "
         "FROM metadata.catalog "
-        "WHERE db_engine IS NOT NULL "
-        "ORDER BY db_engine, schema_name;";
+        "WHERE db_engine IS NOT NULL AND cluster_name IS NOT NULL "
+        "ORDER BY cluster_name, db_engine, schema_name;";
 
     auto result = txn.exec(query);
     txn.commit();
@@ -58,9 +59,9 @@ void DDLExporter::getSchemasFromCatalog() {
       SchemaInfo schema;
       schema.schema_name = row[0].as<std::string>();
       schema.db_engine = row[1].as<std::string>();
-      schema.database_name =
-          schema.schema_name; // Use schema_name as database_name for now
+      schema.database_name = schema.schema_name;
       schema.connection_string = row[2].as<std::string>();
+      schema.cluster_name = row[3].as<std::string>();
       schemas.push_back(schema);
     }
 
@@ -74,10 +75,12 @@ void DDLExporter::getSchemasFromCatalog() {
 
 void DDLExporter::exportSchemaDDL(const SchemaInfo &schema) {
   try {
-    createEngineFolder(schema.db_engine);
-    createDatabaseFolder(schema.db_engine, schema.database_name);
-    createSchemaFolder(schema.db_engine, schema.database_name,
-                       schema.schema_name);
+    createClusterFolder(schema.cluster_name);
+    createEngineFolder(schema.cluster_name, schema.db_engine);
+    createDatabaseFolder(schema.cluster_name, schema.db_engine,
+                         schema.database_name);
+    createSchemaFolder(schema.cluster_name, schema.db_engine,
+                       schema.database_name, schema.schema_name);
 
     if (schema.db_engine == "MariaDB") {
       exportMariaDBDDL(schema);
@@ -97,9 +100,21 @@ void DDLExporter::exportSchemaDDL(const SchemaInfo &schema) {
   }
 }
 
-void DDLExporter::createEngineFolder(const std::string &engine) {
+void DDLExporter::createClusterFolder(const std::string &cluster) {
   try {
-    std::string enginePath = exportPath + "/" + sanitizeFileName(engine);
+    std::string clusterPath = exportPath + "/" + sanitizeFileName(cluster);
+    std::filesystem::create_directories(clusterPath);
+  } catch (const std::exception &e) {
+    Logger::error("DDLExporter",
+                  "Error creating cluster folder: " + std::string(e.what()));
+  }
+}
+
+void DDLExporter::createEngineFolder(const std::string &cluster,
+                                     const std::string &engine) {
+  try {
+    std::string enginePath = exportPath + "/" + sanitizeFileName(cluster) +
+                             "/" + sanitizeFileName(engine);
     std::filesystem::create_directories(enginePath);
   } catch (const std::exception &e) {
     Logger::error("DDLExporter",
@@ -107,10 +122,12 @@ void DDLExporter::createEngineFolder(const std::string &engine) {
   }
 }
 
-void DDLExporter::createDatabaseFolder(const std::string &engine,
+void DDLExporter::createDatabaseFolder(const std::string &cluster,
+                                       const std::string &engine,
                                        const std::string &database) {
   try {
-    std::string dbPath = exportPath + "/" + sanitizeFileName(engine) + "/" +
+    std::string dbPath = exportPath + "/" + sanitizeFileName(cluster) + "/" +
+                         sanitizeFileName(engine) + "/" +
                          sanitizeFileName(database);
     std::filesystem::create_directories(dbPath);
   } catch (const std::exception &e) {
@@ -119,11 +136,13 @@ void DDLExporter::createDatabaseFolder(const std::string &engine,
   }
 }
 
-void DDLExporter::createSchemaFolder(const std::string &engine,
+void DDLExporter::createSchemaFolder(const std::string &cluster,
+                                     const std::string &engine,
                                      const std::string &database,
                                      const std::string &schema) {
   try {
-    std::string schemaPath = exportPath + "/" + sanitizeFileName(engine) + "/" +
+    std::string schemaPath = exportPath + "/" + sanitizeFileName(cluster) +
+                             "/" + sanitizeFileName(engine) + "/" +
                              sanitizeFileName(database) + "/" +
                              sanitizeFileName(schema);
     std::filesystem::create_directories(schemaPath + "/tables");
@@ -234,8 +253,9 @@ void DDLExporter::exportMariaDBDDL(const SchemaInfo &schema) {
         MYSQL_ROW createRow = mysql_fetch_row(createResult);
         if (createRow && createRow[1]) {
           std::string ddl = createRow[1];
-          saveTableDDL(schema.db_engine, schema.database_name,
-                       schema.schema_name, tableName, ddl);
+          saveTableDDL(schema.cluster_name, schema.db_engine,
+                       schema.database_name, schema.schema_name, tableName,
+                       ddl);
         }
       }
       mysql_free_result(createResult);
@@ -266,8 +286,9 @@ void DDLExporter::exportMariaDBDDL(const SchemaInfo &schema) {
             indexDDL += "INDEX `" + indexName + "` ON `" + schema.schema_name +
                         "`.`" + tableName + "` (`" + columnName + "`);";
 
-            saveIndexDDL(schema.db_engine, schema.database_name,
-                         schema.schema_name, tableName, indexDDL);
+            saveIndexDDL(schema.cluster_name, schema.db_engine,
+                         schema.database_name, schema.schema_name, tableName,
+                         indexDDL);
           }
         }
         mysql_free_result(indexesResult);
@@ -352,8 +373,9 @@ void DDLExporter::exportMariaDBViews(MYSQL *conn, const SchemaInfo &schema) {
           MYSQL_ROW createRow = mysql_fetch_row(createResult);
           if (createRow && createRow[1]) {
             std::string ddl = createRow[1];
-            saveTableDDL(schema.db_engine, schema.database_name,
-                         schema.schema_name, viewName, ddl);
+            saveTableDDL(schema.cluster_name, schema.db_engine,
+                         schema.database_name, schema.schema_name, viewName,
+                         ddl);
             // Logger::debug("DDLExporter", "Successfully exported view: " +
             // viewName);
           } else {
@@ -416,8 +438,9 @@ void DDLExporter::exportMariaDBProcedures(MYSQL *conn,
         MYSQL_ROW createRow = mysql_fetch_row(createResult);
         if (createRow && createRow[2]) {
           std::string ddl = createRow[2];
-          saveFunctionDDL(schema.db_engine, schema.database_name,
-                          schema.schema_name, procName, ddl);
+          saveFunctionDDL(schema.cluster_name, schema.db_engine,
+                          schema.database_name, schema.schema_name, procName,
+                          ddl);
         }
       }
       mysql_free_result(createResult);
@@ -471,8 +494,9 @@ void DDLExporter::exportMariaDBFunctions(MYSQL *conn,
         MYSQL_ROW createRow = mysql_fetch_row(createResult);
         if (createRow && createRow[2]) {
           std::string ddl = createRow[2];
-          saveFunctionDDL(schema.db_engine, schema.database_name,
-                          schema.schema_name, funcName, ddl);
+          saveFunctionDDL(schema.cluster_name, schema.db_engine,
+                          schema.database_name, schema.schema_name, funcName,
+                          ddl);
         }
       }
       mysql_free_result(createResult);
@@ -523,8 +547,9 @@ void DDLExporter::exportMariaDBTriggers(MYSQL *conn, const SchemaInfo &schema) {
         MYSQL_ROW createRow = mysql_fetch_row(createResult);
         if (createRow && createRow[2]) {
           std::string ddl = createRow[2];
-          saveFunctionDDL(schema.db_engine, schema.database_name,
-                          schema.schema_name, triggerName, ddl);
+          saveFunctionDDL(schema.cluster_name, schema.db_engine,
+                          schema.database_name, schema.schema_name, triggerName,
+                          ddl);
         }
       }
       mysql_free_result(createResult);
@@ -571,8 +596,9 @@ void DDLExporter::exportMariaDBConstraints(MYSQL *conn,
                         " constraint: " + constraintName + " on table " +
                         tableName;
 
-      saveConstraintDDL(schema.db_engine, schema.database_name,
-                        schema.schema_name, tableName, ddl);
+      saveConstraintDDL(schema.cluster_name, schema.db_engine,
+                        schema.database_name, schema.schema_name, tableName,
+                        ddl);
     }
 
     mysql_free_result(constraintsResult);
@@ -620,8 +646,9 @@ void DDLExporter::exportMariaDBEvents(MYSQL *conn, const SchemaInfo &schema) {
         MYSQL_ROW createRow = mysql_fetch_row(createResult);
         if (createRow && createRow[3]) {
           std::string ddl = createRow[3];
-          saveFunctionDDL(schema.db_engine, schema.database_name,
-                          schema.schema_name, eventName, ddl);
+          saveFunctionDDL(schema.cluster_name, schema.db_engine,
+                          schema.database_name, schema.schema_name, eventName,
+                          ddl);
         }
       }
       mysql_free_result(createResult);
@@ -683,8 +710,9 @@ void DDLExporter::exportPostgreSQLDDL(const SchemaInfo &schema) {
 
         if (!createResult.empty()) {
           std::string ddl = createResult[0][0].as<std::string>();
-          saveTableDDL(schema.db_engine, schema.database_name,
-                       schema.schema_name, tableName, ddl);
+          saveTableDDL(schema.cluster_name, schema.db_engine,
+                       schema.database_name, schema.schema_name, tableName,
+                       ddl);
         }
 
         std::string indexesQuery = "SELECT indexname, indexdef FROM pg_indexes "
@@ -698,8 +726,9 @@ void DDLExporter::exportPostgreSQLDDL(const SchemaInfo &schema) {
 
         for (const auto &indexRow : indexesResult) {
           std::string indexDDL = indexRow[1].as<std::string>();
-          saveIndexDDL(schema.db_engine, schema.database_name,
-                       schema.schema_name, tableName, indexDDL);
+          saveIndexDDL(schema.cluster_name, schema.db_engine,
+                       schema.database_name, schema.schema_name, tableName,
+                       indexDDL);
         }
 
         tableTxn.commit();
@@ -764,8 +793,8 @@ void DDLExporter::exportPostgreSQLViews(pqxx::connection &conn,
       auto createResult = txn.exec(createViewQuery);
       if (!createResult.empty()) {
         std::string ddl = createResult[0][0].as<std::string>();
-        saveTableDDL(schema.db_engine, schema.database_name, schema.schema_name,
-                     viewName, ddl);
+        saveTableDDL(schema.cluster_name, schema.db_engine,
+                     schema.database_name, schema.schema_name, viewName, ddl);
       }
       txn.commit();
     }
@@ -796,8 +825,9 @@ void DDLExporter::exportPostgreSQLFunctions(pqxx::connection &conn,
       std::string funcName = funcRow[0].as<std::string>();
       std::string definition = funcRow[1].as<std::string>();
 
-      saveFunctionDDL(schema.db_engine, schema.database_name,
-                      schema.schema_name, funcName, definition);
+      saveFunctionDDL(schema.cluster_name, schema.db_engine,
+                      schema.database_name, schema.schema_name, funcName,
+                      definition);
     }
 
     txn.commit();
@@ -831,8 +861,9 @@ void DDLExporter::exportPostgreSQLTriggers(pqxx::connection &conn,
       std::string tableName = triggerRow[1].as<std::string>();
       std::string definition = triggerRow[2].as<std::string>();
 
-      saveFunctionDDL(schema.db_engine, schema.database_name,
-                      schema.schema_name, triggerName, definition);
+      saveFunctionDDL(schema.cluster_name, schema.db_engine,
+                      schema.database_name, schema.schema_name, triggerName,
+                      definition);
     }
 
     txn.commit();
@@ -875,8 +906,9 @@ void DDLExporter::exportPostgreSQLConstraints(pqxx::connection &conn,
         ddl += "\n" + definition;
       }
 
-      saveConstraintDDL(schema.db_engine, schema.database_name,
-                        schema.schema_name, tableName, ddl);
+      saveConstraintDDL(schema.cluster_name, schema.db_engine,
+                        schema.database_name, schema.schema_name, tableName,
+                        ddl);
     }
 
     txn.commit();
@@ -914,8 +946,9 @@ void DDLExporter::exportPostgreSQLSequences(pqxx::connection &conn,
       std::string seqName = seqRow[0].as<std::string>();
       std::string definition = seqRow[1].as<std::string>();
 
-      saveFunctionDDL(schema.db_engine, schema.database_name,
-                      schema.schema_name, seqName, definition);
+      saveFunctionDDL(schema.cluster_name, schema.db_engine,
+                      schema.database_name, schema.schema_name, seqName,
+                      definition);
     }
 
     txn.commit();
@@ -964,8 +997,9 @@ void DDLExporter::exportPostgreSQLTypes(pqxx::connection &conn,
       std::string typeName = typeRow[0].as<std::string>();
       std::string definition = typeRow[1].as<std::string>();
 
-      saveFunctionDDL(schema.db_engine, schema.database_name,
-                      schema.schema_name, typeName, definition);
+      saveFunctionDDL(schema.cluster_name, schema.db_engine,
+                      schema.database_name, schema.schema_name, typeName,
+                      definition);
     }
 
     txn.commit();
@@ -1084,8 +1118,9 @@ void DDLExporter::exportMongoDBCollections(mongoc_client_t *client,
                 ddl += "-- Database: " + schema.database_name + "\n\n";
                 ddl += "db.createCollection(\"" + collectionName + "\");\n";
 
-                saveTableDDL(schema.db_engine, schema.database_name,
-                             schema.schema_name, collectionName, ddl);
+                saveTableDDL(schema.cluster_name, schema.db_engine,
+                             schema.database_name, schema.schema_name,
+                             collectionName, ddl);
               }
             }
           }
@@ -1146,8 +1181,9 @@ void DDLExporter::exportMongoDBViews(mongoc_client_t *client,
                   ddl += "db.createView(\"" + viewName +
                          "\", \"source_collection\", []);\n";
 
-                  saveTableDDL(schema.db_engine, schema.database_name,
-                               schema.schema_name, viewName, ddl);
+                  saveTableDDL(schema.cluster_name, schema.db_engine,
+                               schema.database_name, schema.schema_name,
+                               viewName, ddl);
                 }
                 bson_destroy(view_command);
                 bson_destroy(&view_reply);
@@ -1201,8 +1237,9 @@ void DDLExporter::exportMongoDBFunctions(mongoc_client_t *client,
             ddl += "db.system.js.insertOne({_id: \"" + functionName +
                    "\", value: function() { /* function body */ }});\n";
 
-            saveFunctionDDL(schema.db_engine, schema.database_name,
-                            schema.schema_name, functionName, ddl);
+            saveFunctionDDL(schema.cluster_name, schema.db_engine,
+                            schema.database_name, schema.schema_name,
+                            functionName, ddl);
           }
         }
       }
@@ -1379,7 +1416,8 @@ void DDLExporter::exportMSSQLViews(SQLHDBC conn, const SchemaInfo &schema) {
                std::string((char *)viewName) + "] AS\n";
         ddl += std::string((char *)definition) + "\n";
 
-        saveTableDDL(schema.db_engine, schema.database_name, schema.schema_name,
+        saveTableDDL(schema.cluster_name, schema.db_engine,
+                     schema.database_name, schema.schema_name,
                      std::string((char *)viewName), ddl);
       }
     }
@@ -1427,8 +1465,9 @@ void DDLExporter::exportMSSQLProcedures(SQLHDBC conn,
         ddl += "-- Database: " + schema.database_name + "\n\n";
         ddl += std::string((char *)definition) + "\n";
 
-        saveFunctionDDL(schema.db_engine, schema.database_name,
-                        schema.schema_name, std::string((char *)procName), ddl);
+        saveFunctionDDL(schema.cluster_name, schema.db_engine,
+                        schema.database_name, schema.schema_name,
+                        std::string((char *)procName), ddl);
       }
     }
 
@@ -1475,8 +1514,9 @@ void DDLExporter::exportMSSQLFunctions(SQLHDBC conn, const SchemaInfo &schema) {
         ddl += "-- Database: " + schema.database_name + "\n\n";
         ddl += std::string((char *)definition) + "\n";
 
-        saveFunctionDDL(schema.db_engine, schema.database_name,
-                        schema.schema_name, std::string((char *)funcName), ddl);
+        saveFunctionDDL(schema.cluster_name, schema.db_engine,
+                        schema.database_name, schema.schema_name,
+                        std::string((char *)funcName), ddl);
       }
     }
 
@@ -1528,9 +1568,9 @@ void DDLExporter::exportMSSQLTriggers(SQLHDBC conn, const SchemaInfo &schema) {
         ddl += "-- Database: " + schema.database_name + "\n\n";
         ddl += std::string((char *)definition) + "\n";
 
-        saveFunctionDDL(schema.db_engine, schema.database_name,
-                        schema.schema_name, std::string((char *)triggerName),
-                        ddl);
+        saveFunctionDDL(schema.cluster_name, schema.db_engine,
+                        schema.database_name, schema.schema_name,
+                        std::string((char *)triggerName), ddl);
       }
     }
 
@@ -1591,9 +1631,9 @@ void DDLExporter::exportMSSQLConstraints(SQLHDBC conn,
           ddl += "\n" + std::string((char *)definition);
         }
 
-        saveConstraintDDL(schema.db_engine, schema.database_name,
-                          schema.schema_name, std::string((char *)tableName),
-                          ddl);
+        saveConstraintDDL(schema.cluster_name, schema.db_engine,
+                          schema.database_name, schema.schema_name,
+                          std::string((char *)tableName), ddl);
       }
     }
 
@@ -1606,13 +1646,15 @@ void DDLExporter::exportMSSQLConstraints(SQLHDBC conn,
   }
 }
 
-void DDLExporter::saveTableDDL(const std::string &engine,
+void DDLExporter::saveTableDDL(const std::string &cluster,
+                               const std::string &engine,
                                const std::string &database,
                                const std::string &schema,
                                const std::string &table_name,
                                const std::string &ddl) {
   try {
-    std::string filePath = exportPath + "/" + sanitizeFileName(engine) + "/" +
+    std::string filePath = exportPath + "/" + sanitizeFileName(cluster) + "/" +
+                           sanitizeFileName(engine) + "/" +
                            sanitizeFileName(database) + "/" +
                            sanitizeFileName(schema) + "/tables/" +
                            sanitizeFileName(table_name) + ".sql";
@@ -1639,13 +1681,15 @@ void DDLExporter::saveTableDDL(const std::string &engine,
   }
 }
 
-void DDLExporter::saveIndexDDL(const std::string &engine,
+void DDLExporter::saveIndexDDL(const std::string &cluster,
+                               const std::string &engine,
                                const std::string &database,
                                const std::string &schema,
                                const std::string &table_name,
                                const std::string &index_ddl) {
   try {
-    std::string filePath = exportPath + "/" + sanitizeFileName(engine) + "/" +
+    std::string filePath = exportPath + "/" + sanitizeFileName(cluster) + "/" +
+                           sanitizeFileName(engine) + "/" +
                            sanitizeFileName(database) + "/" +
                            sanitizeFileName(schema) + "/indexes/" +
                            sanitizeFileName(table_name) + "_indexes.sql";
@@ -1667,13 +1711,15 @@ void DDLExporter::saveIndexDDL(const std::string &engine,
   }
 }
 
-void DDLExporter::saveConstraintDDL(const std::string &engine,
+void DDLExporter::saveConstraintDDL(const std::string &cluster,
+                                    const std::string &engine,
                                     const std::string &database,
                                     const std::string &schema,
                                     const std::string &table_name,
                                     const std::string &constraint_ddl) {
   try {
-    std::string filePath = exportPath + "/" + sanitizeFileName(engine) + "/" +
+    std::string filePath = exportPath + "/" + sanitizeFileName(cluster) + "/" +
+                           sanitizeFileName(engine) + "/" +
                            sanitizeFileName(database) + "/" +
                            sanitizeFileName(schema) + "/constraints/" +
                            sanitizeFileName(table_name) + "_constraints.sql";
@@ -1695,13 +1741,15 @@ void DDLExporter::saveConstraintDDL(const std::string &engine,
   }
 }
 
-void DDLExporter::saveFunctionDDL(const std::string &engine,
+void DDLExporter::saveFunctionDDL(const std::string &cluster,
+                                  const std::string &engine,
                                   const std::string &database,
                                   const std::string &schema,
                                   const std::string &function_name,
                                   const std::string &function_ddl) {
   try {
-    std::string filePath = exportPath + "/" + sanitizeFileName(engine) + "/" +
+    std::string filePath = exportPath + "/" + sanitizeFileName(cluster) + "/" +
+                           sanitizeFileName(engine) + "/" +
                            sanitizeFileName(database) + "/" +
                            sanitizeFileName(schema) + "/functions/" +
                            sanitizeFileName(function_name) + ".sql";
