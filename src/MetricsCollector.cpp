@@ -6,8 +6,6 @@
 #include <sstream>
 
 void MetricsCollector::collectAllMetrics() {
-  // Logger::info("MetricsCollector", "Starting comprehensive metrics
-  // collection");
 
   try {
     createMetricsTable();
@@ -19,11 +17,9 @@ void MetricsCollector::collectAllMetrics() {
     saveMetricsToDatabase();
     generateMetricsReport();
 
-    Logger::info("MetricsCollector",
-                 "Metrics collection completed successfully");
+    Logger::info("Metrics collection completed");
   } catch (const std::exception &e) {
-    Logger::error("MetricsCollector",
-                  "Error in metrics collection: " + std::string(e.what()));
+    Logger::error("Error in metrics collection: " + std::string(e.what()));
   }
 }
 
@@ -72,11 +68,9 @@ void MetricsCollector::createMetricsTable() {
     txn.exec(createIndexesSQL);
     txn.commit();
 
-    Logger::info("MetricsCollector",
-                 "Transfer metrics table created successfully");
+    Logger::info("Transfer metrics table created successfully");
   } catch (const std::exception &e) {
-    Logger::error("MetricsCollector",
-                  "Error creating metrics table: " + std::string(e.what()));
+    Logger::error("Error creating metrics table: " + std::string(e.what()));
   }
 }
 
@@ -160,12 +154,11 @@ void MetricsCollector::collectTransferMetrics() {
       metrics.push_back(metric);
     }
 
-    Logger::info("MetricsCollector", "Collected transfer metrics for " +
-                                         std::to_string(metrics.size()) +
-                                         " tables");
+    Logger::info("Collected transfer metrics for " +
+                 std::to_string(metrics.size()) + " tables");
   } catch (const std::exception &e) {
-    Logger::error("MetricsCollector", "Error collecting transfer metrics: " +
-                                          std::string(e.what()));
+    Logger::error("Error collecting transfer metrics: " +
+                  std::string(e.what()));
   }
 }
 
@@ -213,10 +206,10 @@ void MetricsCollector::collectPerformanceMetrics() {
       }
     }
 
-    Logger::info("MetricsCollector", "Collected performance metrics");
+    Logger::info("Collected performance metrics");
   } catch (const std::exception &e) {
-    Logger::error("MetricsCollector", "Error collecting performance metrics: " +
-                                          std::string(e.what()));
+    Logger::error("Error collecting performance metrics: " +
+                  std::string(e.what()));
   }
 }
 
@@ -273,10 +266,10 @@ void MetricsCollector::collectMetadataMetrics() {
       }
     }
 
-    Logger::info("MetricsCollector", "Collected metadata metrics");
+    Logger::info("Collected metadata metrics");
   } catch (const std::exception &e) {
-    Logger::error("MetricsCollector", "Error collecting metadata metrics: " +
-                                          std::string(e.what()));
+    Logger::error("Error collecting metadata metrics: " +
+                  std::string(e.what()));
   }
 }
 
@@ -311,10 +304,10 @@ void MetricsCollector::collectTimestampMetrics() {
       }
     }
 
-    Logger::info("MetricsCollector", "Collected timestamp metrics");
+    Logger::info("Collected timestamp metrics");
   } catch (const std::exception &e) {
-    Logger::error("MetricsCollector", "Error collecting timestamp metrics: " +
-                                          std::string(e.what()));
+    Logger::error("Error collecting timestamp metrics: " +
+                  std::string(e.what()));
   }
 }
 
@@ -370,10 +363,9 @@ void MetricsCollector::collectLatencyMetrics() {
     }
 
     txn.commit();
-    Logger::info("MetricsCollector", "Collected latency metrics");
+    Logger::info("Collected latency metrics");
   } catch (const std::exception &e) {
-    Logger::error("MetricsCollector",
-                  "Error collecting latency metrics: " + std::string(e.what()));
+    Logger::error("Error collecting latency metrics: " + std::string(e.what()));
   }
 }
 
@@ -426,11 +418,10 @@ void MetricsCollector::saveMetricsToDatabase() {
     }
 
     txn.commit();
-    Logger::info("MetricsCollector", "Saved " + std::to_string(metrics.size()) +
-                                         " metrics to database");
+    Logger::info("Saved " + std::to_string(metrics.size()) +
+                 " metrics to database");
   } catch (const std::exception &e) {
-    Logger::error("MetricsCollector",
-                  "Error saving metrics to database: " + std::string(e.what()));
+    Logger::error("Error saving metrics to database: " + std::string(e.what()));
   }
 }
 
@@ -476,41 +467,9 @@ void MetricsCollector::generateMetricsReport() {
       double maxLatency = row[10].is_null() ? 0.0 : row[10].as<double>();
       double avgP95Latency = row[11].is_null() ? 0.0 : row[11].as<double>();
       double avgP99Latency = row[12].is_null() ? 0.0 : row[12].as<double>();
-
-      Logger::info("MetricsCollector", "=== DATABASE METRICS REPORT ===");
-      Logger::info("MetricsCollector",
-                   "Total Tables: " + std::to_string(totalTables));
-      Logger::info("MetricsCollector", "Successful Transfers: " +
-                                           std::to_string(successfulTransfers));
-      Logger::info("MetricsCollector",
-                   "Failed Transfers: " + std::to_string(failedTransfers));
-      Logger::info("MetricsCollector",
-                   "Pending Transfers: " + std::to_string(pendingTransfers));
-      Logger::info("MetricsCollector",
-                   "Total Records: " + std::to_string(totalRecords));
-      Logger::info("MetricsCollector",
-                   "Total Bytes: " + std::to_string(totalBytes) + " bytes");
-      Logger::info("MetricsCollector",
-                   "Average Memory Used: " + std::to_string(avgMemoryUsed) +
-                       " MB");
-      Logger::info("MetricsCollector",
-                   "Total IO Operations: " + std::to_string(totalIOOperations));
-      Logger::info("MetricsCollector", "=== LATENCY METRICS ===");
-      Logger::info("MetricsCollector",
-                   "Average Latency: " + std::to_string(avgLatency) + " ms");
-      Logger::info("MetricsCollector",
-                   "Min Latency: " + std::to_string(minLatency) + " ms");
-      Logger::info("MetricsCollector",
-                   "Max Latency: " + std::to_string(maxLatency) + " ms");
-      Logger::info("MetricsCollector",
-                   "P95 Latency: " + std::to_string(avgP95Latency) + " ms");
-      Logger::info("MetricsCollector",
-                   "P99 Latency: " + std::to_string(avgP99Latency) + " ms");
-      Logger::info("MetricsCollector", "===============================");
     }
   } catch (const std::exception &e) {
-    Logger::error("MetricsCollector",
-                  "Error generating metrics report: " + std::string(e.what()));
+    Logger::error("Error generating metrics report: " + std::string(e.what()));
   }
 }
 
@@ -563,8 +522,8 @@ MetricsCollector::calculateBytesTransferred(const std::string &schema_name,
       return result[0][0].as<long long>();
     }
   } catch (const std::exception &e) {
-    Logger::error("MetricsCollector", "Error calculating bytes transferred: " +
-                                          std::string(e.what()));
+    Logger::error("Error calculating bytes transferred: " +
+                  std::string(e.what()));
   }
 
   return 0;
@@ -596,8 +555,7 @@ void MetricsCollector::measureQueryLatency(const std::string &query,
 
     txn.commit();
   } catch (const std::exception &e) {
-    Logger::error("MetricsCollector",
-                  "Error measuring query latency: " + std::string(e.what()));
+    Logger::error("Error measuring query latency: " + std::string(e.what()));
     latency_ms = 0.0;
   }
 }

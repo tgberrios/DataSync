@@ -28,7 +28,6 @@ public:
 
   void cleanCatalog() {
     try {
-      Logger::info("cleanCatalog", "Starting catalog cleanup");
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
 
       // Limpiar tablas que no existen en PostgreSQL
@@ -46,7 +45,7 @@ public:
       // Actualizar cluster names después de la limpieza
       updateClusterNames();
 
-      Logger::info("cleanCatalog", "Catalog cleanup completed successfully");
+      Logger::info("Catalog cleanup completed");
     } catch (const std::exception &e) {
       Logger::error("cleanCatalog",
                     "Error cleaning catalog: " + std::string(e.what()));
@@ -55,8 +54,6 @@ public:
 
   void deactivateNoDataTables() {
     try {
-      Logger::info("deactivateNoDataTables",
-                   "Starting deactivation of NO_DATA tables");
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
 
       pqxx::work txn(pgConn);
@@ -67,8 +64,6 @@ public:
       int noDataCount = countResult[0][0].as<int>();
 
       if (noDataCount == 0) {
-        Logger::info("deactivateNoDataTables",
-                     "No NO_DATA tables found to deactivate");
         txn.commit();
         return;
       }
@@ -80,10 +75,9 @@ public:
 
       txn.commit();
 
-      Logger::info("deactivateNoDataTables",
-                   "Successfully deactivated " +
-                       std::to_string(updateResult.affected_rows()) +
-                       " NO_DATA tables");
+      Logger::info("Deactivated " +
+                   std::to_string(updateResult.affected_rows()) +
+                   " NO_DATA tables");
 
     } catch (const std::exception &e) {
       Logger::error("deactivateNoDataTables",
@@ -94,7 +88,6 @@ public:
 
   void updateClusterNames() {
     try {
-      Logger::info("updateClusterNames", "Starting cluster name updates");
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
 
       // Obtener todas las conexiones únicas que necesitan cluster_name
@@ -129,14 +122,13 @@ public:
               escapeSQL(dbEngine) + "'");
           updateTxn.commit();
 
-          Logger::info("updateClusterNames",
-                       "Updated cluster_name to '" + clusterName + "' for " +
-                           std::to_string(updateResult.affected_rows()) +
-                           " tables for engine " + dbEngine);
+          Logger::info("Updated cluster_name to '" + clusterName + "' for " +
+                       std::to_string(updateResult.affected_rows()) +
+                       " tables");
         }
       }
 
-      Logger::info("updateClusterNames", "Cluster name updates completed");
+      Logger::info("Cluster name updates completed");
     } catch (const std::exception &e) {
       Logger::error("updateClusterNames",
                     "Error updating cluster names: " + std::string(e.what()));
@@ -145,8 +137,6 @@ public:
 
   void syncCatalogMariaDBToPostgres() {
     try {
-      Logger::info("syncCatalogMariaDBToPostgres",
-                   "Starting MariaDB catalog synchronization");
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
 
       std::vector<std::string> mariaConnStrings;
@@ -164,18 +154,14 @@ public:
         }
       }
 
-      Logger::info("syncCatalogMariaDBToPostgres",
-                   "Found " + std::to_string(mariaConnStrings.size()) +
-                       " MariaDB connections");
+      Logger::info("Found " + std::to_string(mariaConnStrings.size()) +
+                   " MariaDB connections");
       if (mariaConnStrings.empty()) {
-        Logger::warning("syncCatalogMariaDBToPostgres",
-                        "No MariaDB connections found in catalog");
+        Logger::warning("No MariaDB connections found in catalog");
         return;
       }
 
       for (const auto &connStr : mariaConnStrings) {
-        // Logger::debug("syncCatalogMariaDBToPostgres",
-        //               "Processing connection: " + connStr);
         {
           pqxx::work txn(pgConn);
           auto connectionCheck =
@@ -188,19 +174,11 @@ public:
 
           if (!connectionCheck.empty() && !connectionCheck[0][0].is_null()) {
             int connectionCount = connectionCheck[0][0].as<int>();
-            // Logger::debug("syncCatalogMariaDBToPostgres",
-            //               "Recent sync count: " +
-            //                   std::to_string(connectionCount));
             if (connectionCount > 0) {
-              // Logger::debug("syncCatalogMariaDBToPostgres",
-              //               "Skipping due to recent sync");
               continue;
             }
           }
         }
-
-        // Logger::debug("syncCatalogMariaDBToPostgres",
-        //               "Connecting to MariaDB: " + connStr);
 
         // Parse MariaDB connection string
         std::string host, user, password, db, port;
@@ -273,10 +251,7 @@ public:
             "AND table_type = 'BASE TABLE' "
             "ORDER BY table_schema, table_name;";
 
-        // std::cerr << "Executing discovery query..." << std::endl;
         auto discoveredTables = executeQueryMariaDB(mariaConn, discoverQuery);
-        // std::cerr << "Found " << discoveredTables.size() << " tables"
-        //<< std::endl;
 
         for (const std::vector<std::string> &row : discoveredTables) {
           if (row.size() < 2)
@@ -284,8 +259,6 @@ public:
 
           std::string schemaName = row[0];
           std::string tableName = row[1];
-          // std::cerr << "Processing table: " << schemaName << "." << tableName
-          //<< std::endl;
 
           {
             // Detectar columna de tiempo con prioridad
@@ -334,15 +307,11 @@ public:
       // Actualizar cluster names después de la sincronización
       updateClusterNames();
     } catch (const std::exception &e) {
-      // std::cerr << "Error in syncCatalogMariaDBToPostgres: " << e.what()
-      //<< std::endl;
     }
   }
 
   void syncCatalogMSSQLToPostgres() {
     try {
-      Logger::info("syncCatalogMSSQLToPostgres",
-                   "Starting MSSQL catalog synchronization");
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
 
       std::vector<std::string> mssqlConnStrings;
@@ -360,18 +329,14 @@ public:
         }
       }
 
-      Logger::info("syncCatalogMSSQLToPostgres",
-                   "Found " + std::to_string(mssqlConnStrings.size()) +
-                       " MSSQL connections");
+      Logger::info("Found " + std::to_string(mssqlConnStrings.size()) +
+                   " MSSQL connections");
       if (mssqlConnStrings.empty()) {
-        Logger::warning("syncCatalogMSSQLToPostgres",
-                        "No MSSQL connections found in catalog");
+        Logger::warning("No MSSQL connections found in catalog");
         return;
       }
 
       for (const auto &connStr : mssqlConnStrings) {
-        // Logger::debug("syncCatalogMSSQLToPostgres",
-        //               "Processing connection: " + connStr);
         {
           pqxx::work txn(pgConn);
           auto connectionCheck =
@@ -384,19 +349,11 @@ public:
 
           if (!connectionCheck.empty() && !connectionCheck[0][0].is_null()) {
             int connectionCount = connectionCheck[0][0].as<int>();
-            // Logger::debug("syncCatalogMSSQLToPostgres",
-            //               "Recent sync count: " +
-            //                   std::to_string(connectionCount));
             if (connectionCount > 0) {
-              Logger::debug("syncCatalogMSSQLToPostgres",
-                            "Skipping due to recent sync");
               continue;
             }
           }
         }
-
-        Logger::debug("syncCatalogMSSQLToPostgres",
-                      "Connecting to MSSQL: " + connStr);
 
         // Connect directly to MSSQL using ODBC
         SQLHENV env;
@@ -459,12 +416,9 @@ public:
             "AND t.name NOT LIKE 'dt_%' "
             "ORDER BY s.name, t.name;";
 
-        Logger::debug("syncCatalogMSSQLToPostgres",
-                      "Executing discovery query...");
         auto discoveredTables = executeQueryMSSQL(dbc, discoverQuery);
-        Logger::info("syncCatalogMSSQLToPostgres",
-                     "Found " + std::to_string(discoveredTables.size()) +
-                         " tables");
+        Logger::info("Found " + std::to_string(discoveredTables.size()) +
+                     " tables");
 
         for (const std::vector<std::string> &row : discoveredTables) {
           if (row.size() < 2)
@@ -472,8 +426,6 @@ public:
 
           std::string schemaName = row[0];
           std::string tableName = row[1];
-          Logger::debug("syncCatalogMSSQLToPostgres",
-                        "Processing table: " + schemaName + "." + tableName);
 
           {
             // Detectar columna de tiempo con prioridad
@@ -540,8 +492,6 @@ public:
 
   void syncCatalogPostgresToPostgres() {
     try {
-      Logger::info("syncCatalogPostgresToPostgres",
-                   "Starting PostgreSQL to PostgreSQL catalog synchronization");
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
 
       std::vector<std::string> pgConnStrings;
@@ -559,18 +509,14 @@ public:
         }
       }
 
-      Logger::info("syncCatalogPostgresToPostgres",
-                   "Found " + std::to_string(pgConnStrings.size()) +
-                       " PostgreSQL source connections");
+      Logger::info("Found " + std::to_string(pgConnStrings.size()) +
+                   " PostgreSQL source connections");
       if (pgConnStrings.empty()) {
-        Logger::warning("syncCatalogPostgresToPostgres",
-                        "No PostgreSQL source connections found in catalog");
+        Logger::warning("No PostgreSQL source connections found in catalog");
         return;
       }
 
       for (const auto &connStr : pgConnStrings) {
-        // Logger::debug("syncCatalogPostgresToPostgres",
-        //               "Processing connection: " + connStr);
         {
           pqxx::work txn(pgConn);
           auto connectionCheck =
@@ -583,19 +529,11 @@ public:
 
           if (!connectionCheck.empty() && !connectionCheck[0][0].is_null()) {
             int connectionCount = connectionCheck[0][0].as<int>();
-            // Logger::debug("syncCatalogPostgresToPostgres",
-            //               "Recent sync count: " +
-            //                   std::to_string(connectionCount));
             if (connectionCount > 0) {
-              Logger::debug("syncCatalogPostgresToPostgres",
-                            "Skipping due to recent sync");
               continue;
             }
           }
         }
-
-        Logger::debug("syncCatalogPostgresToPostgres",
-                      "Connecting to source PostgreSQL: " + connStr);
 
         // Connect directly to PostgreSQL
         pqxx::connection sourcePgConn(connStr);
@@ -613,15 +551,12 @@ public:
             "AND table_type = 'BASE TABLE' "
             "ORDER BY table_schema, table_name;";
 
-        Logger::debug("syncCatalogPostgresToPostgres",
-                      "Executing discovery query...");
         pqxx::work sourceTxn(sourcePgConn);
         auto discoveredTables = sourceTxn.exec(discoverQuery);
         sourceTxn.commit();
 
-        Logger::info("syncCatalogPostgresToPostgres",
-                     "Found " + std::to_string(discoveredTables.size()) +
-                         " tables");
+        Logger::info("Found " + std::to_string(discoveredTables.size()) +
+                     " tables");
 
         for (const auto &row : discoveredTables) {
           if (row.size() < 2)
@@ -629,8 +564,6 @@ public:
 
           std::string schemaName = row[0].as<std::string>();
           std::string tableName = row[1].as<std::string>();
-          Logger::debug("syncCatalogPostgresToPostgres",
-                        "Processing table: " + schemaName + "." + tableName);
 
           {
             // Detectar columna de tiempo con prioridad
@@ -712,13 +645,8 @@ private:
 
       auto results = executeQueryMSSQL(conn, query);
       if (!results.empty() && !results[0][0].empty()) {
-        Logger::debug("detectTimeColumnMSSQL",
-                      "Detected time column: " + results[0][0] + " for " +
-                          schema + "." + table);
         return results[0][0];
       } else {
-        Logger::debug("detectTimeColumnMSSQL",
-                      "No time column found for " + schema + "." + table);
       }
     } catch (const std::exception &e) {
       Logger::error("detectTimeColumnMSSQL",
@@ -743,26 +671,15 @@ private:
           "'timestamp');";
 
       auto results = executeQueryMariaDB(conn, query);
-      Logger::debug("detectTimeColumnMariaDB",
-                    "Query returned " + std::to_string(results.size()) +
-                        " rows for " + schema + "." + table);
 
       for (size_t i = 0; i < results.size(); ++i) {
         if (!results[i].empty()) {
-          Logger::debug("detectTimeColumnMariaDB",
-                        "Row " + std::to_string(i) + ": " + results[i][0] +
-                            " for " + schema + "." + table);
         }
       }
 
       if (!results.empty() && !results[0][0].empty()) {
-        Logger::debug("detectTimeColumnMariaDB",
-                      "Selected time column: " + results[0][0] + " for " +
-                          schema + "." + table);
         return results[0][0];
       } else {
-        Logger::debug("detectTimeColumnMariaDB",
-                      "No time column found for " + schema + "." + table);
       }
     } catch (const std::exception &e) {
       Logger::error("detectTimeColumnMariaDB",
@@ -798,14 +715,8 @@ private:
       txn.commit();
 
       if (!results.empty() && !results[0][0].is_null()) {
-        Logger::debug(
-            "detectTimeColumnPostgres",
-            "Detected time column: " + results[0][0].as<std::string>() +
-                " for " + schema + "." + table);
         return results[0][0].as<std::string>();
       } else {
-        Logger::debug("detectTimeColumnPostgres",
-                      "No time column found for " + schema + "." + table);
       }
     } catch (const std::exception &e) {
       Logger::error("detectTimeColumnPostgres",
@@ -834,16 +745,11 @@ private:
       std::string key = token.substr(0, pos);
       std::string value = token.substr(pos + 1);
       if (key == "DATABASE") {
-        Logger::debug("extractDatabaseName",
-                      "Extracted database: " + value +
-                          " from connection: " + connectionString);
         return value;
       }
     }
     Logger::warning(
-        "extractDatabaseName",
-        "No DATABASE found in connection string, using master fallback: " +
-            connectionString);
+        "No DATABASE found in connection string, using master fallback");
     return "master"; // fallback
   }
 
@@ -1024,9 +930,7 @@ private:
       }
     }
 
-    Logger::warning("extractHostnameFromConnection",
-                    "No hostname found in connection string for " + dbEngine +
-                        ": " + connectionString);
+    Logger::warning("No hostname found in connection string for " + dbEngine);
     return "";
   }
 
@@ -1100,8 +1004,6 @@ private:
 
   void cleanNonExistentPostgresTables(pqxx::connection &pgConn) {
     try {
-      // Logger::debug("cleanNonExistentPostgresTables",
-      //               "Starting PostgreSQL table cleanup");
       pqxx::work txn(pgConn);
 
       // Obtener todas las tablas marcadas como PostgreSQL (solo destinos, no
@@ -1124,9 +1026,8 @@ private:
                      table_name + "';");
 
         if (!checkResult.empty() && checkResult[0][0].as<int>() == 0) {
-          Logger::info("cleanNonExistentPostgresTables",
-                       "Removing non-existent PostgreSQL table: " +
-                           schema_name + "." + table_name);
+          Logger::info("Removing non-existent PostgreSQL table: " +
+                       schema_name + "." + table_name);
 
           txn.exec("DELETE FROM metadata.catalog WHERE schema_name='" +
                    schema_name + "' AND table_name='" + table_name +
@@ -1135,8 +1036,6 @@ private:
       }
 
       txn.commit();
-      // Logger::debug("cleanNonExistentPostgresTables",
-      //               "PostgreSQL table cleanup completed");
     } catch (const std::exception &e) {
       Logger::error("cleanNonExistentPostgresTables",
                     "Error cleaning PostgreSQL tables: " +
@@ -1146,8 +1045,6 @@ private:
 
   void cleanNonExistentMariaDBTables(pqxx::connection &pgConn) {
     try {
-      // Logger::debug("cleanNonExistentMariaDBTables",
-      //               "Starting MariaDB table cleanup");
       pqxx::work txn(pgConn);
 
       // Obtener connection_strings únicos de MariaDB
@@ -1265,9 +1162,8 @@ private:
 
           if (existingTableSet.find({schema_name, table_name}) ==
               existingTableSet.end()) {
-            Logger::info("cleanNonExistentMariaDBTables",
-                         "Removing non-existent MariaDB table: " + schema_name +
-                             "." + table_name);
+            Logger::info("Removing non-existent MariaDB table: " + schema_name +
+                         "." + table_name);
 
             txn.exec("DELETE FROM metadata.catalog WHERE schema_name='" +
                      schema_name + "' AND table_name='" + table_name +
@@ -1281,8 +1177,6 @@ private:
       }
 
       txn.commit();
-      // Logger::debug("cleanNonExistentMariaDBTables",
-      //               "MariaDB table cleanup completed");
     } catch (const std::exception &e) {
       Logger::error("cleanNonExistentMariaDBTables",
                     "Error cleaning MariaDB tables: " + std::string(e.what()));
@@ -1291,8 +1185,6 @@ private:
 
   void cleanNonExistentMSSQLTables(pqxx::connection &pgConn) {
     try {
-      // Logger::debug("cleanNonExistentMSSQLTables",
-      //               "Starting MSSQL table cleanup");
       pqxx::work txn(pgConn);
 
       // Obtener connection_strings únicos de MSSQL
@@ -1364,9 +1256,6 @@ private:
         // Construir query batch para verificar todas las tablas de esta
         // conexión - usar sys.tables con base de datos específica
         std::string databaseName = extractDatabaseName(connection_string);
-        Logger::debug("cleanNonExistentMSSQLTables",
-                      "Using database: " + databaseName +
-                          " for connection: " + connection_string);
         std::string batchQuery =
             "SELECT s.name AS table_schema, t.name AS table_name FROM "
             "[" +
@@ -1413,9 +1302,8 @@ private:
 
           if (existingTableSet.find({schema_name, table_name}) ==
               existingTableSet.end()) {
-            Logger::info("cleanNonExistentMSSQLTables",
-                         "Removing non-existent MSSQL table: " + schema_name +
-                             "." + table_name);
+            Logger::info("Removing non-existent MSSQL table: " + schema_name +
+                         "." + table_name);
 
             txn.exec("DELETE FROM metadata.catalog WHERE schema_name='" +
                      schema_name + "' AND table_name='" + table_name +
@@ -1431,8 +1319,6 @@ private:
       }
 
       txn.commit();
-      // Logger::debug("cleanNonExistentMSSQLTables",
-      //               "MSSQL table cleanup completed");
     } catch (const std::exception &e) {
       Logger::error("cleanNonExistentMSSQLTables",
                     "Error cleaning MSSQL tables: " + std::string(e.what()));
@@ -1441,8 +1327,6 @@ private:
 
   void cleanOrphanedTables(pqxx::connection &pgConn) {
     try {
-      // Logger::debug("cleanOrphanedTables", "Starting orphaned tables
-      // cleanup");
       pqxx::work txn(pgConn);
 
       // Limpiar tablas con connection_string vacío o inválido
@@ -1458,8 +1342,6 @@ private:
                "schema_name='' OR table_name IS NULL OR table_name='';");
 
       txn.commit();
-      // Logger::debug("cleanOrphanedTables", "Orphaned tables cleanup
-      // completed");
     } catch (const std::exception &e) {
       Logger::error("cleanOrphanedTables",
                     "Error cleaning orphaned tables: " + std::string(e.what()));
