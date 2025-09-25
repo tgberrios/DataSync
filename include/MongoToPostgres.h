@@ -7,8 +7,10 @@
 #include <algorithm>
 #include <bson/bson.h>
 #include <json/json.h>
+#include <map>
 #include <mongoc/mongoc.h>
 #include <pqxx/pqxx>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -282,6 +284,29 @@ private:
     txn.exec("CREATE SCHEMA IF NOT EXISTS \"" + schemaName + "\";");
   }
 
+  std::string getColumnTypeFromBsonType(bson_type_t type) {
+    switch (type) {
+    case BSON_TYPE_UTF8:
+      return "TEXT";
+    case BSON_TYPE_INT32:
+      return "INTEGER";
+    case BSON_TYPE_INT64:
+      return "BIGINT";
+    case BSON_TYPE_DOUBLE:
+      return "DOUBLE PRECISION";
+    case BSON_TYPE_BOOL:
+      return "BOOLEAN";
+    case BSON_TYPE_DATE_TIME:
+      return "TIMESTAMP";
+    case BSON_TYPE_OID:
+      return "VARCHAR(24)";
+    case BSON_TYPE_DOCUMENT:
+    case BSON_TYPE_ARRAY:
+    default:
+      return "JSONB";
+    }
+  }
+
   std::string buildCreateTableQuery(mongoc_client_t &mongoClient,
                                     const std::string &dbName,
                                     const std::string &collectionName,
@@ -290,21 +315,37 @@ private:
       mongoc_collection_t *collection = mongoc_client_get_collection(
           &mongoClient, dbName.c_str(), collectionName.c_str());
 
-      // Get sample document to determine schema
+      // Get multiple sample documents to determine complete schema
       bson_t *query = bson_new();
-      bson_t *opts = BCON_NEW("limit", BCON_INT32(1));
+      bson_t *opts = BCON_NEW("limit", BCON_INT32(10));
       mongoc_cursor_t *cursor =
           mongoc_collection_find_with_opts(collection, query, opts, NULL);
 
+      std::set<std::string> allColumns;
+      std::map<std::string, std::string> columnTypes;
+
       const bson_t *doc;
-      if (mongoc_cursor_next(cursor, &doc)) {
-        std::string createQuery =
-            buildCreateTableFromDocument(doc, targetSchema, collectionName);
-        mongoc_cursor_destroy(cursor);
-        bson_destroy(query);
-        bson_destroy(opts);
-        mongoc_collection_destroy(collection);
-        return createQuery;
+      while (mongoc_cursor_next(cursor, &doc)) {
+        bson_iter_t iter;
+        if (bson_iter_init(&iter, doc)) {
+          while (bson_iter_next(&iter)) {
+            const char *key = bson_iter_key(&iter);
+            allColumns.insert(key);
+
+            // Determine the most appropriate type for this column
+            std::string type = getColumnTypeFromBsonType(bson_iter_type(&iter));
+            if (columnTypes.find(key) == columnTypes.end()) {
+              columnTypes[key] = type;
+            } else {
+              // If we already have a type, prefer more specific ones
+              if (type == "TEXT" && columnTypes[key] != "TEXT") {
+                columnTypes[key] = type; // TEXT is more general
+              } else if (type == "JSONB" && columnTypes[key] != "JSONB") {
+                columnTypes[key] = type; // JSONB is more general
+              }
+            }
+          }
+        }
       }
 
       mongoc_cursor_destroy(cursor);
@@ -312,9 +353,36 @@ private:
       bson_destroy(opts);
       mongoc_collection_destroy(collection);
 
-      // If no documents, create basic table with _id
-      return "CREATE TABLE IF NOT EXISTS \"" + targetSchema + "\".\"" +
-             collectionName + "\" (_id VARCHAR(24) PRIMARY KEY, data JSONB);";
+      if (allColumns.empty()) {
+        // If no documents, create basic table with _id
+        return "CREATE TABLE IF NOT EXISTS \"" + targetSchema + "\".\"" +
+               collectionName + "\" (_id VARCHAR(24) PRIMARY KEY, data JSONB);";
+      }
+
+      // Build CREATE TABLE query with all discovered columns
+      std::string createQuery = "CREATE TABLE IF NOT EXISTS \"" + targetSchema +
+                                "\".\"" + collectionName + "\" (";
+      std::vector<std::string> columns;
+
+      // Always include _id as primary key
+      columns.push_back("_id VARCHAR(24) PRIMARY KEY");
+
+      // Add all other columns
+      for (const auto &column : allColumns) {
+        if (column == "_id")
+          continue; // Already added
+
+        std::string columnDef = "\"" + column + "\" " + columnTypes[column];
+        columns.push_back(columnDef);
+      }
+
+      createQuery += columns[0];
+      for (size_t i = 1; i < columns.size(); ++i) {
+        createQuery += ", " + columns[i];
+      }
+      createQuery += ");";
+
+      return createQuery;
 
     } catch (const std::exception &e) {
       Logger::error("buildCreateTableQuery",
@@ -372,9 +440,6 @@ private:
           break;
         }
 
-        // Siempre permitir NULL en todas las columnas
-        columnDef += "";
-
         columns.push_back(columnDef);
       }
     }
@@ -419,30 +484,32 @@ private:
       Logger::info("processTable", "Processing FULL_LOAD table: " + schemaName +
                                        "." + tableName);
 
-      pqxx::work txn(pgConn);
-      auto offsetCheck = txn.exec(
-          "SELECT last_offset FROM metadata.catalog WHERE schema_name='" +
-          escapeSQL(schemaName) + "' AND table_name='" + escapeSQL(tableName) +
-          "';");
+      {
+        pqxx::work txn(pgConn);
+        auto offsetCheck = txn.exec(
+            "SELECT last_offset FROM metadata.catalog WHERE schema_name='" +
+            escapeSQL(schemaName) + "' AND table_name='" +
+            escapeSQL(tableName) + "';");
 
-      bool shouldTruncate = true;
-      if (!offsetCheck.empty() && !offsetCheck[0][0].is_null()) {
-        std::string currentOffset = offsetCheck[0][0].as<std::string>();
-        if (currentOffset != "0" && !currentOffset.empty()) {
-          shouldTruncate = false;
+        bool shouldTruncate = true;
+        if (!offsetCheck.empty() && !offsetCheck[0][0].is_null()) {
+          std::string currentOffset = offsetCheck[0][0].as<std::string>();
+          if (currentOffset != "0" && !currentOffset.empty()) {
+            shouldTruncate = false;
+          }
         }
-      }
 
-      if (shouldTruncate) {
-        std::string cleanSchemaName = cleanSchemaNameForPostgres(schemaName);
-        Logger::info("processTable",
-                     "Truncating table: " + toLowerCase(cleanSchemaName) + "." +
-                         tableName);
-        txn.exec("TRUNCATE TABLE \"" + toLowerCase(cleanSchemaName) + "\".\"" +
-                 tableName + "\" CASCADE;");
-        Logger::debug("processTable", "Table truncated successfully");
+        if (shouldTruncate) {
+          std::string cleanSchemaName = cleanSchemaNameForPostgres(schemaName);
+          Logger::info("processTable",
+                       "Truncating table: " + toLowerCase(cleanSchemaName) +
+                           "." + tableName);
+          txn.exec("TRUNCATE TABLE \"" + toLowerCase(cleanSchemaName) +
+                   "\".\"" + tableName + "\" CASCADE;");
+          Logger::debug("processTable", "Table truncated successfully");
+        }
+        txn.commit();
       }
-      txn.commit();
     }
 
     auto mongoClient = connectMongoDB(mongoConnStr);
@@ -497,11 +564,9 @@ private:
     try {
       std::string cleanSchemaName = cleanSchemaNameForPostgres(schemaName);
       std::string lowerSchemaName = toLowerCase(cleanSchemaName);
-      pqxx::connection countConn(DatabaseConfig::getPostgresConnectionString());
-      pqxx::work txn(countConn);
-      auto result = txn.exec("SELECT COUNT(*) FROM \"" + lowerSchemaName +
-                             "\".\"" + tableName + "\"");
-      txn.commit();
+      pqxx::nontransaction ntxn(pgConn);
+      auto result = ntxn.exec("SELECT COUNT(*) FROM \"" + lowerSchemaName +
+                              "\".\"" + tableName + "\"");
       if (!result.empty()) {
         return result[0][0].as<int>();
       }
@@ -966,7 +1031,6 @@ private:
     std::vector<std::string> pkColumns;
 
     try {
-      pqxx::work txn(pgConn);
       std::string query = "SELECT kcu.column_name "
                           "FROM information_schema.table_constraints tc "
                           "JOIN information_schema.key_column_usage kcu "
@@ -981,8 +1045,8 @@ private:
                           "' "
                           "ORDER BY kcu.ordinal_position;";
 
-      auto results = txn.exec(query);
-      txn.commit();
+      pqxx::nontransaction ntxn(pgConn);
+      auto results = ntxn.exec(query);
 
       for (const auto &row : results) {
         if (!row[0].is_null()) {
