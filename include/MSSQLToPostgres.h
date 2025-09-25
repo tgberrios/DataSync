@@ -219,9 +219,25 @@ public:
   }
 
   void setupTableTargetMSSQLToPostgres() {
+    Logger::info("Starting MSSQL table target setup");
+
     try {
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
+
+      if (!pgConn.is_open()) {
+        Logger::error("CRITICAL ERROR: Cannot establish PostgreSQL connection "
+                      "for MSSQL table setup");
+        return;
+      }
+
+      Logger::info("PostgreSQL connection established for MSSQL table setup");
+
       auto tables = getActiveTables(pgConn);
+
+      if (tables.empty()) {
+        Logger::info("No active MSSQL tables found to setup");
+        return;
+      }
 
       // Sort tables by priority: FULL_LOAD, RESET, PERFECT_MATCH,
       // LISTENING_CHANGES
@@ -261,12 +277,21 @@ public:
       }
 
       for (const auto &table : tables) {
-        if (table.db_engine != "MSSQL")
+        if (table.db_engine != "MSSQL") {
+          Logger::warning("Skipping non-MSSQL table: " + table.db_engine +
+                          " - " + table.schema_name + "." + table.table_name);
           continue;
+        }
+
+        Logger::info("Setting up MSSQL table: " + table.schema_name + "." +
+                     table.table_name + " (status: " + table.status + ")");
 
         SQLHDBC dbc = getMSSQLConnection(table.connection_string);
         if (!dbc) {
-          Logger::error("Failed to get MSSQL connection");
+          Logger::error(
+              "CRITICAL ERROR: Failed to get MSSQL connection for table " +
+              table.schema_name + "." + table.table_name +
+              " - skipping table setup");
           continue;
         }
 
@@ -464,9 +489,25 @@ public:
   }
 
   void transferDataMSSQLToPostgres() {
+    Logger::info("Starting MSSQL to PostgreSQL data transfer");
+
     try {
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
+
+      if (!pgConn.is_open()) {
+        Logger::error("CRITICAL ERROR: Cannot establish PostgreSQL connection "
+                      "for MSSQL data transfer");
+        return;
+      }
+
+      Logger::info("PostgreSQL connection established for MSSQL data transfer");
+
       auto tables = getActiveTables(pgConn);
+
+      if (tables.empty()) {
+        Logger::info("No active MSSQL tables found for data transfer");
+        return;
+      }
 
       // Sort tables by priority: FULL_LOAD, RESET, PERFECT_MATCH,
       // LISTENING_CHANGES
@@ -506,15 +547,19 @@ public:
       }
 
       for (auto &table : tables) {
-        if (table.db_engine != "MSSQL")
+        if (table.db_engine != "MSSQL") {
+          Logger::warning(
+              "Skipping non-MSSQL table in transfer: " + table.db_engine +
+              " - " + table.schema_name + "." + table.table_name);
           continue;
-
-        // Tabla procesando: table.schema_name + "." + table.table_name + " (" +
-        // table.status + ")"
+        }
 
         SQLHDBC dbc = getMSSQLConnection(table.connection_string);
         if (!dbc) {
-          Logger::error("Failed to get MSSQL connection");
+          Logger::error(
+              "CRITICAL ERROR: Failed to get MSSQL connection for table " +
+              table.schema_name + "." + table.table_name +
+              " - marking as ERROR and skipping");
           updateStatus(pgConn, table.schema_name, table.table_name, "ERROR");
           continue;
         }
@@ -535,10 +580,25 @@ public:
                                        "].[" + table_name + "];");
         size_t sourceCount = 0;
         if (!countRes.empty() && !countRes[0][0].empty()) {
-          sourceCount = std::stoul(countRes[0][0]);
+          try {
+            sourceCount = std::stoul(countRes[0][0]);
+            Logger::info("MSSQL source table " + schema_name + "." +
+                         table_name + " has " + std::to_string(sourceCount) +
+                         " records");
+          } catch (const std::exception &e) {
+            Logger::error("ERROR parsing source count for MSSQL table " +
+                          schema_name + "." + table_name + ": " +
+                          std::string(e.what()));
+            sourceCount = 0;
+          }
+        } else {
+          Logger::error("ERROR: Could not get source count for MSSQL table " +
+                        schema_name + "." + table_name +
+                        " - count query returned no results");
         }
 
         // Obtener conteo de registros en la tabla destino
+
         std::string targetCountQuery = "SELECT COUNT(*) FROM \"" +
                                        lowerSchemaName + "\".\"" + table_name +
                                        "\";";
@@ -548,9 +608,19 @@ public:
           auto targetResult = txn.exec(targetCountQuery);
           if (!targetResult.empty()) {
             targetCount = targetResult[0][0].as<size_t>();
+            Logger::info("MSSQL target table " + lowerSchemaName + "." +
+                         table_name + " has " + std::to_string(targetCount) +
+                         " records");
+          } else {
+            Logger::error("ERROR: MSSQL target count query returned no results "
+                          "for table " +
+                          lowerSchemaName + "." + table_name);
           }
           txn.commit();
         } catch (const std::exception &e) {
+          Logger::error("ERROR getting MSSQL target count for table " +
+                        lowerSchemaName + "." + table_name + ": " +
+                        std::string(e.what()));
         }
 
         // Lógica simple basada en counts reales

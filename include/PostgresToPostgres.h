@@ -55,14 +55,25 @@ public:
   }
 
   void setupTableTargetPostgresToPostgres() {
+    Logger::info("Starting PostgreSQL table target setup");
+
     try {
-      Logger::info("Starting PostgreSQL target table setup");
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
+
+      if (!pgConn.is_open()) {
+        Logger::error("CRITICAL ERROR: Cannot establish PostgreSQL connection "
+                      "for PostgreSQL table setup");
+        return;
+      }
 
       pqxx::work txn(pgConn);
       auto results = txn.exec("SELECT schema_name, table_name, "
                               "connection_string, status FROM metadata.catalog "
                               "WHERE db_engine='PostgreSQL' AND active=true;");
+
+      Logger::info("PostgreSQL catalog query executed - found " +
+                   std::to_string(results.size()) +
+                   " active PostgreSQL tables");
 
       // Sort tables by priority: FULL_LOAD, RESET, PERFECT_MATCH,
       // LISTENING_CHANGES
@@ -148,8 +159,16 @@ public:
   }
 
   void transferDataPostgresToPostgres() {
+    Logger::info("Starting PostgreSQL to PostgreSQL data transfer");
+
     try {
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
+
+      if (!pgConn.is_open()) {
+        Logger::error("CRITICAL ERROR: Cannot establish PostgreSQL connection "
+                      "for PostgreSQL data transfer");
+        return;
+      }
 
       {
         pqxx::work txn(pgConn);
@@ -159,6 +178,10 @@ public:
                      "FROM metadata.catalog "
                      "WHERE db_engine='PostgreSQL' AND active=true AND status "
                      "!= 'NO_DATA';");
+
+        Logger::info("PostgreSQL catalog query executed - found " +
+                     std::to_string(results.size()) +
+                     " active PostgreSQL tables for transfer");
 
         // Sort tables by priority: FULL_LOAD, RESET, PERFECT_MATCH,
         // LISTENING_CHANGES
@@ -245,10 +268,13 @@ public:
 
         txn.commit();
       }
+
+      Logger::info(
+          "PostgreSQL to PostgreSQL data transfer completed successfully");
     } catch (const std::exception &e) {
-      Logger::error("transferDataPostgresToPostgres",
-                    "Error in transferDataPostgresToPostgres: " +
-                        std::string(e.what()));
+      Logger::error("CRITICAL ERROR in transferDataPostgresToPostgres: " +
+                    std::string(e.what()) +
+                    " - PostgreSQL data transfer completely failed");
     }
   }
 
