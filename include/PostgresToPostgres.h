@@ -43,25 +43,29 @@ public:
         currentConnectionString = connectionString;
         return postgresConn.get();
       } else {
-        Logger::error(LogCategory::TRANSFER, "Failed to open PostgreSQL connection");
+        Logger::error(LogCategory::TRANSFER,
+                      "Failed to open PostgreSQL connection");
         postgresConn.reset();
         return nullptr;
       }
     } catch (const std::exception &e) {
-      Logger::error(LogCategory::TRANSFER, "Connection failed: " + std::string(e.what()));
+      Logger::error(LogCategory::TRANSFER,
+                    "Connection failed: " + std::string(e.what()));
       postgresConn.reset();
       return nullptr;
     }
   }
 
   void setupTableTargetPostgresToPostgres() {
-    Logger::info(LogCategory::TRANSFER, "Starting PostgreSQL table target setup");
+    Logger::info(LogCategory::TRANSFER,
+                 "Starting PostgreSQL table target setup");
 
     try {
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
 
       if (!pgConn.is_open()) {
-        Logger::error(LogCategory::TRANSFER, "CRITICAL ERROR: Cannot establish PostgreSQL connection "
+        Logger::error(LogCategory::TRANSFER,
+                      "CRITICAL ERROR: Cannot establish PostgreSQL connection "
                       "for PostgreSQL table setup");
         return;
       }
@@ -71,9 +75,10 @@ public:
                               "connection_string, status FROM metadata.catalog "
                               "WHERE db_engine='PostgreSQL' AND active=true;");
 
-      Logger::info(LogCategory::TRANSFER, "PostgreSQL catalog query executed - found " +
-                   std::to_string(results.size()) +
-                   " active PostgreSQL tables");
+      Logger::info(LogCategory::TRANSFER,
+                   "PostgreSQL catalog query executed - found " +
+                       std::to_string(results.size()) +
+                       " active PostgreSQL tables");
 
       // Sort tables by priority: FULL_LOAD, RESET, PERFECT_MATCH,
       // LISTENING_CHANGES
@@ -112,13 +117,15 @@ public:
         return false;
       });
 
-      Logger::info(LogCategory::TRANSFER, "Processing " + std::to_string(tables.size()) +
-                   " PostgreSQL tables in priority order");
+      Logger::info(LogCategory::TRANSFER,
+                   "Processing " + std::to_string(tables.size()) +
+                       " PostgreSQL tables in priority order");
       for (size_t i = 0; i < tables.size(); ++i) {
-        Logger::info(LogCategory::TRANSFER, "[" + std::to_string(i + 1) + "/" +
-                     std::to_string(tables.size()) + "] " +
-                     std::get<0>(tables[i]) + "." + std::get<1>(tables[i]) +
-                     " (status: " + std::get<3>(tables[i]) + ")");
+        Logger::info(LogCategory::TRANSFER,
+                     "[" + std::to_string(i + 1) + "/" +
+                         std::to_string(tables.size()) + "] " +
+                         std::get<0>(tables[i]) + "." + std::get<1>(tables[i]) +
+                         " (status: " + std::get<3>(tables[i]) + ")");
       }
 
       for (const auto &table : tables) {
@@ -129,7 +136,8 @@ public:
         try {
           auto sourceConn = getPostgresConnection(sourceConnStr);
           if (!sourceConn) {
-            Logger::error(LogCategory::TRANSFER, "Failed to connect to source PostgreSQL");
+            Logger::error(LogCategory::TRANSFER,
+                          "Failed to connect to source PostgreSQL");
             continue;
           }
 
@@ -140,32 +148,37 @@ public:
               *sourceConn, schemaName, tableName, lowerSchemaName);
           if (!createTableQuery.empty()) {
             txn.exec(createTableQuery);
-            Logger::info(LogCategory::TRANSFER, "Created target table: " + lowerSchemaName + "." +
-                         tableName);
+            Logger::info(LogCategory::TRANSFER,
+                         "Created target table: " + lowerSchemaName + "." +
+                             tableName);
           }
 
         } catch (const std::exception &e) {
-          Logger::error(LogCategory::TRANSFER, "Error setting up table " + schemaName + "." +
-                        tableName + ": " + e.what());
+          Logger::error(LogCategory::TRANSFER, "Error setting up table " +
+                                                   schemaName + "." +
+                                                   tableName + ": " + e.what());
         }
       }
 
       txn.commit();
       Logger::info(LogCategory::TRANSFER, "Target table setup completed");
     } catch (const std::exception &e) {
-      Logger::error(LogCategory::TRANSFER, "Error in setupTableTargetPostgresToPostgres: " +
-                    std::string(e.what()));
+      Logger::error(LogCategory::TRANSFER,
+                    "Error in setupTableTargetPostgresToPostgres: " +
+                        std::string(e.what()));
     }
   }
 
   void transferDataPostgresToPostgres() {
-    Logger::info(LogCategory::TRANSFER, "Starting PostgreSQL to PostgreSQL data transfer");
+    Logger::info(LogCategory::TRANSFER,
+                 "Starting PostgreSQL to PostgreSQL data transfer");
 
     try {
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
 
       if (!pgConn.is_open()) {
-        Logger::error(LogCategory::TRANSFER, "CRITICAL ERROR: Cannot establish PostgreSQL connection "
+        Logger::error(LogCategory::TRANSFER,
+                      "CRITICAL ERROR: Cannot establish PostgreSQL connection "
                       "for PostgreSQL data transfer");
         return;
       }
@@ -179,9 +192,10 @@ public:
                      "WHERE db_engine='PostgreSQL' AND active=true AND status "
                      "!= 'NO_DATA';");
 
-        Logger::info(LogCategory::TRANSFER, "PostgreSQL catalog query executed - found " +
-                     std::to_string(results.size()) +
-                     " active PostgreSQL tables for transfer");
+        Logger::info(LogCategory::TRANSFER,
+                     "PostgreSQL catalog query executed - found " +
+                         std::to_string(results.size()) +
+                         " active PostgreSQL tables for transfer");
 
         // Sort tables by priority: FULL_LOAD, RESET, PERFECT_MATCH,
         // LISTENING_CHANGES
@@ -259,7 +273,8 @@ public:
                                    lastOffset, status, lastSyncColumn,
                                    lastSyncTime);
           } catch (const std::exception &e) {
-            Logger::error(LogCategory::TRANSFER, "transferDataPostgresToPostgres",
+            Logger::error(LogCategory::TRANSFER,
+                          "transferDataPostgresToPostgres",
                           "Error processing table " + schemaName + "." +
                               tableName + ": " + e.what());
             updateStatus(pgConn, schemaName, tableName, "ERROR", 0);
@@ -272,9 +287,10 @@ public:
       Logger::info(
           "PostgreSQL to PostgreSQL data transfer completed successfully");
     } catch (const std::exception &e) {
-      Logger::error(LogCategory::TRANSFER, "CRITICAL ERROR in transferDataPostgresToPostgres: " +
-                    std::string(e.what()) +
-                    " - PostgreSQL data transfer completely failed");
+      Logger::error(LogCategory::TRANSFER,
+                    "CRITICAL ERROR in transferDataPostgresToPostgres: " +
+                        std::string(e.what()) +
+                        " - PostgreSQL data transfer completely failed");
     }
   }
 
@@ -306,9 +322,9 @@ private:
           "ORDER BY ordinal_position;");
 
       if (results.empty()) {
-        Logger::warning(LogCategory::TRANSFER, "buildCreateTableQuery", "No columns found for table " +
-                                                     sourceSchema + "." +
-                                                     tableName);
+        Logger::warning(LogCategory::TRANSFER, "buildCreateTableQuery",
+                        "No columns found for table " + sourceSchema + "." +
+                            tableName);
         return "";
       }
 
@@ -388,8 +404,9 @@ private:
     }
 
     if (status == "FULL_LOAD") {
-      Logger::info(LogCategory::TRANSFER, "processTableWithDeltas", "Processing FULL_LOAD table: " +
-                                                 schemaName + "." + tableName);
+      Logger::info(LogCategory::TRANSFER, "processTableWithDeltas",
+                   "Processing FULL_LOAD table: " + schemaName + "." +
+                       tableName);
 
       {
         pqxx::work txn(pgConn);
@@ -522,8 +539,9 @@ private:
     }
 
     if (status == "FULL_LOAD") {
-      Logger::info(LogCategory::TRANSFER, "processTable", "Processing FULL_LOAD table: " + schemaName +
-                                       "." + tableName);
+      Logger::info(LogCategory::TRANSFER, "processTable",
+                   "Processing FULL_LOAD table: " + schemaName + "." +
+                       tableName);
 
       pqxx::work txn(pgConn);
       auto offsetCheck = txn.exec(
@@ -559,8 +577,9 @@ private:
     std::string timeColumn =
         detectTimeColumn(*sourceConn, schemaName, tableName);
     if (timeColumn.empty()) {
-      Logger::warning(LogCategory::TRANSFER, "processTable", "No time column detected for " +
-                                          schemaName + "." + tableName);
+      Logger::warning(LogCategory::TRANSFER, "processTable",
+                      "No time column detected for " + schemaName + "." +
+                          tableName);
     }
 
     int sourceCount = getSourceCount(*sourceConn, schemaName, tableName);
@@ -684,25 +703,77 @@ private:
 
       std::string lowerSchemaName = toLowerCase(schemaName);
 
-      // Usar last_offset para paginación (como en MariaDBToPostgres.h)
-      size_t currentOffset = 0;
-      try {
-        currentOffset = std::stoul(lastOffset);
-      } catch (...) {
-        currentOffset = 0;
-      }
+      // OPTIMIZED: Usar cursor-based pagination con primary key
+      std::string pkStrategy =
+          getPKStrategyFromCatalog(pgConn, schemaName, tableName);
+      std::vector<std::string> pkColumns =
+          getPKColumnsFromCatalog(pgConn, schemaName, tableName);
+      std::string lastProcessedPK =
+          getLastProcessedPKFromCatalog(pgConn, schemaName, tableName);
 
       const size_t CHUNK_SIZE = SyncConfig::getChunkSize();
-      size_t totalProcessed = currentOffset;
+      size_t totalProcessed = 0;
       bool hasMoreData = true;
 
       while (hasMoreData) {
-        pqxx::work sourceTxn(sourceConn);
-        std::string selectQuery = "SELECT * FROM \"" + schemaName + "\".\"" +
-                                  tableName + "\" LIMIT " +
-                                  std::to_string(CHUNK_SIZE) + " OFFSET " +
-                                  std::to_string(totalProcessed) + ";";
+        std::string selectQuery =
+            "SELECT * FROM \"" + schemaName + "\".\"" + tableName + "\"";
 
+        if (pkStrategy == "PK" && !pkColumns.empty()) {
+          // CURSOR-BASED PAGINATION: Usar PK para paginación eficiente
+          if (!lastProcessedPK.empty()) {
+            selectQuery += " WHERE ";
+            std::vector<std::string> lastPKValues =
+                parseLastPK(lastProcessedPK);
+
+            if (pkColumns.size() == 1) {
+              // Single PK: simple comparison
+              selectQuery += "\"" + pkColumns[0] + "\" > '" +
+                             escapeSQL(lastPKValues[0]) + "'";
+            } else {
+              // Composite PK: lexicographic ordering
+              selectQuery += "(";
+              for (size_t i = 0; i < pkColumns.size(); ++i) {
+                if (i > 0)
+                  selectQuery += " OR ";
+                selectQuery += "(";
+                for (size_t j = 0; j <= i; ++j) {
+                  if (j > 0)
+                    selectQuery += " AND ";
+                  if (j == i) {
+                    selectQuery += "\"" + pkColumns[j] + "\" > '" +
+                                   escapeSQL(lastPKValues[j]) + "'";
+                  } else {
+                    selectQuery += "\"" + pkColumns[j] + "\" = '" +
+                                   escapeSQL(lastPKValues[j]) + "'";
+                  }
+                }
+                selectQuery += ")";
+              }
+              selectQuery += ")";
+            }
+          }
+
+          selectQuery += " ORDER BY ";
+          for (size_t i = 0; i < pkColumns.size(); ++i) {
+            if (i > 0)
+              selectQuery += ", ";
+            selectQuery += "\"" + pkColumns[i] + "\"";
+          }
+          selectQuery += " LIMIT " + std::to_string(CHUNK_SIZE) + ";";
+        } else {
+          // FALLBACK: Usar OFFSET pagination para tablas sin PK
+          size_t currentOffset = 0;
+          try {
+            currentOffset = std::stoul(lastOffset);
+          } catch (...) {
+            currentOffset = 0;
+          }
+          selectQuery += " LIMIT " + std::to_string(CHUNK_SIZE) + " OFFSET " +
+                         std::to_string(totalProcessed) + ";";
+        }
+
+        pqxx::work sourceTxn(sourceConn);
         auto sourceResult = sourceTxn.exec(selectQuery);
         sourceTxn.commit();
 
@@ -752,6 +823,37 @@ private:
 
         totalProcessed += sourceResult.size();
 
+        // OPTIMIZED: Update last_processed_pk for cursor-based pagination
+        if (pkStrategy == "PK" && !pkColumns.empty() && !sourceResult.empty()) {
+          // Convert pqxx::result to vector<vector<string>> for
+          // getLastPKFromResults
+          std::vector<std::vector<std::string>> resultsVector;
+          std::vector<std::string> columnNames;
+
+          // Get column names
+          if (!sourceResult.empty()) {
+            for (size_t i = 0; i < sourceResult[0].size(); ++i) {
+              columnNames.push_back(sourceResult[0][i].name());
+            }
+          }
+
+          // Convert results
+          for (const auto &row : sourceResult) {
+            std::vector<std::string> rowData;
+            for (size_t i = 0; i < row.size(); ++i) {
+              rowData.push_back(row[i].is_null() ? "NULL"
+                                                 : row[i].as<std::string>());
+            }
+            resultsVector.push_back(rowData);
+          }
+
+          std::string lastPK =
+              getLastPKFromResults(resultsVector, pkColumns, columnNames);
+          if (!lastPK.empty()) {
+            updateLastProcessedPK(pgConn, schemaName, tableName, lastPK);
+          }
+        }
+
         // Actualizar last_offset en la base de datos
         try {
           pqxx::work updateTxn(pgConn);
@@ -778,10 +880,60 @@ private:
 
       updateStatus(pgConn, schemaName, tableName, "PERFECT_MATCH",
                    totalProcessed);
-      Logger::info(LogCategory::TRANSFER, "performDataTransfer", "Successfully transferred " +
-                                              std::to_string(totalProcessed) +
-                                              " records for " + schemaName +
-                                              "." + tableName);
+
+      // OPTIMIZED: Update last_processed_pk for completed transfer (even if
+      // single chunk)
+      if (pkStrategy == "PK" && !pkColumns.empty() && totalProcessed > 0) {
+        try {
+          // Obtener el último PK de la tabla para marcar como completamente
+          // procesada
+          std::string maxPKQuery = "SELECT ";
+          for (size_t i = 0; i < pkColumns.size(); ++i) {
+            if (i > 0)
+              maxPKQuery += ", ";
+            maxPKQuery += "\"" + pkColumns[i] + "\"";
+          }
+          maxPKQuery +=
+              " FROM \"" + schemaName + "\".\"" + tableName + "\" ORDER BY ";
+          for (size_t i = 0; i < pkColumns.size(); ++i) {
+            if (i > 0)
+              maxPKQuery += ", ";
+            maxPKQuery += "\"" + pkColumns[i] + "\"";
+          }
+          maxPKQuery += " DESC LIMIT 1;";
+
+          pqxx::work sourceTxn(sourceConn);
+          auto maxPKResults = sourceTxn.exec(maxPKQuery);
+          sourceTxn.commit();
+
+          if (!maxPKResults.empty() && !maxPKResults[0].empty()) {
+            std::string lastPK;
+            for (size_t i = 0; i < maxPKResults[0].size(); ++i) {
+              if (i > 0)
+                lastPK += "|";
+              lastPK += maxPKResults[0][i].is_null()
+                            ? "NULL"
+                            : maxPKResults[0][i].as<std::string>();
+            }
+
+            updateLastProcessedPK(pgConn, schemaName, tableName, lastPK);
+            Logger::info(LogCategory::TRANSFER,
+                         "Updated last_processed_pk to " + lastPK +
+                             " for completed table " + schemaName + "." +
+                             tableName);
+          }
+        } catch (const std::exception &e) {
+          Logger::error(
+              LogCategory::TRANSFER,
+              "ERROR: Failed to update last_processed_pk for completed table " +
+                  schemaName + "." + tableName + ": " + std::string(e.what()));
+        }
+      }
+
+      Logger::info(LogCategory::TRANSFER, "performDataTransfer",
+                   "Successfully transferred " +
+                       std::to_string(totalProcessed) + " records for " +
+                       schemaName + "." + tableName);
 
     } catch (const std::exception &e) {
       Logger::error(LogCategory::TRANSFER, "performDataTransfer",
@@ -817,6 +969,159 @@ private:
       pos += 2;
     }
     return escaped;
+  }
+
+  // CURSOR-BASED PAGINATION HELPER FUNCTIONS
+  std::string getPKStrategyFromCatalog(pqxx::connection &pgConn,
+                                       const std::string &schema_name,
+                                       const std::string &table_name) {
+    try {
+      pqxx::work txn(pgConn);
+      auto result = txn.exec(
+          "SELECT pk_strategy FROM metadata.catalog WHERE schema_name='" +
+          escapeSQL(schema_name) + "' AND table_name='" +
+          escapeSQL(table_name) + "';");
+      txn.commit();
+
+      if (!result.empty() && !result[0][0].is_null()) {
+        return result[0][0].as<std::string>();
+      }
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER,
+                    "Error getting PK strategy: " + std::string(e.what()));
+    }
+    return "OFFSET";
+  }
+
+  std::vector<std::string>
+  getPKColumnsFromCatalog(pqxx::connection &pgConn,
+                          const std::string &schema_name,
+                          const std::string &table_name) {
+    try {
+      pqxx::work txn(pgConn);
+      auto result = txn.exec(
+          "SELECT pk_columns FROM metadata.catalog WHERE schema_name='" +
+          escapeSQL(schema_name) + "' AND table_name='" +
+          escapeSQL(table_name) + "';");
+      txn.commit();
+
+      if (!result.empty() && !result[0][0].is_null()) {
+        std::string pkColumnsJson = result[0][0].as<std::string>();
+        return parseJSONArray(pkColumnsJson);
+      }
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER,
+                    "Error getting PK columns: " + std::string(e.what()));
+    }
+    return {};
+  }
+
+  std::string getLastProcessedPKFromCatalog(pqxx::connection &pgConn,
+                                            const std::string &schema_name,
+                                            const std::string &table_name) {
+    try {
+      pqxx::work txn(pgConn);
+      auto result = txn.exec(
+          "SELECT last_processed_pk FROM metadata.catalog WHERE schema_name='" +
+          escapeSQL(schema_name) + "' AND table_name='" +
+          escapeSQL(table_name) + "';");
+      txn.commit();
+
+      if (!result.empty() && !result[0][0].is_null()) {
+        return result[0][0].as<std::string>();
+      }
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER, "Error getting last processed PK: " +
+                                               std::string(e.what()));
+    }
+    return "";
+  }
+
+  std::vector<std::string> parseJSONArray(const std::string &jsonArray) {
+    std::vector<std::string> result;
+    if (jsonArray.empty() || jsonArray == "[]")
+      return result;
+
+    std::string content = jsonArray;
+    if (content.front() == '[')
+      content = content.substr(1);
+    if (content.back() == ']')
+      content = content.substr(0, content.length() - 1);
+
+    std::istringstream ss(content);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+      item = item.substr(item.find_first_not_of(" \t\""));
+      item = item.substr(0, item.find_last_not_of(" \t\"") + 1);
+      if (!item.empty()) {
+        result.push_back(item);
+      }
+    }
+    return result;
+  }
+
+  void updateLastProcessedPK(pqxx::connection &pgConn,
+                             const std::string &schema_name,
+                             const std::string &table_name,
+                             const std::string &lastPK) {
+    try {
+      pqxx::work txn(pgConn);
+      txn.exec("UPDATE metadata.catalog SET last_processed_pk='" +
+               escapeSQL(lastPK) + "' WHERE schema_name='" +
+               escapeSQL(schema_name) + "' AND table_name='" +
+               escapeSQL(table_name) + "';");
+      txn.commit();
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER,
+                    "Error updating last processed PK: " +
+                        std::string(e.what()));
+    }
+  }
+
+  std::string
+  getLastPKFromResults(const std::vector<std::vector<std::string>> &results,
+                       const std::vector<std::string> &pkColumns,
+                       const std::vector<std::string> &columnNames) {
+    if (results.empty())
+      return "";
+
+    const auto &lastRow = results.back();
+    std::string lastPK;
+
+    for (size_t i = 0; i < pkColumns.size(); ++i) {
+      if (i > 0)
+        lastPK += "|";
+
+      // Find the index of this PK column in the results
+      size_t pkIndex = 0;
+      for (size_t j = 0; j < columnNames.size(); ++j) {
+        if (columnNames[j] == pkColumns[i]) {
+          pkIndex = j;
+          break;
+        }
+      }
+
+      if (pkIndex < lastRow.size()) {
+        lastPK += lastRow[pkIndex];
+      }
+    }
+
+    return lastPK;
+  }
+
+  std::vector<std::string> parseLastPK(const std::string &lastPK) {
+    std::vector<std::string> result;
+    if (lastPK.empty())
+      return result;
+
+    std::istringstream ss(lastPK);
+    std::string item;
+    while (std::getline(ss, item, '|')) {
+      if (!item.empty()) {
+        result.push_back(item);
+      }
+    }
+    return result;
   }
 
   void processDeletesByPrimaryKey(const std::string &schema_name,
