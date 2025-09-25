@@ -2,7 +2,6 @@
 #define MARIADBTOPOSTGRES_H
 
 #include "Config.h"
-#include "SyncReporter.h"
 #include "logger.h"
 #include "catalog_manager.h"
 #include <algorithm>
@@ -718,10 +717,7 @@ public:
         if (table.db_engine != "MariaDB")
           continue;
 
-        // Actualizar tabla actualmente procesando para el dashboard
-        SyncReporter::currentProcessingTable = table.schema_name + "." +
-                                               table.table_name + " (" +
-                                               table.status + ")";
+        // Tabla procesando: table.schema_name + "." + table.table_name + " (" + table.status + ")"
 
         // Connect directly to MariaDB
         std::string host, user, password, db, port;
@@ -1094,10 +1090,7 @@ public:
           }
         }
 
-        // Limpiar tabla actualmente procesando cuando termine
-        SyncReporter::lastProcessingTable =
-            SyncReporter::currentProcessingTable;
-        SyncReporter::currentProcessingTable = "";
+        // Tabla procesada completamente
         
         // Close MariaDB connection
         mysql_close(mariadbConn);

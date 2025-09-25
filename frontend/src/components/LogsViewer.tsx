@@ -507,7 +507,6 @@ const LogsViewer = () => {
             <Label>Function/Module:</Label>
             <Select value={functionFilter} onChange={(e) => setFunctionFilter(e.target.value)}>
               <option value="ALL">All Functions</option>
-              <option value="ConnectionPool">ConnectionPool</option>
               <option value="Catalog">Catalog</option>
               <option value="DataGovernance">DataGovernance</option>
               <option value="DataQuality">DataQuality</option>
@@ -517,7 +516,6 @@ const LogsViewer = () => {
               <option value="MSSQLToPostgres">MSSQLToPostgres</option>
               <option value="PostgresToPostgres">PostgresToPostgres</option>
               <option value="StreamingData">StreamingData</option>
-              <option value="SyncReporter">SyncReporter</option>
               <option value="MetricsCollector">MetricsCollector</option>
               <option value="Config">Config</option>
               <option value="Logger">Logger</option>

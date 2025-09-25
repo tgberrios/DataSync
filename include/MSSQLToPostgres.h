@@ -2,7 +2,6 @@
 #define MSSQLTOPOSTGRES_H
 
 #include "Config.h"
-#include "SyncReporter.h"
 #include "logger.h"
 #include "catalog_manager.h"
 
@@ -478,10 +477,7 @@ public:
         if (table.db_engine != "MSSQL")
           continue;
 
-        // Actualizar tabla actualmente procesando para el dashboard
-        SyncReporter::currentProcessingTable = table.schema_name + "." +
-                                               table.table_name + " (" +
-                                               table.status + ")";
+        // Tabla procesando: table.schema_name + "." + table.table_name + " (" + table.status + ")"
 
         // Connect directly to MSSQL using ODBC
         SQLHENV env;
@@ -929,10 +925,7 @@ public:
           }
         }
 
-        // Limpiar tabla actualmente procesando cuando termine
-        SyncReporter::lastProcessingTable =
-            SyncReporter::currentProcessingTable;
-        SyncReporter::currentProcessingTable = "";
+        // Tabla procesada completamente
         
         // Close MSSQL connection
         SQLDisconnect(dbc);
