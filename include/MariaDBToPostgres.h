@@ -91,7 +91,7 @@ public:
     // Crear nueva conexión
     mariadbConn = mysql_init(nullptr);
     if (!mariadbConn) {
-      Logger::error("getMariaDBConnection", "mysql_init() failed");
+      Logger::error(LogCategory::TRANSFER, "getMariaDBConnection", "mysql_init() failed");
       return nullptr;
     }
 
@@ -107,7 +107,7 @@ public:
     if (mysql_real_connect(mariadbConn, host.c_str(), user.c_str(),
                            password.c_str(), db.c_str(), portNum, nullptr,
                            0) == nullptr) {
-      Logger::error("getMariaDBConnection",
+      Logger::error(LogCategory::TRANSFER, "getMariaDBConnection",
                     "MariaDB connection failed: " +
                         std::string(mysql_error(mariadbConn)));
       mysql_close(mariadbConn);
@@ -161,7 +161,7 @@ public:
         data.push_back(t);
       }
     } catch (const std::exception &e) {
-      Logger::error("getActiveTables",
+      Logger::error(LogCategory::TRANSFER, "getActiveTables",
                     "Error getting active tables: " + std::string(e.what()));
     }
 
@@ -175,7 +175,7 @@ public:
                                  const std::string &connection_string) {
     MYSQL *mariadbConn = getMariaDBConnection(connection_string);
     if (!mariadbConn) {
-      Logger::error("syncIndexesAndConstraints",
+      Logger::error(LogCategory::TRANSFER, "syncIndexesAndConstraints",
                     "Failed to get MariaDB connection");
       return;
     }
@@ -209,7 +209,7 @@ public:
         txn.exec(createQuery);
         txn.commit();
       } catch (const std::exception &e) {
-        Logger::error("syncIndexesAndConstraints",
+        Logger::error(LogCategory::TRANSFER, "syncIndexesAndConstraints",
                       "Error creating index '" + indexName +
                           "': " + std::string(e.what()));
       }
@@ -217,29 +217,29 @@ public:
   }
 
   void setupTableTargetMariaDBToPostgres() {
-    Logger::info("Starting MariaDB table target setup");
+    Logger::info(LogCategory::TRANSFER, "Starting MariaDB table target setup");
 
     try {
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
 
       if (!pgConn.is_open()) {
-        Logger::error("CRITICAL ERROR: Cannot establish PostgreSQL connection "
+        Logger::error(LogCategory::TRANSFER, "CRITICAL ERROR: Cannot establish PostgreSQL connection "
                       "for MariaDB table setup");
         return;
       }
 
-      Logger::info("PostgreSQL connection established for MariaDB table setup");
+      Logger::info(LogCategory::TRANSFER, "PostgreSQL connection established for MariaDB table setup");
 
       auto tables = getActiveTables(pgConn);
 
       if (tables.empty()) {
-        Logger::info("No active MariaDB tables found to setup");
+        Logger::info(LogCategory::TRANSFER, "No active MariaDB tables found to setup");
         return;
       }
 
       // Sort tables by priority: FULL_LOAD, RESET, PERFECT_MATCH,
       // LISTENING_CHANGES
-      Logger::info("Sorting " + std::to_string(tables.size()) +
+      Logger::info(LogCategory::TRANSFER, "Sorting " + std::to_string(tables.size()) +
                    " MariaDB tables by priority");
 
       std::sort(
@@ -266,11 +266,11 @@ public:
             return false; // Keep original order for same priority
           });
 
-      Logger::info("Processing " + std::to_string(tables.size()) +
+      Logger::info(LogCategory::TRANSFER, "Processing " + std::to_string(tables.size()) +
                    " MariaDB tables in priority order");
       for (size_t i = 0; i < tables.size(); ++i) {
         if (tables[i].db_engine == "MariaDB") {
-          Logger::info("[" + std::to_string(i + 1) + "/" +
+          Logger::info(LogCategory::TRANSFER, "[" + std::to_string(i + 1) + "/" +
                        std::to_string(tables.size()) + "] " +
                        tables[i].schema_name + "." + tables[i].table_name +
                        " (status: " + tables[i].status + ")");
@@ -283,7 +283,7 @@ public:
 
         MYSQL *mariadbConn = getMariaDBConnection(table.connection_string);
         if (!mariadbConn) {
-          Logger::error("Failed to get MariaDB connection");
+          Logger::error(LogCategory::TRANSFER, "Failed to get MariaDB connection");
           continue;
         }
 
@@ -300,7 +300,7 @@ public:
         // std::endl;
 
         if (columns.empty()) {
-          Logger::error("No columns found for table " + table.schema_name +
+          Logger::error(LogCategory::TRANSFER, "No columns found for table " + table.schema_name +
                         "." + table.table_name + " - skipping");
           continue;
         }
@@ -360,7 +360,7 @@ public:
         }
 
         if (columnDefinitions.empty()) {
-          Logger::error("No valid columns found for table " +
+          Logger::error(LogCategory::TRANSFER, "No valid columns found for table " +
                         table.schema_name + "." + table.table_name +
                         " - skipping");
           continue;
@@ -393,7 +393,7 @@ public:
         // correctamente en catalog_manager.h
       }
     } catch (const std::exception &e) {
-      Logger::error("Error in setupTableTargetMariaDBToPostgres: " +
+      Logger::error(LogCategory::TRANSFER, "Error in setupTableTargetMariaDBToPostgres: " +
                     std::string(e.what()));
     }
   }
@@ -449,7 +449,7 @@ public:
             pgPKs.push_back(pkValues);
           }
         } catch (const std::exception &e) {
-          Logger::error("Error getting PKs from PostgreSQL: " +
+          Logger::error(LogCategory::TRANSFER, "Error getting PKs from PostgreSQL: " +
                         std::string(e.what()));
           break;
         }
@@ -469,7 +469,7 @@ public:
               pgConn, lowerSchemaName, table_name, deletedPKs, pkColumns);
           totalDeleted += deletedCount;
 
-          Logger::info("Deleted " + std::to_string(deletedCount) +
+          Logger::info(LogCategory::TRANSFER, "Deleted " + std::to_string(deletedCount) +
                        " records from batch in " + schema_name + "." +
                        table_name);
         }
@@ -483,12 +483,12 @@ public:
       }
 
       if (totalDeleted > 0) {
-        Logger::info("Total deleted records: " + std::to_string(totalDeleted) +
+        Logger::info(LogCategory::TRANSFER, "Total deleted records: " + std::to_string(totalDeleted) +
                      " from " + schema_name + "." + table_name);
       }
 
     } catch (const std::exception &e) {
-      Logger::error("Error processing deletes for " + schema_name + "." +
+      Logger::error(LogCategory::TRANSFER, "Error processing deletes for " + schema_name + "." +
                     table_name + ": " + std::string(e.what()));
     }
   }
@@ -515,7 +515,7 @@ public:
         return;
       }
 
-      Logger::info("Processing updates for " + schema_name + "." + table_name +
+      Logger::info(LogCategory::TRANSFER, "Processing updates for " + schema_name + "." + table_name +
                    " using time column: " + timeColumn +
                    " since: " + lastSyncTime);
 
@@ -542,7 +542,7 @@ public:
       std::vector<std::vector<std::string>> columnNames =
           executeQueryMariaDB(mariadbConn, columnQuery);
       if (columnNames.empty() || columnNames[0].empty()) {
-        Logger::error("Could not get column names for " + schema_name + "." +
+        Logger::error(LogCategory::TRANSFER, "Could not get column names for " + schema_name + "." +
                       table_name);
         return;
       }
@@ -551,7 +551,7 @@ public:
       size_t totalUpdated = 0;
       for (const std::vector<std::string> &record : modifiedRecords) {
         if (record.size() != columnNames.size()) {
-          Logger::warning("Record size mismatch for " + schema_name + "." +
+          Logger::warning(LogCategory::TRANSFER, "Record size mismatch for " + schema_name + "." +
                           table_name + " - skipping record");
           continue;
         }
@@ -614,13 +614,13 @@ public:
       }
 
       if (totalUpdated > 0) {
-        Logger::info("Updated " + std::to_string(totalUpdated) +
+        Logger::info(LogCategory::TRANSFER, "Updated " + std::to_string(totalUpdated) +
                      " records in " + schema_name + "." + table_name);
       } else {
       }
 
     } catch (const std::exception &e) {
-      Logger::error("Error processing updates for " + schema_name + "." +
+      Logger::error(LogCategory::TRANSFER, "Error processing updates for " + schema_name + "." +
                     table_name + ": " + std::string(e.what()));
     }
   }
@@ -708,20 +708,20 @@ public:
       return false; // No había cambios
 
     } catch (const std::exception &e) {
-      Logger::error("Error comparing/updating record: " +
+      Logger::error(LogCategory::TRANSFER, "Error comparing/updating record: " +
                     std::string(e.what()));
       return false;
     }
   }
 
   void transferDataMariaDBToPostgres() {
-    Logger::info("Starting MariaDB to PostgreSQL data transfer");
+    Logger::info(LogCategory::TRANSFER, "Starting MariaDB to PostgreSQL data transfer");
 
     try {
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
 
       if (!pgConn.is_open()) {
-        Logger::error("CRITICAL ERROR: Cannot establish PostgreSQL connection "
+        Logger::error(LogCategory::TRANSFER, "CRITICAL ERROR: Cannot establish PostgreSQL connection "
                       "for MariaDB data transfer");
         return;
       }
@@ -732,7 +732,7 @@ public:
       auto tables = getActiveTables(pgConn);
 
       if (tables.empty()) {
-        Logger::info("No active MariaDB tables found for data transfer");
+        Logger::info(LogCategory::TRANSFER, "No active MariaDB tables found for data transfer");
         return;
       }
 
@@ -762,11 +762,11 @@ public:
             return false; // Keep original order for same priority
           });
 
-      Logger::info("Processing " + std::to_string(tables.size()) +
+      Logger::info(LogCategory::TRANSFER, "Processing " + std::to_string(tables.size()) +
                    " MariaDB tables in priority order");
       for (size_t i = 0; i < tables.size(); ++i) {
         if (tables[i].db_engine == "MariaDB") {
-          Logger::info("[" + std::to_string(i + 1) + "/" +
+          Logger::info(LogCategory::TRANSFER, "[" + std::to_string(i + 1) + "/" +
                        std::to_string(tables.size()) + "] " +
                        tables[i].schema_name + "." + tables[i].table_name +
                        " (status: " + tables[i].status + ")");
@@ -804,16 +804,16 @@ public:
         if (!countRes.empty() && !countRes[0][0].empty()) {
           try {
             sourceCount = std::stoul(countRes[0][0]);
-            Logger::info("Source table " + schema_name + "." + table_name +
+            Logger::info(LogCategory::TRANSFER, "Source table " + schema_name + "." + table_name +
                          " has " + std::to_string(sourceCount) + " records");
           } catch (const std::exception &e) {
-            Logger::error("ERROR parsing source count for table " +
+            Logger::error(LogCategory::TRANSFER, "ERROR parsing source count for table " +
                           schema_name + "." + table_name + ": " +
                           std::string(e.what()));
             sourceCount = 0;
           }
         } else {
-          Logger::error("ERROR: Could not get source count for table " +
+          Logger::error(LogCategory::TRANSFER, "ERROR: Could not get source count for table " +
                         schema_name + "." + table_name +
                         " - count query returned no results");
         }
@@ -828,7 +828,7 @@ public:
           auto targetResult = txn.exec(targetCountQuery);
           if (!targetResult.empty()) {
             targetCount = targetResult[0][0].as<size_t>();
-            Logger::info("Target table " + lowerSchemaName + "." + table_name +
+            Logger::info(LogCategory::TRANSFER, "Target table " + lowerSchemaName + "." + table_name +
                          " has " + std::to_string(targetCount) + " records");
           } else {
             Logger::error(
@@ -837,26 +837,26 @@ public:
           }
           txn.commit();
         } catch (const std::exception &e) {
-          Logger::error("ERROR getting target count for table " +
+          Logger::error(LogCategory::TRANSFER, "ERROR getting target count for table " +
                         lowerSchemaName + "." + table_name + ": " +
                         std::string(e.what()));
         }
 
         // Lógica simple basada en counts reales
         if (sourceCount != targetCount || sourceCount > 1000) {
-          Logger::info("Source: " + std::to_string(sourceCount) +
+          Logger::info(LogCategory::TRANSFER, "Source: " + std::to_string(sourceCount) +
                        ", Target: " + std::to_string(targetCount));
         }
 
         if (sourceCount == 0) {
-          Logger::info("Source table " + schema_name + "." + table_name +
+          Logger::info(LogCategory::TRANSFER, "Source table " + schema_name + "." + table_name +
                        " has no data");
           if (targetCount == 0) {
             Logger::info(
                 "Both source and target are empty - marking as NO_DATA");
             updateStatus(pgConn, schema_name, table_name, "NO_DATA", 0);
           } else {
-            Logger::error("Source is empty but target has " +
+            Logger::error(LogCategory::TRANSFER, "Source is empty but target has " +
                           std::to_string(targetCount) +
                           " records - marking as ERROR");
             updateStatus(pgConn, schema_name, table_name, "ERROR", 0);
@@ -866,23 +866,23 @@ public:
 
         // Si sourceCount = targetCount, verificar si hay cambios incrementales
         if (sourceCount == targetCount) {
-          Logger::info("Source and target counts match (" +
+          Logger::info(LogCategory::TRANSFER, "Source and target counts match (" +
                        std::to_string(sourceCount) +
                        ") - checking for incremental changes");
 
           // Procesar UPDATEs si hay columna de tiempo y last_sync_time
           if (!table.last_sync_column.empty() &&
               !table.last_sync_time.empty()) {
-            Logger::info("Processing updates for " + schema_name + "." +
+            Logger::info(LogCategory::TRANSFER, "Processing updates for " + schema_name + "." +
                          table_name + " since: " + table.last_sync_time);
             try {
               processUpdatesByPrimaryKey(schema_name, table_name, mariadbConn,
                                          pgConn, table.last_sync_column,
                                          table.last_sync_time);
-              Logger::info("Update processing completed for " + schema_name +
+              Logger::info(LogCategory::TRANSFER, "Update processing completed for " + schema_name +
                            "." + table_name);
             } catch (const std::exception &e) {
-              Logger::error("ERROR processing updates for " + schema_name +
+              Logger::error(LogCategory::TRANSFER, "ERROR processing updates for " + schema_name +
                             "." + table_name + ": " + std::string(e.what()));
             }
           } else {
@@ -922,16 +922,16 @@ public:
         // Procesar DELETEs por Primary Key
         if (sourceCount < targetCount) {
           size_t deletedCount = targetCount - sourceCount;
-          Logger::info("Detected " + std::to_string(deletedCount) +
+          Logger::info(LogCategory::TRANSFER, "Detected " + std::to_string(deletedCount) +
                        " deleted records in " + schema_name + "." + table_name +
                        " - processing deletes");
           try {
             processDeletesByPrimaryKey(schema_name, table_name, mariadbConn,
                                        pgConn);
-            Logger::info("Delete processing completed for " + schema_name +
+            Logger::info(LogCategory::TRANSFER, "Delete processing completed for " + schema_name +
                          "." + table_name);
           } catch (const std::exception &e) {
-            Logger::error("ERROR processing deletes for " + schema_name + "." +
+            Logger::error(LogCategory::TRANSFER, "ERROR processing deletes for " + schema_name + "." +
                           table_name + ": " + std::string(e.what()));
           }
 
@@ -945,7 +945,7 @@ public:
                             "\".\"" + table_name + "\";");
           countTxn.commit();
           targetCount = newTargetCount[0][0].as<int>();
-          Logger::info("After deletes: source=" + std::to_string(sourceCount) +
+          Logger::info(LogCategory::TRANSFER, "After deletes: source=" + std::to_string(sourceCount) +
                        ", target=" + std::to_string(targetCount));
         }
 
@@ -1019,7 +1019,7 @@ public:
           }
 
           if (shouldTruncate) {
-            Logger::info("Truncating table: " + lowerSchemaName + "." +
+            Logger::info(LogCategory::TRANSFER, "Truncating table: " + lowerSchemaName + "." +
                          table_name);
             pqxx::work txn(pgConn);
             txn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
@@ -1027,7 +1027,7 @@ public:
             txn.commit();
           }
         } else if (table.status == "RESET") {
-          Logger::info("Processing RESET table: " + schema_name + "." +
+          Logger::info(LogCategory::TRANSFER, "Processing RESET table: " + schema_name + "." +
                        table_name);
           pqxx::work txn(pgConn);
           txn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
@@ -1061,7 +1061,7 @@ public:
           }
         }
 
-        Logger::info("Starting data transfer for table " + schema_name + "." +
+        Logger::info(LogCategory::TRANSFER, "Starting data transfer for table " + schema_name + "." +
                      table_name + " - chunk size: " +
                      std::to_string(SyncConfig::getChunkSize()));
 
@@ -1073,7 +1073,7 @@ public:
           const size_t CHUNK_SIZE =
               std::min(SyncConfig::getChunkSize(), static_cast<size_t>(10000));
 
-          Logger::info("Processing chunk " + std::to_string(chunkNumber) +
+          Logger::info(LogCategory::TRANSFER, "Processing chunk " + std::to_string(chunkNumber) +
                        " for table " + schema_name + "." + table_name +
                        " (size: " + std::to_string(CHUNK_SIZE) +
                        ", offset: " + std::to_string(targetCount) + ")");
@@ -1085,20 +1085,20 @@ public:
           selectQuery += " LIMIT " + std::to_string(CHUNK_SIZE) + " OFFSET " +
                          std::to_string(targetCount) + ";";
 
-          Logger::info("Executing data transfer query for chunk " +
+          Logger::info(LogCategory::TRANSFER, "Executing data transfer query for chunk " +
                        std::to_string(chunkNumber));
 
           std::vector<std::vector<std::string>> results =
               executeQueryMariaDB(mariadbConn, selectQuery);
 
           if (results.size() > 0) {
-            Logger::info("Retrieved chunk " + std::to_string(chunkNumber) +
+            Logger::info(LogCategory::TRANSFER, "Retrieved chunk " + std::to_string(chunkNumber) +
                          " with " + std::to_string(results.size()) +
                          " rows for " + schema_name + "." + table_name);
           }
 
           if (results.empty()) {
-            Logger::info("No more data available for table " + schema_name +
+            Logger::info(LogCategory::TRANSFER, "No more data available for table " + schema_name +
                          "." + table_name + " - ending transfer loop");
             hasMoreData = false;
             break;
@@ -1107,7 +1107,7 @@ public:
           size_t rowsInserted = 0;
 
           try {
-            Logger::info("Preparing bulk upsert for chunk " +
+            Logger::info(LogCategory::TRANSFER, "Preparing bulk upsert for chunk " +
                          std::to_string(chunkNumber) + " with " +
                          std::to_string(results.size()) + " rows");
 
@@ -1118,35 +1118,35 @@ public:
                 columnsStr += ",";
             }
 
-            Logger::info("Columns for bulk upsert: " + columnsStr);
+            Logger::info(LogCategory::TRANSFER, "Columns for bulk upsert: " + columnsStr);
 
             rowsInserted = results.size();
 
             if (rowsInserted > 0) {
               try {
-                Logger::info("Executing bulk upsert for chunk " +
+                Logger::info(LogCategory::TRANSFER, "Executing bulk upsert for chunk " +
                              std::to_string(chunkNumber));
                 performBulkUpsert(pgConn, results, columnNames, columnTypes,
                                   lowerSchemaName, table_name, schema_name);
-                Logger::info("Successfully processed chunk " +
+                Logger::info(LogCategory::TRANSFER, "Successfully processed chunk " +
                              std::to_string(chunkNumber) + " with " +
                              std::to_string(rowsInserted) + " rows for " +
                              schema_name + "." + table_name);
               } catch (const std::exception &e) {
-                Logger::error("CRITICAL ERROR: Bulk upsert failed for chunk " +
+                Logger::error(LogCategory::TRANSFER, "CRITICAL ERROR: Bulk upsert failed for chunk " +
                               std::to_string(chunkNumber) + " in table " +
                               schema_name + "." + table_name + ": " +
                               std::string(e.what()));
                 rowsInserted = 0;
               }
             } else {
-              Logger::warning("No rows to process in chunk " +
+              Logger::warning(LogCategory::TRANSFER, "No rows to process in chunk " +
                               std::to_string(chunkNumber) + " for table " +
                               schema_name + "." + table_name);
             }
 
           } catch (const std::exception &e) {
-            Logger::error("ERROR processing data for chunk " +
+            Logger::error(LogCategory::TRANSFER, "ERROR processing data for chunk " +
                           std::to_string(chunkNumber) + " in table " +
                           schema_name + "." + table_name + ": " +
                           std::string(e.what()));
@@ -1160,7 +1160,7 @@ public:
 
           // Update last_offset in database to prevent infinite loops
           try {
-            Logger::info("Updating last_offset to " +
+            Logger::info(LogCategory::TRANSFER, "Updating last_offset to " +
                          std::to_string(targetCount) + " for table " +
                          schema_name + "." + table_name);
             pqxx::work updateTxn(pgConn);
@@ -1169,17 +1169,17 @@ public:
                            "' WHERE schema_name='" + escapeSQL(schema_name) +
                            "' AND table_name='" + escapeSQL(table_name) + "';");
             updateTxn.commit();
-            Logger::info("Successfully updated last_offset for table " +
+            Logger::info(LogCategory::TRANSFER, "Successfully updated last_offset for table " +
                          schema_name + "." + table_name);
           } catch (const std::exception &e) {
-            Logger::error("ERROR: Failed to update last_offset for table " +
+            Logger::error(LogCategory::TRANSFER, "ERROR: Failed to update last_offset for table " +
                           schema_name + "." + table_name + ": " +
                           std::string(e.what()) +
                           " - this may cause infinite loops");
           }
 
           if (targetCount >= sourceCount) {
-            Logger::info("Target count (" + std::to_string(targetCount) +
+            Logger::info(LogCategory::TRANSFER, "Target count (" + std::to_string(targetCount) +
                          ") >= source count (" + std::to_string(sourceCount) +
                          ") - ending data transfer");
             hasMoreData = false;
@@ -1190,17 +1190,17 @@ public:
 
         if (targetCount > 0) {
           if (targetCount >= sourceCount) {
-            Logger::info("Table " + schema_name + "." + table_name +
+            Logger::info(LogCategory::TRANSFER, "Table " + schema_name + "." + table_name +
                          " fully synchronized - PERFECT_MATCH (source: " +
                          std::to_string(sourceCount) +
                          ", target: " + std::to_string(targetCount) + ")");
             try {
               updateStatus(pgConn, schema_name, table_name, "PERFECT_MATCH",
                            targetCount);
-              Logger::info("Successfully updated status to PERFECT_MATCH for " +
+              Logger::info(LogCategory::TRANSFER, "Successfully updated status to PERFECT_MATCH for " +
                            schema_name + "." + table_name);
             } catch (const std::exception &e) {
-              Logger::error("ERROR updating status to PERFECT_MATCH for " +
+              Logger::error(LogCategory::TRANSFER, "ERROR updating status to PERFECT_MATCH for " +
                             schema_name + "." + table_name + ": " +
                             std::string(e.what()));
             }
@@ -1217,24 +1217,24 @@ public:
                   "Successfully updated status to LISTENING_CHANGES for " +
                   schema_name + "." + table_name);
             } catch (const std::exception &e) {
-              Logger::error("ERROR updating status to LISTENING_CHANGES for " +
+              Logger::error(LogCategory::TRANSFER, "ERROR updating status to LISTENING_CHANGES for " +
                             schema_name + "." + table_name + ": " +
                             std::string(e.what()));
             }
           }
         } else {
-          Logger::warning("No data transferred for table " + schema_name + "." +
+          Logger::warning(LogCategory::TRANSFER, "No data transferred for table " + schema_name + "." +
                           table_name + " - keeping current status");
         }
 
-        Logger::info("Table processing completed for " + schema_name + "." +
+        Logger::info(LogCategory::TRANSFER, "Table processing completed for " + schema_name + "." +
                      table_name);
       }
 
       Logger::info(
           "MariaDB to PostgreSQL data transfer completed successfully");
     } catch (const std::exception &e) {
-      Logger::error("CRITICAL ERROR in transferDataMariaDBToPostgres: " +
+      Logger::error(LogCategory::TRANSFER, "CRITICAL ERROR in transferDataMariaDBToPostgres: " +
                     std::string(e.what()) +
                     " - MariaDB data transfer completely failed");
     }
@@ -1288,7 +1288,7 @@ public:
       txn.exec(updateQuery);
       txn.commit();
     } catch (const std::exception &e) {
-      Logger::error("Error updating status: " + std::string(e.what()));
+      Logger::error(LogCategory::TRANSFER, "Error updating status: " + std::string(e.what()));
     }
   }
 
@@ -1441,7 +1441,7 @@ private:
       txn.commit();
 
     } catch (const std::exception &e) {
-      Logger::error("deleteRecordsByPrimaryKey",
+      Logger::error(LogCategory::TRANSFER, "deleteRecordsByPrimaryKey",
                     "Error deleting records: " + std::string(e.what()));
     }
 
@@ -1464,12 +1464,12 @@ private:
   executeQueryMariaDB(MYSQL *conn, const std::string &query) {
     std::vector<std::vector<std::string>> results;
     if (!conn) {
-      Logger::error("No valid MariaDB connection");
+      Logger::error(LogCategory::TRANSFER, "No valid MariaDB connection");
       return results;
     }
 
     if (mysql_query(conn, query.c_str())) {
-      Logger::error("Query execution failed: " +
+      Logger::error(LogCategory::TRANSFER, "Query execution failed: " +
                     std::string(mysql_error(conn)));
       return results;
     }
@@ -1477,7 +1477,7 @@ private:
     MYSQL_RES *res = mysql_store_result(conn);
     if (!res) {
       if (mysql_field_count(conn) > 0) {
-        Logger::error("mysql_store_result() failed: " +
+        Logger::error(LogCategory::TRANSFER, "mysql_store_result() failed: " +
                       std::string(mysql_error(conn)));
       }
       return results;
@@ -1578,7 +1578,7 @@ private:
       txn.commit();
 
     } catch (const std::exception &e) {
-      Logger::error("Error in bulk upsert: " + std::string(e.what()));
+      Logger::error(LogCategory::TRANSFER, "Error in bulk upsert: " + std::string(e.what()));
       throw;
     }
   }
@@ -1655,7 +1655,7 @@ private:
       txn.commit();
 
     } catch (const std::exception &e) {
-      Logger::error("Error in bulk insert: " + std::string(e.what()));
+      Logger::error(LogCategory::TRANSFER, "Error in bulk insert: " + std::string(e.what()));
       throw;
     }
   }
@@ -1694,7 +1694,7 @@ private:
         }
       }
     } catch (const std::exception &e) {
-      Logger::error("Error getting PK columns: " + std::string(e.what()));
+      Logger::error(LogCategory::TRANSFER, "Error getting PK columns: " + std::string(e.what()));
     }
 
     return pkColumns;

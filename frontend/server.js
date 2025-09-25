@@ -806,7 +806,10 @@ app.get("/api/logs", async (req, res) => {
     const {
       lines = 100,
       level = "ALL",
-      function: functionFilter = "ALL",
+      category = "ALL",
+      search = "",
+      startDate = "",
+      endDate = "",
     } = req.query;
     const logFilePath = path.join(process.cwd(), "..", "DataSync.log");
 
@@ -825,52 +828,100 @@ app.get("/api/logs", async (req, res) => {
       .split("\n")
       .filter((line) => line.trim() !== "");
 
-    // Filtrar por nivel y función si se especifica
-    let filteredLines = allLines;
+    // Parsear logs y aplicar filtros
+    let filteredLines = allLines.map((line) => {
+      // Nuevo formato con categoría: [timestamp] [level] [category] [function] message
+      const newMatch = line.match(
+        /^\[([^\]]+)\] \[([^\]]+)\] \[([^\]]+)\] \[([^\]]+)\] (.+)$/
+      );
+      if (newMatch) {
+        return {
+          timestamp: newMatch[1],
+          level: newMatch[2],
+          category: newMatch[3],
+          function: newMatch[4],
+          message: newMatch[5],
+          raw: line,
+          parsed: true,
+        };
+      }
+      // Formato antiguo: [timestamp] [level] [function] message
+      const oldMatch = line.match(
+        /^\[([^\]]+)\] \[([^\]]+)\](?: \[([^\]]+)\])? (.+)$/
+      );
+      if (oldMatch) {
+        return {
+          timestamp: oldMatch[1],
+          level: oldMatch[2],
+          category: "SYSTEM",
+          function: oldMatch[3] || "",
+          message: oldMatch[4],
+          raw: line,
+          parsed: true,
+        };
+      }
+      return {
+        timestamp: "",
+        level: "UNKNOWN",
+        category: "UNKNOWN",
+        function: "",
+        message: line,
+        raw: line,
+        parsed: false,
+      };
+    });
+
+    // Aplicar filtros
     if (level !== "ALL") {
-      filteredLines = filteredLines.filter((line) =>
-        line.includes(`[${level.toUpperCase()}]`)
+      filteredLines = filteredLines.filter((log) => log.level === level);
+    }
+
+    if (category !== "ALL") {
+      filteredLines = filteredLines.filter((log) => log.category === category);
+    }
+
+    if (search) {
+      filteredLines = filteredLines.filter(
+        (log) =>
+          log.message.toLowerCase().includes(search.toLowerCase()) ||
+          (log.function &&
+            log.function.toLowerCase().includes(search.toLowerCase()))
       );
     }
-    if (functionFilter !== "ALL") {
-      filteredLines = filteredLines.filter((line) =>
-        line.includes(`[${functionFilter}]`)
-      );
+
+    if (startDate) {
+      const start = new Date(startDate);
+      filteredLines = filteredLines.filter((log) => {
+        if (!log.timestamp) return false;
+        const logDate = new Date(log.timestamp);
+        return logDate >= start;
+      });
+    }
+
+    if (endDate) {
+      const end = new Date(endDate);
+      filteredLines = filteredLines.filter((log) => {
+        if (!log.timestamp) return false;
+        const logDate = new Date(log.timestamp);
+        return logDate <= end;
+      });
     }
 
     // Obtener las últimas N líneas
     const lastLines = filteredLines.slice(-parseInt(lines));
 
-    // Parsear cada línea de log
-    const parsedLogs = lastLines.map((line, index) => {
-      const logMatch = line.match(
-        /^\[([^\]]+)\] \[([^\]]+)\](?: \[([^\]]+)\])? (.+)$/
-      );
-      if (logMatch) {
-        return {
-          id: index,
-          timestamp: logMatch[1],
-          level: logMatch[2],
-          function: logMatch[3] || "",
-          message: logMatch[4],
-          raw: line,
-        };
-      }
-      return {
-        id: index,
-        timestamp: "",
-        level: "UNKNOWN",
-        function: "",
-        message: line,
-        raw: line,
-      };
-    });
-
     res.json({
-      logs: parsedLogs,
+      logs: lastLines,
       totalLines: filteredLines.length,
       filePath: logFilePath,
       lastModified: fs.statSync(logFilePath).mtime,
+      filters: {
+        level,
+        category,
+        search,
+        startDate,
+        endDate,
+      },
     });
   } catch (err) {
     console.error("Error reading logs:", err);
@@ -911,6 +962,110 @@ app.get("/api/logs/info", async (req, res) => {
     console.error("Error getting log info:", err);
     res.status(500).json({
       error: "Error al obtener información de logs",
+      details: err.message,
+    });
+  }
+});
+
+// Endpoint para obtener estadísticas de logs
+app.get("/api/logs/stats", async (req, res) => {
+  try {
+    const logFilePath = path.join(process.cwd(), "..", "DataSync.log");
+
+    if (!fs.existsSync(logFilePath)) {
+      return res.json({
+        stats: {},
+        message: "Log file not found",
+      });
+    }
+
+    const logContent = fs.readFileSync(logFilePath, "utf8");
+    const allLines = logContent
+      .split("\n")
+      .filter((line) => line.trim() !== "");
+
+    // Parsear logs para estadísticas
+    const parsedLogs = allLines.map((line) => {
+      const newMatch = line.match(
+        /^\[([^\]]+)\] \[([^\]]+)\] \[([^\]]+)\] \[([^\]]+)\] (.+)$/
+      );
+      if (newMatch) {
+        return {
+          level: newMatch[2],
+          category: newMatch[3],
+          function: newMatch[4],
+          timestamp: newMatch[1],
+        };
+      }
+      const oldMatch = line.match(
+        /^\[([^\]]+)\] \[([^\]]+)\](?: \[([^\]]+)\])? (.+)$/
+      );
+      if (oldMatch) {
+        return {
+          level: oldMatch[2],
+          category: "SYSTEM",
+          function: oldMatch[3] || "",
+          timestamp: oldMatch[1],
+        };
+      }
+      return {
+        level: "UNKNOWN",
+        category: "UNKNOWN",
+        function: "",
+        timestamp: "",
+      };
+    });
+
+    // Calcular estadísticas
+    const stats = {
+      total: parsedLogs.length,
+      byLevel: {},
+      byCategory: {},
+      byFunction: {},
+      recent: parsedLogs.slice(-10).map((log) => ({
+        timestamp: log.timestamp,
+        level: log.level,
+        category: log.category,
+        function: log.function,
+      })),
+    };
+
+    // Contar por nivel
+    parsedLogs.forEach((log) => {
+      stats.byLevel[log.level] = (stats.byLevel[log.level] || 0) + 1;
+    });
+
+    // Contar por categoría
+    parsedLogs.forEach((log) => {
+      stats.byCategory[log.category] =
+        (stats.byCategory[log.category] || 0) + 1;
+    });
+
+    // Contar por función (top 10)
+    parsedLogs.forEach((log) => {
+      if (log.function) {
+        stats.byFunction[log.function] =
+          (stats.byFunction[log.function] || 0) + 1;
+      }
+    });
+
+    // Convertir a array y ordenar
+    stats.byFunction = Object.entries(stats.byFunction)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 10)
+      .reduce((obj, [key, value]) => {
+        obj[key] = value;
+        return obj;
+      }, {});
+
+    res.json({
+      stats,
+      generatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error("Error getting log stats:", err);
+    res.status(500).json({
+      error: "Error al obtener estadísticas de logs",
       details: err.message,
     });
   }

@@ -362,12 +362,14 @@ export const catalogApi = {
 
 // Interfaces para logs
 export interface LogEntry {
-  id: number;
+  id?: number;
   timestamp: string;
   level: string;
+  category?: string;
   function: string;
   message: string;
   raw: string;
+  parsed?: boolean;
 }
 
 export interface LogsResponse {
@@ -375,6 +377,13 @@ export interface LogsResponse {
   totalLines: number;
   filePath: string;
   lastModified: string;
+  filters?: {
+    level: string;
+    category: string;
+    search: string;
+    startDate: string;
+    endDate: string;
+  };
 }
 
 export interface LogInfo {
@@ -387,9 +396,34 @@ export interface LogInfo {
   message?: string;
 }
 
+export interface LogStats {
+  total: number;
+  byLevel: Record<string, number>;
+  byCategory: Record<string, number>;
+  byFunction: Record<string, number>;
+  recent: Array<{
+    timestamp: string;
+    level: string;
+    category: string;
+    function: string;
+  }>;
+}
+
+export interface LogStatsResponse {
+  stats: LogStats;
+  generatedAt: string;
+}
+
 export const logsApi = {
   getLogs: async (
-    params: { lines?: number; level?: string; function?: string } = {}
+    params: {
+      lines?: number;
+      level?: string;
+      category?: string;
+      search?: string;
+      startDate?: string;
+      endDate?: string;
+    } = {}
   ) => {
     try {
       const response = await api.get<LogsResponse>("/logs", { params });
@@ -430,6 +464,23 @@ export const logsApi = {
       return response.data;
     } catch (error) {
       console.error("Error clearing logs:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getLogStats: async () => {
+    try {
+      const response = await api.get<LogStatsResponse>("/logs/stats");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching log stats:", error);
       if (axios.isAxiosError(error) && error.response) {
         throw new Error(
           error.response.data.details ||

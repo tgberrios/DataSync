@@ -45,9 +45,9 @@ public:
       // Actualizar cluster names después de la limpieza
       updateClusterNames();
 
-      Logger::info("Catalog cleanup completed");
+      Logger::info(LogCategory::DATABASE, "Catalog cleanup completed");
     } catch (const std::exception &e) {
-      Logger::error("cleanCatalog",
+      Logger::error(LogCategory::DATABASE, "cleanCatalog",
                     "Error cleaning catalog: " + std::string(e.what()));
     }
   }
@@ -75,12 +75,12 @@ public:
 
       txn.commit();
 
-      Logger::info("Deactivated " +
+      Logger::info(LogCategory::DATABASE, "Deactivated " +
                    std::to_string(updateResult.affected_rows()) +
                    " NO_DATA tables");
 
     } catch (const std::exception &e) {
-      Logger::error("deactivateNoDataTables",
+      Logger::error(LogCategory::DATABASE, "deactivateNoDataTables",
                     "Error deactivating NO_DATA tables: " +
                         std::string(e.what()));
     }
@@ -122,15 +122,15 @@ public:
               escapeSQL(dbEngine) + "'");
           updateTxn.commit();
 
-          Logger::info("Updated cluster_name to '" + clusterName + "' for " +
+          Logger::info(LogCategory::DATABASE, "Updated cluster_name to '" + clusterName + "' for " +
                        std::to_string(updateResult.affected_rows()) +
                        " tables");
         }
       }
 
-      Logger::info("Cluster name updates completed");
+      Logger::info(LogCategory::DATABASE, "Cluster name updates completed");
     } catch (const std::exception &e) {
-      Logger::error("updateClusterNames",
+      Logger::error(LogCategory::DATABASE, "updateClusterNames",
                     "Error updating cluster names: " + std::string(e.what()));
     }
   }
@@ -154,10 +154,10 @@ public:
         }
       }
 
-      Logger::info("Found " + std::to_string(mariaConnStrings.size()) +
+      Logger::info(LogCategory::DATABASE, "Found " + std::to_string(mariaConnStrings.size()) +
                    " MariaDB connections");
       if (mariaConnStrings.empty()) {
-        Logger::warning("No MariaDB connections found in catalog");
+        Logger::warning(LogCategory::DATABASE, "No MariaDB connections found in catalog");
         return;
       }
 
@@ -209,7 +209,7 @@ public:
         // Connect directly to MariaDB
         MYSQL *mariaConn = mysql_init(nullptr);
         if (!mariaConn) {
-          Logger::error("syncCatalogMariaDBToPostgres", "mysql_init() failed");
+          Logger::error(LogCategory::DATABASE, "syncCatalogMariaDBToPostgres", "mysql_init() failed");
           continue;
         }
 
@@ -225,7 +225,7 @@ public:
         if (mysql_real_connect(mariaConn, host.c_str(), user.c_str(),
                                password.c_str(), db.c_str(), portNum, nullptr,
                                0) == nullptr) {
-          Logger::error("syncCatalogMariaDBToPostgres",
+          Logger::error(LogCategory::DATABASE, "syncCatalogMariaDBToPostgres",
                         "MariaDB connection failed: " +
                             std::string(mysql_error(mariaConn)));
           mysql_close(mariaConn);
@@ -329,10 +329,10 @@ public:
         }
       }
 
-      Logger::info("Found " + std::to_string(mssqlConnStrings.size()) +
+      Logger::info(LogCategory::DATABASE, "Found " + std::to_string(mssqlConnStrings.size()) +
                    " MSSQL connections");
       if (mssqlConnStrings.empty()) {
-        Logger::warning("No MSSQL connections found in catalog");
+        Logger::warning(LogCategory::DATABASE, "No MSSQL connections found in catalog");
         return;
       }
 
@@ -362,7 +362,7 @@ public:
 
         ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env);
         if (!SQL_SUCCEEDED(ret)) {
-          Logger::error("syncCatalogMSSQLToPostgres",
+          Logger::error(LogCategory::DATABASE, "syncCatalogMSSQLToPostgres",
                         "Failed to allocate ODBC environment handle");
           continue;
         }
@@ -371,7 +371,7 @@ public:
                             (SQLPOINTER)SQL_OV_ODBC3, 0);
         if (!SQL_SUCCEEDED(ret)) {
           SQLFreeHandle(SQL_HANDLE_ENV, env);
-          Logger::error("syncCatalogMSSQLToPostgres",
+          Logger::error(LogCategory::DATABASE, "syncCatalogMSSQLToPostgres",
                         "Failed to set ODBC version");
           continue;
         }
@@ -379,7 +379,7 @@ public:
         ret = SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc);
         if (!SQL_SUCCEEDED(ret)) {
           SQLFreeHandle(SQL_HANDLE_ENV, env);
-          Logger::error("syncCatalogMSSQLToPostgres",
+          Logger::error(LogCategory::DATABASE, "syncCatalogMSSQLToPostgres",
                         "Failed to allocate ODBC connection handle");
           continue;
         }
@@ -397,7 +397,7 @@ public:
                         sizeof(msg), &msgLen);
           SQLFreeHandle(SQL_HANDLE_DBC, dbc);
           SQLFreeHandle(SQL_HANDLE_ENV, env);
-          Logger::error("syncCatalogMSSQLToPostgres",
+          Logger::error(LogCategory::DATABASE, "syncCatalogMSSQLToPostgres",
                         "Failed to connect to MSSQL: " +
                             std::string((char *)msg));
           continue;
@@ -417,7 +417,7 @@ public:
             "ORDER BY s.name, t.name;";
 
         auto discoveredTables = executeQueryMSSQL(dbc, discoverQuery);
-        Logger::info("Found " + std::to_string(discoveredTables.size()) +
+        Logger::info(LogCategory::DATABASE, "Found " + std::to_string(discoveredTables.size()) +
                      " tables");
 
         for (const std::vector<std::string> &row : discoveredTables) {
@@ -484,7 +484,7 @@ public:
       // Actualizar cluster names después de la sincronización
       updateClusterNames();
     } catch (const std::exception &e) {
-      Logger::error("syncCatalogMSSQLToPostgres",
+      Logger::error(LogCategory::DATABASE, "syncCatalogMSSQLToPostgres",
                     "Error in syncCatalogMSSQLToPostgres: " +
                         std::string(e.what()));
     }
@@ -509,10 +509,10 @@ public:
         }
       }
 
-      Logger::info("Found " + std::to_string(pgConnStrings.size()) +
+      Logger::info(LogCategory::DATABASE, "Found " + std::to_string(pgConnStrings.size()) +
                    " PostgreSQL source connections");
       if (pgConnStrings.empty()) {
-        Logger::warning("No PostgreSQL source connections found in catalog");
+        Logger::warning(LogCategory::DATABASE, "No PostgreSQL source connections found in catalog");
         return;
       }
 
@@ -538,7 +538,7 @@ public:
         // Connect directly to PostgreSQL
         pqxx::connection sourcePgConn(connStr);
         if (!sourcePgConn.is_open()) {
-          Logger::error("syncCatalogPostgresToPostgres",
+          Logger::error(LogCategory::DATABASE, "syncCatalogPostgresToPostgres",
                         "Failed to connect to source PostgreSQL");
           continue;
         }
@@ -555,7 +555,7 @@ public:
         auto discoveredTables = sourceTxn.exec(discoverQuery);
         sourceTxn.commit();
 
-        Logger::info("Found " + std::to_string(discoveredTables.size()) +
+        Logger::info(LogCategory::DATABASE, "Found " + std::to_string(discoveredTables.size()) +
                      " tables");
 
         for (const auto &row : discoveredTables) {
@@ -613,7 +613,7 @@ public:
       // Actualizar cluster names después de la sincronización
       updateClusterNames();
     } catch (const std::exception &e) {
-      Logger::error("syncCatalogPostgresToPostgres",
+      Logger::error(LogCategory::DATABASE, "syncCatalogPostgresToPostgres",
                     "Error in syncCatalogPostgresToPostgres: " +
                         std::string(e.what()));
     }
@@ -649,7 +649,7 @@ private:
       } else {
       }
     } catch (const std::exception &e) {
-      Logger::error("detectTimeColumnMSSQL",
+      Logger::error(LogCategory::DATABASE, "detectTimeColumnMSSQL",
                     "Error detecting time column: " + std::string(e.what()));
     }
     return "";
@@ -682,7 +682,7 @@ private:
       } else {
       }
     } catch (const std::exception &e) {
-      Logger::error("detectTimeColumnMariaDB",
+      Logger::error(LogCategory::DATABASE, "detectTimeColumnMariaDB",
                     "Error detecting time column: " + std::string(e.what()));
     }
     return "";
@@ -719,7 +719,7 @@ private:
       } else {
       }
     } catch (const std::exception &e) {
-      Logger::error("detectTimeColumnPostgres",
+      Logger::error(LogCategory::DATABASE, "detectTimeColumnPostgres",
                     "Error detecting time column: " + std::string(e.what()));
     }
     return "";
@@ -930,7 +930,7 @@ private:
       }
     }
 
-    Logger::warning("No hostname found in connection string for " + dbEngine);
+    Logger::warning(LogCategory::DATABASE, "No hostname found in connection string for " + dbEngine);
     return "";
   }
 
@@ -1026,7 +1026,7 @@ private:
                      table_name + "';");
 
         if (!checkResult.empty() && checkResult[0][0].as<int>() == 0) {
-          Logger::info("Removing non-existent PostgreSQL table: " +
+          Logger::info(LogCategory::DATABASE, "Removing non-existent PostgreSQL table: " +
                        schema_name + "." + table_name);
 
           txn.exec("DELETE FROM metadata.catalog WHERE schema_name='" +
@@ -1037,7 +1037,7 @@ private:
 
       txn.commit();
     } catch (const std::exception &e) {
-      Logger::error("cleanNonExistentPostgresTables",
+      Logger::error(LogCategory::DATABASE, "cleanNonExistentPostgresTables",
                     "Error cleaning PostgreSQL tables: " +
                         std::string(e.what()));
     }
@@ -1083,7 +1083,7 @@ private:
 
         MYSQL *mariadbConn = mysql_init(nullptr);
         if (!mariadbConn) {
-          Logger::warning("cleanNonExistentMariaDBTables",
+          Logger::warning(LogCategory::DATABASE, "cleanNonExistentMariaDBTables",
                           "mysql_init() failed");
           continue;
         }
@@ -1100,7 +1100,7 @@ private:
         if (mysql_real_connect(mariadbConn, host.c_str(), user.c_str(),
                                password.c_str(), db.c_str(), portNum, nullptr,
                                0) == nullptr) {
-          Logger::warning("cleanNonExistentMariaDBTables",
+          Logger::warning(LogCategory::DATABASE, "cleanNonExistentMariaDBTables",
                           "MariaDB connection failed: " +
                               std::string(mysql_error(mariadbConn)));
           mysql_close(mariadbConn);
@@ -1162,7 +1162,7 @@ private:
 
           if (existingTableSet.find({schema_name, table_name}) ==
               existingTableSet.end()) {
-            Logger::info("Removing non-existent MariaDB table: " + schema_name +
+            Logger::info(LogCategory::DATABASE, "Removing non-existent MariaDB table: " + schema_name +
                          "." + table_name);
 
             txn.exec("DELETE FROM metadata.catalog WHERE schema_name='" +
@@ -1178,7 +1178,7 @@ private:
 
       txn.commit();
     } catch (const std::exception &e) {
-      Logger::error("cleanNonExistentMariaDBTables",
+      Logger::error(LogCategory::DATABASE, "cleanNonExistentMariaDBTables",
                     "Error cleaning MariaDB tables: " + std::string(e.what()));
     }
   }
@@ -1202,7 +1202,7 @@ private:
 
         ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env);
         if (!SQL_SUCCEEDED(ret)) {
-          Logger::warning("cleanNonExistentMSSQLTables",
+          Logger::warning(LogCategory::DATABASE, "cleanNonExistentMSSQLTables",
                           "Failed to allocate ODBC environment handle");
           continue;
         }
@@ -1211,7 +1211,7 @@ private:
                             (SQLPOINTER)SQL_OV_ODBC3, 0);
         if (!SQL_SUCCEEDED(ret)) {
           SQLFreeHandle(SQL_HANDLE_ENV, env);
-          Logger::warning("cleanNonExistentMSSQLTables",
+          Logger::warning(LogCategory::DATABASE, "cleanNonExistentMSSQLTables",
                           "Failed to set ODBC version");
           continue;
         }
@@ -1219,7 +1219,7 @@ private:
         ret = SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc);
         if (!SQL_SUCCEEDED(ret)) {
           SQLFreeHandle(SQL_HANDLE_ENV, env);
-          Logger::warning("cleanNonExistentMSSQLTables",
+          Logger::warning(LogCategory::DATABASE, "cleanNonExistentMSSQLTables",
                           "Failed to allocate ODBC connection handle");
           continue;
         }
@@ -1238,7 +1238,7 @@ private:
                         sizeof(msg), &msgLen);
           SQLFreeHandle(SQL_HANDLE_DBC, dbc);
           SQLFreeHandle(SQL_HANDLE_ENV, env);
-          Logger::warning("cleanNonExistentMSSQLTables",
+          Logger::warning(LogCategory::DATABASE, "cleanNonExistentMSSQLTables",
                           "Failed to connect to MSSQL: " +
                               std::string((char *)msg));
           continue;
@@ -1302,7 +1302,7 @@ private:
 
           if (existingTableSet.find({schema_name, table_name}) ==
               existingTableSet.end()) {
-            Logger::info("Removing non-existent MSSQL table: " + schema_name +
+            Logger::info(LogCategory::DATABASE, "Removing non-existent MSSQL table: " + schema_name +
                          "." + table_name);
 
             txn.exec("DELETE FROM metadata.catalog WHERE schema_name='" +
@@ -1320,7 +1320,7 @@ private:
 
       txn.commit();
     } catch (const std::exception &e) {
-      Logger::error("cleanNonExistentMSSQLTables",
+      Logger::error(LogCategory::DATABASE, "cleanNonExistentMSSQLTables",
                     "Error cleaning MSSQL tables: " + std::string(e.what()));
     }
   }
@@ -1343,7 +1343,7 @@ private:
 
       txn.commit();
     } catch (const std::exception &e) {
-      Logger::error("cleanOrphanedTables",
+      Logger::error(LogCategory::DATABASE, "cleanOrphanedTables",
                     "Error cleaning orphaned tables: " + std::string(e.what()));
     }
   }
@@ -1352,12 +1352,12 @@ private:
   executeQueryMariaDB(MYSQL *conn, const std::string &query) {
     std::vector<std::vector<std::string>> results;
     if (!conn) {
-      Logger::error("executeQueryMariaDB", "No valid MariaDB connection");
+      Logger::error(LogCategory::DATABASE, "executeQueryMariaDB", "No valid MariaDB connection");
       return results;
     }
 
     if (mysql_query(conn, query.c_str())) {
-      Logger::error("executeQueryMariaDB", "Query execution failed: " +
+      Logger::error(LogCategory::DATABASE, "executeQueryMariaDB", "Query execution failed: " +
                                                std::string(mysql_error(conn)));
       return results;
     }
@@ -1365,7 +1365,7 @@ private:
     MYSQL_RES *res = mysql_store_result(conn);
     if (!res) {
       if (mysql_field_count(conn) > 0) {
-        Logger::error("executeQueryMariaDB",
+        Logger::error(LogCategory::DATABASE, "executeQueryMariaDB",
                       "mysql_store_result() failed: " +
                           std::string(mysql_error(conn)));
       }
@@ -1390,20 +1390,20 @@ private:
   executeQueryMSSQL(SQLHDBC conn, const std::string &query) {
     std::vector<std::vector<std::string>> results;
     if (!conn) {
-      Logger::error("executeQueryMSSQL", "No valid MSSQL connection");
+      Logger::error(LogCategory::DATABASE, "executeQueryMSSQL", "No valid MSSQL connection");
       return results;
     }
 
     SQLHSTMT stmt;
     SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, conn, &stmt);
     if (ret != SQL_SUCCESS) {
-      Logger::error("executeQueryMSSQL", "SQLAllocHandle(STMT) failed");
+      Logger::error(LogCategory::DATABASE, "executeQueryMSSQL", "SQLAllocHandle(STMT) failed");
       return results;
     }
 
     ret = SQLExecDirect(stmt, (SQLCHAR *)query.c_str(), SQL_NTS);
     if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
-      Logger::error("executeQueryMSSQL", "SQLExecDirect failed");
+      Logger::error(LogCategory::DATABASE, "executeQueryMSSQL", "SQLExecDirect failed");
       SQLFreeHandle(SQL_HANDLE_STMT, stmt);
       return results;
     }
