@@ -97,13 +97,7 @@ const Dashboard = () => {
       cacheHitRate: '0.0',
       status: 'Healthy'
     },
-    connectionPool: {
-      totalPools: 4,
-      activeConnections: 0,
-      idleConnections: 0,
-      failedConnections: 0,
-      lastCleanup: '0m ago'
-    }
+    // Connection pooling removed - using direct connections now
   });
 
   useEffect(() => {
@@ -212,16 +206,7 @@ const Dashboard = () => {
             </Grid>
           </Section>
 
-          <Section>
-            <SectionTitle>■ CONNECTION POOLING</SectionTitle>
-            <Grid>
-              <Value>Total Pools: {stats.connectionPool.totalPools}</Value>
-              <Value>Active Connections: {stats.connectionPool.activeConnections}</Value>
-              <Value>Idle Connections: {stats.connectionPool.idleConnections}</Value>
-              <Value>Failed Connections: {stats.connectionPool.failedConnections}</Value>
-              <Value>Last Cleanup: {stats.connectionPool.lastCleanup}</Value>
-            </Grid>
-          </Section>
+          {/* Connection pooling section removed - using direct connections now */}
         </>
       )}
     </DashboardContainer>

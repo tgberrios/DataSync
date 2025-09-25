@@ -2,9 +2,10 @@
 #define MSSQLTOPOSTGRES_H
 
 #include "Config.h"
-#include "ConnectionPool.h"
 #include "SyncReporter.h"
 #include "logger.h"
+#include "catalog_manager.h"
+
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -80,13 +81,42 @@ public:
   void syncIndexesAndConstraints(const std::string &schema_name,
                                  const std::string &table_name,
                                  pqxx::connection &pgConn,
-                                 const std::string &lowerSchemaName) {
-    ConnectionGuard mssqlGuard(g_connectionPool.get(), DatabaseType::MSSQL);
-    auto mssqlConn = mssqlGuard.get<ODBCHandles>();
-    if (!mssqlConn) {
-      Logger::error("syncIndexesAndConstraints",
-                    "Failed to connect to MSSQL for " + schema_name + "." +
-                        table_name);
+                                 const std::string &lowerSchemaName,
+                                 const std::string &connection_string) {
+    // Connect directly to MSSQL using ODBC
+    SQLHENV env;
+    SQLHDBC dbc;
+    SQLRETURN ret;
+
+    ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env);
+    if (!SQL_SUCCEEDED(ret)) {
+      Logger::error("syncIndexesAndConstraints", "Failed to allocate ODBC environment handle");
+      return;
+    }
+
+    ret = SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION, (SQLPOINTER)SQL_OV_ODBC3, 0);
+    if (!SQL_SUCCEEDED(ret)) {
+      SQLFreeHandle(SQL_HANDLE_ENV, env);
+      Logger::error("syncIndexesAndConstraints", "Failed to set ODBC version");
+      return;
+    }
+
+    ret = SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc);
+    if (!SQL_SUCCEEDED(ret)) {
+      SQLFreeHandle(SQL_HANDLE_ENV, env);
+      Logger::error("syncIndexesAndConstraints", "Failed to allocate ODBC connection handle");
+      return;
+    }
+
+    ret = SQLConnect(dbc, (SQLCHAR*)connection_string.c_str(), SQL_NTS, nullptr, 0, nullptr, 0);
+    if (!SQL_SUCCEEDED(ret)) {
+      SQLCHAR sqlState[6], msg[SQL_MAX_MESSAGE_LENGTH];
+      SQLINTEGER nativeError;
+      SQLSMALLINT msgLen;
+      SQLGetDiagRec(SQL_HANDLE_DBC, dbc, 1, sqlState, &nativeError, msg, sizeof(msg), &msgLen);
+      SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+      SQLFreeHandle(SQL_HANDLE_ENV, env);
+      Logger::error("syncIndexesAndConstraints", "Failed to connect to MSSQL: " + std::string((char*)msg));
       return;
     }
 
@@ -107,7 +137,7 @@ public:
                         "AND i.name IS NOT NULL AND i.is_primary_key = 0 "
                         "ORDER BY i.name, ic.key_ordinal;";
 
-    auto results = executeQueryMSSQL(mssqlConn->dbc, query);
+    std::vector<std::vector<std::string>> results = executeQueryMSSQL(dbc, query);
 
     for (const auto &row : results) {
       if (row.size() < 3)
@@ -136,23 +166,80 @@ public:
                           "': " + std::string(e.what()));
       }
     }
+    
+    // Close MSSQL connection
+    SQLDisconnect(dbc);
+    SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+    SQLFreeHandle(SQL_HANDLE_ENV, env);
   }
 
   void setupTableTargetMSSQLToPostgres() {
     try {
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
       auto tables = getActiveTables(pgConn);
+      
+      // Sort tables by priority: FULL_LOAD, RESET, PERFECT_MATCH, LISTENING_CHANGES
+      std::sort(tables.begin(), tables.end(), [](const TableInfo &a, const TableInfo &b) {
+        if (a.status == "FULL_LOAD" && b.status != "FULL_LOAD") return true;
+        if (a.status != "FULL_LOAD" && b.status == "FULL_LOAD") return false;
+        if (a.status == "RESET" && b.status != "RESET") return true;
+        if (a.status != "RESET" && b.status == "RESET") return false;
+        if (a.status == "PERFECT_MATCH" && b.status != "PERFECT_MATCH") return true;
+        if (a.status != "PERFECT_MATCH" && b.status == "PERFECT_MATCH") return false;
+        if (a.status == "LISTENING_CHANGES" && b.status != "LISTENING_CHANGES") return true;
+        if (a.status != "LISTENING_CHANGES" && b.status == "LISTENING_CHANGES") return false;
+        return false; // Keep original order for same priority
+      });
+
+      Logger::info("setupTableTargetMSSQLToPostgres", 
+                   "Processing " + std::to_string(tables.size()) + " MSSQL tables in priority order");
+      for (size_t i = 0; i < tables.size(); ++i) {
+        if (tables[i].db_engine == "MSSQL") {
+          Logger::info("setupTableTargetMSSQLToPostgres", 
+                       "[" + std::to_string(i+1) + "/" + std::to_string(tables.size()) + "] " + 
+                       tables[i].schema_name + "." + tables[i].table_name + " (status: " + tables[i].status + ")");
+        }
+      }
 
       for (const auto &table : tables) {
         if (table.db_engine != "MSSQL")
           continue;
 
-        ConnectionGuard mssqlGuard(g_connectionPool.get(), DatabaseType::MSSQL);
-        auto mssqlConn = mssqlGuard.get<ODBCHandles>();
-        if (!mssqlConn) {
-          Logger::error("setupTableTargetMSSQLToPostgres",
-                        "Failed to connect to MSSQL for " + table.schema_name +
-                            "." + table.table_name);
+        // Create direct MSSQL connection
+        // Connect directly to MSSQL using ODBC
+        SQLHENV env;
+        SQLHDBC dbc;
+        SQLRETURN ret;
+
+        ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env);
+        if (!SQL_SUCCEEDED(ret)) {
+          Logger::error("setupTableTargetMSSQLToPostgres", "Failed to allocate ODBC environment handle");
+          continue;
+        }
+
+        ret = SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION, (SQLPOINTER)SQL_OV_ODBC3, 0);
+        if (!SQL_SUCCEEDED(ret)) {
+          SQLFreeHandle(SQL_HANDLE_ENV, env);
+          Logger::error("setupTableTargetMSSQLToPostgres", "Failed to set ODBC version");
+          continue;
+        }
+
+        ret = SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc);
+        if (!SQL_SUCCEEDED(ret)) {
+          SQLFreeHandle(SQL_HANDLE_ENV, env);
+          Logger::error("setupTableTargetMSSQLToPostgres", "Failed to allocate ODBC connection handle");
+          continue;
+        }
+
+        ret = SQLConnect(dbc, (SQLCHAR*)table.connection_string.c_str(), SQL_NTS, nullptr, 0, nullptr, 0);
+        if (!SQL_SUCCEEDED(ret)) {
+          SQLCHAR sqlState[6], msg[SQL_MAX_MESSAGE_LENGTH];
+          SQLINTEGER nativeError;
+          SQLSMALLINT msgLen;
+          SQLGetDiagRec(SQL_HANDLE_DBC, dbc, 1, sqlState, &nativeError, msg, sizeof(msg), &msgLen);
+          SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+          SQLFreeHandle(SQL_HANDLE_ENV, env);
+          Logger::error("setupTableTargetMSSQLToPostgres", "Failed to connect to MSSQL: " + std::string((char*)msg));
           continue;
         }
 
@@ -165,7 +252,7 @@ public:
 
         // Primero cambiar a la base de datos correcta
         std::string useQuery = "USE [" + databaseName + "];";
-        auto useResult = executeQueryMSSQL(mssqlConn->dbc, useQuery);
+        auto useResult = executeQueryMSSQL(dbc, useQuery);
 
         // Luego ejecutar la query sin prefijo de base de datos
         std::string query =
@@ -194,7 +281,7 @@ public:
             "' "
             "ORDER BY c.column_id;";
 
-        auto columns = executeQueryMSSQL(mssqlConn->dbc, query);
+        std::vector<std::vector<std::string>> columns = executeQueryMSSQL(dbc, query);
 
         if (columns.empty()) {
           Logger::error("setupTableTargetMSSQLToPostgres",
@@ -218,7 +305,7 @@ public:
                                   "\" (";
         std::vector<std::string> primaryKeys;
 
-        for (const auto &col : columns) {
+        for (const std::vector<std::string> &col : columns) {
           if (col.size() < 8)
             continue;
 
@@ -346,6 +433,11 @@ public:
 
         // No actualizar la columna de tiempo aquí - ya fue detectada
         // correctamente en catalog_manager.h
+        
+        // Close MSSQL connection
+        SQLDisconnect(dbc);
+        SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+        SQLFreeHandle(SQL_HANDLE_ENV, env);
       }
     } catch (const std::exception &e) {
       Logger::error("setupTableTargetMSSQLToPostgres",
@@ -358,6 +450,29 @@ public:
     try {
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
       auto tables = getActiveTables(pgConn);
+      
+      // Sort tables by priority: FULL_LOAD, RESET, PERFECT_MATCH, LISTENING_CHANGES
+      std::sort(tables.begin(), tables.end(), [](const TableInfo &a, const TableInfo &b) {
+        if (a.status == "FULL_LOAD" && b.status != "FULL_LOAD") return true;
+        if (a.status != "FULL_LOAD" && b.status == "FULL_LOAD") return false;
+        if (a.status == "RESET" && b.status != "RESET") return true;
+        if (a.status != "RESET" && b.status == "RESET") return false;
+        if (a.status == "PERFECT_MATCH" && b.status != "PERFECT_MATCH") return true;
+        if (a.status != "PERFECT_MATCH" && b.status == "PERFECT_MATCH") return false;
+        if (a.status == "LISTENING_CHANGES" && b.status != "LISTENING_CHANGES") return true;
+        if (a.status != "LISTENING_CHANGES" && b.status == "LISTENING_CHANGES") return false;
+        return false; // Keep original order for same priority
+      });
+
+      Logger::info("transferDataMSSQLToPostgres", 
+                   "Processing " + std::to_string(tables.size()) + " MSSQL tables in priority order");
+      for (size_t i = 0; i < tables.size(); ++i) {
+        if (tables[i].db_engine == "MSSQL") {
+          Logger::info("transferDataMSSQLToPostgres", 
+                       "[" + std::to_string(i+1) + "/" + std::to_string(tables.size()) + "] " + 
+                       tables[i].schema_name + "." + tables[i].table_name + " (status: " + tables[i].status + ")");
+        }
+      }
 
       for (auto &table : tables) {
         if (table.db_engine != "MSSQL")
@@ -368,12 +483,43 @@ public:
                                                table.table_name + " (" +
                                                table.status + ")";
 
-        ConnectionGuard mssqlGuard(g_connectionPool.get(), DatabaseType::MSSQL);
-        auto mssqlConn = mssqlGuard.get<ODBCHandles>();
-        if (!mssqlConn) {
-          Logger::error("transferDataMSSQLToPostgres",
-                        "Failed to connect to MSSQL for " + table.schema_name +
-                            "." + table.table_name);
+        // Connect directly to MSSQL using ODBC
+        SQLHENV env;
+        SQLHDBC dbc;
+        SQLRETURN ret;
+
+        ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env);
+        if (!SQL_SUCCEEDED(ret)) {
+          Logger::error("transferDataMSSQLToPostgres", "Failed to allocate ODBC environment handle");
+          updateStatus(pgConn, table.schema_name, table.table_name, "ERROR");
+          continue;
+        }
+
+        ret = SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION, (SQLPOINTER)SQL_OV_ODBC3, 0);
+        if (!SQL_SUCCEEDED(ret)) {
+          SQLFreeHandle(SQL_HANDLE_ENV, env);
+          Logger::error("transferDataMSSQLToPostgres", "Failed to set ODBC version");
+          updateStatus(pgConn, table.schema_name, table.table_name, "ERROR");
+          continue;
+        }
+
+        ret = SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc);
+        if (!SQL_SUCCEEDED(ret)) {
+          SQLFreeHandle(SQL_HANDLE_ENV, env);
+          Logger::error("transferDataMSSQLToPostgres", "Failed to allocate ODBC connection handle");
+          updateStatus(pgConn, table.schema_name, table.table_name, "ERROR");
+          continue;
+        }
+
+        ret = SQLConnect(dbc, (SQLCHAR*)table.connection_string.c_str(), SQL_NTS, nullptr, 0, nullptr, 0);
+        if (!SQL_SUCCEEDED(ret)) {
+          SQLCHAR sqlState[6], msg[SQL_MAX_MESSAGE_LENGTH];
+          SQLINTEGER nativeError;
+          SQLSMALLINT msgLen;
+          SQLGetDiagRec(SQL_HANDLE_DBC, dbc, 1, sqlState, &nativeError, msg, sizeof(msg), &msgLen);
+          SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+          SQLFreeHandle(SQL_HANDLE_ENV, env);
+          Logger::error("transferDataMSSQLToPostgres", "Failed to connect to MSSQL: " + std::string((char*)msg));
           updateStatus(pgConn, table.schema_name, table.table_name, "ERROR");
           continue;
         }
@@ -387,10 +533,10 @@ public:
         // Usar USE [database] para cambiar el contexto de base de datos
         std::string databaseName = extractDatabaseName(table.connection_string);
         std::string useQuery = "USE [" + databaseName + "];";
-        auto useResult = executeQueryMSSQL(mssqlConn->dbc, useQuery);
+        auto useResult = executeQueryMSSQL(dbc, useQuery);
 
         auto countRes = executeQueryMSSQL(
-            mssqlConn->dbc,
+            dbc,
             "SELECT COUNT(*) FROM [" + schema_name + "].[" + table_name + "];");
         size_t sourceCount = 0;
         if (!countRes.empty() && !countRes[0][0].empty()) {
@@ -442,7 +588,7 @@ public:
                              table_name +
                              " using time column: " + table.last_sync_column +
                              " since: " + table.last_sync_time);
-            processUpdatesByPrimaryKey(schema_name, table_name, mssqlConn->dbc,
+            processUpdatesByPrimaryKey(schema_name, table_name, dbc,
                                        pgConn, table.last_sync_column,
                                        table.last_sync_time);
           }
@@ -481,7 +627,7 @@ public:
                        "Detected " + std::to_string(targetCount - sourceCount) +
                            " deleted records in " + schema_name + "." +
                            table_name + " - processing deletes");
-          processDeletesByPrimaryKey(schema_name, table_name, mssqlConn->dbc,
+          processDeletesByPrimaryKey(schema_name, table_name, dbc,
                                      pgConn);
 
           // Después de procesar DELETEs, verificar el nuevo conteo
@@ -500,8 +646,8 @@ public:
         }
 
         // Luego ejecutar la query sin prefijo de base de datos
-        auto columns = executeQueryMSSQL(
-            mssqlConn->dbc,
+        std::vector<std::vector<std::string>> columns = executeQueryMSSQL(
+            dbc,
             "SELECT c.name AS COLUMN_NAME, tp.name AS DATA_TYPE, "
             "CASE WHEN c.is_nullable = 1 THEN 'YES' ELSE 'NO' END as "
             "IS_NULLABLE, "
@@ -540,7 +686,7 @@ public:
         std::vector<std::string> columnTypes;
         std::vector<bool> columnNullable;
 
-        for (const auto &col : columns) {
+        for (const std::vector<std::string> &col : columns) {
           if (col.size() < 7)
             continue;
 
@@ -655,7 +801,7 @@ public:
           const size_t CHUNK_SIZE = SyncConfig::getChunkSize();
 
           // Asegurar que estamos en la base de datos correcta
-          executeQueryMSSQL(mssqlConn->dbc, "USE [" + databaseName + "];");
+          executeQueryMSSQL(dbc, "USE [" + databaseName + "];");
 
           std::string selectQuery =
               "SELECT * FROM [" + schema_name + "].[" + table_name + "]";
@@ -665,7 +811,7 @@ public:
                          " ROWS FETCH NEXT " + std::to_string(CHUNK_SIZE) +
                          " ROWS ONLY;";
 
-          auto results = executeQueryMSSQL(mssqlConn->dbc, selectQuery);
+          std::vector<std::vector<std::string>> results = executeQueryMSSQL(dbc, selectQuery);
 
           if (results.empty()) {
             hasMoreData = false;
@@ -683,7 +829,7 @@ public:
             }
 
             std::stringstream csvData;
-            for (const auto &row : results) {
+            for (const std::vector<std::string> &row : results) {
               if (row.size() != columnNames.size()) {
                 continue;
               }
@@ -787,6 +933,11 @@ public:
         SyncReporter::lastProcessingTable =
             SyncReporter::currentProcessingTable;
         SyncReporter::currentProcessingTable = "";
+        
+        // Close MSSQL connection
+        SQLDisconnect(dbc);
+        SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+        SQLFreeHandle(SQL_HANDLE_ENV, env);
       }
     } catch (const std::exception &e) {
       Logger::error("transferDataMSSQLToPostgres",
@@ -1237,7 +1388,7 @@ private:
     Logger::debug("getPrimaryKeyColumns", "Executing query: " + query +
                                               " for " + schema_name + "." +
                                               table_name);
-    auto results = executeQueryMSSQL(mssqlConn, query);
+    std::vector<std::vector<std::string>> results = executeQueryMSSQL(mssqlConn, query);
     Logger::debug("getPrimaryKeyColumns",
                   "Query returned " + std::to_string(results.size()) +
                       " rows for " + schema_name + "." + table_name);

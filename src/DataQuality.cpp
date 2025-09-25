@@ -72,7 +72,6 @@ DataQuality::collectMetrics(pqxx::connection &conn, const std::string &schema,
     // Check constraints
     checkConstraints(conn, metrics);
 
-
     // Calculate final quality score
     calculateQualityScore(metrics);
 
@@ -248,7 +247,6 @@ bool DataQuality::checkConstraints(pqxx::connection &conn,
     return false;
   }
 }
-
 
 void DataQuality::calculateQualityScore(QualityMetrics &metrics) {
   double score = 100.0;

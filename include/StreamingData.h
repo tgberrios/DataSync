@@ -2,7 +2,6 @@
 #define STREAMINGDATA_H
 
 #include "Config.h"
-#include "ConnectionPool.h"
 #include "DDLExporter.h"
 #include "DataGovernance.h"
 #include "DataQuality.h"
@@ -37,23 +36,8 @@ public:
     mongoc_init();
     Logger::info("StreamingData", "MongoDB driver initialized successfully");
 
-    // Initialize connection pool
-    Logger::info("StreamingData", "Initializing connection pool");
-    g_connectionPool = std::make_unique<ConnectionPool>();
-    g_connectionPool->initialize();
-
-    // Add database configurations
-    Logger::info("StreamingData", "Configuring PostgreSQL connection");
-    ConnectionConfig pgConfig;
-    pgConfig.type = DatabaseType::POSTGRESQL;
-    pgConfig.connectionString = DatabaseConfig::getPostgresConnectionString();
-    pgConfig.minConnections = 2;
-    pgConfig.maxConnections = 5;
-    g_connectionPool->addDatabaseConfig(pgConfig);
-
-    // Print pool status
-    Logger::info("StreamingData", "Connection pool configured");
-    g_connectionPool->printPoolStatus();
+    // Database connections will be created as needed
+    Logger::info("StreamingData", "Database connections will be created as needed");
 
     Logger::info("StreamingData",
                  "System initialization completed successfully");
@@ -114,12 +98,7 @@ public:
     }
     Logger::info("StreamingData", "All threads finished successfully");
 
-    // Cleanup connection pool
-    if (g_connectionPool) {
-      Logger::info("StreamingData", "Shutting down connection pool");
-      g_connectionPool->shutdown();
-      g_connectionPool.reset();
-    }
+    // Database connections are cleaned up automatically
 
     // Cleanup MongoDB
     Logger::info("StreamingData", "Cleaning up MongoDB driver");

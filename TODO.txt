@@ -1,49 +1,28 @@
- Analiza todos los archivos del proyecto (excluyendo la carpeta frontend) y crea un diagrama completo de la arquitectura del sistema DataSync. 
 
-INSTRUCCIONES:
-1. Lee todos los archivos .h, .cpp, .sql, .txt, .sh, .cmake en el proyecto
-2. Excluye completamente la carpeta frontend/
-3. Identifica las clases principales, sus relaciones y dependencias
-4. Muestra el flujo de datos entre componentes
-5. Incluye las conexiones a bases de datos (PostgreSQL, MariaDB, MSSQL, MongoDB)
-6. Muestra el patrón de conexiones (ConnectionPool vs conexiones directas)
-7. Incluye el sistema de logging y configuración
-
-COMPONENTES A ANALIZAR:
-- CatalogManager (catalog_manager.h)
-- ConnectionPool (ConnectionPool.h/cpp)
-- StreamingData (StreamingData.h)
-- DDLExporter (DDLExporter.h/cpp)
-- DataQuality (DataQuality.h/cpp)
-- DataGovernance (DataGovernance.h/cpp)
-- SyncReporter (SyncReporter.h/cpp)
-- MetricsCollector (MetricsCollector.h/cpp)
-- Logger (logger.h/cpp)
-- Config (Config.h/cpp)
-- Archivos de sincronización (MariaDBToPostgres.h, MSSQLToPostgres.h, etc.)
-
-FORMATO DEL DIAGRAMA:
-Usa Mermaid con:
-- Rectángulos para clases principales
-- Círculos para bases de datos
-- Flechas para dependencias y flujos
-- Colores diferentes para tipos de componentes
-- Agrupa componentes relacionados
-
-INCLUYE:
-- Arquitectura general del sistema
-- Flujo de sincronización de datos
-- Patrones de conexión a BD
-- Sistema de logging y monitoreo
-- Gestión de catálogo de metadatos
-- Procesos de limpieza y mantenimiento
-
-Genera un diagrama detallado que muestre cómo todos estos componentes trabajan juntos en el sistema DataSync.
+revisar esto de los NULL en todos los archivos
+remover sync reporter ahora que tengo DASHBOARD WEB
+porque dura tanto en seguir con la proxima tabla full_load ? 
+revisar lo del batch y mostrarlo en la ui en dashboard
+que configs tengo que eliminar ahora que quitamos connection pool 
+REVISAR QUE TODOS MIS ARCHIVOS NO USEN CONNECTION POOL TODO TIENE QUE SER DIRECTO
 
 
+MUST ALWAYS REVIEW
+
+Commit apropiado en casos de éxito
+Abort/Rollback en casos de error
+Cierre de conexiones en todos los casos
+Liberación de recursos apropiada
 
 
-BUGS:
-
-
-gcc -g -O0 -o DataSync main.c
+2025-09-23 23:00:27.807[ERROR][transferDataMariaDBToPostgres]Bulk upsert failed: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
+2025-09-23 23:00:27.806[ERROR][performBulkUpsert]Error in bulk upsert: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
+2025-09-23 23:00:27.587[ERROR][transferDataMariaDBToPostgres]Bulk upsert failed: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
+2025-09-23 23:00:27.587[ERROR][performBulkUpsert]Error in bulk upsert: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
+2025-09-23 23:00:27.370[ERROR][transferDataMariaDBToPostgres]Bulk upsert failed: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
+2025-09-23 23:00:27.370[ERROR][performBulkUpsert]Error in bulk upsert: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
+2025-09-23 23:00:27.155[ERROR][transferDataMariaDBToPostgres]Bulk upsert failed: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
+2025-09-23 23:00:27.155[ERROR][performBulkUpsert]Error in bulk upsert: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
+2025-09-23 23:00:26.942[ERROR][transferDataMariaDBToPostgres]Bulk upsert failed: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
+2025-09-23 23:00:26.942[ERROR][performBulkUpsert]Error in bulk upsert: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
+2025-09-23 23:00:26.730[ERROR][transferDataMariaDBToPostgres]Bulk upsert failed: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint

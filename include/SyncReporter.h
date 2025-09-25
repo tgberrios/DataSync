@@ -2,7 +2,6 @@
 #define SYNCREPORTER_H
 
 #include "Config.h"
-#include "ConnectionPool.h"
 #include "logger.h"
 #include <chrono>
 #include <cstdlib>

@@ -48,13 +48,7 @@ export interface DashboardStats {
     cacheHitRate: string;
     status: string;
   };
-  connectionPool: {
-    totalPools: number;
-    activeConnections: number;
-    idleConnections: number;
-    failedConnections: number;
-    lastCleanup: string;
-  };
+  // Connection pooling removed - using direct connections now
   engineMetrics?: {
     [engine: string]: {
       recordsPerSecond: number;
