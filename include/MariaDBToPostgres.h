@@ -115,11 +115,14 @@ public:
       return nullptr;
     }
 
-    // Set connection timeout
+    // Set connection timeouts for large tables
     {
       std::string timeoutQuery =
           "SET SESSION wait_timeout = " +
-          std::to_string(SyncConfig::getConnectionTimeout());
+          std::to_string(SyncConfig::getConnectionTimeout()) +
+          ", interactive_timeout = " +
+          std::to_string(SyncConfig::getConnectionTimeout()) +
+          ", net_read_timeout = 600" + ", net_write_timeout = 600";
       mysql_query(mariadbConn, timeoutQuery.c_str());
     }
 
