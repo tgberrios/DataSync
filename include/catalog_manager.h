@@ -149,42 +149,55 @@ public:
 
         // Logger::debug("syncCatalogMariaDBToPostgres",
         //               "Connecting to MariaDB: " + connStr);
-        
+
         // Parse MariaDB connection string
         std::string host, user, password, db, port;
         std::istringstream ss(connStr);
         std::string token;
         while (std::getline(ss, token, ';')) {
           auto pos = token.find('=');
-          if (pos == std::string::npos) continue;
+          if (pos == std::string::npos)
+            continue;
           std::string key = token.substr(0, pos);
           std::string value = token.substr(pos + 1);
           key.erase(0, key.find_first_not_of(" \t\r\n"));
           key.erase(key.find_last_not_of(" \t\r\n") + 1);
           value.erase(0, value.find_first_not_of(" \t\r\n"));
           value.erase(value.find_last_not_of(" \t\r\n") + 1);
-          if (key == "host") host = value;
-          else if (key == "user") user = value;
-          else if (key == "password") password = value;
-          else if (key == "db") db = value;
-          else if (key == "port") port = value;
+          if (key == "host")
+            host = value;
+          else if (key == "user")
+            user = value;
+          else if (key == "password")
+            password = value;
+          else if (key == "db")
+            db = value;
+          else if (key == "port")
+            port = value;
         }
-        
+
         // Connect directly to MariaDB
         MYSQL *mariaConn = mysql_init(nullptr);
         if (!mariaConn) {
           Logger::error("syncCatalogMariaDBToPostgres", "mysql_init() failed");
           continue;
         }
-        
+
         unsigned int portNum = 3306;
         if (!port.empty()) {
-          try { portNum = std::stoul(port); } catch (...) { portNum = 3306; }
+          try {
+            portNum = std::stoul(port);
+          } catch (...) {
+            portNum = 3306;
+          }
         }
-        
-        if (mysql_real_connect(mariaConn, host.c_str(), user.c_str(), password.c_str(),
-                               db.c_str(), portNum, nullptr, 0) == nullptr) {
-          Logger::error("syncCatalogMariaDBToPostgres", "MariaDB connection failed: " + std::string(mysql_error(mariaConn)));
+
+        if (mysql_real_connect(mariaConn, host.c_str(), user.c_str(),
+                               password.c_str(), db.c_str(), portNum, nullptr,
+                               0) == nullptr) {
+          Logger::error("syncCatalogMariaDBToPostgres",
+                        "MariaDB connection failed: " +
+                            std::string(mysql_error(mariaConn)));
           mysql_close(mariaConn);
           continue;
         }
@@ -198,8 +211,7 @@ public:
             "ORDER BY table_schema, table_name;";
 
         // std::cerr << "Executing discovery query..." << std::endl;
-        auto discoveredTables =
-            executeQueryMariaDB(mariaConn, discoverQuery);
+        auto discoveredTables = executeQueryMariaDB(mariaConn, discoverQuery);
         // std::cerr << "Found " << discoveredTables.size() << " tables"
         //<< std::endl;
 
@@ -234,7 +246,7 @@ public:
             txn.commit();
           }
         }
-        
+
         // Close MariaDB connection
         mysql_close(mariaConn);
       }
@@ -310,33 +322,44 @@ public:
 
         ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env);
         if (!SQL_SUCCEEDED(ret)) {
-          Logger::error("syncCatalogMSSQLToPostgres", "Failed to allocate ODBC environment handle");
+          Logger::error("syncCatalogMSSQLToPostgres",
+                        "Failed to allocate ODBC environment handle");
           continue;
         }
 
-        ret = SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION, (SQLPOINTER)SQL_OV_ODBC3, 0);
+        ret = SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION,
+                            (SQLPOINTER)SQL_OV_ODBC3, 0);
         if (!SQL_SUCCEEDED(ret)) {
           SQLFreeHandle(SQL_HANDLE_ENV, env);
-          Logger::error("syncCatalogMSSQLToPostgres", "Failed to set ODBC version");
+          Logger::error("syncCatalogMSSQLToPostgres",
+                        "Failed to set ODBC version");
           continue;
         }
 
         ret = SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc);
         if (!SQL_SUCCEEDED(ret)) {
           SQLFreeHandle(SQL_HANDLE_ENV, env);
-          Logger::error("syncCatalogMSSQLToPostgres", "Failed to allocate ODBC connection handle");
+          Logger::error("syncCatalogMSSQLToPostgres",
+                        "Failed to allocate ODBC connection handle");
           continue;
         }
 
-        ret = SQLConnect(dbc, (SQLCHAR*)connStr.c_str(), SQL_NTS, nullptr, 0, nullptr, 0);
+        SQLCHAR outConnStr[1024];
+        SQLSMALLINT outConnStrLen;
+        ret = SQLDriverConnect(dbc, nullptr, (SQLCHAR *)connStr.c_str(),
+                               SQL_NTS, outConnStr, sizeof(outConnStr),
+                               &outConnStrLen, SQL_DRIVER_NOPROMPT);
         if (!SQL_SUCCEEDED(ret)) {
           SQLCHAR sqlState[6], msg[SQL_MAX_MESSAGE_LENGTH];
           SQLINTEGER nativeError;
           SQLSMALLINT msgLen;
-          SQLGetDiagRec(SQL_HANDLE_DBC, dbc, 1, sqlState, &nativeError, msg, sizeof(msg), &msgLen);
+          SQLGetDiagRec(SQL_HANDLE_DBC, dbc, 1, sqlState, &nativeError, msg,
+                        sizeof(msg), &msgLen);
           SQLFreeHandle(SQL_HANDLE_DBC, dbc);
           SQLFreeHandle(SQL_HANDLE_ENV, env);
-          Logger::error("syncCatalogMSSQLToPostgres", "Failed to connect to MSSQL: " + std::string((char*)msg));
+          Logger::error("syncCatalogMSSQLToPostgres",
+                        "Failed to connect to MSSQL: " +
+                            std::string((char *)msg));
           continue;
         }
 
@@ -355,8 +378,7 @@ public:
 
         Logger::debug("syncCatalogMSSQLToPostgres",
                       "Executing discovery query...");
-        auto discoveredTables =
-            executeQueryMSSQL(dbc, discoverQuery);
+        auto discoveredTables = executeQueryMSSQL(dbc, discoverQuery);
         Logger::info("syncCatalogMSSQLToPostgres",
                      "Found " + std::to_string(discoveredTables.size()) +
                          " tables");
@@ -409,7 +431,7 @@ public:
             txn.commit();
           }
         }
-        
+
         // Close MSSQL connection
         SQLDisconnect(dbc);
         SQLFreeHandle(SQL_HANDLE_DBC, dbc);
@@ -480,7 +502,7 @@ public:
 
         Logger::debug("syncCatalogPostgresToPostgres",
                       "Connecting to source PostgreSQL: " + connStr);
-        
+
         // Connect directly to PostgreSQL
         pqxx::connection sourcePgConn(connStr);
         if (!sourcePgConn.is_open()) {
@@ -538,8 +560,9 @@ public:
             txn.commit();
           }
         }
-        
-        // PostgreSQL connection closes automatically when sourcePgConn goes out of scope
+
+        // PostgreSQL connection closes automatically when sourcePgConn goes out
+        // of scope
       }
     } catch (const std::exception &e) {
       Logger::error("syncCatalogPostgresToPostgres",
@@ -990,34 +1013,48 @@ private:
         std::string token;
         while (std::getline(ss, token, ';')) {
           auto pos = token.find('=');
-          if (pos == std::string::npos) continue;
+          if (pos == std::string::npos)
+            continue;
           std::string key = token.substr(0, pos);
           std::string value = token.substr(pos + 1);
           key.erase(0, key.find_first_not_of(" \t\r\n"));
           key.erase(key.find_last_not_of(" \t\r\n") + 1);
           value.erase(0, value.find_first_not_of(" \t\r\n"));
           value.erase(value.find_last_not_of(" \t\r\n") + 1);
-          if (key == "host") host = value;
-          else if (key == "user") user = value;
-          else if (key == "password") password = value;
-          else if (key == "db") db = value;
-          else if (key == "port") port = value;
+          if (key == "host")
+            host = value;
+          else if (key == "user")
+            user = value;
+          else if (key == "password")
+            password = value;
+          else if (key == "db")
+            db = value;
+          else if (key == "port")
+            port = value;
         }
-        
+
         MYSQL *mariadbConn = mysql_init(nullptr);
         if (!mariadbConn) {
-          Logger::warning("cleanNonExistentMariaDBTables", "mysql_init() failed");
+          Logger::warning("cleanNonExistentMariaDBTables",
+                          "mysql_init() failed");
           continue;
         }
-        
+
         unsigned int portNum = 3306;
         if (!port.empty()) {
-          try { portNum = std::stoul(port); } catch (...) { portNum = 3306; }
+          try {
+            portNum = std::stoul(port);
+          } catch (...) {
+            portNum = 3306;
+          }
         }
-        
-        if (mysql_real_connect(mariadbConn, host.c_str(), user.c_str(), password.c_str(),
-                               db.c_str(), portNum, nullptr, 0) == nullptr) {
-          Logger::warning("cleanNonExistentMariaDBTables", "MariaDB connection failed: " + std::string(mysql_error(mariadbConn)));
+
+        if (mysql_real_connect(mariadbConn, host.c_str(), user.c_str(),
+                               password.c_str(), db.c_str(), portNum, nullptr,
+                               0) == nullptr) {
+          Logger::warning("cleanNonExistentMariaDBTables",
+                          "MariaDB connection failed: " +
+                              std::string(mysql_error(mariadbConn)));
           mysql_close(mariadbConn);
           continue;
         }
@@ -1049,8 +1086,7 @@ private:
         batchQuery += whereConditions;
 
         // Ejecutar verificación batch
-        auto existingTables =
-            executeQueryMariaDB(mariadbConn, batchQuery);
+        auto existingTables = executeQueryMariaDB(mariadbConn, batchQuery);
 
         // Crear set de tablas existentes para lookup rápido
         std::set<std::pair<std::string, std::string>> existingTableSet;
@@ -1077,7 +1113,7 @@ private:
                      escapeSQL(connection_string) + "';");
           }
         }
-        
+
         // Close MariaDB connection
         mysql_close(mariadbConn);
       }
@@ -1112,33 +1148,45 @@ private:
 
         ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env);
         if (!SQL_SUCCEEDED(ret)) {
-          Logger::warning("cleanNonExistentMSSQLTables", "Failed to allocate ODBC environment handle");
+          Logger::warning("cleanNonExistentMSSQLTables",
+                          "Failed to allocate ODBC environment handle");
           continue;
         }
 
-        ret = SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION, (SQLPOINTER)SQL_OV_ODBC3, 0);
+        ret = SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION,
+                            (SQLPOINTER)SQL_OV_ODBC3, 0);
         if (!SQL_SUCCEEDED(ret)) {
           SQLFreeHandle(SQL_HANDLE_ENV, env);
-          Logger::warning("cleanNonExistentMSSQLTables", "Failed to set ODBC version");
+          Logger::warning("cleanNonExistentMSSQLTables",
+                          "Failed to set ODBC version");
           continue;
         }
 
         ret = SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc);
         if (!SQL_SUCCEEDED(ret)) {
           SQLFreeHandle(SQL_HANDLE_ENV, env);
-          Logger::warning("cleanNonExistentMSSQLTables", "Failed to allocate ODBC connection handle");
+          Logger::warning("cleanNonExistentMSSQLTables",
+                          "Failed to allocate ODBC connection handle");
           continue;
         }
 
-        ret = SQLConnect(dbc, (SQLCHAR*)connection_string.c_str(), SQL_NTS, nullptr, 0, nullptr, 0);
+        SQLCHAR outConnStr[1024];
+        SQLSMALLINT outConnStrLen;
+        ret =
+            SQLDriverConnect(dbc, nullptr, (SQLCHAR *)connection_string.c_str(),
+                             SQL_NTS, outConnStr, sizeof(outConnStr),
+                             &outConnStrLen, SQL_DRIVER_NOPROMPT);
         if (!SQL_SUCCEEDED(ret)) {
           SQLCHAR sqlState[6], msg[SQL_MAX_MESSAGE_LENGTH];
           SQLINTEGER nativeError;
           SQLSMALLINT msgLen;
-          SQLGetDiagRec(SQL_HANDLE_DBC, dbc, 1, sqlState, &nativeError, msg, sizeof(msg), &msgLen);
+          SQLGetDiagRec(SQL_HANDLE_DBC, dbc, 1, sqlState, &nativeError, msg,
+                        sizeof(msg), &msgLen);
           SQLFreeHandle(SQL_HANDLE_DBC, dbc);
           SQLFreeHandle(SQL_HANDLE_ENV, env);
-          Logger::warning("cleanNonExistentMSSQLTables", "Failed to connect to MSSQL: " + std::string((char*)msg));
+          Logger::warning("cleanNonExistentMSSQLTables",
+                          "Failed to connect to MSSQL: " +
+                              std::string((char *)msg));
           continue;
         }
 
@@ -1213,7 +1261,7 @@ private:
                      escapeSQL(connection_string) + "';");
           }
         }
-        
+
         // Close MSSQL connection
         SQLDisconnect(dbc);
         SQLFreeHandle(SQL_HANDLE_DBC, dbc);
@@ -1255,9 +1303,6 @@ private:
                     "Error cleaning orphaned tables: " + std::string(e.what()));
     }
   }
-
-
-
 
   std::vector<std::vector<std::string>>
   executeQueryMariaDB(MYSQL *conn, const std::string &query) {

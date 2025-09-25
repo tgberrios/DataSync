@@ -8,15 +8,4 @@ que configs tengo que eliminar ahora que quitamos connection pool
 confirmar la creacion de las tablas en todos los archivos que se creen sin nulos 
 
 
-
-2025-09-23 23:00:27.807[ERROR][transferDataMariaDBToPostgres]Bulk upsert failed: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
-2025-09-23 23:00:27.806[ERROR][performBulkUpsert]Error in bulk upsert: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
-2025-09-23 23:00:27.587[ERROR][transferDataMariaDBToPostgres]Bulk upsert failed: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
-2025-09-23 23:00:27.587[ERROR][performBulkUpsert]Error in bulk upsert: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
-2025-09-23 23:00:27.370[ERROR][transferDataMariaDBToPostgres]Bulk upsert failed: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
-2025-09-23 23:00:27.370[ERROR][performBulkUpsert]Error in bulk upsert: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
-2025-09-23 23:00:27.155[ERROR][transferDataMariaDBToPostgres]Bulk upsert failed: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
-2025-09-23 23:00:27.155[ERROR][performBulkUpsert]Error in bulk upsert: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
-2025-09-23 23:00:26.942[ERROR][transferDataMariaDBToPostgres]Bulk upsert failed: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
-2025-09-23 23:00:26.942[ERROR][performBulkUpsert]Error in bulk upsert: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
-2025-09-23 23:00:26.730[ERROR][transferDataMariaDBToPostgres]Bulk upsert failed: ERROR: null value in column "from_date" of relation "ma_customer_map" violates not-null constraint
+eliminar la config de RESET EN LOS ARCHIVOS 
