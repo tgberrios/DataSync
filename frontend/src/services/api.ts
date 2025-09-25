@@ -22,6 +22,13 @@ export interface CatalogEntry {
   updated_at: string;
 }
 
+export interface BatchConfig {
+  key: string;
+  value: string;
+  description: string;
+  updated_at: string;
+}
+
 export interface DashboardStats {
   syncStatus: {
     progress: number;
@@ -48,6 +55,7 @@ export interface DashboardStats {
     cacheHitRate: string;
     status: string;
   };
+  batchConfig: BatchConfig;
   // Connection pooling removed - using direct connections now
   engineMetrics?: {
     [engine: string]: {
@@ -150,6 +158,23 @@ export const configApi = {
       return response.data;
     } catch (error) {
       console.error("Error deleting configuration:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getBatchConfig: async () => {
+    try {
+      const response = await api.get<BatchConfig>("/config/batch");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching batch configuration:", error);
       if (axios.isAxiosError(error) && error.response) {
         throw new Error(
           error.response.data.details ||
@@ -337,7 +362,9 @@ export interface LogInfo {
 }
 
 export const logsApi = {
-  getLogs: async (params: { lines?: number; level?: string; function?: string } = {}) => {
+  getLogs: async (
+    params: { lines?: number; level?: string; function?: string } = {}
+  ) => {
     try {
       const response = await api.get<LogsResponse>("/logs", { params });
       return response.data;
