@@ -43,6 +43,9 @@ public:
       // Limpiar tablas huérfanas (sin conexión válida)
       cleanOrphanedTables(pgConn);
 
+      // Actualizar cluster names después de la limpieza
+      updateClusterNames();
+
       Logger::info("cleanCatalog", "Catalog cleanup completed successfully");
     } catch (const std::exception &e) {
       Logger::error("cleanCatalog",
@@ -86,6 +89,57 @@ public:
       Logger::error("deactivateNoDataTables",
                     "Error deactivating NO_DATA tables: " +
                         std::string(e.what()));
+    }
+  }
+
+  void updateClusterNames() {
+    try {
+      Logger::info("updateClusterNames", "Starting cluster name updates");
+      pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
+
+      // Obtener todas las conexiones únicas que necesitan cluster_name
+      pqxx::work txn(pgConn);
+      auto results = txn.exec(
+          "SELECT DISTINCT connection_string, db_engine FROM metadata.catalog "
+          "WHERE (cluster_name IS NULL OR cluster_name = '') AND active = "
+          "true");
+      txn.commit();
+
+      for (const auto &row : results) {
+        std::string connectionString = row[0].as<std::string>();
+        std::string dbEngine = row[1].as<std::string>();
+
+        // Prefer resolving from the source engine itself; fallback to hostname
+        // parsing
+        std::string clusterName =
+            resolveClusterName(connectionString, dbEngine);
+        if (clusterName.empty()) {
+          std::string hostname =
+              extractHostnameFromConnection(connectionString, dbEngine);
+          clusterName = getClusterNameFromHostname(hostname);
+        }
+
+        if (!clusterName.empty()) {
+          // Actualizar cluster_name para todas las tablas con esta conexión
+          pqxx::work updateTxn(pgConn);
+          auto updateResult = updateTxn.exec(
+              "UPDATE metadata.catalog SET cluster_name = '" +
+              escapeSQL(clusterName) + "' WHERE connection_string = '" +
+              escapeSQL(connectionString) + "' AND db_engine = '" +
+              escapeSQL(dbEngine) + "'");
+          updateTxn.commit();
+
+          Logger::info("updateClusterNames",
+                       "Updated cluster_name to '" + clusterName + "' for " +
+                           std::to_string(updateResult.affected_rows()) +
+                           " tables for engine " + dbEngine);
+        }
+      }
+
+      Logger::info("updateClusterNames", "Cluster name updates completed");
+    } catch (const std::exception &e) {
+      Logger::error("updateClusterNames",
+                    "Error updating cluster names: " + std::string(e.what()));
     }
   }
 
@@ -248,6 +302,9 @@ public:
         // Close MariaDB connection
         mysql_close(mariaConn);
       }
+
+      // Actualizar cluster names después de la sincronización
+      updateClusterNames();
     } catch (const std::exception &e) {
       // std::cerr << "Error in syncCatalogMariaDBToPostgres: " << e.what()
       //<< std::endl;
@@ -435,6 +492,9 @@ public:
         SQLFreeHandle(SQL_HANDLE_DBC, dbc);
         SQLFreeHandle(SQL_HANDLE_ENV, env);
       }
+
+      // Actualizar cluster names después de la sincronización
+      updateClusterNames();
     } catch (const std::exception &e) {
       Logger::error("syncCatalogMSSQLToPostgres",
                     "Error in syncCatalogMSSQLToPostgres: " +
@@ -562,6 +622,9 @@ public:
         // PostgreSQL connection closes automatically when sourcePgConn goes out
         // of scope
       }
+
+      // Actualizar cluster names después de la sincronización
+      updateClusterNames();
     } catch (const std::exception &e) {
       Logger::error("syncCatalogPostgresToPostgres",
                     "Error in syncCatalogPostgresToPostgres: " +
@@ -728,6 +791,246 @@ private:
         "No DATABASE found in connection string, using master fallback: " +
             connectionString);
     return "master"; // fallback
+  }
+
+  std::string resolveClusterName(const std::string &connectionString,
+                                 const std::string &dbEngine) {
+    try {
+      if (dbEngine == "MariaDB") {
+        // Connect and get @@hostname
+        std::string host, user, password, db, port;
+        std::istringstream ss(connectionString);
+        std::string token;
+        while (std::getline(ss, token, ';')) {
+          auto pos = token.find('=');
+          if (pos == std::string::npos)
+            continue;
+          std::string key = token.substr(0, pos);
+          std::string value = token.substr(pos + 1);
+          key.erase(0, key.find_first_not_of(" \t\r\n"));
+          key.erase(key.find_last_not_of(" \t\r\n") + 1);
+          value.erase(0, value.find_first_not_of(" \t\r\n"));
+          value.erase(value.find_last_not_of(" \t\r\n") + 1);
+          if (key == "host")
+            host = value;
+          else if (key == "user")
+            user = value;
+          else if (key == "password")
+            password = value;
+          else if (key == "db")
+            db = value;
+          else if (key == "port")
+            port = value;
+        }
+
+        MYSQL *conn = mysql_init(nullptr);
+        if (!conn)
+          return "";
+        unsigned int portNum = 3306;
+        if (!port.empty()) {
+          try {
+            portNum = std::stoul(port);
+          } catch (...) {
+            portNum = 3306;
+          }
+        }
+        if (mysql_real_connect(conn, host.c_str(), user.c_str(),
+                               password.c_str(), db.c_str(), portNum, nullptr,
+                               0) == nullptr) {
+          mysql_close(conn);
+          return "";
+        }
+        auto res = executeQueryMariaDB(conn, "SELECT @@hostname;");
+        mysql_close(conn);
+        if (!res.empty() && !res[0].empty() && !res[0][0].empty()) {
+          std::string name = res[0][0];
+          std::transform(name.begin(), name.end(), name.begin(), ::toupper);
+          return name;
+        }
+        return "";
+      }
+
+      if (dbEngine == "MSSQL") {
+        // Connect via ODBC and query SERVERPROPERTY('MachineName')
+        SQLHENV env;
+        SQLHDBC dbc;
+        SQLRETURN ret;
+        ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env);
+        if (!SQL_SUCCEEDED(ret))
+          return "";
+        ret = SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION,
+                            (SQLPOINTER)SQL_OV_ODBC3, 0);
+        if (!SQL_SUCCEEDED(ret)) {
+          SQLFreeHandle(SQL_HANDLE_ENV, env);
+          return "";
+        }
+        ret = SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc);
+        if (!SQL_SUCCEEDED(ret)) {
+          SQLFreeHandle(SQL_HANDLE_ENV, env);
+          return "";
+        }
+        SQLCHAR outConnStr[1024];
+        SQLSMALLINT outConnStrLen;
+        ret =
+            SQLDriverConnect(dbc, nullptr, (SQLCHAR *)connectionString.c_str(),
+                             SQL_NTS, outConnStr, sizeof(outConnStr),
+                             &outConnStrLen, SQL_DRIVER_NOPROMPT);
+        if (!SQL_SUCCEEDED(ret)) {
+          SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+          SQLFreeHandle(SQL_HANDLE_ENV, env);
+          return "";
+        }
+        auto results =
+            executeQueryMSSQL(dbc, "SELECT CAST(SERVERPROPERTY('MachineName') "
+                                   "AS VARCHAR(128)) AS name;");
+        if (results.empty() || results[0].empty() || results[0][0] == "NULL" ||
+            results[0][0].empty()) {
+          results = executeQueryMSSQL(
+              dbc, "SELECT CAST(@@SERVERNAME AS VARCHAR(128)) AS name;");
+        }
+        SQLDisconnect(dbc);
+        SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+        SQLFreeHandle(SQL_HANDLE_ENV, env);
+        if (!results.empty() && !results[0].empty() &&
+            results[0][0] != "NULL" && !results[0][0].empty()) {
+          std::string name = results[0][0];
+          std::transform(name.begin(), name.end(), name.begin(), ::toupper);
+          return name;
+        }
+        return "";
+      }
+
+      if (dbEngine == "PostgreSQL") {
+        try {
+          pqxx::connection srcConn(connectionString);
+          if (!srcConn.is_open())
+            return "";
+          pqxx::work txn(srcConn);
+          // Prefer cluster_name GUC if set; else fallback to inet_server_addr()
+          auto r1 = txn.exec("SELECT current_setting('cluster_name', true);");
+          std::string name;
+          if (!r1.empty() && !r1[0][0].is_null()) {
+            name = r1[0][0].as<std::string>();
+          }
+          if (name.empty()) {
+            auto r2 = txn.exec("SELECT inet_server_addr()::text;");
+            if (!r2.empty() && !r2[0][0].is_null()) {
+              name = r2[0][0].as<std::string>();
+            }
+          }
+          txn.commit();
+          std::transform(name.begin(), name.end(), name.begin(), ::toupper);
+          return name;
+        } catch (...) {
+          return "";
+        }
+      }
+    } catch (...) {
+      return "";
+    }
+    return "";
+  }
+
+  std::string extractHostnameFromConnection(const std::string &connectionString,
+                                            const std::string &dbEngine) {
+    std::istringstream ss(connectionString);
+    std::string token;
+
+    while (std::getline(ss, token, ';')) {
+      auto pos = token.find('=');
+      if (pos == std::string::npos)
+        continue;
+
+      std::string key = token.substr(0, pos);
+      std::string value = token.substr(pos + 1);
+
+      // Limpiar espacios en blanco
+      key.erase(0, key.find_first_not_of(" \t\r\n"));
+      key.erase(key.find_last_not_of(" \t\r\n") + 1);
+      value.erase(0, value.find_first_not_of(" \t\r\n"));
+      value.erase(value.find_last_not_of(" \t\r\n") + 1);
+
+      if (dbEngine == "MariaDB" && key == "host") {
+        return value;
+      } else if (dbEngine == "MSSQL" && key == "SERVER") {
+        return value;
+      } else if (dbEngine == "PostgreSQL" && key == "host") {
+        return value;
+      }
+    }
+
+    Logger::warning("extractHostnameFromConnection",
+                    "No hostname found in connection string for " + dbEngine +
+                        ": " + connectionString);
+    return "";
+  }
+
+  std::string getClusterNameFromHostname(const std::string &hostname) {
+    if (hostname.empty()) {
+      return "";
+    }
+
+    // Mapeo de hostnames a cluster names
+    // Puedes personalizar estos mapeos según tu infraestructura
+    std::string lowerHostname = hostname;
+    std::transform(lowerHostname.begin(), lowerHostname.end(),
+                   lowerHostname.begin(), ::tolower);
+
+    // Patrones comunes de hostnames
+    if (lowerHostname.find("prod") != std::string::npos ||
+        lowerHostname.find("production") != std::string::npos) {
+      return "PRODUCTION";
+    }
+    if (lowerHostname.find("staging") != std::string::npos ||
+        lowerHostname.find("stage") != std::string::npos) {
+      return "STAGING";
+    }
+    if (lowerHostname.find("dev") != std::string::npos ||
+        lowerHostname.find("development") != std::string::npos) {
+      return "DEVELOPMENT";
+    }
+    if (lowerHostname.find("test") != std::string::npos ||
+        lowerHostname.find("testing") != std::string::npos) {
+      return "TESTING";
+    }
+    if (lowerHostname.find("local") != std::string::npos ||
+        lowerHostname.find("localhost") != std::string::npos) {
+      return "LOCAL";
+    }
+    if (lowerHostname.find("uat") != std::string::npos) {
+      return "UAT";
+    }
+    if (lowerHostname.find("qa") != std::string::npos) {
+      return "QA";
+    }
+
+    // Extraer cluster name del hostname (ej: db-cluster-01 -> CLUSTER-01)
+    if (lowerHostname.find("cluster") != std::string::npos) {
+      size_t clusterPos = lowerHostname.find("cluster");
+      if (clusterPos != std::string::npos) {
+        std::string clusterPart = lowerHostname.substr(clusterPos);
+        std::transform(clusterPart.begin(), clusterPart.end(),
+                       clusterPart.begin(), ::toupper);
+        return clusterPart;
+      }
+    }
+
+    // Extraer número de servidor (ej: db-01 -> DB-01)
+    if (lowerHostname.find("db-") != std::string::npos) {
+      size_t dbPos = lowerHostname.find("db-");
+      if (dbPos != std::string::npos) {
+        std::string dbPart = lowerHostname.substr(dbPos);
+        std::transform(dbPart.begin(), dbPart.end(), dbPart.begin(), ::toupper);
+        return dbPart;
+      }
+    }
+
+    // Si no se encuentra patrón específico, usar el hostname completo en
+    // mayúsculas
+    std::string upperHostname = hostname;
+    std::transform(upperHostname.begin(), upperHostname.end(),
+                   upperHostname.begin(), ::toupper);
+    return upperHostname;
   }
 
   void cleanNonExistentPostgresTables(pqxx::connection &pgConn) {
