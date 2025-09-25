@@ -51,9 +51,17 @@ public:
   MYSQL *getMariaDBConnection(const std::string &connectionString) {
     std::lock_guard<std::mutex> lock(connectionMutex);
 
-    // Si ya tenemos una conexión para esta connection string, la reutilizamos
+    // Si ya tenemos una conexión para esta connection string, verificar que
+    // esté activa
     if (mariadbConn && currentConnectionString == connectionString) {
-      return mariadbConn;
+      // Verificar que la conexión esté activa con un ping
+      if (mysql_ping(mariadbConn) == 0) {
+        return mariadbConn;
+      } else {
+        // Conexión perdida, cerrarla y crear una nueva
+        mysql_close(mariadbConn);
+        mariadbConn = nullptr;
+      }
     }
 
     // Si tenemos una conexión diferente, la cerramos
@@ -303,10 +311,26 @@ public:
                             table.schema_name + "' AND table_name = '" +
                             table.table_name + "';";
 
+        // Verificar que la tabla existe antes de obtener columnas
+        std::string tableExistsQuery =
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema "
+            "= '" +
+            table.schema_name + "' AND table_name = '" + table.table_name +
+            "';";
+        std::vector<std::vector<std::string>> tableExistsRes =
+            executeQueryMariaDB(mariadbConn, tableExistsQuery);
+
+        if (tableExistsRes.empty() || tableExistsRes[0].empty() ||
+            tableExistsRes[0][0] == "0") {
+          Logger::warning(LogCategory::TRANSFER,
+                          "Table " + table.schema_name + "." +
+                              table.table_name +
+                              " does not exist in MariaDB - skipping");
+          continue;
+        }
+
         std::vector<std::vector<std::string>> columns =
             executeQueryMariaDB(mariadbConn, query);
-        // std::cerr << "Got " << columns.size() << " columns from MariaDB" <<
-        // std::endl;
 
         if (columns.empty()) {
           Logger::error(LogCategory::TRANSFER,
@@ -314,6 +338,11 @@ public:
                             "." + table.table_name + " - skipping");
           continue;
         }
+
+        Logger::info(LogCategory::TRANSFER,
+                     "Found " + std::to_string(columns.size()) +
+                         " columns for table " + table.schema_name + "." +
+                         table.table_name);
 
         std::string lowerSchema = table.schema_name;
         std::transform(lowerSchema.begin(), lowerSchema.end(),
@@ -843,14 +872,55 @@ public:
         std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
                        lowerSchemaName.begin(), ::tolower);
 
+        // Verificar conexión antes de hacer count
+        if (mysql_ping(mariadbConn) != 0) {
+          Logger::error(LogCategory::TRANSFER,
+                        "MariaDB connection lost for table " + schema_name +
+                            "." + table_name + " - reconnecting");
+          mariadbConn = getMariaDBConnection(table.connection_string);
+          if (!mariadbConn) {
+            Logger::error(LogCategory::TRANSFER,
+                          "Failed to reconnect to MariaDB for table " +
+                              schema_name + "." + table_name + " - skipping");
+            continue;
+          }
+        }
+
+        // Verificar que la tabla existe antes de hacer count
+        std::string tableExistsQuery =
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema "
+            "= '" +
+            schema_name + "' AND table_name = '" + table_name + "';";
+        std::vector<std::vector<std::string>> tableExistsRes =
+            executeQueryMariaDB(mariadbConn, tableExistsQuery);
+
+        if (tableExistsRes.empty() || tableExistsRes[0].empty() ||
+            tableExistsRes[0][0] == "0") {
+          Logger::warning(LogCategory::TRANSFER,
+                          "Table " + schema_name + "." + table_name +
+                              " does not exist in MariaDB - skipping");
+          continue;
+        }
+
         std::vector<std::vector<std::string>> countRes = executeQueryMariaDB(
             mariadbConn,
             "SELECT COUNT(*) FROM `" + schema_name + "`.`" + table_name + "`;");
         size_t sourceCount = 0;
+
         if (!countRes.empty() && !countRes[0].empty() &&
             !countRes[0][0].empty()) {
           try {
             std::string countStr = countRes[0][0];
+            // Limpiar espacios en blanco y caracteres no deseados
+            countStr.erase(
+                std::remove_if(countStr.begin(), countStr.end(), ::isspace),
+                countStr.end());
+
+            // Debug: log the raw result
+            Logger::info(LogCategory::TRANSFER,
+                         "Raw count result for " + schema_name + "." +
+                             table_name + ": '" + countStr + "'");
+
             if (!countStr.empty() &&
                 std::all_of(countStr.begin(), countStr.end(), ::isdigit)) {
               sourceCount = std::stoul(countStr);
@@ -860,8 +930,9 @@ public:
                                " records");
             } else {
               Logger::warning(LogCategory::TRANSFER,
-                              "Invalid count value for table " + schema_name +
-                                  "." + table_name + " - using 0");
+                              "Invalid count value '" + countStr +
+                                  "' for table " + schema_name + "." +
+                                  table_name + " - using 0");
               sourceCount = 0;
             }
           } catch (const std::exception &e) {
@@ -1081,6 +1152,22 @@ public:
         // std::endl; std::cerr << "Table status: " << table.status <<
         // std::endl;
 
+        // Verificar que la tabla existe antes de obtener columnas
+        std::string columnTableExistsQuery =
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema "
+            "= '" +
+            schema_name + "' AND table_name = '" + table_name + "';";
+        std::vector<std::vector<std::string>> columnTableExistsRes =
+            executeQueryMariaDB(mariadbConn, columnTableExistsQuery);
+
+        if (columnTableExistsRes.empty() || columnTableExistsRes[0].empty() ||
+            columnTableExistsRes[0][0] == "0") {
+          Logger::warning(LogCategory::TRANSFER,
+                          "Table " + schema_name + "." + table_name +
+                              " does not exist in MariaDB - skipping");
+          continue;
+        }
+
         std::vector<std::vector<std::string>> columns = executeQueryMariaDB(
             mariadbConn,
             "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_KEY, EXTRA, "
@@ -1089,9 +1176,17 @@ public:
                 schema_name + "' AND table_name = '" + table_name + "';");
 
         if (columns.empty()) {
+          Logger::error(LogCategory::TRANSFER, "No columns found for table " +
+                                                   schema_name + "." +
+                                                   table_name + " - skipping");
           updateStatus(pgConn, schema_name, table_name, "ERROR");
           continue;
         }
+
+        Logger::info(LogCategory::TRANSFER, "Found " +
+                                                std::to_string(columns.size()) +
+                                                " columns for table " +
+                                                schema_name + "." + table_name);
 
         std::vector<std::string> columnNames;
         std::vector<std::string> columnTypes;
@@ -1745,20 +1840,34 @@ private:
       return results;
     }
 
+    // Verificar conexión antes de ejecutar query
+    if (mysql_ping(conn) != 0) {
+      Logger::error(LogCategory::TRANSFER,
+                    "MariaDB connection lost during query execution: " +
+                        std::string(mysql_error(conn)));
+      return results;
+    }
+
     if (mysql_query(conn, query.c_str())) {
-      Logger::warning(
-          LogCategory::TRANSFER,
-          "Query execution failed: " + std::string(mysql_error(conn)) +
-              " for query: " + query.substr(0, 100) + "...");
+      std::string errorMsg = mysql_error(conn);
+      if (errorMsg.empty()) {
+        errorMsg = "Unknown or undefined error code";
+      }
+      Logger::warning(LogCategory::TRANSFER,
+                      "Query execution failed: " + errorMsg +
+                          " for query: " + query.substr(0, 100) + "...");
       return results;
     }
 
     MYSQL_RES *res = mysql_store_result(conn);
     if (!res) {
       if (mysql_field_count(conn) > 0) {
+        std::string errorMsg = mysql_error(conn);
+        if (errorMsg.empty()) {
+          errorMsg = "Unknown or undefined error code";
+        }
         Logger::warning(LogCategory::TRANSFER,
-                        "mysql_store_result() failed: " +
-                            std::string(mysql_error(conn)));
+                        "mysql_store_result() failed: " + errorMsg);
       }
       return results;
     }

@@ -59,9 +59,21 @@ public:
   SQLHDBC getMSSQLConnection(const std::string &connectionString) {
     std::lock_guard<std::mutex> lock(connectionMutex);
 
-    // Si ya tenemos una conexión para esta connection string, la reutilizamos
+    // Si ya tenemos una conexión para esta connection string, verificar que
+    // esté activa
     if (mssqlConn && currentConnectionString == connectionString) {
-      return mssqlConn;
+      // Verificar que la conexión esté activa
+      SQLUINTEGER infoValue;
+      SQLRETURN ret = SQLGetConnectAttr(mssqlConn, SQL_ATTR_CONNECTION_DEAD,
+                                        &infoValue, sizeof(infoValue), nullptr);
+      if (ret == SQL_SUCCESS && infoValue == SQL_CD_FALSE) {
+        return mssqlConn;
+      } else {
+        // Conexión perdida o inactiva, cerrarla y crear una nueva
+        SQLDisconnect(mssqlConn);
+        SQLFreeHandle(SQL_HANDLE_DBC, mssqlConn);
+        mssqlConn = nullptr;
+      }
     }
 
     // Si tenemos una conexión diferente, la cerramos
@@ -2182,12 +2194,16 @@ private:
       return results;
     }
 
-    SQLHSTMT stmt;
+    SQLHSTMT stmt = nullptr;
     SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, conn, &stmt);
     if (ret != SQL_SUCCESS) {
       Logger::error(LogCategory::TRANSFER, "SQLAllocHandle(STMT) failed");
       return results;
     }
+
+    // Asegurar que no hay resultados pendientes en la conexión
+    SQLCancel(stmt);
+    SQLCloseCursor(stmt);
 
     ret = SQLExecDirect(stmt, (SQLCHAR *)query.c_str(), SQL_NTS);
     if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
@@ -2199,10 +2215,21 @@ private:
       SQLGetDiagRec(SQL_HANDLE_STMT, stmt, 1, sqlState, &nativeError, errorMsg,
                     sizeof(errorMsg), &msgLen);
 
-      Logger::error(
-          "SQLExecDirect failed - SQLState: " + std::string((char *)sqlState) +
-          ", NativeError: " + std::to_string(nativeError) +
-          ", Error: " + std::string((char *)errorMsg) + ", Query: " + query);
+      // Solo loggear como error si no es un error de "Connection is busy"
+      if (strcmp((char *)sqlState, "HY000") == 0 && nativeError == 0) {
+        Logger::warning("SQLExecDirect failed - Connection busy, retrying: " +
+                        std::string((char *)errorMsg) +
+                        ", Query: " + query.substr(0, 100) + "...");
+      } else {
+        Logger::error("SQLExecDirect failed - SQLState: " +
+                      std::string((char *)sqlState) +
+                      ", NativeError: " + std::to_string(nativeError) +
+                      ", Error: " + std::string((char *)errorMsg) +
+                      ", Query: " + query);
+      }
+
+      // Limpiar el statement antes de salir
+      SQLCloseCursor(stmt);
       SQLFreeHandle(SQL_HANDLE_STMT, stmt);
       return results;
     }
@@ -2231,6 +2258,8 @@ private:
       results.push_back(row);
     }
 
+    // Limpiar el statement correctamente
+    SQLCloseCursor(stmt);
     SQLFreeHandle(SQL_HANDLE_STMT, stmt);
     return results;
   }
