@@ -110,8 +110,11 @@ public:
       return;
     }
 
-    ret = SQLConnect(dbc, (SQLCHAR *)connection_string.c_str(), SQL_NTS,
-                     nullptr, 0, nullptr, 0);
+    SQLCHAR outConnStr[1024];
+    SQLSMALLINT outConnStrLen;
+    ret = SQLDriverConnect(dbc, nullptr, (SQLCHAR *)connection_string.c_str(),
+                           SQL_NTS, outConnStr, sizeof(outConnStr),
+                           &outConnStrLen, SQL_DRIVER_NOPROMPT);
     if (!SQL_SUCCEEDED(ret)) {
       SQLCHAR sqlState[6], msg[SQL_MAX_MESSAGE_LENGTH];
       SQLINTEGER nativeError;
@@ -257,8 +260,12 @@ public:
           continue;
         }
 
-        ret = SQLConnect(dbc, (SQLCHAR *)table.connection_string.c_str(),
-                         SQL_NTS, nullptr, 0, nullptr, 0);
+        SQLCHAR outConnStr[1024];
+        SQLSMALLINT outConnStrLen;
+        ret = SQLDriverConnect(dbc, nullptr,
+                               (SQLCHAR *)table.connection_string.c_str(),
+                               SQL_NTS, outConnStr, sizeof(outConnStr),
+                               &outConnStrLen, SQL_DRIVER_NOPROMPT);
         if (!SQL_SUCCEEDED(ret)) {
           SQLCHAR sqlState[6], msg[SQL_MAX_MESSAGE_LENGTH];
           SQLINTEGER nativeError;
@@ -560,8 +567,12 @@ public:
           continue;
         }
 
-        ret = SQLConnect(dbc, (SQLCHAR *)table.connection_string.c_str(),
-                         SQL_NTS, nullptr, 0, nullptr, 0);
+        SQLCHAR outConnStr[1024];
+        SQLSMALLINT outConnStrLen;
+        ret = SQLDriverConnect(dbc, nullptr,
+                               (SQLCHAR *)table.connection_string.c_str(),
+                               SQL_NTS, outConnStr, sizeof(outConnStr),
+                               &outConnStrLen, SQL_DRIVER_NOPROMPT);
         if (!SQL_SUCCEEDED(ret)) {
           SQLCHAR sqlState[6], msg[SQL_MAX_MESSAGE_LENGTH];
           SQLINTEGER nativeError;
