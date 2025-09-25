@@ -51,12 +51,7 @@ public:
     threads.emplace_back(&StreamingData::maintenanceThread, this);
     Logger::info("StreamingData", "Core threads launched successfully");
 
-    // Wait for initialization to complete
-    Logger::info("StreamingData",
-                 "Waiting 60 seconds for initialization to complete");
-    std::this_thread::sleep_for(std::chrono::seconds(60));
-
-    // Launch transfer threads after initialization
+    // Launch transfer threads immediately
     Logger::info("StreamingData",
                  "Launching transfer threads (MariaDB, MSSQL, PostgreSQL)");
     threads.emplace_back(&StreamingData::mariaTransferThread, this);
@@ -186,17 +181,32 @@ private:
         Logger::info("catalogSyncThread",
                      "Starting catalog synchronization cycle");
 
-        Logger::debug("catalogSyncThread", "Syncing MariaDB catalog");
-        catalogManager.syncCatalogMariaDBToPostgres();
-        Logger::debug("catalogSyncThread", "MariaDB catalog sync completed");
+        // Launch all catalog syncs in parallel
+        std::vector<std::thread> syncThreads;
 
-        Logger::debug("catalogSyncThread", "Syncing MSSQL catalog");
-        catalogManager.syncCatalogMSSQLToPostgres();
-        Logger::debug("catalogSyncThread", "MSSQL catalog sync completed");
+        syncThreads.emplace_back([this]() {
+          Logger::debug("catalogSyncThread", "Syncing MariaDB catalog");
+          catalogManager.syncCatalogMariaDBToPostgres();
+          Logger::debug("catalogSyncThread", "MariaDB catalog sync completed");
+        });
 
-        Logger::debug("catalogSyncThread", "Syncing PostgreSQL catalog");
-        catalogManager.syncCatalogPostgresToPostgres();
-        Logger::debug("catalogSyncThread", "PostgreSQL catalog sync completed");
+        syncThreads.emplace_back([this]() {
+          Logger::debug("catalogSyncThread", "Syncing MSSQL catalog");
+          catalogManager.syncCatalogMSSQLToPostgres();
+          Logger::debug("catalogSyncThread", "MSSQL catalog sync completed");
+        });
+
+        syncThreads.emplace_back([this]() {
+          Logger::debug("catalogSyncThread", "Syncing PostgreSQL catalog");
+          catalogManager.syncCatalogPostgresToPostgres();
+          Logger::debug("catalogSyncThread",
+                        "PostgreSQL catalog sync completed");
+        });
+
+        // Wait for all sync threads to complete
+        for (auto &thread : syncThreads) {
+          thread.join();
+        }
 
         Logger::debug("catalogSyncThread", "Cleaning catalog");
         catalogManager.cleanCatalog();
