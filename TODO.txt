@@ -1,4 +1,4 @@
 mejorar performance!
 creo que algo relantiza mi app en @maria siento que va muy muy lento indagar al maximo
 
-logger.h revisarlo improvewments y tambien a la web
+

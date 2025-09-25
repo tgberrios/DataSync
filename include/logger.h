@@ -19,6 +19,21 @@ enum class LogLevel {
   CRITICAL = 4
 };
 
+enum class LogCategory {
+  SYSTEM = 0,
+  DATABASE = 1,
+  TRANSFER = 2,
+  CONFIG = 3,
+  VALIDATION = 4,
+  MAINTENANCE = 5,
+  MONITORING = 6,
+  DDL_EXPORT = 7,
+  METRICS = 8,
+  GOVERNANCE = 9,
+  QUALITY = 10,
+  UNKNOWN = 99
+};
+
 class Logger {
 private:
   static std::ofstream logFile;
@@ -66,6 +81,61 @@ private:
     }
   }
 
+  static std::string getCategoryString(LogCategory category) {
+    switch (category) {
+    case LogCategory::SYSTEM:
+      return "SYSTEM";
+    case LogCategory::DATABASE:
+      return "DATABASE";
+    case LogCategory::TRANSFER:
+      return "TRANSFER";
+    case LogCategory::CONFIG:
+      return "CONFIG";
+    case LogCategory::VALIDATION:
+      return "VALIDATION";
+    case LogCategory::MAINTENANCE:
+      return "MAINTENANCE";
+    case LogCategory::MONITORING:
+      return "MONITORING";
+    case LogCategory::DDL_EXPORT:
+      return "DDL_EXPORT";
+    case LogCategory::METRICS:
+      return "METRICS";
+    case LogCategory::GOVERNANCE:
+      return "GOVERNANCE";
+    case LogCategory::QUALITY:
+      return "QUALITY";
+    default:
+      return "UNKNOWN";
+    }
+  }
+
+  static LogCategory stringToCategory(const std::string &categoryStr) {
+    if (categoryStr == "SYSTEM")
+      return LogCategory::SYSTEM;
+    if (categoryStr == "DATABASE")
+      return LogCategory::DATABASE;
+    if (categoryStr == "TRANSFER")
+      return LogCategory::TRANSFER;
+    if (categoryStr == "CONFIG")
+      return LogCategory::CONFIG;
+    if (categoryStr == "VALIDATION")
+      return LogCategory::VALIDATION;
+    if (categoryStr == "MAINTENANCE")
+      return LogCategory::MAINTENANCE;
+    if (categoryStr == "MONITORING")
+      return LogCategory::MONITORING;
+    if (categoryStr == "DDL_EXPORT")
+      return LogCategory::DDL_EXPORT;
+    if (categoryStr == "METRICS")
+      return LogCategory::METRICS;
+    if (categoryStr == "GOVERNANCE")
+      return LogCategory::GOVERNANCE;
+    if (categoryStr == "QUALITY")
+      return LogCategory::QUALITY;
+    return LogCategory::UNKNOWN;
+  }
+
   static void rotateLogFile() {
     if (logFile.is_open()) {
       logFile.close();
@@ -103,7 +173,8 @@ private:
     }
   }
 
-  static void writeLog(LogLevel level, const std::string &function,
+  static void writeLog(LogLevel level, LogCategory category,
+                       const std::string &function,
                        const std::string &message) {
     std::lock_guard<std::mutex> lock(logMutex);
 
@@ -120,8 +191,10 @@ private:
 
     std::string timestamp = getCurrentTimestamp();
     std::string levelStr = getLevelString(level);
+    std::string categoryStr = getCategoryString(category);
 
-    logFile << "[" << timestamp << "] [" << levelStr << "]";
+    logFile << "[" << timestamp << "] [" << levelStr << "] [" << categoryStr
+            << "]";
     if (!function.empty()) {
       logFile << " [" << function << "]";
     }
@@ -159,54 +232,103 @@ public:
     }
   }
 
+  // Convenience methods with categories
   static void debug(const std::string &message) {
-    writeLog(LogLevel::DEBUG, "", message);
+    writeLog(LogLevel::DEBUG, LogCategory::SYSTEM, "", message);
   }
 
   static void info(const std::string &message) {
-    writeLog(LogLevel::INFO, "", message);
+    writeLog(LogLevel::INFO, LogCategory::SYSTEM, "", message);
   }
 
   static void warning(const std::string &message) {
-    writeLog(LogLevel::WARNING, "", message);
+    writeLog(LogLevel::WARNING, LogCategory::SYSTEM, "", message);
   }
 
   static void error(const std::string &message) {
-    writeLog(LogLevel::ERROR, "", message);
+    writeLog(LogLevel::ERROR, LogCategory::SYSTEM, "", message);
   }
 
   static void critical(const std::string &message) {
-    writeLog(LogLevel::CRITICAL, "", message);
+    writeLog(LogLevel::CRITICAL, LogCategory::SYSTEM, "", message);
   }
 
   static void debug(const std::string &function, const std::string &message) {
-    writeLog(LogLevel::DEBUG, function, message);
+    writeLog(LogLevel::DEBUG, LogCategory::SYSTEM, function, message);
   }
 
   static void info(const std::string &function, const std::string &message) {
-    writeLog(LogLevel::INFO, function, message);
+    writeLog(LogLevel::INFO, LogCategory::SYSTEM, function, message);
   }
 
   static void warning(const std::string &function, const std::string &message) {
-    writeLog(LogLevel::WARNING, function, message);
+    writeLog(LogLevel::WARNING, LogCategory::SYSTEM, function, message);
   }
 
   static void error(const std::string &function, const std::string &message) {
-    writeLog(LogLevel::ERROR, function, message);
+    writeLog(LogLevel::ERROR, LogCategory::SYSTEM, function, message);
   }
 
   static void critical(const std::string &function,
                        const std::string &message) {
-    writeLog(LogLevel::CRITICAL, function, message);
+    writeLog(LogLevel::CRITICAL, LogCategory::SYSTEM, function, message);
   }
 
-  static void log(LogLevel level, const std::string &message) {
-    writeLog(level, "", message);
+  // Categorized logging methods
+  static void debug(LogCategory category, const std::string &message) {
+    writeLog(LogLevel::DEBUG, category, "", message);
   }
 
-  static void log(LogLevel level, const std::string &function,
+  static void info(LogCategory category, const std::string &message) {
+    writeLog(LogLevel::INFO, category, "", message);
+  }
+
+  static void warning(LogCategory category, const std::string &message) {
+    writeLog(LogLevel::WARNING, category, "", message);
+  }
+
+  static void error(LogCategory category, const std::string &message) {
+    writeLog(LogLevel::ERROR, category, "", message);
+  }
+
+  static void critical(LogCategory category, const std::string &message) {
+    writeLog(LogLevel::CRITICAL, category, "", message);
+  }
+
+  static void debug(LogCategory category, const std::string &function,
+                    const std::string &message) {
+    writeLog(LogLevel::DEBUG, category, function, message);
+  }
+
+  static void info(LogCategory category, const std::string &function,
+                   const std::string &message) {
+    writeLog(LogLevel::INFO, category, function, message);
+  }
+
+  static void warning(LogCategory category, const std::string &function,
+                      const std::string &message) {
+    writeLog(LogLevel::WARNING, category, function, message);
+  }
+
+  static void error(LogCategory category, const std::string &function,
+                    const std::string &message) {
+    writeLog(LogLevel::ERROR, category, function, message);
+  }
+
+  static void critical(LogCategory category, const std::string &function,
+                       const std::string &message) {
+    writeLog(LogLevel::CRITICAL, category, function, message);
+  }
+
+  // Generic logging methods
+  static void log(LogLevel level, LogCategory category,
                   const std::string &message) {
-    writeLog(level, function, message);
+    writeLog(level, category, "", message);
+  }
+
+  static void log(LogLevel level, LogCategory category,
+                  const std::string &function, const std::string &message) {
+    writeLog(level, category, function, message);
   }
 
   // Configuration management

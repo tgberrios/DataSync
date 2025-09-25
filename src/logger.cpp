@@ -53,7 +53,7 @@ void Logger::loadDebugConfig() {
     txn.commit();
   } catch (const std::exception &e) {
     // If database is not available, use default values
-    currentLogLevel = LogLevel::INFO;
+    currentLogLevel = LogLevel::DEBUG; // Changed to DEBUG for better visibility
     showTimestamps = true;
     showThreadId = false;
     showFileLine = false;

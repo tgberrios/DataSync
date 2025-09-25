@@ -128,7 +128,7 @@ const LogsArea = styled.div`
   max-height: 500px;
 `;
 
-const LogLine = styled.div<{ level: string }>`
+const LogLine = styled.div<{ level: string; category: string }>`
   margin-bottom: 2px;
   padding: 2px 0;
   border-left: 3px solid ${props => {
@@ -147,9 +147,45 @@ const LogLine = styled.div<{ level: string }>`
     }
   }};
   padding-left: 8px;
+  position: relative;
 
   &:hover {
     background-color: #f5f5f5;
+  }
+
+  &::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background-color: ${props => {
+      switch (props.category) {
+        case 'DATABASE':
+          return '#9c27b0';
+        case 'TRANSFER':
+          return '#ff9800';
+        case 'CONFIG':
+          return '#2196f3';
+        case 'VALIDATION':
+          return '#4caf50';
+        case 'MAINTENANCE':
+          return '#607d8b';
+        case 'MONITORING':
+          return '#00bcd4';
+        case 'DDL_EXPORT':
+          return '#795548';
+        case 'METRICS':
+          return '#e91e63';
+        case 'GOVERNANCE':
+          return '#3f51b5';
+        case 'QUALITY':
+          return '#009688';
+        default:
+          return 'transparent';
+      }
+    }};
   }
 `;
 
@@ -183,6 +219,38 @@ const LogFunction = styled.span`
   color: #7b1fa2;
   margin-right: 10px;
   font-size: 0.9em;
+`;
+
+const LogCategory = styled.span<{ category: string }>`
+  color: ${props => {
+    switch (props.category) {
+      case 'DATABASE':
+        return '#9c27b0';
+      case 'TRANSFER':
+        return '#ff9800';
+      case 'CONFIG':
+        return '#2196f3';
+      case 'VALIDATION':
+        return '#4caf50';
+      case 'MAINTENANCE':
+        return '#607d8b';
+      case 'MONITORING':
+        return '#00bcd4';
+      case 'DDL_EXPORT':
+        return '#795548';
+      case 'METRICS':
+        return '#e91e63';
+      case 'GOVERNANCE':
+        return '#3f51b5';
+      case 'QUALITY':
+        return '#009688';
+      default:
+        return '#666';
+    }
+  }};
+  margin-right: 10px;
+  font-size: 0.8em;
+  font-weight: bold;
 `;
 
 const LogMessage = styled.span`
@@ -273,7 +341,10 @@ const LogsViewer = () => {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [lines, setLines] = useState(100);
   const [level, setLevel] = useState('ALL');
-  const [functionFilter, setFunctionFilter] = useState('ALL');
+  const [category, setCategory] = useState('ALL');
+  const [search, setSearch] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
   const [showClearDialog, setShowClearDialog] = useState(false);
@@ -294,9 +365,16 @@ const LogsViewer = () => {
       setIsRefreshing(true);
       setError(null);
       
-      // Fetch more logs for pagination (get 1000 lines)
+      // Fetch logs with specified number of lines
       const [logsData, infoData] = await Promise.all([
-        logsApi.getLogs({ lines: 1000, level, function: functionFilter }),
+        logsApi.getLogs({ 
+          lines, 
+          level, 
+          category,
+          search,
+          startDate,
+          endDate
+        }),
         logsApi.getLogInfo()
       ]);
       
@@ -359,13 +437,30 @@ const LogsViewer = () => {
     }
   };
 
+  const clearFilters = () => {
+    setLines(100);
+    setLevel('ALL');
+    setCategory('ALL');
+    setSearch('');
+    setStartDate('');
+    setEndDate('');
+    setCurrentPage(1);
+  };
+
   const handleCopyAllLogs = async () => {
     try {
       setIsCopying(true);
       setCopySuccess(false);
       
       // Get all logs (not just current page)
-      const allLogsData = await logsApi.getLogs({ lines: 10000, level, function: functionFilter });
+      const allLogsData = await logsApi.getLogs({ 
+        lines: 10000, 
+        level, 
+        category,
+        search,
+        startDate,
+        endDate
+      });
       
       // Format logs for copying
       const logsText = allLogsData.logs.map(log => {
@@ -380,7 +475,7 @@ const LogsViewer = () => {
       const header = `DataSync Logs - ${new Date().toLocaleString()}\n` +
                     `Total Entries: ${allLogsData.logs.length}\n` +
                     `Level Filter: ${level}\n` +
-                    `Function Filter: ${functionFilter}\n` +
+                    `Category Filter: ${category}\n` +
                     `File: ${logInfo?.filePath || 'Unknown'}\n` +
                     `Size: ${logInfo ? formatFileSize(logInfo.size || 0) : 'Unknown'}\n` +
                     `Last Modified: ${logInfo?.lastModified ? formatDate(logInfo.lastModified) : 'Unknown'}\n` +
@@ -403,7 +498,7 @@ const LogsViewer = () => {
 
   useEffect(() => {
     fetchLogs();
-  }, [lines, level, functionFilter]);
+  }, [lines, level, category, search, startDate, endDate]);
 
   useEffect(() => {
     // Clear any existing countdown interval
@@ -443,7 +538,7 @@ const LogsViewer = () => {
     } else {
       setRefreshCountdown(5);
     }
-  }, [autoRefresh, lines, level, functionFilter]);
+  }, [autoRefresh, lines, level, category, search, startDate, endDate]);
 
   // Update logs when allLogs or currentPage changes
   useEffect(() => {
@@ -548,22 +643,53 @@ const LogsViewer = () => {
           </ControlGroup>
           
           <ControlGroup>
-            <Label>Function/Module:</Label>
-            <Select value={functionFilter} onChange={(e) => setFunctionFilter(e.target.value)}>
-              <option value="ALL">All Functions</option>
-              <option value="Catalog">Catalog</option>
-              <option value="DataGovernance">DataGovernance</option>
-              <option value="DataQuality">DataQuality</option>
-              <option value="DDLExporter">DDLExporter</option>
-              <option value="MariaDBToPostgres">MariaDBToPostgres</option>
-              <option value="MongoToPostgres">MongoToPostgres</option>
-              <option value="MSSQLToPostgres">MSSQLToPostgres</option>
-              <option value="PostgresToPostgres">PostgresToPostgres</option>
-              <option value="StreamingData">StreamingData</option>
-              <option value="MetricsCollector">MetricsCollector</option>
-              <option value="Config">Config</option>
-              <option value="Logger">Logger</option>
+            <Label>Category:</Label>
+            <Select value={category} onChange={(e) => setCategory(e.target.value)}>
+              <option value="ALL">All Categories</option>
+              <option value="SYSTEM">SYSTEM</option>
+              <option value="DATABASE">DATABASE</option>
+              <option value="TRANSFER">TRANSFER</option>
+              <option value="CONFIG">CONFIG</option>
+              <option value="VALIDATION">VALIDATION</option>
+              <option value="MAINTENANCE">MAINTENANCE</option>
+              <option value="MONITORING">MONITORING</option>
+              <option value="DDL_EXPORT">DDL_EXPORT</option>
+              <option value="METRICS">METRICS</option>
+              <option value="GOVERNANCE">GOVERNANCE</option>
+              <option value="QUALITY">QUALITY</option>
             </Select>
+          </ControlGroup>
+          
+          
+          <ControlGroup>
+            <Label>Search:</Label>
+            <Input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search in logs..."
+              style={{ width: '150px' }}
+            />
+          </ControlGroup>
+          
+          <ControlGroup>
+            <Label>Start Date:</Label>
+            <Input
+              type="datetime-local"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              style={{ width: '180px' }}
+            />
+          </ControlGroup>
+          
+          <ControlGroup>
+            <Label>End Date:</Label>
+            <Input
+              type="datetime-local"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              style={{ width: '180px' }}
+            />
           </ControlGroup>
           
           <ControlGroup>
@@ -598,6 +724,10 @@ const LogsViewer = () => {
           
           <Button onClick={fetchLogs} disabled={isRefreshing}>
             {isRefreshing ? 'Refreshing...' : 'Refresh Now'}
+          </Button>
+          
+          <Button $variant="secondary" onClick={clearFilters}>
+            Clear Filters
           </Button>
           
           <Button $variant="secondary" onClick={scrollToBottom}>
@@ -646,10 +776,11 @@ const LogsViewer = () => {
       <Section>
         <SectionTitle>■ LOG ENTRIES</SectionTitle>
         <LogsArea>
-          {logs.map((log) => (
-            <LogLine key={log.id} level={log.level}>
+          {logs.map((log, index) => (
+            <LogLine key={log.id || index} level={log.level} category={log.category || 'SYSTEM'}>
               <LogTimestamp>{log.timestamp}</LogTimestamp>
               <LogLevel level={log.level}>[{log.level}]</LogLevel>
+              {log.category && <LogCategory category={log.category}>[{log.category}]</LogCategory>}
               {log.function && <LogFunction>[{log.function}]</LogFunction>}
               <LogMessage>{log.message}</LogMessage>
             </LogLine>

@@ -12,30 +12,35 @@ void DDLExporter::exportAllDDL() {
     createFolderStructure();
     getSchemasFromCatalog();
 
-    Logger::info("Found " + std::to_string(schemas.size()) +
-                 " schemas to export");
+    Logger::info(LogCategory::DDL_EXPORT, "Found " +
+                                              std::to_string(schemas.size()) +
+                                              " schemas to export");
 
     for (const auto &schema : schemas) {
       try {
         exportSchemaDDL(schema);
       } catch (const std::exception &e) {
-        Logger::error("Error exporting schema " + schema.schema_name + ": " +
-                      std::string(e.what()));
+        Logger::error(LogCategory::DDL_EXPORT, "Error exporting schema " +
+                                                   schema.schema_name + ": " +
+                                                   std::string(e.what()));
       }
     }
 
-    Logger::info("DDL export process completed");
+    Logger::info(LogCategory::DDL_EXPORT, "DDL export process completed");
   } catch (const std::exception &e) {
-    Logger::error("Error in DDL export process: " + std::string(e.what()));
+    Logger::error(LogCategory::DDL_EXPORT,
+                  "Error in DDL export process: " + std::string(e.what()));
   }
 }
 
 void DDLExporter::createFolderStructure() {
   try {
     std::filesystem::create_directories(exportPath);
-    Logger::info("Created base export directory: " + exportPath);
+    Logger::info(LogCategory::DDL_EXPORT,
+                 "Created base export directory: " + exportPath);
   } catch (const std::exception &e) {
-    Logger::error("Error creating folder structure: " + std::string(e.what()));
+    Logger::error(LogCategory::DDL_EXPORT,
+                  "Error creating folder structure: " + std::string(e.what()));
   }
 }
 
@@ -65,11 +70,13 @@ void DDLExporter::getSchemasFromCatalog() {
       schemas.push_back(schema);
     }
 
-    Logger::info("Retrieved " + std::to_string(schemas.size()) +
-                 " schemas from catalog");
+    Logger::info(LogCategory::DDL_EXPORT, "Retrieved " +
+                                              std::to_string(schemas.size()) +
+                                              " schemas from catalog");
   } catch (const std::exception &e) {
-    Logger::error("Error getting schemas from catalog: " +
-                  std::string(e.what()));
+    Logger::error(LogCategory::DDL_EXPORT,
+                  "Error getting schemas from catalog: " +
+                      std::string(e.what()));
   }
 }
 
@@ -91,11 +98,11 @@ void DDLExporter::exportSchemaDDL(const SchemaInfo &schema) {
     } else if (schema.db_engine == "MSSQL") {
       exportMSSQLDDL(schema);
     } else {
-      Logger::warning("DDLExporter",
+      Logger::warning(LogCategory::DDL_EXPORT, "DDLExporter",
                       "Unknown database engine: " + schema.db_engine);
     }
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter",
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error exporting schema DDL: " + std::string(e.what()));
   }
 }
@@ -105,7 +112,7 @@ void DDLExporter::createClusterFolder(const std::string &cluster) {
     std::string clusterPath = exportPath + "/" + sanitizeFileName(cluster);
     std::filesystem::create_directories(clusterPath);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter",
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error creating cluster folder: " + std::string(e.what()));
   }
 }
@@ -117,7 +124,7 @@ void DDLExporter::createEngineFolder(const std::string &cluster,
                              "/" + sanitizeFileName(engine);
     std::filesystem::create_directories(enginePath);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter",
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error creating engine folder: " + std::string(e.what()));
   }
 }
@@ -131,7 +138,7 @@ void DDLExporter::createDatabaseFolder(const std::string &cluster,
                          sanitizeFileName(database);
     std::filesystem::create_directories(dbPath);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter",
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error creating database folder: " + std::string(e.what()));
   }
 }
@@ -150,7 +157,7 @@ void DDLExporter::createSchemaFolder(const std::string &cluster,
     std::filesystem::create_directories(schemaPath + "/constraints");
     std::filesystem::create_directories(schemaPath + "/functions");
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter",
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error creating schema folder: " + std::string(e.what()));
   }
 }
@@ -191,7 +198,8 @@ void DDLExporter::exportMariaDBDDL(const SchemaInfo &schema) {
     // Connect to MariaDB using MySQL library
     MYSQL *conn = mysql_init(nullptr);
     if (!conn) {
-      Logger::error("DDLExporter", "mysql_init() failed");
+      Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                    "mysql_init() failed");
       return;
     }
 
@@ -206,8 +214,9 @@ void DDLExporter::exportMariaDBDDL(const SchemaInfo &schema) {
 
     if (mysql_real_connect(conn, host.c_str(), user.c_str(), password.c_str(),
                            db.c_str(), portNum, nullptr, 0) == nullptr) {
-      Logger::error("DDLExporter", "MariaDB connection failed: " +
-                                       std::string(mysql_error(conn)));
+      Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                    "MariaDB connection failed: " +
+                        std::string(mysql_error(conn)));
       mysql_close(conn);
       return;
     }
@@ -220,7 +229,7 @@ void DDLExporter::exportMariaDBDDL(const SchemaInfo &schema) {
         "AND table_type = 'BASE TABLE';";
 
     if (mysql_query(conn, tablesQuery.c_str())) {
-      Logger::error("DDLExporter",
+      Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                     "Query failed: " + std::string(mysql_error(conn)));
       mysql_close(conn);
       return;
@@ -228,8 +237,9 @@ void DDLExporter::exportMariaDBDDL(const SchemaInfo &schema) {
 
     MYSQL_RES *tablesResult = mysql_store_result(conn);
     if (!tablesResult) {
-      Logger::error("DDLExporter", "mysql_store_result() failed: " +
-                                       std::string(mysql_error(conn)));
+      Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                    "mysql_store_result() failed: " +
+                        std::string(mysql_error(conn)));
       mysql_close(conn);
       return;
     }
@@ -243,8 +253,9 @@ void DDLExporter::exportMariaDBDDL(const SchemaInfo &schema) {
                                      escapeSQL(tableName) + "`;";
 
       if (mysql_query(conn, createTableQuery.c_str())) {
-        Logger::error("DDLExporter", "SHOW CREATE TABLE failed: " +
-                                         std::string(mysql_error(conn)));
+        Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                      "SHOW CREATE TABLE failed: " +
+                          std::string(mysql_error(conn)));
         continue;
       }
 
@@ -265,7 +276,7 @@ void DDLExporter::exportMariaDBDDL(const SchemaInfo &schema) {
                                  escapeSQL(tableName) + "`;";
 
       if (mysql_query(conn, indexesQuery.c_str())) {
-        Logger::error("DDLExporter",
+        Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                       "SHOW INDEX failed: " + std::string(mysql_error(conn)));
         continue;
       }
@@ -317,10 +328,10 @@ void DDLExporter::exportMariaDBDDL(const SchemaInfo &schema) {
 
     mysql_close(conn);
 
-    // Logger::info("DDLExporter",
+    // Logger::info(LogCategory::DDL_EXPORT, "DDLExporter",
     //"Exported MariaDB DDL for schema: " + schema.schema_name);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter",
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error exporting MariaDB DDL: " + std::string(e.what()));
   }
 }
@@ -331,40 +342,41 @@ void DDLExporter::exportMariaDBViews(MYSQL *conn, const SchemaInfo &schema) {
                              escapeSQL(schema.schema_name) +
                              "` WHERE Table_type = 'VIEW';";
 
-    // Logger::debug("DDLExporter", "Querying for views in schema: " +
-    // schema.schema_name);
+    // Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter", "Querying for views
+    // in schema: " + schema.schema_name);
 
     if (mysql_query(conn, viewsQuery.c_str())) {
-      Logger::debug("DDLExporter",
+      Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
                     "Views query failed: " + std::string(mysql_error(conn)));
       return;
     }
 
     MYSQL_RES *viewsResult = mysql_store_result(conn);
     if (!viewsResult) {
-      Logger::debug("DDLExporter",
+      Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
                     "No views result set for schema: " + schema.schema_name);
       return;
     }
 
     int viewCount = mysql_num_rows(viewsResult);
-    // Logger::debug("DDLExporter", "Found " + std::to_string(viewCount) + "
-    // views in schema: " + schema.schema_name);
+    // Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter", "Found " +
+    // std::to_string(viewCount) + " views in schema: " + schema.schema_name);
 
     MYSQL_ROW viewRow;
     while ((viewRow = mysql_fetch_row(viewsResult))) {
       if (viewRow[0]) {
         std::string viewName = viewRow[0];
-        // Logger::debug("DDLExporter", "Processing view: " + viewName);
+        // Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter", "Processing
+        // view: " + viewName);
 
         std::string createViewQuery = "SHOW CREATE VIEW `" +
                                       escapeSQL(schema.schema_name) + "`.`" +
                                       escapeSQL(viewName) + "`;";
 
         if (mysql_query(conn, createViewQuery.c_str())) {
-          Logger::error("DDLExporter", "SHOW CREATE VIEW failed for " +
-                                           viewName + ": " +
-                                           std::string(mysql_error(conn)));
+          Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                        "SHOW CREATE VIEW failed for " + viewName + ": " +
+                            std::string(mysql_error(conn)));
           continue;
         }
 
@@ -376,14 +388,14 @@ void DDLExporter::exportMariaDBViews(MYSQL *conn, const SchemaInfo &schema) {
             saveTableDDL(schema.cluster_name, schema.db_engine,
                          schema.database_name, schema.schema_name, viewName,
                          ddl);
-            // Logger::debug("DDLExporter", "Successfully exported view: " +
-            // viewName);
+            // Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
+            // "Successfully exported view: " + viewName);
           } else {
-            Logger::warning("DDLExporter",
+            Logger::warning(LogCategory::DDL_EXPORT, "DDLExporter",
                             "No DDL found for view: " + viewName);
           }
         } else {
-          Logger::warning("DDLExporter",
+          Logger::warning(LogCategory::DDL_EXPORT, "DDLExporter",
                           "No CREATE VIEW result for: " + viewName);
         }
         mysql_free_result(createResult);
@@ -391,10 +403,10 @@ void DDLExporter::exportMariaDBViews(MYSQL *conn, const SchemaInfo &schema) {
     }
 
     mysql_free_result(viewsResult);
-    // Logger::debug("DDLExporter", "Exported MariaDB views for schema: " +
-    // schema.schema_name);
+    // Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter", "Exported MariaDB
+    // views for schema: " + schema.schema_name);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter",
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error exporting MariaDB views: " + std::string(e.what()));
   }
 }
@@ -410,8 +422,9 @@ void DDLExporter::exportMariaDBProcedures(MYSQL *conn,
         "AND routine_type = 'PROCEDURE';";
 
     if (mysql_query(conn, proceduresQuery.c_str())) {
-      Logger::debug("DDLExporter", "No procedures found or query failed: " +
-                                       std::string(mysql_error(conn)));
+      Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
+                    "No procedures found or query failed: " +
+                        std::string(mysql_error(conn)));
       return;
     }
 
@@ -428,8 +441,9 @@ void DDLExporter::exportMariaDBProcedures(MYSQL *conn,
                                     escapeSQL(procName) + "`;";
 
       if (mysql_query(conn, createProcQuery.c_str())) {
-        Logger::error("DDLExporter", "SHOW CREATE PROCEDURE failed: " +
-                                         std::string(mysql_error(conn)));
+        Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                      "SHOW CREATE PROCEDURE failed: " +
+                          std::string(mysql_error(conn)));
         continue;
       }
 
@@ -447,11 +461,12 @@ void DDLExporter::exportMariaDBProcedures(MYSQL *conn,
     }
 
     mysql_free_result(proceduresResult);
-    // Logger::debug("DDLExporter", "Exported MariaDB procedures for schema: " +
-    // schema.schema_name);
+    // Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter", "Exported MariaDB
+    // procedures for schema: " + schema.schema_name);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter", "Error exporting MariaDB procedures: " +
-                                     std::string(e.what()));
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                  "Error exporting MariaDB procedures: " +
+                      std::string(e.what()));
   }
 }
 
@@ -466,8 +481,9 @@ void DDLExporter::exportMariaDBFunctions(MYSQL *conn,
         "AND routine_type = 'FUNCTION';";
 
     if (mysql_query(conn, functionsQuery.c_str())) {
-      Logger::debug("DDLExporter", "No functions found or query failed: " +
-                                       std::string(mysql_error(conn)));
+      Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
+                    "No functions found or query failed: " +
+                        std::string(mysql_error(conn)));
       return;
     }
 
@@ -484,8 +500,9 @@ void DDLExporter::exportMariaDBFunctions(MYSQL *conn,
                                     escapeSQL(funcName) + "`;";
 
       if (mysql_query(conn, createFuncQuery.c_str())) {
-        Logger::error("DDLExporter", "SHOW CREATE FUNCTION failed: " +
-                                         std::string(mysql_error(conn)));
+        Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                      "SHOW CREATE FUNCTION failed: " +
+                          std::string(mysql_error(conn)));
         continue;
       }
 
@@ -503,11 +520,12 @@ void DDLExporter::exportMariaDBFunctions(MYSQL *conn,
     }
 
     mysql_free_result(functionsResult);
-    // Logger::debug("DDLExporter", "Exported MariaDB functions for schema: " +
-    // schema.schema_name);
+    // Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter", "Exported MariaDB
+    // functions for schema: " + schema.schema_name);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter", "Error exporting MariaDB functions: " +
-                                     std::string(e.what()));
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                  "Error exporting MariaDB functions: " +
+                      std::string(e.what()));
   }
 }
 
@@ -519,8 +537,9 @@ void DDLExporter::exportMariaDBTriggers(MYSQL *conn, const SchemaInfo &schema) {
         escapeSQL(schema.schema_name) + "';";
 
     if (mysql_query(conn, triggersQuery.c_str())) {
-      Logger::debug("DDLExporter", "No triggers found or query failed: " +
-                                       std::string(mysql_error(conn)));
+      Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
+                    "No triggers found or query failed: " +
+                        std::string(mysql_error(conn)));
       return;
     }
 
@@ -537,8 +556,9 @@ void DDLExporter::exportMariaDBTriggers(MYSQL *conn, const SchemaInfo &schema) {
                                        escapeSQL(triggerName) + "`;";
 
       if (mysql_query(conn, createTriggerQuery.c_str())) {
-        Logger::error("DDLExporter", "SHOW CREATE TRIGGER failed: " +
-                                         std::string(mysql_error(conn)));
+        Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                      "SHOW CREATE TRIGGER failed: " +
+                          std::string(mysql_error(conn)));
         continue;
       }
 
@@ -556,10 +576,10 @@ void DDLExporter::exportMariaDBTriggers(MYSQL *conn, const SchemaInfo &schema) {
     }
 
     mysql_free_result(triggersResult);
-    // Logger::debug("DDLExporter", "Exported MariaDB triggers for schema: " +
-    // schema.schema_name);
+    // Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter", "Exported MariaDB
+    // triggers for schema: " + schema.schema_name);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter",
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error exporting MariaDB triggers: " + std::string(e.what()));
   }
 }
@@ -576,8 +596,9 @@ void DDLExporter::exportMariaDBConstraints(MYSQL *conn,
         "AND constraint_type IN ('FOREIGN KEY', 'CHECK', 'UNIQUE');";
 
     if (mysql_query(conn, constraintsQuery.c_str())) {
-      Logger::debug("DDLExporter", "No constraints found or query failed: " +
-                                       std::string(mysql_error(conn)));
+      Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
+                    "No constraints found or query failed: " +
+                        std::string(mysql_error(conn)));
       return;
     }
 
@@ -602,11 +623,13 @@ void DDLExporter::exportMariaDBConstraints(MYSQL *conn,
     }
 
     mysql_free_result(constraintsResult);
-    // Logger::debug("DDLExporter", "Exported MariaDB constraints for schema: "
+    // Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter", "Exported MariaDB
+    // constraints for schema: "
     // + schema.schema_name);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter", "Error exporting MariaDB constraints: " +
-                                     std::string(e.what()));
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                  "Error exporting MariaDB constraints: " +
+                      std::string(e.what()));
   }
 }
 
@@ -618,8 +641,9 @@ void DDLExporter::exportMariaDBEvents(MYSQL *conn, const SchemaInfo &schema) {
         escapeSQL(schema.schema_name) + "';";
 
     if (mysql_query(conn, eventsQuery.c_str())) {
-      Logger::debug("DDLExporter", "No events found or query failed: " +
-                                       std::string(mysql_error(conn)));
+      Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
+                    "No events found or query failed: " +
+                        std::string(mysql_error(conn)));
       return;
     }
 
@@ -636,8 +660,9 @@ void DDLExporter::exportMariaDBEvents(MYSQL *conn, const SchemaInfo &schema) {
                                      escapeSQL(eventName) + "`;";
 
       if (mysql_query(conn, createEventQuery.c_str())) {
-        Logger::error("DDLExporter", "SHOW CREATE EVENT failed: " +
-                                         std::string(mysql_error(conn)));
+        Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                      "SHOW CREATE EVENT failed: " +
+                          std::string(mysql_error(conn)));
         continue;
       }
 
@@ -655,10 +680,10 @@ void DDLExporter::exportMariaDBEvents(MYSQL *conn, const SchemaInfo &schema) {
     }
 
     mysql_free_result(eventsResult);
-    // Logger::debug("DDLExporter", "Exported MariaDB events for schema: " +
-    // schema.schema_name);
+    // Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter", "Exported MariaDB
+    // events for schema: " + schema.schema_name);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter",
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error exporting MariaDB events: " + std::string(e.what()));
   }
 }
@@ -753,10 +778,10 @@ void DDLExporter::exportPostgreSQLDDL(const SchemaInfo &schema) {
     // Export Types
     exportPostgreSQLTypes(conn, schema);
 
-    Logger::info("DDLExporter",
+    Logger::info(LogCategory::DDL_EXPORT, "DDLExporter",
                  "Exported PostgreSQL DDL for schema: " + schema.schema_name);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter",
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error exporting PostgreSQL DDL: " + std::string(e.what()));
   }
 }
@@ -799,10 +824,11 @@ void DDLExporter::exportPostgreSQLViews(pqxx::connection &conn,
       txn.commit();
     }
 
-    Logger::debug("DDLExporter", "Exported PostgreSQL views for schema: " +
-                                     schema.schema_name);
+    Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
+                  "Exported PostgreSQL views for schema: " +
+                      schema.schema_name);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter",
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error exporting PostgreSQL views: " + std::string(e.what()));
   }
 }
@@ -831,11 +857,13 @@ void DDLExporter::exportPostgreSQLFunctions(pqxx::connection &conn,
     }
 
     txn.commit();
-    Logger::debug("DDLExporter", "Exported PostgreSQL functions for schema: " +
-                                     schema.schema_name);
+    Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
+                  "Exported PostgreSQL functions for schema: " +
+                      schema.schema_name);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter", "Error exporting PostgreSQL functions: " +
-                                     std::string(e.what()));
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                  "Error exporting PostgreSQL functions: " +
+                      std::string(e.what()));
   }
 }
 
@@ -867,11 +895,13 @@ void DDLExporter::exportPostgreSQLTriggers(pqxx::connection &conn,
     }
 
     txn.commit();
-    Logger::debug("DDLExporter", "Exported PostgreSQL triggers for schema: " +
-                                     schema.schema_name);
+    Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
+                  "Exported PostgreSQL triggers for schema: " +
+                      schema.schema_name);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter", "Error exporting PostgreSQL triggers: " +
-                                     std::string(e.what()));
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                  "Error exporting PostgreSQL triggers: " +
+                      std::string(e.what()));
   }
 }
 
@@ -912,12 +942,13 @@ void DDLExporter::exportPostgreSQLConstraints(pqxx::connection &conn,
     }
 
     txn.commit();
-    Logger::debug("DDLExporter",
+    Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Exported PostgreSQL constraints for schema: " +
                       schema.schema_name);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter", "Error exporting PostgreSQL constraints: " +
-                                     std::string(e.what()));
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                  "Error exporting PostgreSQL constraints: " +
+                      std::string(e.what()));
   }
 }
 
@@ -952,11 +983,13 @@ void DDLExporter::exportPostgreSQLSequences(pqxx::connection &conn,
     }
 
     txn.commit();
-    Logger::debug("DDLExporter", "Exported PostgreSQL sequences for schema: " +
-                                     schema.schema_name);
+    Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
+                  "Exported PostgreSQL sequences for schema: " +
+                      schema.schema_name);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter", "Error exporting PostgreSQL sequences: " +
-                                     std::string(e.what()));
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                  "Error exporting PostgreSQL sequences: " +
+                      std::string(e.what()));
   }
 }
 
@@ -1003,10 +1036,11 @@ void DDLExporter::exportPostgreSQLTypes(pqxx::connection &conn,
     }
 
     txn.commit();
-    Logger::debug("DDLExporter", "Exported PostgreSQL types for schema: " +
-                                     schema.schema_name);
+    Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
+                  "Exported PostgreSQL types for schema: " +
+                      schema.schema_name);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter",
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error exporting PostgreSQL types: " + std::string(e.what()));
   }
 }
@@ -1061,7 +1095,8 @@ void DDLExporter::exportMongoDBDDL(const SchemaInfo &schema) {
     // Initialize MongoDB client
     mongoc_client_t *client = mongoc_client_new(uri.c_str());
     if (!client) {
-      Logger::error("DDLExporter", "Failed to create MongoDB client");
+      Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                    "Failed to create MongoDB client");
       return;
     }
 
@@ -1076,10 +1111,10 @@ void DDLExporter::exportMongoDBDDL(const SchemaInfo &schema) {
 
     mongoc_client_destroy(client);
 
-    Logger::info("DDLExporter",
+    Logger::info(LogCategory::DDL_EXPORT, "DDLExporter",
                  "Exported MongoDB DDL for schema: " + schema.schema_name);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter",
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error exporting MongoDB DDL: " + std::string(e.what()));
   }
 }
@@ -1132,11 +1167,13 @@ void DDLExporter::exportMongoDBCollections(mongoc_client_t *client,
     bson_destroy(&reply);
     mongoc_database_destroy(database);
 
-    Logger::debug("DDLExporter", "Exported MongoDB collections for schema: " +
-                                     schema.schema_name);
+    Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
+                  "Exported MongoDB collections for schema: " +
+                      schema.schema_name);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter", "Error exporting MongoDB collections: " +
-                                     std::string(e.what()));
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                  "Error exporting MongoDB collections: " +
+                      std::string(e.what()));
   }
 }
 
@@ -1198,10 +1235,10 @@ void DDLExporter::exportMongoDBViews(mongoc_client_t *client,
     bson_destroy(&reply);
     mongoc_database_destroy(database);
 
-    Logger::debug("DDLExporter",
+    Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Exported MongoDB views for schema: " + schema.schema_name);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter",
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error exporting MongoDB views: " + std::string(e.what()));
   }
 }
@@ -1251,11 +1288,13 @@ void DDLExporter::exportMongoDBFunctions(mongoc_client_t *client,
     mongoc_collection_destroy(collection);
     mongoc_database_destroy(database);
 
-    Logger::debug("DDLExporter", "Exported MongoDB functions for schema: " +
-                                     schema.schema_name);
+    Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
+                  "Exported MongoDB functions for schema: " +
+                      schema.schema_name);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter", "Error exporting MongoDB functions: " +
-                                     std::string(e.what()));
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                  "Error exporting MongoDB functions: " +
+                      std::string(e.what()));
   }
 }
 
@@ -1309,21 +1348,24 @@ void DDLExporter::exportMSSQLDDL(const SchemaInfo &schema) {
 
     ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env);
     if (ret != SQL_SUCCESS) {
-      Logger::error("DDLExporter", "Failed to allocate ODBC environment");
+      Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                    "Failed to allocate ODBC environment");
       return;
     }
 
     ret =
         SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION, (SQLPOINTER)SQL_OV_ODBC3, 0);
     if (ret != SQL_SUCCESS) {
-      Logger::error("DDLExporter", "Failed to set ODBC version");
+      Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                    "Failed to set ODBC version");
       SQLFreeHandle(SQL_HANDLE_ENV, env);
       return;
     }
 
     ret = SQLAllocHandle(SQL_HANDLE_DBC, env, &conn);
     if (ret != SQL_SUCCESS) {
-      Logger::error("DDLExporter", "Failed to allocate ODBC connection");
+      Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                    "Failed to allocate ODBC connection");
       SQLFreeHandle(SQL_HANDLE_ENV, env);
       return;
     }
@@ -1345,7 +1387,7 @@ void DDLExporter::exportMSSQLDDL(const SchemaInfo &schema) {
                          ", Message: " + std::string((char *)message) + "\n";
       }
 
-      Logger::error("DDLExporter",
+      Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                     "Failed to connect to MSSQL server. Connection string: " +
                         odbcConnStr + "\nDetailed errors:\n" + error_details);
       SQLFreeHandle(SQL_HANDLE_DBC, conn);
@@ -1373,10 +1415,10 @@ void DDLExporter::exportMSSQLDDL(const SchemaInfo &schema) {
     SQLFreeHandle(SQL_HANDLE_DBC, conn);
     SQLFreeHandle(SQL_HANDLE_ENV, env);
 
-    Logger::info("DDLExporter",
+    Logger::info(LogCategory::DDL_EXPORT, "DDLExporter",
                  "Exported MSSQL DDL for schema: " + schema.schema_name);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter",
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error exporting MSSQL DDL: " + std::string(e.what()));
   }
 }
@@ -1386,7 +1428,7 @@ void DDLExporter::exportMSSQLViews(SQLHDBC conn, const SchemaInfo &schema) {
     SQLHSTMT stmt;
     SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, conn, &stmt);
     if (ret != SQL_SUCCESS) {
-      Logger::error("DDLExporter",
+      Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                     "Failed to allocate statement handle for views");
       return;
     }
@@ -1423,10 +1465,10 @@ void DDLExporter::exportMSSQLViews(SQLHDBC conn, const SchemaInfo &schema) {
     }
 
     SQLFreeHandle(SQL_HANDLE_STMT, stmt);
-    Logger::debug("DDLExporter",
+    Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Exported MSSQL views for schema: " + schema.schema_name);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter",
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error exporting MSSQL views: " + std::string(e.what()));
   }
 }
@@ -1437,7 +1479,7 @@ void DDLExporter::exportMSSQLProcedures(SQLHDBC conn,
     SQLHSTMT stmt;
     SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, conn, &stmt);
     if (ret != SQL_SUCCESS) {
-      Logger::error("DDLExporter",
+      Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                     "Failed to allocate statement handle for procedures");
       return;
     }
@@ -1472,10 +1514,11 @@ void DDLExporter::exportMSSQLProcedures(SQLHDBC conn,
     }
 
     SQLFreeHandle(SQL_HANDLE_STMT, stmt);
-    Logger::debug("DDLExporter", "Exported MSSQL procedures for schema: " +
-                                     schema.schema_name);
+    Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
+                  "Exported MSSQL procedures for schema: " +
+                      schema.schema_name);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter",
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error exporting MSSQL procedures: " + std::string(e.what()));
   }
 }
@@ -1485,7 +1528,7 @@ void DDLExporter::exportMSSQLFunctions(SQLHDBC conn, const SchemaInfo &schema) {
     SQLHSTMT stmt;
     SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, conn, &stmt);
     if (ret != SQL_SUCCESS) {
-      Logger::error("DDLExporter",
+      Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                     "Failed to allocate statement handle for functions");
       return;
     }
@@ -1521,10 +1564,10 @@ void DDLExporter::exportMSSQLFunctions(SQLHDBC conn, const SchemaInfo &schema) {
     }
 
     SQLFreeHandle(SQL_HANDLE_STMT, stmt);
-    Logger::debug("DDLExporter",
+    Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Exported MSSQL functions for schema: " + schema.schema_name);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter",
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error exporting MSSQL functions: " + std::string(e.what()));
   }
 }
@@ -1534,7 +1577,7 @@ void DDLExporter::exportMSSQLTriggers(SQLHDBC conn, const SchemaInfo &schema) {
     SQLHSTMT stmt;
     SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, conn, &stmt);
     if (ret != SQL_SUCCESS) {
-      Logger::error("DDLExporter",
+      Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                     "Failed to allocate statement handle for triggers");
       return;
     }
@@ -1575,10 +1618,10 @@ void DDLExporter::exportMSSQLTriggers(SQLHDBC conn, const SchemaInfo &schema) {
     }
 
     SQLFreeHandle(SQL_HANDLE_STMT, stmt);
-    Logger::debug("DDLExporter",
+    Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Exported MSSQL triggers for schema: " + schema.schema_name);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter",
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error exporting MSSQL triggers: " + std::string(e.what()));
   }
 }
@@ -1589,7 +1632,7 @@ void DDLExporter::exportMSSQLConstraints(SQLHDBC conn,
     SQLHSTMT stmt;
     SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, conn, &stmt);
     if (ret != SQL_SUCCESS) {
-      Logger::error("DDLExporter",
+      Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                     "Failed to allocate statement handle for constraints");
       return;
     }
@@ -1638,11 +1681,13 @@ void DDLExporter::exportMSSQLConstraints(SQLHDBC conn,
     }
 
     SQLFreeHandle(SQL_HANDLE_STMT, stmt);
-    Logger::debug("DDLExporter", "Exported MSSQL constraints for schema: " +
-                                     schema.schema_name);
+    Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
+                  "Exported MSSQL constraints for schema: " +
+                      schema.schema_name);
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter", "Error exporting MSSQL constraints: " +
-                                     std::string(e.what()));
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                  "Error exporting MSSQL constraints: " +
+                      std::string(e.what()));
   }
 }
 
@@ -1673,10 +1718,11 @@ void DDLExporter::saveTableDDL(const std::string &cluster,
       file << ddl << std::endl;
       file.close();
 
-      // Logger::debug("DDLExporter", "Saved table DDL: " + filePath);
+      // Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter", "Saved table DDL:
+      // " + filePath);
     }
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter",
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error saving table DDL: " + std::string(e.what()));
   }
 }
@@ -1703,10 +1749,11 @@ void DDLExporter::saveIndexDDL(const std::string &cluster,
       file << index_ddl << std::endl;
       file.close();
 
-      // Logger::debug("DDLExporter", "Saved index DDL: " + filePath);
+      // Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter", "Saved index DDL:
+      // " + filePath);
     }
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter",
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error saving index DDL: " + std::string(e.what()));
   }
 }
@@ -1733,10 +1780,11 @@ void DDLExporter::saveConstraintDDL(const std::string &cluster,
       file << constraint_ddl << std::endl;
       file.close();
 
-      // Logger::debug("DDLExporter", "Saved constraint DDL: " + filePath);
+      // Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter", "Saved constraint
+      // DDL: " + filePath);
     }
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter",
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error saving constraint DDL: " + std::string(e.what()));
   }
 }
@@ -1769,10 +1817,11 @@ void DDLExporter::saveFunctionDDL(const std::string &cluster,
       file << function_ddl << std::endl;
       file.close();
 
-      // Logger::debug("DDLExporter", "Saved function DDL: " + filePath);
+      // Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter", "Saved function
+      // DDL: " + filePath);
     }
   } catch (const std::exception &e) {
-    Logger::error("DDLExporter",
+    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error saving function DDL: " + std::string(e.what()));
   }
 }

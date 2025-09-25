@@ -3,7 +3,7 @@
 
 int main() {
   Logger::initialize();
-  Logger::info("DataSync started");
+  Logger::info(LogCategory::SYSTEM, "DataSync started");
 
   std::cout << "Running... :)" << std::endl;
 
