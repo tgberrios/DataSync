@@ -740,6 +740,31 @@ app.delete("/api/config/:key", async (req, res) => {
   }
 });
 
+// Obtener configuración de batch size específicamente
+app.get("/api/config/batch", async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT t.* FROM metadata.config t WHERE key = 'chunk_size'"
+    );
+    if (result.rows.length === 0) {
+      res.json({
+        key: "chunk_size",
+        value: "25000",
+        description: "Tamaño de lote para procesamiento de datos",
+        updated_at: new Date().toISOString(),
+      });
+    } else {
+      res.json(result.rows[0]);
+    }
+  } catch (err) {
+    console.error("Error getting batch configuration:", err);
+    res.status(500).json({
+      error: "Error al obtener configuración de batch",
+      details: err.message,
+    });
+  }
+});
+
 // Endpoint para leer logs
 app.get("/api/logs", async (req, res) => {
   try {

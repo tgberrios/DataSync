@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import styled from 'styled-components';
-import { dashboardApi } from '../services/api';
-import type { DashboardStats } from '../services/api';
+import { dashboardApi, configApi } from '../services/api';
+import type { DashboardStats, BatchConfig } from '../services/api';
 
 const DashboardContainer = styled.div`
   background-color: white;
@@ -71,6 +71,12 @@ const Value = styled.div`
 const Dashboard = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [batchConfig, setBatchConfig] = useState<BatchConfig>({
+    key: 'chunk_size',
+    value: '25000',
+    description: 'Tamaño de lote para procesamiento de datos',
+    updated_at: new Date().toISOString()
+  });
   const [stats, setStats] = useState<DashboardStats>({
     syncStatus: {
       progress: 75,
@@ -105,8 +111,12 @@ const Dashboard = () => {
       try {
         setLoading(true);
         setError(null);
-        const data = await dashboardApi.getDashboardStats();
-        setStats(data);
+        const [dashboardData, batchData] = await Promise.all([
+          dashboardApi.getDashboardStats(),
+          configApi.getBatchConfig()
+        ]);
+        setStats(dashboardData);
+        setBatchConfig(batchData);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Error loading dashboard data');
       } finally {
@@ -115,8 +125,8 @@ const Dashboard = () => {
     };
 
     fetchStats();
-    // Actualizar cada 5 segundos
-    const interval = setInterval(fetchStats, 30000); // Actualizar cada 30 segundos
+    // Actualizar cada 30 segundos
+    const interval = setInterval(fetchStats, 30000);
     return () => clearInterval(interval);
   }, []);
 
@@ -203,6 +213,15 @@ const Dashboard = () => {
               <Value>Buffer Hit Rate: {stats.dbHealth.bufferHitRate}%</Value>
               <Value>Cache Hit Rate: {stats.dbHealth.cacheHitRate}%</Value>
               <Value>Status: ✓ {stats.dbHealth.status}</Value>
+            </Grid>
+          </Section>
+
+          <Section>
+            <SectionTitle>⚙️ BATCH CONFIGURATION</SectionTitle>
+            <Grid>
+              <Value>Current Batch Size: {batchConfig.value}</Value>
+              <Value>Description: {batchConfig.description}</Value>
+              <Value>Last Updated: {new Date(batchConfig.updated_at).toLocaleString()}</Value>
             </Grid>
           </Section>
 

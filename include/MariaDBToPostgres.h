@@ -2,8 +2,8 @@
 #define MARIADBTOPOSTGRES_H
 
 #include "Config.h"
-#include "logger.h"
 #include "catalog_manager.h"
+#include "logger.h"
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -86,34 +86,47 @@ public:
     std::string token;
     while (std::getline(ss, token, ';')) {
       auto pos = token.find('=');
-      if (pos == std::string::npos) continue;
+      if (pos == std::string::npos)
+        continue;
       std::string key = token.substr(0, pos);
       std::string value = token.substr(pos + 1);
       key.erase(0, key.find_first_not_of(" \t\r\n"));
       key.erase(key.find_last_not_of(" \t\r\n") + 1);
       value.erase(0, value.find_first_not_of(" \t\r\n"));
       value.erase(value.find_last_not_of(" \t\r\n") + 1);
-      if (key == "host") host = value;
-      else if (key == "user") user = value;
-      else if (key == "password") password = value;
-      else if (key == "db") db = value;
-      else if (key == "port") port = value;
+      if (key == "host")
+        host = value;
+      else if (key == "user")
+        user = value;
+      else if (key == "password")
+        password = value;
+      else if (key == "db")
+        db = value;
+      else if (key == "port")
+        port = value;
     }
-    
+
     MYSQL *mariadbConn = mysql_init(nullptr);
     if (!mariadbConn) {
       Logger::error("syncIndexesAndConstraints", "mysql_init() failed");
       return;
     }
-    
+
     unsigned int portNum = 3306;
     if (!port.empty()) {
-      try { portNum = std::stoul(port); } catch (...) { portNum = 3306; }
+      try {
+        portNum = std::stoul(port);
+      } catch (...) {
+        portNum = 3306;
+      }
     }
-    
-    if (mysql_real_connect(mariadbConn, host.c_str(), user.c_str(), password.c_str(),
-                           db.c_str(), portNum, nullptr, 0) == nullptr) {
-      Logger::error("syncIndexesAndConstraints", "MariaDB connection failed: " + std::string(mysql_error(mariadbConn)));
+
+    if (mysql_real_connect(mariadbConn, host.c_str(), user.c_str(),
+                           password.c_str(), db.c_str(), portNum, nullptr,
+                           0) == nullptr) {
+      Logger::error("syncIndexesAndConstraints",
+                    "MariaDB connection failed: " +
+                        std::string(mysql_error(mariadbConn)));
       mysql_close(mariadbConn);
       return;
     }
@@ -125,7 +138,8 @@ public:
                         "' AND INDEX_NAME != 'PRIMARY' "
                         "ORDER BY INDEX_NAME, SEQ_IN_INDEX;";
 
-    std::vector<std::vector<std::string>> results = executeQueryMariaDB(mariadbConn, query);
+    std::vector<std::vector<std::string>> results =
+        executeQueryMariaDB(mariadbConn, query);
 
     for (const auto &row : results) {
       if (row.size() < 3)
@@ -151,7 +165,7 @@ public:
                           "': " + std::string(e.what()));
       }
     }
-    
+
     // Close MariaDB connection
     mysql_close(mariadbConn);
   }
@@ -160,27 +174,43 @@ public:
     try {
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
       auto tables = getActiveTables(pgConn);
-      
-      // Sort tables by priority: FULL_LOAD, RESET, PERFECT_MATCH, LISTENING_CHANGES
-      std::sort(tables.begin(), tables.end(), [](const TableInfo &a, const TableInfo &b) {
-        if (a.status == "FULL_LOAD" && b.status != "FULL_LOAD") return true;
-        if (a.status != "FULL_LOAD" && b.status == "FULL_LOAD") return false;
-        if (a.status == "RESET" && b.status != "RESET") return true;
-        if (a.status != "RESET" && b.status == "RESET") return false;
-        if (a.status == "PERFECT_MATCH" && b.status != "PERFECT_MATCH") return true;
-        if (a.status != "PERFECT_MATCH" && b.status == "PERFECT_MATCH") return false;
-        if (a.status == "LISTENING_CHANGES" && b.status != "LISTENING_CHANGES") return true;
-        if (a.status != "LISTENING_CHANGES" && b.status == "LISTENING_CHANGES") return false;
-        return false; // Keep original order for same priority
-      });
 
-      Logger::info("setupTableTargetMariaDBToPostgres", 
-                   "Processing " + std::to_string(tables.size()) + " MariaDB tables in priority order");
+      // Sort tables by priority: FULL_LOAD, RESET, PERFECT_MATCH,
+      // LISTENING_CHANGES
+      std::sort(
+          tables.begin(), tables.end(),
+          [](const TableInfo &a, const TableInfo &b) {
+            if (a.status == "FULL_LOAD" && b.status != "FULL_LOAD")
+              return true;
+            if (a.status != "FULL_LOAD" && b.status == "FULL_LOAD")
+              return false;
+            if (a.status == "RESET" && b.status != "RESET")
+              return true;
+            if (a.status != "RESET" && b.status == "RESET")
+              return false;
+            if (a.status == "PERFECT_MATCH" && b.status != "PERFECT_MATCH")
+              return true;
+            if (a.status != "PERFECT_MATCH" && b.status == "PERFECT_MATCH")
+              return false;
+            if (a.status == "LISTENING_CHANGES" &&
+                b.status != "LISTENING_CHANGES")
+              return true;
+            if (a.status != "LISTENING_CHANGES" &&
+                b.status == "LISTENING_CHANGES")
+              return false;
+            return false; // Keep original order for same priority
+          });
+
+      Logger::info("setupTableTargetMariaDBToPostgres",
+                   "Processing " + std::to_string(tables.size()) +
+                       " MariaDB tables in priority order");
       for (size_t i = 0; i < tables.size(); ++i) {
         if (tables[i].db_engine == "MariaDB") {
-          Logger::info("setupTableTargetMariaDBToPostgres", 
-                       "[" + std::to_string(i+1) + "/" + std::to_string(tables.size()) + "] " + 
-                       tables[i].schema_name + "." + tables[i].table_name + " (status: " + tables[i].status + ")");
+          Logger::info("setupTableTargetMariaDBToPostgres",
+                       "[" + std::to_string(i + 1) + "/" +
+                           std::to_string(tables.size()) + "] " +
+                           tables[i].schema_name + "." + tables[i].table_name +
+                           " (status: " + tables[i].status + ")");
         }
       }
 
@@ -198,34 +228,48 @@ public:
         std::string token;
         while (std::getline(ss, token, ';')) {
           auto pos = token.find('=');
-          if (pos == std::string::npos) continue;
+          if (pos == std::string::npos)
+            continue;
           std::string key = token.substr(0, pos);
           std::string value = token.substr(pos + 1);
           key.erase(0, key.find_first_not_of(" \t\r\n"));
           key.erase(key.find_last_not_of(" \t\r\n") + 1);
           value.erase(0, value.find_first_not_of(" \t\r\n"));
           value.erase(value.find_last_not_of(" \t\r\n") + 1);
-          if (key == "host") host = value;
-          else if (key == "user") user = value;
-          else if (key == "password") password = value;
-          else if (key == "db") db = value;
-          else if (key == "port") port = value;
+          if (key == "host")
+            host = value;
+          else if (key == "user")
+            user = value;
+          else if (key == "password")
+            password = value;
+          else if (key == "db")
+            db = value;
+          else if (key == "port")
+            port = value;
         }
-        
+
         MYSQL *mariadbConn = mysql_init(nullptr);
         if (!mariadbConn) {
-          Logger::error("setupTableTargetMariaDBToPostgres", "mysql_init() failed");
+          Logger::error("setupTableTargetMariaDBToPostgres",
+                        "mysql_init() failed");
           continue;
         }
-        
+
         unsigned int portNum = 3306;
         if (!port.empty()) {
-          try { portNum = std::stoul(port); } catch (...) { portNum = 3306; }
+          try {
+            portNum = std::stoul(port);
+          } catch (...) {
+            portNum = 3306;
+          }
         }
-        
-        if (mysql_real_connect(mariadbConn, host.c_str(), user.c_str(), password.c_str(),
-                               db.c_str(), portNum, nullptr, 0) == nullptr) {
-          Logger::error("setupTableTargetMariaDBToPostgres", "MariaDB connection failed: " + std::string(mysql_error(mariadbConn)));
+
+        if (mysql_real_connect(mariadbConn, host.c_str(), user.c_str(),
+                               password.c_str(), db.c_str(), portNum, nullptr,
+                               0) == nullptr) {
+          Logger::error("setupTableTargetMariaDBToPostgres",
+                        "MariaDB connection failed: " +
+                            std::string(mysql_error(mariadbConn)));
           mysql_close(mariadbConn);
           continue;
         }
@@ -238,7 +282,8 @@ public:
                             table.schema_name + "' AND table_name = '" +
                             table.table_name + "';";
 
-        std::vector<std::vector<std::string>> columns = executeQueryMariaDB(mariadbConn, query);
+        std::vector<std::vector<std::string>> columns =
+            executeQueryMariaDB(mariadbConn, query);
         // std::cerr << "Got " << columns.size() << " columns from MariaDB" <<
         // std::endl;
 
@@ -361,7 +406,7 @@ public:
               " using PK columns: " + std::to_string(pkColumns.size()));
 
       // 2. Obtener todas las PKs de PostgreSQL en batches
-      const size_t BATCH_SIZE = 1000;
+      const size_t BATCH_SIZE = SyncConfig::getChunkSize();
       size_t offset = 0;
       size_t totalDeleted = 0;
 
@@ -481,7 +526,8 @@ public:
                                 "` > '" + escapeSQL(lastSyncTime) +
                                 "' ORDER BY `" + timeColumn + "`";
 
-      std::vector<std::vector<std::string>> modifiedRecords = executeQueryMariaDB(mariadbConn, selectQuery);
+      std::vector<std::vector<std::string>> modifiedRecords =
+          executeQueryMariaDB(mariadbConn, selectQuery);
       Logger::debug("processUpdatesByPrimaryKey",
                     "Found " + std::to_string(modifiedRecords.size()) +
                         " modified records in MariaDB");
@@ -500,7 +546,8 @@ public:
           escapeSQL(schema_name) + "' AND table_name = '" +
           escapeSQL(table_name) + "' ORDER BY ORDINAL_POSITION";
 
-      std::vector<std::vector<std::string>> columnNames = executeQueryMariaDB(mariadbConn, columnQuery);
+      std::vector<std::vector<std::string>> columnNames =
+          executeQueryMariaDB(mariadbConn, columnQuery);
       if (columnNames.empty() || columnNames[0].empty()) {
         Logger::error("processUpdatesByPrimaryKey",
                       "Could not get column names for " + schema_name + "." +
@@ -689,27 +736,43 @@ public:
     try {
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
       auto tables = getActiveTables(pgConn);
-      
-      // Sort tables by priority: FULL_LOAD, RESET, PERFECT_MATCH, LISTENING_CHANGES
-      std::sort(tables.begin(), tables.end(), [](const TableInfo &a, const TableInfo &b) {
-        if (a.status == "FULL_LOAD" && b.status != "FULL_LOAD") return true;
-        if (a.status != "FULL_LOAD" && b.status == "FULL_LOAD") return false;
-        if (a.status == "RESET" && b.status != "RESET") return true;
-        if (a.status != "RESET" && b.status == "RESET") return false;
-        if (a.status == "PERFECT_MATCH" && b.status != "PERFECT_MATCH") return true;
-        if (a.status != "PERFECT_MATCH" && b.status == "PERFECT_MATCH") return false;
-        if (a.status == "LISTENING_CHANGES" && b.status != "LISTENING_CHANGES") return true;
-        if (a.status != "LISTENING_CHANGES" && b.status == "LISTENING_CHANGES") return false;
-        return false; // Keep original order for same priority
-      });
 
-      Logger::info("transferDataMariaDBToPostgres", 
-                   "Processing " + std::to_string(tables.size()) + " MariaDB tables in priority order");
+      // Sort tables by priority: FULL_LOAD, RESET, PERFECT_MATCH,
+      // LISTENING_CHANGES
+      std::sort(
+          tables.begin(), tables.end(),
+          [](const TableInfo &a, const TableInfo &b) {
+            if (a.status == "FULL_LOAD" && b.status != "FULL_LOAD")
+              return true;
+            if (a.status != "FULL_LOAD" && b.status == "FULL_LOAD")
+              return false;
+            if (a.status == "RESET" && b.status != "RESET")
+              return true;
+            if (a.status != "RESET" && b.status == "RESET")
+              return false;
+            if (a.status == "PERFECT_MATCH" && b.status != "PERFECT_MATCH")
+              return true;
+            if (a.status != "PERFECT_MATCH" && b.status == "PERFECT_MATCH")
+              return false;
+            if (a.status == "LISTENING_CHANGES" &&
+                b.status != "LISTENING_CHANGES")
+              return true;
+            if (a.status != "LISTENING_CHANGES" &&
+                b.status == "LISTENING_CHANGES")
+              return false;
+            return false; // Keep original order for same priority
+          });
+
+      Logger::info("transferDataMariaDBToPostgres",
+                   "Processing " + std::to_string(tables.size()) +
+                       " MariaDB tables in priority order");
       for (size_t i = 0; i < tables.size(); ++i) {
         if (tables[i].db_engine == "MariaDB") {
-          Logger::info("transferDataMariaDBToPostgres", 
-                       "[" + std::to_string(i+1) + "/" + std::to_string(tables.size()) + "] " + 
-                       tables[i].schema_name + "." + tables[i].table_name + " (status: " + tables[i].status + ")");
+          Logger::info("transferDataMariaDBToPostgres",
+                       "[" + std::to_string(i + 1) + "/" +
+                           std::to_string(tables.size()) + "] " +
+                           tables[i].schema_name + "." + tables[i].table_name +
+                           " (status: " + tables[i].status + ")");
         }
       }
 
@@ -717,7 +780,8 @@ public:
         if (table.db_engine != "MariaDB")
           continue;
 
-        // Tabla procesando: table.schema_name + "." + table.table_name + " (" + table.status + ")"
+        // Tabla procesando: table.schema_name + "." + table.table_name + " (" +
+        // table.status + ")"
 
         // Connect directly to MariaDB
         std::string host, user, password, db, port;
@@ -725,35 +789,48 @@ public:
         std::string token;
         while (std::getline(ss, token, ';')) {
           auto pos = token.find('=');
-          if (pos == std::string::npos) continue;
+          if (pos == std::string::npos)
+            continue;
           std::string key = token.substr(0, pos);
           std::string value = token.substr(pos + 1);
           key.erase(0, key.find_first_not_of(" \t\r\n"));
           key.erase(key.find_last_not_of(" \t\r\n") + 1);
           value.erase(0, value.find_first_not_of(" \t\r\n"));
           value.erase(value.find_last_not_of(" \t\r\n") + 1);
-          if (key == "host") host = value;
-          else if (key == "user") user = value;
-          else if (key == "password") password = value;
-          else if (key == "db") db = value;
-          else if (key == "port") port = value;
+          if (key == "host")
+            host = value;
+          else if (key == "user")
+            user = value;
+          else if (key == "password")
+            password = value;
+          else if (key == "db")
+            db = value;
+          else if (key == "port")
+            port = value;
         }
-        
+
         MYSQL *mariadbConn = mysql_init(nullptr);
         if (!mariadbConn) {
           Logger::error("transferDataMariaDBToPostgres", "mysql_init() failed");
           updateStatus(pgConn, table.schema_name, table.table_name, "ERROR");
           continue;
         }
-        
+
         unsigned int portNum = 3306;
         if (!port.empty()) {
-          try { portNum = std::stoul(port); } catch (...) { portNum = 3306; }
+          try {
+            portNum = std::stoul(port);
+          } catch (...) {
+            portNum = 3306;
+          }
         }
-        
-        if (mysql_real_connect(mariadbConn, host.c_str(), user.c_str(), password.c_str(),
-                               db.c_str(), portNum, nullptr, 0) == nullptr) {
-          Logger::error("transferDataMariaDBToPostgres", "MariaDB connection failed: " + std::string(mysql_error(mariadbConn)));
+
+        if (mysql_real_connect(mariadbConn, host.c_str(), user.c_str(),
+                               password.c_str(), db.c_str(), portNum, nullptr,
+                               0) == nullptr) {
+          Logger::error("transferDataMariaDBToPostgres",
+                        "MariaDB connection failed: " +
+                            std::string(mysql_error(mariadbConn)));
           mysql_close(mariadbConn);
           updateStatus(pgConn, table.schema_name, table.table_name, "ERROR");
           continue;
@@ -999,7 +1076,8 @@ public:
           selectQuery += " LIMIT " + std::to_string(CHUNK_SIZE) + " OFFSET " +
                          std::to_string(targetCount) + ";";
 
-          std::vector<std::vector<std::string>> results = executeQueryMariaDB(mariadbConn, selectQuery);
+          std::vector<std::vector<std::string>> results =
+              executeQueryMariaDB(mariadbConn, selectQuery);
 
           if (results.size() > 0) {
             Logger::info("transferDataMariaDBToPostgres",
@@ -1091,7 +1169,7 @@ public:
         }
 
         // Tabla procesada completamente
-        
+
         // Close MariaDB connection
         mysql_close(mariadbConn);
       }
@@ -1172,7 +1250,8 @@ private:
                         "AND constraint_name = 'PRIMARY' "
                         "ORDER BY ordinal_position;";
 
-    std::vector<std::vector<std::string>> results = executeQueryMariaDB(mariadbConn, query);
+    std::vector<std::vector<std::string>> results =
+        executeQueryMariaDB(mariadbConn, query);
 
     for (const auto &row : results) {
       if (!row.empty()) {
@@ -1199,7 +1278,8 @@ private:
     }
 
     // Procesar en batches para evitar consultas muy largas
-    const size_t CHECK_BATCH_SIZE = 500;
+    const size_t CHECK_BATCH_SIZE =
+        std::min(SyncConfig::getChunkSize() / 2, static_cast<size_t>(500));
 
     for (size_t batchStart = 0; batchStart < pgPKs.size();
          batchStart += CHECK_BATCH_SIZE) {
@@ -1233,7 +1313,8 @@ private:
       checkQuery += ");";
 
       // Ejecutar query en MariaDB
-      std::vector<std::vector<std::string>> existingResults = executeQueryMariaDB(mariadbConn, checkQuery);
+      std::vector<std::vector<std::string>> existingResults =
+          executeQueryMariaDB(mariadbConn, checkQuery);
 
       // Crear set de PKs que SÍ existen en MariaDB
       std::set<std::vector<std::string>> existingPKs;
@@ -1387,7 +1468,8 @@ private:
       txn.exec("SET statement_timeout = '300s'");
 
       // Procesar en batches para evitar queries muy largas
-      const size_t BATCH_SIZE = 500;
+      const size_t BATCH_SIZE =
+          std::min(SyncConfig::getChunkSize() / 2, static_cast<size_t>(500));
       size_t totalProcessed = 0;
 
       for (size_t batchStart = 0; batchStart < results.size();
@@ -1470,7 +1552,7 @@ private:
       txn.exec("SET statement_timeout = '300s'");
 
       // Procesar en batches
-      const size_t BATCH_SIZE = 1000;
+      const size_t BATCH_SIZE = SyncConfig::getChunkSize();
       size_t totalProcessed = 0;
 
       for (size_t batchStart = 0; batchStart < results.size();

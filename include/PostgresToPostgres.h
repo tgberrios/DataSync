@@ -2,8 +2,8 @@
 #define POSTGRESTOPOSTGRES_H
 
 #include "Config.h"
-#include "logger.h"
 #include "catalog_manager.h"
+#include "logger.h"
 #include <pqxx/pqxx>
 #include <string>
 #include <vector>
@@ -24,38 +24,52 @@ public:
                               "connection_string, status FROM metadata.catalog "
                               "WHERE db_engine='PostgreSQL' AND active=true;");
 
-      // Sort tables by priority: FULL_LOAD, RESET, PERFECT_MATCH, LISTENING_CHANGES
-      std::vector<std::tuple<std::string, std::string, std::string, std::string>> tables;
+      // Sort tables by priority: FULL_LOAD, RESET, PERFECT_MATCH,
+      // LISTENING_CHANGES
+      std::vector<
+          std::tuple<std::string, std::string, std::string, std::string>>
+          tables;
       for (const auto &row : results) {
-        if (row.size() < 4) continue;
-        tables.emplace_back(
-          row[0].as<std::string>(), // schema_name
-          row[1].as<std::string>(), // table_name
-          row[2].as<std::string>(), // connection_string
-          row[3].as<std::string>()  // status
+        if (row.size() < 4)
+          continue;
+        tables.emplace_back(row[0].as<std::string>(), // schema_name
+                            row[1].as<std::string>(), // table_name
+                            row[2].as<std::string>(), // connection_string
+                            row[3].as<std::string>()  // status
         );
       }
 
       std::sort(tables.begin(), tables.end(), [](const auto &a, const auto &b) {
         std::string statusA = std::get<3>(a);
         std::string statusB = std::get<3>(b);
-        if (statusA == "FULL_LOAD" && statusB != "FULL_LOAD") return true;
-        if (statusA != "FULL_LOAD" && statusB == "FULL_LOAD") return false;
-        if (statusA == "RESET" && statusB != "RESET") return true;
-        if (statusA != "RESET" && statusB == "RESET") return false;
-        if (statusA == "PERFECT_MATCH" && statusB != "PERFECT_MATCH") return true;
-        if (statusA != "PERFECT_MATCH" && statusB == "PERFECT_MATCH") return false;
-        if (statusA == "LISTENING_CHANGES" && statusB != "LISTENING_CHANGES") return true;
-        if (statusA != "LISTENING_CHANGES" && statusB == "LISTENING_CHANGES") return false;
+        if (statusA == "FULL_LOAD" && statusB != "FULL_LOAD")
+          return true;
+        if (statusA != "FULL_LOAD" && statusB == "FULL_LOAD")
+          return false;
+        if (statusA == "RESET" && statusB != "RESET")
+          return true;
+        if (statusA != "RESET" && statusB == "RESET")
+          return false;
+        if (statusA == "PERFECT_MATCH" && statusB != "PERFECT_MATCH")
+          return true;
+        if (statusA != "PERFECT_MATCH" && statusB == "PERFECT_MATCH")
+          return false;
+        if (statusA == "LISTENING_CHANGES" && statusB != "LISTENING_CHANGES")
+          return true;
+        if (statusA != "LISTENING_CHANGES" && statusB == "LISTENING_CHANGES")
+          return false;
         return false;
       });
 
-      Logger::info("setupTableTargetPostgresToPostgres", 
-                   "Processing " + std::to_string(tables.size()) + " PostgreSQL tables in priority order");
+      Logger::info("setupTableTargetPostgresToPostgres",
+                   "Processing " + std::to_string(tables.size()) +
+                       " PostgreSQL tables in priority order");
       for (size_t i = 0; i < tables.size(); ++i) {
-        Logger::info("setupTableTargetPostgresToPostgres", 
-                     "[" + std::to_string(i+1) + "/" + std::to_string(tables.size()) + "] " + 
-                     std::get<0>(tables[i]) + "." + std::get<1>(tables[i]) + " (status: " + std::get<3>(tables[i]) + ")");
+        Logger::info("setupTableTargetPostgresToPostgres",
+                     "[" + std::to_string(i + 1) + "/" +
+                         std::to_string(tables.size()) + "] " +
+                         std::get<0>(tables[i]) + "." + std::get<1>(tables[i]) +
+                         " (status: " + std::get<3>(tables[i]) + ")");
       }
 
       for (const auto &table : tables) {
@@ -116,41 +130,62 @@ public:
                      "WHERE db_engine='PostgreSQL' AND active=true AND status "
                      "!= 'NO_DATA';");
 
-        // Sort tables by priority: FULL_LOAD, RESET, PERFECT_MATCH, LISTENING_CHANGES
-        std::vector<std::tuple<std::string, std::string, std::string, std::string, std::string, std::string, std::string>> tables;
+        // Sort tables by priority: FULL_LOAD, RESET, PERFECT_MATCH,
+        // LISTENING_CHANGES
+        std::vector<
+            std::tuple<std::string, std::string, std::string, std::string,
+                       std::string, std::string, std::string>>
+            tables;
         for (const auto &row : results) {
-          if (row.size() < 7) continue;
+          if (row.size() < 7)
+            continue;
           tables.emplace_back(
-            row[0].as<std::string>(), // schema_name
-            row[1].as<std::string>(), // table_name
-            row[2].as<std::string>(), // connection_string
-            row[3].as<std::string>(), // last_offset
-            row[4].as<std::string>(), // status
-            row[5].is_null() ? "" : row[5].as<std::string>(), // last_sync_column
-            row[6].is_null() ? "" : row[6].as<std::string>()  // last_sync_time
+              row[0].as<std::string>(), // schema_name
+              row[1].as<std::string>(), // table_name
+              row[2].as<std::string>(), // connection_string
+              row[3].as<std::string>(), // last_offset
+              row[4].as<std::string>(), // status
+              row[5].is_null() ? ""
+                               : row[5].as<std::string>(), // last_sync_column
+              row[6].is_null() ? "" : row[6].as<std::string>() // last_sync_time
           );
         }
 
-        std::sort(tables.begin(), tables.end(), [](const auto &a, const auto &b) {
-          std::string statusA = std::get<4>(a);
-          std::string statusB = std::get<4>(b);
-          if (statusA == "FULL_LOAD" && statusB != "FULL_LOAD") return true;
-          if (statusA != "FULL_LOAD" && statusB == "FULL_LOAD") return false;
-          if (statusA == "RESET" && statusB != "RESET") return true;
-          if (statusA != "RESET" && statusB == "RESET") return false;
-          if (statusA == "PERFECT_MATCH" && statusB != "PERFECT_MATCH") return true;
-          if (statusA != "PERFECT_MATCH" && statusB == "PERFECT_MATCH") return false;
-          if (statusA == "LISTENING_CHANGES" && statusB != "LISTENING_CHANGES") return true;
-          if (statusA != "LISTENING_CHANGES" && statusB == "LISTENING_CHANGES") return false;
-          return false;
-        });
+        std::sort(
+            tables.begin(), tables.end(), [](const auto &a, const auto &b) {
+              std::string statusA = std::get<4>(a);
+              std::string statusB = std::get<4>(b);
+              if (statusA == "FULL_LOAD" && statusB != "FULL_LOAD")
+                return true;
+              if (statusA != "FULL_LOAD" && statusB == "FULL_LOAD")
+                return false;
+              if (statusA == "RESET" && statusB != "RESET")
+                return true;
+              if (statusA != "RESET" && statusB == "RESET")
+                return false;
+              if (statusA == "PERFECT_MATCH" && statusB != "PERFECT_MATCH")
+                return true;
+              if (statusA != "PERFECT_MATCH" && statusB == "PERFECT_MATCH")
+                return false;
+              if (statusA == "LISTENING_CHANGES" &&
+                  statusB != "LISTENING_CHANGES")
+                return true;
+              if (statusA != "LISTENING_CHANGES" &&
+                  statusB == "LISTENING_CHANGES")
+                return false;
+              return false;
+            });
 
-        Logger::info("transferDataPostgresToPostgres", 
-                     "Processing " + std::to_string(tables.size()) + " PostgreSQL tables in priority order");
+        Logger::info("transferDataPostgresToPostgres",
+                     "Processing " + std::to_string(tables.size()) +
+                         " PostgreSQL tables in priority order");
         for (size_t i = 0; i < tables.size(); ++i) {
-          Logger::info("transferDataPostgresToPostgres", 
-                       "[" + std::to_string(i+1) + "/" + std::to_string(tables.size()) + "] " + 
-                       std::get<0>(tables[i]) + "." + std::get<1>(tables[i]) + " (status: " + std::get<4>(tables[i]) + ")");
+          Logger::info("transferDataPostgresToPostgres",
+                       "[" + std::to_string(i + 1) + "/" +
+                           std::to_string(tables.size()) + "] " +
+                           std::get<0>(tables[i]) + "." +
+                           std::get<1>(tables[i]) +
+                           " (status: " + std::get<4>(tables[i]) + ")");
         }
 
         for (const auto &table : tables) {
@@ -617,7 +652,7 @@ private:
         currentOffset = 0;
       }
 
-      const size_t CHUNK_SIZE = 1000; // Tamaño de chunk fijo
+      const size_t CHUNK_SIZE = SyncConfig::getChunkSize();
       size_t totalProcessed = currentOffset;
       bool hasMoreData = true;
 
@@ -766,7 +801,7 @@ private:
           "Processing deletes for " + schema_name + "." + table_name +
               " using PK columns: " + std::to_string(pkColumns.size()));
 
-      const size_t BATCH_SIZE = 1000;
+      const size_t BATCH_SIZE = SyncConfig::getChunkSize();
       size_t offset = 0;
       size_t totalDeleted = 0;
 
@@ -1014,7 +1049,8 @@ private:
       return deletedPKs;
     }
 
-    const size_t CHECK_BATCH_SIZE = 500;
+    const size_t CHECK_BATCH_SIZE =
+        std::min(SyncConfig::getChunkSize() / 2, static_cast<size_t>(500));
 
     for (size_t batchStart = 0; batchStart < pgPKs.size();
          batchStart += CHECK_BATCH_SIZE) {
@@ -1237,7 +1273,8 @@ private:
       txn.exec("SET statement_timeout = '300s'");
 
       // Procesar en batches para evitar queries muy largas
-      const size_t BATCH_SIZE = 500;
+      const size_t BATCH_SIZE =
+          std::min(SyncConfig::getChunkSize() / 2, static_cast<size_t>(500));
       size_t totalProcessed = 0;
 
       for (size_t batchStart = 0; batchStart < results.size();
@@ -1316,7 +1353,7 @@ private:
       txn.exec("SET statement_timeout = '300s'");
 
       // Procesar en batches
-      const size_t BATCH_SIZE = 1000;
+      const size_t BATCH_SIZE = SyncConfig::getChunkSize();
       size_t totalProcessed = 0;
 
       for (size_t batchStart = 0; batchStart < results.size();
