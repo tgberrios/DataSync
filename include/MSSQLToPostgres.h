@@ -59,43 +59,30 @@ public:
   SQLHDBC getMSSQLConnection(const std::string &connectionString) {
     std::lock_guard<std::mutex> lock(connectionMutex);
 
-    // Si ya tenemos una conexión para esta connection string, la reutilizamos
-    if (mssqlConn && currentConnectionString == connectionString) {
-      return mssqlConn;
-    }
-
-    // Si tenemos una conexión diferente, la cerramos
-    if (mssqlConn) {
-      SQLDisconnect(mssqlConn);
-      SQLFreeHandle(SQL_HANDLE_DBC, mssqlConn);
-      mssqlConn = nullptr;
-    }
-    if (mssqlEnv) {
-      SQLFreeHandle(SQL_HANDLE_ENV, mssqlEnv);
-      mssqlEnv = nullptr;
-    }
+    // Crear nueva conexión para cada consulta para evitar "Connection is busy"
+    SQLHENV tempEnv = nullptr;
+    SQLHDBC tempConn = nullptr;
+    SQLRETURN ret;
 
     // Crear nueva conexión
-    SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &mssqlEnv);
+    ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &tempEnv);
     if (!SQL_SUCCEEDED(ret)) {
       Logger::error(LogCategory::TRANSFER,
                     "Failed to allocate ODBC environment handle");
       return nullptr;
     }
 
-    ret = SQLSetEnvAttr(mssqlEnv, SQL_ATTR_ODBC_VERSION,
+    ret = SQLSetEnvAttr(tempEnv, SQL_ATTR_ODBC_VERSION,
                         (SQLPOINTER)SQL_OV_ODBC3, 0);
     if (!SQL_SUCCEEDED(ret)) {
-      SQLFreeHandle(SQL_HANDLE_ENV, mssqlEnv);
-      mssqlEnv = nullptr;
+      SQLFreeHandle(SQL_HANDLE_ENV, tempEnv);
       Logger::error(LogCategory::TRANSFER, "Failed to set ODBC version");
       return nullptr;
     }
 
-    ret = SQLAllocHandle(SQL_HANDLE_DBC, mssqlEnv, &mssqlConn);
+    ret = SQLAllocHandle(SQL_HANDLE_DBC, tempEnv, &tempConn);
     if (!SQL_SUCCEEDED(ret)) {
-      SQLFreeHandle(SQL_HANDLE_ENV, mssqlEnv);
-      mssqlEnv = nullptr;
+      SQLFreeHandle(SQL_HANDLE_ENV, tempEnv);
       Logger::error(LogCategory::TRANSFER,
                     "Failed to allocate ODBC connection handle");
       return nullptr;
@@ -104,25 +91,29 @@ public:
     SQLCHAR outConnStr[1024];
     SQLSMALLINT outConnStrLen;
     ret = SQLDriverConnect(
-        mssqlConn, nullptr, (SQLCHAR *)connectionString.c_str(), SQL_NTS,
+        tempConn, nullptr, (SQLCHAR *)connectionString.c_str(), SQL_NTS,
         outConnStr, sizeof(outConnStr), &outConnStrLen, SQL_DRIVER_NOPROMPT);
     if (!SQL_SUCCEEDED(ret)) {
       SQLCHAR sqlState[6], msg[SQL_MAX_MESSAGE_LENGTH];
       SQLINTEGER nativeError;
       SQLSMALLINT msgLen;
-      SQLGetDiagRec(SQL_HANDLE_DBC, mssqlConn, 1, sqlState, &nativeError, msg,
+      SQLGetDiagRec(SQL_HANDLE_DBC, tempConn, 1, sqlState, &nativeError, msg,
                     sizeof(msg), &msgLen);
-      SQLFreeHandle(SQL_HANDLE_DBC, mssqlConn);
-      SQLFreeHandle(SQL_HANDLE_ENV, mssqlEnv);
-      mssqlConn = nullptr;
-      mssqlEnv = nullptr;
+      SQLFreeHandle(SQL_HANDLE_DBC, tempConn);
+      SQLFreeHandle(SQL_HANDLE_ENV, tempEnv);
       Logger::error(LogCategory::TRANSFER,
                     "Failed to connect to MSSQL: " + std::string((char *)msg));
       return nullptr;
     }
 
-    currentConnectionString = connectionString;
-    return mssqlConn;
+    return tempConn;
+  }
+
+  void closeMSSQLConnection(SQLHDBC conn) {
+    if (conn) {
+      SQLDisconnect(conn);
+      SQLFreeHandle(SQL_HANDLE_DBC, conn);
+    }
   }
 
   std::vector<TableInfo> getActiveTables(pqxx::connection &pgConn) {
@@ -495,6 +486,9 @@ public:
 
         // No actualizar la columna de tiempo aquí - ya fue detectada
         // correctamente en catalog_manager.h
+
+        // Cerrar conexión para evitar "Connection is busy"
+        closeMSSQLConnection(dbc);
       }
     } catch (const std::exception &e) {
       Logger::error(LogCategory::TRANSFER,
@@ -1120,7 +1114,9 @@ public:
           }
         }
 
-        // Tabla procesada completamente - connection stays in pool
+        // Tabla procesada completamente - cerrar conexión para evitar
+        // "Connection is busy"
+        closeMSSQLConnection(dbc);
       }
     } catch (const std::exception &e) {
       Logger::error(LogCategory::TRANSFER,
@@ -1270,7 +1266,7 @@ public:
 
           for (const auto &row : results) {
             std::vector<std::string> pkValues;
-            for (size_t i = 0; i < pkColumns.size(); ++i) {
+            for (size_t i = 0; i < pkColumns.size() && i < row.size(); ++i) {
               pkValues.push_back(row[i].is_null() ? "NULL"
                                                   : row[i].as<std::string>());
             }
@@ -1610,7 +1606,7 @@ private:
       std::set<std::vector<std::string>> existingPKs;
       for (const auto &row : existingResults) {
         std::vector<std::string> pkValues;
-        for (size_t i = 0; i < pkColumns.size(); ++i) {
+        for (size_t i = 0; i < pkColumns.size() && i < row.size(); ++i) {
           pkValues.push_back(row[i]);
         }
         existingPKs.insert(pkValues);

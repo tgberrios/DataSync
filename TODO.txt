@@ -8,3 +8,9 @@ IN clause para deletes	5-10x	Baja
 Batch sizes adaptativos	2-5x	Baja
 Multi-row INSERTs	3-5x	Media
 Índices apropiados	5-20x	Alta
+
+
+mssql ES EL QUE FALLA EN LA TRANSFERENCIA AHORA ! 
+
+
+gdb --batch --ex run --ex bt --ex quit --args ./DataSync

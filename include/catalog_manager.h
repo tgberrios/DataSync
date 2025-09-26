@@ -1178,7 +1178,7 @@ private:
       txn.commit();
 
       for (const auto &row : results) {
-        if (!row[0].is_null()) {
+        if (row.size() >= 4 && !row[0].is_null()) {
           std::string columnName = row[0].as<std::string>();
           std::string dataType = row[1].as<std::string>();
           std::string columnKey = row[2].as<std::string>();
