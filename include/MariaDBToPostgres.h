@@ -474,7 +474,7 @@ public:
 
           for (const auto &row : results) {
             std::vector<std::string> pkValues;
-            for (size_t i = 0; i < pkColumns.size(); ++i) {
+            for (size_t i = 0; i < pkColumns.size() && i < row.size(); ++i) {
               pkValues.push_back(row[i].is_null() ? "NULL"
                                                   : row[i].as<std::string>());
             }
@@ -1656,7 +1656,7 @@ private:
       std::set<std::vector<std::string>> existingPKs;
       for (const std::vector<std::string> &row : existingResults) {
         std::vector<std::string> pkValues;
-        for (size_t i = 0; i < pkColumns.size(); ++i) {
+        for (size_t i = 0; i < pkColumns.size() && i < row.size(); ++i) {
           pkValues.push_back(row[i]);
         }
         existingPKs.insert(pkValues);
