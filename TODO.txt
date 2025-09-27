@@ -84,6 +84,3 @@ Mes 8: Optimización y features adicionales
 metodo de recuperacion en catalog manager
 
 si esta PERFECT_MATCH Y LISTENING CHANGES SI CAMBIA EL LAST_OFFSET Y EL OTRO ? me refiero por los incrementales y deltas
-
-
-anadir al dashboard grafos de metrics

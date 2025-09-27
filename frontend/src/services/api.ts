@@ -77,6 +77,26 @@ export interface DashboardStats {
     status: string;
     lastSyncTime: string;
   }[];
+  metricsCards?: {
+    topTablesThroughput: {
+      tableName: string;
+      dbEngine: string;
+      throughputRps: number;
+      recordsTransferred: number;
+    }[];
+    currentIops: number;
+    dataVolumeByTable: {
+      tableName: string;
+      dbEngine: string;
+      totalBytes: number;
+      transferCount: number;
+    }[];
+    currentThroughput: {
+      avgRps: number;
+      totalRecords: number;
+      transferCount: number;
+    };
+  };
 }
 
 export const dashboardApi = {
