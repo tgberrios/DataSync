@@ -82,9 +82,13 @@ Mes 8: Optimización y features adicionales
 
 
 metodo de recuperacion en catalog manager
-transfer metrics si esta enviando data real ? 
 
 arreglar el dashboard
 arreglar los logs solo muestra 2 paginas
 
-si esta PERFECT_MATCH Y LISTENING CHANGES SI CAMBIA EL LAST_OFFSET Y EL OTRO ?
+si esta PERFECT_MATCH Y LISTENING CHANGES SI CAMBIA EL LAST_OFFSET Y EL OTRO ? me refiero por los incrementales y deltas
+
+ahora que tenemos table_size que es el count del source
+necesito saber cada cuanto se actualiza? 
+lo podemos usar en dashboard
+anadir al dashboard grafos de metrics

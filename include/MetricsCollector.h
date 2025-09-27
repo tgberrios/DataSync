@@ -18,14 +18,6 @@ struct TransferMetrics {
   double memory_used_mb = 0.0;
   int io_operations_per_second = 0;
 
-  // Métricas de Latencia (solo si hay datos históricos)
-  double avg_latency_ms = 0.0;
-  double min_latency_ms = 0.0;
-  double max_latency_ms = 0.0;
-  double p95_latency_ms = 0.0;
-  double p99_latency_ms = 0.0;
-  int latency_samples = 0;
-
   // Metadatos
   std::string transfer_type;
   std::string status;
@@ -49,7 +41,6 @@ private:
   void collectPerformanceMetrics();
   void collectMetadataMetrics();
   void collectTimestampMetrics();
-  void collectLatencyMetrics();
   void saveMetricsToDatabase();
   void generateMetricsReport();
 
@@ -58,9 +49,6 @@ private:
   double calculateTransferRate(long long records, int duration_ms);
   long long calculateBytesTransferred(const std::string &schema_name,
                                       const std::string &table_name);
-  double calculatePercentile(const std::vector<double> &values,
-                             double percentile);
-  void measureQueryLatency(const std::string &query, double &latency_ms);
 
   std::vector<TransferMetrics> metrics;
 };
