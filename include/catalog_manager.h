@@ -871,8 +871,12 @@ private:
   long long getTableSizeMariaDB(MYSQL *conn, const std::string &schema,
                                 const std::string &table) {
     try {
-      std::string query = "SELECT COUNT(*) FROM `" + escapeSQL(schema) + "`.`" +
-                          escapeSQL(table) + "`;";
+      std::string query = "SELECT TABLE_ROWS FROM information_schema.tables "
+                          "WHERE table_schema = '" +
+                          escapeSQL(schema) +
+                          "' "
+                          "AND table_name = '" +
+                          escapeSQL(table) + "';";
 
       Logger::info(LogCategory::DATABASE, "getTableSizeMariaDB",
                    "Executing query: " + query);
@@ -913,8 +917,12 @@ private:
   long long getTableSizeMSSQL(SQLHDBC conn, const std::string &schema,
                               const std::string &table) {
     try {
-      std::string query = "SELECT COUNT(*) FROM [" + escapeSQL(schema) + "].[" +
-                          escapeSQL(table) + "];";
+      std::string query =
+          "SELECT SUM(row_count) FROM sys.dm_db_partition_stats "
+          "WHERE object_id = OBJECT_ID('[" +
+          escapeSQL(schema) + "].[" + escapeSQL(table) +
+          "]') "
+          "AND index_id IN (0, 1);";
 
       auto results = executeQueryMSSQL(conn, query);
       if (!results.empty() && !results[0].empty() && !results[0][0].empty()) {
@@ -939,8 +947,13 @@ private:
                                  const std::string &schema,
                                  const std::string &table) {
     try {
-      std::string query = "SELECT COUNT(*) FROM \"" + escapeSQL(schema) +
-                          "\".\"" + escapeSQL(table) + "\";";
+      std::string query = "SELECT COALESCE(n_tup_ins + n_tup_upd + n_tup_del, "
+                          "0) FROM pg_stat_user_tables "
+                          "WHERE schemaname = '" +
+                          escapeSQL(schema) +
+                          "' "
+                          "AND relname = '" +
+                          escapeSQL(table) + "';";
 
       pqxx::work txn(conn);
       auto results = txn.exec(query);

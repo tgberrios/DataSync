@@ -85,6 +85,5 @@ metodo de recuperacion en catalog manager
 
 si esta PERFECT_MATCH Y LISTENING CHANGES SI CAMBIA EL LAST_OFFSET Y EL OTRO ? me refiero por los incrementales y deltas
 
-cada cuanto se actualiza el table_size en catalog manager
-necesito saber cada cuanto se actualiza? 
+
 anadir al dashboard grafos de metrics
