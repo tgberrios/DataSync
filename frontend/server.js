@@ -462,6 +462,82 @@ app.get("/api/dashboard/stats", async (req, res) => {
       lastSyncTime: row.last_sync_time,
     }));
 
+    // MÉTRICAS PARA CARDS INFORMATIVAS
+
+    // 1. Top 10 Tablas por Throughput (Records/Segundo)
+    const topTablesThroughput = await pool.query(`
+      SELECT 
+        tm.schema_name,
+        tm.table_name,
+        tm.db_engine,
+        ROUND(tm.records_transferred::numeric / NULLIF(EXTRACT(EPOCH FROM (tm.completed_at - tm.created_at)), 0), 2) as throughput_rps,
+        tm.records_transferred
+      FROM metadata.transfer_metrics tm
+      WHERE tm.created_at > NOW() - INTERVAL '24 hours'
+        AND tm.completed_at IS NOT NULL
+        AND tm.records_transferred > 0
+      ORDER BY throughput_rps DESC
+      LIMIT 10
+    `);
+
+    // 2. IO Operations promedio actual
+    const currentIops = await pool.query(`
+      SELECT ROUND(AVG(io_operations_per_second)::numeric, 2) as avg_iops
+      FROM metadata.transfer_metrics
+      WHERE created_at > NOW() - INTERVAL '1 hour'
+        AND io_operations_per_second > 0
+    `);
+
+    // 3. Volumen de datos por tabla (últimos 7 días)
+    const dataVolumeByTable = await pool.query(`
+      SELECT 
+        tm.schema_name,
+        tm.table_name,
+        tm.db_engine,
+        SUM(tm.bytes_transferred) as total_bytes,
+        COUNT(tm.id) as transfer_count
+      FROM metadata.transfer_metrics tm
+      WHERE tm.created_at > NOW() - INTERVAL '7 days'
+        AND tm.bytes_transferred > 0
+      GROUP BY tm.schema_name, tm.table_name, tm.db_engine
+      ORDER BY total_bytes DESC
+      LIMIT 10
+    `);
+
+    // 4. Throughput actual (última hora)
+    const currentThroughput = await pool.query(`
+      SELECT 
+        ROUND(AVG(records_transferred::numeric / NULLIF(EXTRACT(EPOCH FROM (completed_at - created_at)), 0))::numeric, 2) as avg_throughput_rps,
+        SUM(records_transferred) as total_records,
+        COUNT(*) as transfer_count
+      FROM metadata.transfer_metrics
+      WHERE created_at > NOW() - INTERVAL '1 hour'
+        AND completed_at IS NOT NULL
+        AND records_transferred > 0
+    `);
+
+    // Agregar las métricas al response
+    stats.metricsCards = {
+      topTablesThroughput: topTablesThroughput.rows.map((row) => ({
+        tableName: `${row.schema_name}.${row.table_name}`,
+        dbEngine: row.db_engine,
+        throughputRps: parseFloat(row.throughput_rps || 0),
+        recordsTransferred: parseInt(row.records_transferred || 0),
+      })),
+      currentIops: parseFloat(currentIops.rows[0]?.avg_iops || 0),
+      dataVolumeByTable: dataVolumeByTable.rows.map((row) => ({
+        tableName: `${row.schema_name}.${row.table_name}`,
+        dbEngine: row.db_engine,
+        totalBytes: parseInt(row.total_bytes || 0),
+        transferCount: parseInt(row.transfer_count || 0),
+      })),
+      currentThroughput: {
+        avgRps: parseFloat(currentThroughput.rows[0]?.avg_throughput_rps || 0),
+        totalRecords: parseInt(currentThroughput.rows[0]?.total_records || 0),
+        transferCount: parseInt(currentThroughput.rows[0]?.transfer_count || 0),
+      },
+    };
+
     console.log("Sending dashboard stats");
     res.json(stats);
   } catch (err) {
