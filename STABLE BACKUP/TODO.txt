@@ -1,0 +1,107 @@
+mejorar performance!
+
+
+
+📊 IMPACTO ESTIMADO DE OPTIMIZACIONES:
+Optimización	Mejora de Velocidad	Complejidad
+IN clause para deletes	5-10x	Baja
+Batch sizes adaptativos	2-5x	Baja
+Multi-row INSERTs	3-5x	Media
+Índices apropiados	5-20x	Alta
+
+
+mssql ES EL QUE FALLA EN LA TRANSFERENCIA AHORA ! 
+
+
+gdb --batch --ex run --ex bt --ex quit --args ./DataSync
+
+
+
+que por cada tipo de datos metamos un default
+
+
+¡Perfecto! Aquí está el resumen completo de todos los cambios que hicimos para solucionar el problema del bucle infinito y los errores de transferencia:
+
+## **�� Resumen de Cambios Realizados**
+
+### **🔧 Problema Principal Identificado**
+- **Bucle infinito** en transferencia de datos de MariaDB a PostgreSQL
+- **Errores de restricción NOT NULL** en columnas Primary Key
+- **Thread de MariaDB colgándose** por mutex en conexiones
+
+---
+
+### **1. �� Eliminación del Mutex en Conexiones MariaDB**
+**Archivo:** `include/MariaDBToPostgres.h`
+- **Problema:** Mutex causaba deadlocks en `getMariaDBConnection()`
+- **Solución:** Eliminamos `std::mutex connectionMutex` y variables globales
+- **Resultado:** Conexiones directas sin bloqueos
+
+### **2. 🔄 Corrección de Lógica de Paginación OFFSET**
+**Archivo:** `include/MariaDBToPostgres.h`
+- **Problema:** `targetCount` se usaba como OFFSET causando bucle infinito
+- **Solución:** Separamos `currentOffset` para paginación y `targetCount` para tracking
+- **Resultado:** Paginación correcta sin bucles
+
+### **3. ��️ Prevención de Reset de Offset en updateStatus()**
+**Archivo:** `include/MariaDBToPostgres.h`
+- **Problema:** `updateStatus()` reseteaba `last_offset` a 0 en tablas sincronizadas
+- **Solución:** Solo actualizar `last_offset` en status "FULL_LOAD" o "RESET"
+- **Resultado:** Preserva progreso de sincronización
+
+### **4. �� Manejo Inteligente de Valores NULL**
+**Archivo:** `include/MariaDBToPostgres.h`
+- **Problema:** Valores NULL en columnas PK causaban errores de restricción
+- **Solución:** `cleanValueForPostgres()` genera valores por defecto en lugar de NULL
+- **Valores por defecto:**
+  - **Enteros:** `0`
+  - **Texto:** `"DEFAULT"`
+  - **Fechas:** `"1970-01-01"` / `"1970-01-01 00:00:00"`
+  - **Tiempo:** `"00:00:00"`
+
+### **5. 🗂️ Creación de Tablas sin NOT NULL**
+**Archivo:** `include/MariaDBToPostgres.h`
+- **Problema:** Tablas se creaban con restricciones NOT NULL problemáticas
+- **Solución:** Eliminamos lógica que agregaba `NOT NULL` en `setupTableTargetMariaDBToPostgres()`
+- **Resultado:** Todas las columnas son nullable por defecto
+
+### **6. �� Mejoras en Frontend - Query Monitor**
+**Archivo:** `frontend/src/components/Monitor.tsx`
+- **Filtro DataLake:** Solo muestra queries de base de datos "DataLake"
+- **Botón de copia:** Permite copiar queries al portapapeles
+- **Contador visual:** Muestra "X of Y queries"
+
+---
+
+### **✅ Resultados Finales**
+
+1. **🚀 Transferencia estable** sin bucles infinitos
+2. **🔒 Sin errores de restricción NOT NULL** en PostgreSQL
+3. **⚡ Threads de transferencia funcionando** correctamente
+4. **📊 Paginación eficiente** con cursor-based y OFFSET
+5. **🛠️ Manejo robusto de datos** con valores por defecto
+6. **�� UI mejorada** con filtros y funcionalidad de copia
+
+### **�� Estado Final**
+- ✅ **MariaDB transfer thread** funcionando
+- ✅ **MSSQL transfer thread** funcionando  
+- ✅ **PostgreSQL transfer thread** funcionando
+- ✅ **Sin bucles infinitos**
+- ✅ **Sin errores de transferencia**
+- ✅ **Frontend con filtros DataLake**
+
+¡El sistema está completamente funcional y robusto! 🚀
+
+
+
+UPDATE "documents_service_jetu_cr"."comments" SET "created_at" = '2018-11-27 10:51:39', "updated_at" = '2018-11-27 10:51:39' WHERE "id" = '192840'
+
+
+me preocupa que updates se queden permanentes porque nunca pueda salir de ahi 
+SELECT COUNT(*) FROM "documents_service_jetu_cr"."comments" WHERE "id" = '349386'
+
+UPDATE "documents_service_jetu_cr"."comments" SET "created_at" = '2020-07-21 14:10:42', "updated_at" = '2020-07-21 14:10:42' WHERE "id" = '392308'
+
+
+
+Currently Processing: deposit_service_jetu_cr.transactions (3649000 records) ordenamiento por millones me explico que tenga los puntitos  
