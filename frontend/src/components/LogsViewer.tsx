@@ -797,8 +797,8 @@ const LogsViewer = () => {
               «
             </PageButton>
             
-            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-              const startPage = Math.max(1, currentPage - 2);
+            {Array.from({ length: Math.min(20, totalPages) }, (_, i) => {
+              const startPage = Math.max(1, currentPage - 9);
               const page = startPage + i;
               if (page > totalPages) return null;
               
@@ -813,6 +813,12 @@ const LogsViewer = () => {
               );
             })}
             
+            {totalPages > 20 && currentPage < totalPages - 9 && (
+              <PageInfo style={{ color: '#999', fontSize: '0.8em' }}>
+                ...
+              </PageInfo>
+            )}
+            
             <PageButton onClick={goToNextPage} disabled={currentPage === totalPages}>
               »
             </PageButton>
@@ -823,6 +829,26 @@ const LogsViewer = () => {
             <PageInfo>
               Page {currentPage} of {totalPages}
             </PageInfo>
+            
+            <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+              <span style={{ fontSize: '0.9em', color: '#666' }}>Go to:</span>
+              <Input
+                type="number"
+                min="1"
+                max={totalPages}
+                style={{ width: '60px', padding: '4px 8px', fontSize: '0.9em' }}
+                onKeyPress={(e) => {
+                  if (e.key === 'Enter') {
+                    const targetPage = parseInt((e.target as HTMLInputElement).value);
+                    if (targetPage >= 1 && targetPage <= totalPages) {
+                      goToPage(targetPage);
+                      (e.target as HTMLInputElement).value = '';
+                    }
+                  }
+                }}
+                placeholder={currentPage.toString()}
+              />
+            </div>
           </Pagination>
         )}
       </Section>
