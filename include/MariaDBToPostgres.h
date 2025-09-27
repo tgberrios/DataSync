@@ -1937,8 +1937,67 @@ private:
           }
           batchQuery += conflictClause;
 
-          txn.exec(batchQuery);
-          totalProcessed += values.size();
+          try {
+            txn.exec(batchQuery);
+            totalProcessed += values.size();
+          } catch (const std::exception &e) {
+            std::string errorMsg = e.what();
+
+            // Manejo específico para errores de datos binarios inválidos
+            if (errorMsg.find("not a valid binary digit") !=
+                    std::string::npos ||
+                errorMsg.find("invalid input syntax") != std::string::npos) {
+
+              Logger::warning(LogCategory::TRANSFER, "performBulkUpsert",
+                              "Binary data error detected, processing batch "
+                              "individually: " +
+                                  errorMsg.substr(0, 100));
+
+              // Procesar registros individualmente para identificar el
+              // problemático
+              for (size_t i = batchStart; i < batchEnd; ++i) {
+                try {
+                  const auto &row = results[i];
+                  if (row.size() != columnNames.size())
+                    continue;
+
+                  std::string singleRowValues = "(";
+                  for (size_t j = 0; j < row.size(); ++j) {
+                    if (j > 0)
+                      singleRowValues += ", ";
+
+                    if (row[j].empty()) {
+                      singleRowValues += "NULL";
+                    } else {
+                      std::string cleanValue =
+                          cleanValueForPostgres(row[j], columnTypes[j]);
+                      if (cleanValue == "NULL") {
+                        singleRowValues += "NULL";
+                      } else {
+                        singleRowValues += "'" + escapeSQL(cleanValue) + "'";
+                      }
+                    }
+                  }
+                  singleRowValues += ")";
+
+                  std::string singleQuery =
+                      upsertQuery + singleRowValues + conflictClause;
+                  txn.exec(singleQuery);
+                  totalProcessed++;
+
+                } catch (const std::exception &singleError) {
+                  Logger::error(
+                      LogCategory::TRANSFER, "performBulkUpsert",
+                      "Skipping problematic record in batch: " +
+                          std::string(singleError.what()).substr(0, 100));
+                  // Continuar con el siguiente registro
+                }
+              }
+            } else {
+              // Re-lanzar errores que no sean de datos binarios
+              throw;
+            }
+          }
         }
       }
 
@@ -2131,6 +2190,35 @@ private:
       if (static_cast<unsigned char>(c) > 127 || c < 32) {
         isNull = true;
         break;
+      }
+    }
+
+    // NUEVO: Manejo específico para datos binarios inválidos
+    if (upperType.find("BYTEA") != std::string::npos ||
+        upperType.find("BLOB") != std::string::npos ||
+        upperType.find("BIT") != std::string::npos) {
+
+      // Verificar si contiene caracteres no binarios válidos
+      bool hasInvalidBinaryChars = false;
+      for (char c : cleanValue) {
+        // Solo permitir caracteres hex válidos (0-9, A-F, a-f) y espacios
+        if (!std::isxdigit(c) && c != ' ' && c != '\\' && c != 'x') {
+          hasInvalidBinaryChars = true;
+          break;
+        }
+      }
+
+      if (hasInvalidBinaryChars) {
+        Logger::warning(LogCategory::TRANSFER, "cleanValueForPostgres",
+                        "Invalid binary data detected, converting to NULL: " +
+                            cleanValue.substr(0, 50) + "...");
+        isNull = true;
+      } else if (!cleanValue.empty() && cleanValue.length() > 1000) {
+        // Datos binarios muy grandes pueden causar problemas
+        Logger::warning(LogCategory::TRANSFER, "cleanValueForPostgres",
+                        "Large binary data detected, truncating: " +
+                            std::to_string(cleanValue.length()) + " bytes");
+        cleanValue = cleanValue.substr(0, 1000);
       }
     }
 
