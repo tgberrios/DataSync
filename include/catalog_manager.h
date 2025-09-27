@@ -272,6 +272,14 @@ public:
                 determinePKStrategy(pkColumns, candidateColumns);
             bool hasPK = !pkColumns.empty();
 
+            // NUEVO: Obtener tamaño de la tabla para ordenamiento
+            long long tableSize =
+                getTableSizeMariaDB(mariaConn, schemaName, tableName);
+
+            Logger::info(LogCategory::DATABASE, "Table size for " + schemaName +
+                                                    "." + tableName + ": " +
+                                                    std::to_string(tableSize));
+
             Logger::info(
                 LogCategory::DATABASE,
                 "PK Detection Results for " + schemaName + "." + tableName +
@@ -281,12 +289,12 @@ public:
 
             pqxx::work txn(pgConn);
             // Check if table already exists
-            auto existingCheck =
-                txn.exec("SELECT last_sync_column, pk_columns, pk_strategy, "
-                         "has_pk, candidate_columns FROM metadata.catalog "
-                         "WHERE schema_name='" +
-                         escapeSQL(schemaName) + "' AND table_name='" +
-                         escapeSQL(tableName) + "' AND db_engine='MariaDB';");
+            auto existingCheck = txn.exec(
+                "SELECT last_sync_column, pk_columns, pk_strategy, "
+                "has_pk, candidate_columns, table_size FROM metadata.catalog "
+                "WHERE schema_name='" +
+                escapeSQL(schemaName) + "' AND table_name='" +
+                escapeSQL(tableName) + "' AND db_engine='MariaDB';");
 
             if (!existingCheck.empty()) {
               // Table exists, update if any column information changed
@@ -350,6 +358,13 @@ public:
                 needsUpdate = true;
               }
 
+              // NUEVO: Actualizar table_size siempre para mantenerlo
+              // sincronizado
+              if (needsUpdate)
+                updateQuery += ", ";
+              updateQuery += "table_size = " + std::to_string(tableSize);
+              needsUpdate = true;
+
               if (needsUpdate) {
                 updateQuery += " WHERE schema_name='" + escapeSQL(schemaName) +
                                "' AND table_name='" + escapeSQL(tableName) +
@@ -362,7 +377,7 @@ public:
                        "(schema_name, table_name, cluster_name, db_engine, "
                        "connection_string, last_sync_time, last_sync_column, "
                        "status, last_offset, active, pk_columns, pk_strategy, "
-                       "has_pk, candidate_columns) "
+                       "has_pk, candidate_columns, table_size) "
                        "VALUES ('" +
                        escapeSQL(schemaName) + "', '" + escapeSQL(tableName) +
                        "', '', 'MariaDB', '" + escapeSQL(connStr) +
@@ -371,7 +386,8 @@ public:
                        escapeSQL(columnsToJSON(pkColumns)) + "', '" +
                        escapeSQL(pkStrategy) + "', " +
                        std::string(hasPK ? "true" : "false") + ", '" +
-                       escapeSQL(columnsToJSON(candidateColumns)) + "');");
+                       escapeSQL(columnsToJSON(candidateColumns)) + "', " +
+                       std::to_string(tableSize) + ");");
             }
             txn.commit();
           }
@@ -510,14 +526,21 @@ public:
                 determinePKStrategy(pkColumns, candidateColumns);
             bool hasPK = !pkColumns.empty();
 
+            // NUEVO: Obtener tamaño de la tabla para ordenamiento
+            long long tableSize = getTableSizeMSSQL(dbc, schemaName, tableName);
+
+            Logger::info(LogCategory::DATABASE, "Table size for " + schemaName +
+                                                    "." + tableName + ": " +
+                                                    std::to_string(tableSize));
+
             pqxx::work txn(pgConn);
             // Verificar si la tabla ya existe (sin importar connection_string)
-            auto existingCheck =
-                txn.exec("SELECT last_sync_column, pk_columns, pk_strategy, "
-                         "has_pk, candidate_columns FROM metadata.catalog "
-                         "WHERE schema_name='" +
-                         escapeSQL(schemaName) + "' AND table_name='" +
-                         escapeSQL(tableName) + "' AND db_engine='MSSQL';");
+            auto existingCheck = txn.exec(
+                "SELECT last_sync_column, pk_columns, pk_strategy, "
+                "has_pk, candidate_columns, table_size FROM metadata.catalog "
+                "WHERE schema_name='" +
+                escapeSQL(schemaName) + "' AND table_name='" +
+                escapeSQL(tableName) + "' AND db_engine='MSSQL';");
 
             if (!existingCheck.empty()) {
               // Tabla ya existe, verificar si timeColumn cambió
@@ -581,6 +604,13 @@ public:
                 needsUpdate = true;
               }
 
+              // NUEVO: Actualizar table_size siempre para mantenerlo
+              // sincronizado
+              if (needsUpdate)
+                updateQuery += ", ";
+              updateQuery += "table_size = " + std::to_string(tableSize);
+              needsUpdate = true;
+
               if (needsUpdate) {
                 updateQuery += " WHERE schema_name='" + escapeSQL(schemaName) +
                                "' AND table_name='" + escapeSQL(tableName) +
@@ -593,7 +623,7 @@ public:
                        "(schema_name, table_name, cluster_name, db_engine, "
                        "connection_string, last_sync_time, last_sync_column, "
                        "status, last_offset, active, pk_columns, pk_strategy, "
-                       "has_pk, candidate_columns) "
+                       "has_pk, candidate_columns, table_size) "
                        "VALUES ('" +
                        escapeSQL(schemaName) + "', '" + escapeSQL(tableName) +
                        "', '', 'MSSQL', '" + escapeSQL(connStr) +
@@ -602,7 +632,8 @@ public:
                        escapeSQL(columnsToJSON(pkColumns)) + "', '" +
                        escapeSQL(pkStrategy) + "', " +
                        std::string(hasPK ? "true" : "false") + ", '" +
-                       escapeSQL(columnsToJSON(candidateColumns)) + "');");
+                       escapeSQL(columnsToJSON(candidateColumns)) + "', " +
+                       std::to_string(tableSize) + ");");
             }
             txn.commit();
           }
@@ -706,11 +737,19 @@ public:
                 determinePKStrategy(pkColumns, candidateColumns);
             bool hasPK = !pkColumns.empty();
 
+            // NUEVO: Obtener tamaño de la tabla para ordenamiento
+            long long tableSize =
+                getTableSizePostgres(sourcePgConn, schemaName, tableName);
+
+            Logger::info(LogCategory::DATABASE, "Table size for " + schemaName +
+                                                    "." + tableName + ": " +
+                                                    std::to_string(tableSize));
+
             pqxx::work txn(pgConn);
             // Check if table already exists
             auto existingCheck = txn.exec(
                 "SELECT last_sync_column, pk_columns, pk_strategy, has_pk, "
-                "candidate_columns FROM metadata.catalog "
+                "candidate_columns, table_size FROM metadata.catalog "
                 "WHERE schema_name='" +
                 escapeSQL(schemaName) + "' AND table_name='" +
                 escapeSQL(tableName) + "' AND db_engine='PostgreSQL';");
@@ -777,6 +816,13 @@ public:
                 needsUpdate = true;
               }
 
+              // NUEVO: Actualizar table_size siempre para mantenerlo
+              // sincronizado
+              if (needsUpdate)
+                updateQuery += ", ";
+              updateQuery += "table_size = " + std::to_string(tableSize);
+              needsUpdate = true;
+
               if (needsUpdate) {
                 updateQuery += " WHERE schema_name='" + escapeSQL(schemaName) +
                                "' AND table_name='" + escapeSQL(tableName) +
@@ -789,7 +835,7 @@ public:
                        "(schema_name, table_name, cluster_name, db_engine, "
                        "connection_string, last_sync_time, last_sync_column, "
                        "status, last_offset, active, pk_columns, pk_strategy, "
-                       "has_pk, candidate_columns) "
+                       "has_pk, candidate_columns, table_size) "
                        "VALUES ('" +
                        escapeSQL(schemaName) + "', '" + escapeSQL(tableName) +
                        "', '', 'PostgreSQL', '" + escapeSQL(connStr) +
@@ -798,7 +844,8 @@ public:
                        escapeSQL(columnsToJSON(pkColumns)) + "', '" +
                        escapeSQL(pkStrategy) + "', " +
                        std::string(hasPK ? "true" : "false") + ", '" +
-                       escapeSQL(columnsToJSON(candidateColumns)) + "');");
+                       escapeSQL(columnsToJSON(candidateColumns)) + "', " +
+                       std::to_string(tableSize) + ");");
             }
             txn.commit();
           }
@@ -819,6 +866,95 @@ public:
 
 private:
   // NUEVAS FUNCIONES PARA DETECCIÓN DE PK Y COLUMNAS CANDIDATAS
+  // NUEVAS FUNCIONES PARA OBTENER TAMAÑO DE TABLAS
+
+  long long getTableSizeMariaDB(MYSQL *conn, const std::string &schema,
+                                const std::string &table) {
+    try {
+      std::string query = "SELECT COUNT(*) FROM `" + escapeSQL(schema) + "`.`" +
+                          escapeSQL(table) + "`;";
+
+      Logger::info(LogCategory::DATABASE, "getTableSizeMariaDB",
+                   "Executing query: " + query);
+
+      auto results = executeQueryMariaDB(conn, query);
+
+      Logger::info(LogCategory::DATABASE, "getTableSizeMariaDB",
+                   "Query returned " + std::to_string(results.size()) +
+                       " rows");
+      if (!results.empty() && !results[0].empty() && !results[0][0].empty()) {
+        try {
+          std::string rowsStr = results[0][0];
+          Logger::info(LogCategory::DATABASE, "getTableSizeMariaDB",
+                       "Raw TABLE_ROWS value: '" + rowsStr + "'");
+          if (rowsStr == "NULL" || rowsStr.empty()) {
+            Logger::info(LogCategory::DATABASE, "getTableSizeMariaDB",
+                         "TABLE_ROWS is NULL or empty, returning 0");
+            return 0;
+          }
+          long long size = std::stoll(rowsStr);
+          Logger::info(LogCategory::DATABASE, "getTableSizeMariaDB",
+                       "Parsed table size: " + std::to_string(size));
+          return size;
+        } catch (...) {
+          Logger::error(LogCategory::DATABASE, "getTableSizeMariaDB",
+                        "Failed to parse TABLE_ROWS value: '" + results[0][0] +
+                            "'");
+          return 0;
+        }
+      }
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::DATABASE, "getTableSizeMariaDB",
+                    "Error getting table size: " + std::string(e.what()));
+    }
+    return 0;
+  }
+
+  long long getTableSizeMSSQL(SQLHDBC conn, const std::string &schema,
+                              const std::string &table) {
+    try {
+      std::string query = "SELECT COUNT(*) FROM [" + escapeSQL(schema) + "].[" +
+                          escapeSQL(table) + "];";
+
+      auto results = executeQueryMSSQL(conn, query);
+      if (!results.empty() && !results[0].empty() && !results[0][0].empty()) {
+        try {
+          std::string rowsStr = results[0][0];
+          if (rowsStr == "NULL" || rowsStr.empty()) {
+            return 0;
+          }
+          return std::stoll(rowsStr);
+        } catch (...) {
+          return 0;
+        }
+      }
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::DATABASE, "getTableSizeMSSQL",
+                    "Error getting table size: " + std::string(e.what()));
+    }
+    return 0;
+  }
+
+  long long getTableSizePostgres(pqxx::connection &conn,
+                                 const std::string &schema,
+                                 const std::string &table) {
+    try {
+      std::string query = "SELECT COUNT(*) FROM \"" + escapeSQL(schema) +
+                          "\".\"" + escapeSQL(table) + "\";";
+
+      pqxx::work txn(conn);
+      auto results = txn.exec(query);
+      txn.commit();
+
+      if (!results.empty() && !results[0][0].is_null()) {
+        return results[0][0].as<long long>();
+      }
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::DATABASE, "getTableSizePostgres",
+                    "Error getting table size: " + std::string(e.what()));
+    }
+    return 0;
+  }
 
   std::vector<std::string> detectPrimaryKeyColumns(MYSQL *conn,
                                                    const std::string &schema,
