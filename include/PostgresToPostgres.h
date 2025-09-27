@@ -7,51 +7,32 @@
 #include <mutex>
 #include <pqxx/pqxx>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 class PostgresToPostgres {
 private:
-  std::unique_ptr<pqxx::connection> postgresConn = nullptr;
-  std::string currentConnectionString;
-  std::mutex connectionMutex;
-
 public:
   PostgresToPostgres() = default;
-  ~PostgresToPostgres() {
-    if (postgresConn) {
-      postgresConn.reset();
-    }
-  }
+
+  static std::unordered_map<std::string, std::string> dataTypeMap;
+  ~PostgresToPostgres() = default;
 
   pqxx::connection *getPostgresConnection(const std::string &connectionString) {
-    std::lock_guard<std::mutex> lock(connectionMutex);
-
-    // Si ya tenemos una conexión para esta connection string, la reutilizamos
-    if (postgresConn && currentConnectionString == connectionString) {
-      return postgresConn.get();
-    }
-
-    // Si tenemos una conexión diferente, la cerramos
-    if (postgresConn) {
-      postgresConn.reset();
-    }
-
-    // Crear nueva conexión
+    // Crear nueva conexión directa para cada consulta
     try {
-      postgresConn = std::make_unique<pqxx::connection>(connectionString);
-      if (postgresConn->is_open()) {
-        currentConnectionString = connectionString;
-        return postgresConn.get();
+      auto *conn = new pqxx::connection(connectionString);
+      if (conn->is_open()) {
+        return conn;
       } else {
         Logger::error(LogCategory::TRANSFER,
                       "Failed to open PostgreSQL connection");
-        postgresConn.reset();
+        delete conn;
         return nullptr;
       }
     } catch (const std::exception &e) {
       Logger::error(LogCategory::TRANSFER,
                     "Connection failed: " + std::string(e.what()));
-      postgresConn.reset();
       return nullptr;
     }
   }
@@ -763,12 +744,6 @@ private:
           selectQuery += " LIMIT " + std::to_string(CHUNK_SIZE) + ";";
         } else {
           // FALLBACK: Usar OFFSET pagination para tablas sin PK
-          size_t currentOffset = 0;
-          try {
-            currentOffset = std::stoul(lastOffset);
-          } catch (...) {
-            currentOffset = 0;
-          }
           selectQuery += " LIMIT " + std::to_string(CHUNK_SIZE) + " OFFSET " +
                          std::to_string(totalProcessed) + ";";
         }
@@ -1762,17 +1737,64 @@ private:
     std::transform(upperType.begin(), upperType.end(), upperType.begin(),
                    ::toupper);
 
-    if (cleanValue.empty()) {
-      return "NULL";
-    }
+    // Detectar valores NULL de PostgreSQL - SIMPLIFICADO
+    bool isNull =
+        (cleanValue.empty() || cleanValue == "NULL" || cleanValue == "null" ||
+         cleanValue == "\\N" || cleanValue == "\\0" || cleanValue == "0" ||
+         cleanValue.find("0000-") != std::string::npos ||
+         cleanValue.find("1900-01-01") != std::string::npos ||
+         cleanValue.find("1970-01-01") != std::string::npos);
 
-    // Limpiar caracteres de control
+    // Limpiar caracteres de control y caracteres problemáticos
     for (char &c : cleanValue) {
-      if (static_cast<unsigned char>(c) > 127) {
-        c = '?';
+      if (static_cast<unsigned char>(c) > 127 || c < 32) {
+        isNull = true;
+        break;
       }
     }
 
+    // Para fechas, cualquier valor que no sea una fecha válida = NULL
+    if (upperType.find("TIMESTAMP") != std::string::npos ||
+        upperType.find("DATETIME") != std::string::npos ||
+        upperType.find("DATE") != std::string::npos) {
+      if (cleanValue.length() < 10 ||
+          cleanValue.find("-") == std::string::npos ||
+          cleanValue.find("0000") != std::string::npos) {
+        isNull = true;
+      }
+    }
+
+    // Si es NULL, generar valor por defecto en lugar de NULL
+    if (isNull) {
+      if (upperType.find("INTEGER") != std::string::npos ||
+          upperType.find("BIGINT") != std::string::npos ||
+          upperType.find("SMALLINT") != std::string::npos) {
+        return "0"; // Valor por defecto para enteros
+      } else if (upperType.find("REAL") != std::string::npos ||
+                 upperType.find("FLOAT") != std::string::npos ||
+                 upperType.find("DOUBLE") != std::string::npos ||
+                 upperType.find("NUMERIC") != std::string::npos) {
+        return "0.0"; // Valor por defecto para números decimales
+      } else if (upperType.find("VARCHAR") != std::string::npos ||
+                 upperType.find("TEXT") != std::string::npos ||
+                 upperType.find("CHAR") != std::string::npos) {
+        return "DEFAULT"; // Valor por defecto para texto
+      } else if (upperType.find("TIMESTAMP") != std::string::npos ||
+                 upperType.find("DATETIME") != std::string::npos) {
+        return "1970-01-01 00:00:00"; // Valor por defecto para fechas
+      } else if (upperType.find("DATE") != std::string::npos) {
+        return "1970-01-01"; // Valor por defecto para fechas
+      } else if (upperType.find("TIME") != std::string::npos) {
+        return "00:00:00"; // Valor por defecto para tiempo
+      } else if (upperType.find("BOOLEAN") != std::string::npos ||
+                 upperType.find("BOOL") != std::string::npos) {
+        return "false"; // Valor por defecto para booleanos
+      } else {
+        return "DEFAULT"; // Valor por defecto genérico
+      }
+    }
+
+    // Limpiar caracteres de control restantes
     cleanValue.erase(std::remove_if(cleanValue.begin(), cleanValue.end(),
                                     [](unsigned char c) {
                                       return c < 32 && c != 9 && c != 10 &&
@@ -1791,30 +1813,11 @@ private:
         cleanValue = "true";
       }
     } else if (upperType.find("BIT") != std::string::npos) {
-      if (cleanValue == "0" || cleanValue == "false" || cleanValue == "FALSE" ||
-          cleanValue.empty()) {
-        return "NULL";
+      if (cleanValue == "0" || cleanValue == "false" || cleanValue == "FALSE") {
+        cleanValue = "false";
       } else if (cleanValue == "1" || cleanValue == "true" ||
                  cleanValue == "TRUE") {
-        cleanValue = "1";
-      } else {
-        return "NULL";
-      }
-    } else if (upperType.find("TIMESTAMP") != std::string::npos ||
-               upperType.find("DATETIME") != std::string::npos ||
-               upperType.find("DATE") != std::string::npos) {
-      // Convertir fechas inválidas a NULL para PostgreSQL
-      if (cleanValue == "0000-00-00 00:00:00" || cleanValue == "0000-00-00" ||
-          cleanValue == "0000-01-01" || cleanValue == "0000-01-01 00:00:00") {
-        return "NULL";
-      } else if (cleanValue.find("0000-00-00") != std::string::npos) {
-        return "NULL";
-      } else if (cleanValue.find("0000-01-01") != std::string::npos) {
-        return "NULL";
-      } else if (cleanValue.find("-00 00:00:00") != std::string::npos) {
-        return "NULL";
-      } else if (cleanValue.find("-00") != std::string::npos) {
-        return "NULL";
+        cleanValue = "true";
       }
     }
 
@@ -1903,5 +1906,57 @@ private:
     return conflictClause;
   }
 };
+
+// Definición de variables estáticas
+std::unordered_map<std::string, std::string> PostgresToPostgres::dataTypeMap = {
+    {"int4", "INTEGER"},
+    {"int8", "BIGINT"},
+    {"int2", "SMALLINT"},
+    {"serial", "INTEGER"},
+    {"bigserial", "BIGINT"},
+    {"smallserial", "SMALLINT"},
+    {"numeric", "NUMERIC"},
+    {"decimal", "NUMERIC"},
+    {"real", "REAL"},
+    {"float4", "REAL"},
+    {"double precision", "DOUBLE PRECISION"},
+    {"float8", "DOUBLE PRECISION"},
+    {"money", "NUMERIC(19,4)"},
+    {"varchar", "VARCHAR"},
+    {"character varying", "VARCHAR"},
+    {"char", "CHAR"},
+    {"character", "CHAR"},
+    {"text", "TEXT"},
+    {"bytea", "BYTEA"},
+    {"timestamp", "TIMESTAMP"},
+    {"timestamp without time zone", "TIMESTAMP"},
+    {"timestamp with time zone", "TIMESTAMP WITH TIME ZONE"},
+    {"timestamptz", "TIMESTAMP WITH TIME ZONE"},
+    {"date", "DATE"},
+    {"time", "TIME"},
+    {"time without time zone", "TIME"},
+    {"time with time zone", "TIME WITH TIME ZONE"},
+    {"timetz", "TIME WITH TIME ZONE"},
+    {"interval", "INTERVAL"},
+    {"boolean", "BOOLEAN"},
+    {"bool", "BOOLEAN"},
+    {"bit", "BIT"},
+    {"bit varying", "BIT VARYING"},
+    {"varbit", "BIT VARYING"},
+    {"uuid", "UUID"},
+    {"xml", "TEXT"},
+    {"json", "JSON"},
+    {"jsonb", "JSONB"},
+    {"array", "TEXT"},
+    {"inet", "INET"},
+    {"cidr", "CIDR"},
+    {"macaddr", "MACADDR"},
+    {"point", "POINT"},
+    {"line", "LINE"},
+    {"lseg", "LSEG"},
+    {"box", "BOX"},
+    {"path", "PATH"},
+    {"polygon", "POLYGON"},
+    {"circle", "CIRCLE"}};
 
 #endif // POSTGRESTOPOSTGRES_H
