@@ -61,7 +61,6 @@ export interface DashboardStats {
     [engine: string]: {
       recordsPerSecond: number;
       bytesTransferred: number;
-      avgLatencyMs: number;
       cpuUsage: number;
       memoryUsed: number;
       iops: number;

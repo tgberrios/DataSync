@@ -13,13 +13,13 @@ void MetricsCollector::collectAllMetrics() {
     collectPerformanceMetrics();
     collectMetadataMetrics();
     collectTimestampMetrics();
-    collectLatencyMetrics();
     saveMetricsToDatabase();
     generateMetricsReport();
 
     Logger::info(LogCategory::METRICS, "Metrics collection completed");
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::METRICS, "Error in metrics collection: " + std::string(e.what()));
+    Logger::error(LogCategory::METRICS,
+                  "Error in metrics collection: " + std::string(e.what()));
   }
 }
 
@@ -38,12 +38,6 @@ void MetricsCollector::createMetricsTable() {
         "bytes_transferred BIGINT,"
         "memory_used_mb DECIMAL(15,2),"
         "io_operations_per_second INTEGER,"
-        "avg_latency_ms DECIMAL(10,2),"
-        "min_latency_ms DECIMAL(10,2),"
-        "max_latency_ms DECIMAL(10,2),"
-        "p95_latency_ms DECIMAL(10,2),"
-        "p99_latency_ms DECIMAL(10,2),"
-        "latency_samples INTEGER,"
         "transfer_type VARCHAR(20),"
         "status VARCHAR(20),"
         "error_message TEXT,"
@@ -68,9 +62,11 @@ void MetricsCollector::createMetricsTable() {
     txn.exec(createIndexesSQL);
     txn.commit();
 
-    Logger::info(LogCategory::METRICS, "Transfer metrics table created successfully");
+    Logger::info(LogCategory::METRICS,
+                 "Transfer metrics table created successfully");
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::METRICS, "Error creating metrics table: " + std::string(e.what()));
+    Logger::error(LogCategory::METRICS,
+                  "Error creating metrics table: " + std::string(e.what()));
   }
 }
 
@@ -117,12 +113,6 @@ void MetricsCollector::collectTransferMetrics() {
       metric.bytes_transferred = tableSizeBytes;
       metric.memory_used_mb = tableSizeBytes / (1024.0 * 1024.0);
       metric.io_operations_per_second = 0;
-      metric.avg_latency_ms = 0.0;
-      metric.min_latency_ms = 0.0;
-      metric.max_latency_ms = 0.0;
-      metric.p95_latency_ms = 0.0;
-      metric.p99_latency_ms = 0.0;
-      metric.latency_samples = 0;
 
       if (status == "full_load") {
         metric.transfer_type = "FULL_LOAD";
@@ -155,10 +145,11 @@ void MetricsCollector::collectTransferMetrics() {
     }
 
     Logger::info(LogCategory::METRICS, "Collected transfer metrics for " +
-                 std::to_string(metrics.size()) + " tables");
+                                           std::to_string(metrics.size()) +
+                                           " tables");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::METRICS, "Error collecting transfer metrics: " +
-                  std::string(e.what()));
+                                            std::string(e.what()));
   }
 }
 
@@ -208,8 +199,9 @@ void MetricsCollector::collectPerformanceMetrics() {
 
     Logger::info(LogCategory::METRICS, "Collected performance metrics");
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::METRICS, "Error collecting performance metrics: " +
-                  std::string(e.what()));
+    Logger::error(LogCategory::METRICS,
+                  "Error collecting performance metrics: " +
+                      std::string(e.what()));
   }
 }
 
@@ -269,7 +261,7 @@ void MetricsCollector::collectMetadataMetrics() {
     Logger::info(LogCategory::METRICS, "Collected metadata metrics");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::METRICS, "Error collecting metadata metrics: " +
-                  std::string(e.what()));
+                                            std::string(e.what()));
   }
 }
 
@@ -307,65 +299,7 @@ void MetricsCollector::collectTimestampMetrics() {
     Logger::info(LogCategory::METRICS, "Collected timestamp metrics");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::METRICS, "Error collecting timestamp metrics: " +
-                  std::string(e.what()));
-  }
-}
-
-void MetricsCollector::collectLatencyMetrics() {
-  try {
-    pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
-    pqxx::work txn(conn);
-
-    for (auto &metric : metrics) {
-      std::string latencyQuery = "SELECT "
-                                 "EXTRACT(EPOCH FROM (completed_at - "
-                                 "started_at)) * 1000 as latency_ms "
-                                 "FROM metadata.transfer_metrics "
-                                 "WHERE schema_name = $1 "
-                                 "AND table_name = $2 "
-                                 "AND db_engine = $3 "
-                                 "AND completed_at IS NOT NULL "
-                                 "AND started_at IS NOT NULL "
-                                 "ORDER BY created_at DESC LIMIT 100;";
-
-      auto result = txn.exec_params(latencyQuery, metric.schema_name,
-                                    metric.table_name, metric.db_engine);
-
-      std::vector<double> latencySamples;
-      for (const auto &row : result) {
-        if (!row[0].is_null()) {
-          double latency = row[0].as<double>();
-          if (latency > 0) {
-            latencySamples.push_back(latency);
-          }
-        }
-      }
-
-      if (!latencySamples.empty()) {
-        std::sort(latencySamples.begin(), latencySamples.end());
-
-        metric.latency_samples = latencySamples.size();
-        metric.avg_latency_ms =
-            std::accumulate(latencySamples.begin(), latencySamples.end(), 0.0) /
-            latencySamples.size();
-        metric.min_latency_ms = latencySamples.front();
-        metric.max_latency_ms = latencySamples.back();
-        metric.p95_latency_ms = calculatePercentile(latencySamples, 95.0);
-        metric.p99_latency_ms = calculatePercentile(latencySamples, 99.0);
-      } else {
-        metric.latency_samples = 0;
-        metric.avg_latency_ms = 0.0;
-        metric.min_latency_ms = 0.0;
-        metric.max_latency_ms = 0.0;
-        metric.p95_latency_ms = 0.0;
-        metric.p99_latency_ms = 0.0;
-      }
-    }
-
-    txn.commit();
-    Logger::info(LogCategory::METRICS, "Collected latency metrics");
-  } catch (const std::exception &e) {
-    Logger::error(LogCategory::METRICS, "Error collecting latency metrics: " + std::string(e.what()));
+                                            std::string(e.what()));
   }
 }
 
@@ -379,25 +313,16 @@ void MetricsCollector::saveMetricsToDatabase() {
         "schema_name, table_name, db_engine,"
         "records_transferred, bytes_transferred, memory_used_mb, "
         "io_operations_per_second,"
-        "avg_latency_ms, min_latency_ms, max_latency_ms, "
-        "p95_latency_ms, p99_latency_ms, latency_samples,"
         "transfer_type, status, error_message,"
         "started_at, completed_at"
         ") VALUES ("
-        "$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, "
-        "$16, $17, $18"
+        "$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12"
         ") ON CONFLICT (schema_name, table_name, db_engine, "
         "created_date) DO UPDATE SET "
         "records_transferred = EXCLUDED.records_transferred,"
         "bytes_transferred = EXCLUDED.bytes_transferred,"
         "memory_used_mb = EXCLUDED.memory_used_mb,"
         "io_operations_per_second = EXCLUDED.io_operations_per_second,"
-        "avg_latency_ms = EXCLUDED.avg_latency_ms,"
-        "min_latency_ms = EXCLUDED.min_latency_ms,"
-        "max_latency_ms = EXCLUDED.max_latency_ms,"
-        "p95_latency_ms = EXCLUDED.p95_latency_ms,"
-        "p99_latency_ms = EXCLUDED.p99_latency_ms,"
-        "latency_samples = EXCLUDED.latency_samples,"
         "transfer_type = EXCLUDED.transfer_type,"
         "status = EXCLUDED.status,"
         "error_message = EXCLUDED.error_message,"
@@ -409,8 +334,6 @@ void MetricsCollector::saveMetricsToDatabase() {
           insertQuery, metric.schema_name, metric.table_name, metric.db_engine,
           metric.records_transferred, metric.bytes_transferred,
           metric.memory_used_mb, metric.io_operations_per_second,
-          metric.avg_latency_ms, metric.min_latency_ms, metric.max_latency_ms,
-          metric.p95_latency_ms, metric.p99_latency_ms, metric.latency_samples,
           metric.transfer_type, metric.status,
           metric.error_message.empty() ? nullptr : metric.error_message.c_str(),
           metric.started_at.empty() ? nullptr : metric.started_at.c_str(),
@@ -418,10 +341,12 @@ void MetricsCollector::saveMetricsToDatabase() {
     }
 
     txn.commit();
-    Logger::info(LogCategory::METRICS, "Saved " + std::to_string(metrics.size()) +
-                 " metrics to database");
+    Logger::info(LogCategory::METRICS, "Saved " +
+                                           std::to_string(metrics.size()) +
+                                           " metrics to database");
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::METRICS, "Error saving metrics to database: " + std::string(e.what()));
+    Logger::error(LogCategory::METRICS,
+                  "Error saving metrics to database: " + std::string(e.what()));
   }
 }
 
@@ -439,12 +364,7 @@ void MetricsCollector::generateMetricsReport() {
         "SUM(records_transferred) as total_records_transferred,"
         "SUM(bytes_transferred) as total_bytes_transferred,"
         "AVG(memory_used_mb) as avg_memory_used_mb,"
-        "SUM(io_operations_per_second) as total_io_operations,"
-        "AVG(avg_latency_ms) as avg_latency_ms,"
-        "MIN(min_latency_ms) as min_latency_ms,"
-        "MAX(max_latency_ms) as max_latency_ms,"
-        "AVG(p95_latency_ms) as avg_p95_latency_ms,"
-        "AVG(p99_latency_ms) as avg_p99_latency_ms "
+        "SUM(io_operations_per_second) as total_io_operations "
         "FROM metadata.transfer_metrics "
         "WHERE created_at >= CURRENT_DATE;";
 
@@ -462,14 +382,10 @@ void MetricsCollector::generateMetricsReport() {
       double avgMemoryUsed = row[6].is_null() ? 0.0 : row[6].as<double>();
       long long totalIOOperations =
           row[7].is_null() ? 0 : row[7].as<long long>();
-      double avgLatency = row[8].is_null() ? 0.0 : row[8].as<double>();
-      double minLatency = row[9].is_null() ? 0.0 : row[9].as<double>();
-      double maxLatency = row[10].is_null() ? 0.0 : row[10].as<double>();
-      double avgP95Latency = row[11].is_null() ? 0.0 : row[11].as<double>();
-      double avgP99Latency = row[12].is_null() ? 0.0 : row[12].as<double>();
     }
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::METRICS, "Error generating metrics report: " + std::string(e.what()));
+    Logger::error(LogCategory::METRICS,
+                  "Error generating metrics report: " + std::string(e.what()));
   }
 }
 
@@ -522,40 +438,10 @@ MetricsCollector::calculateBytesTransferred(const std::string &schema_name,
       return result[0][0].as<long long>();
     }
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::METRICS, "Error calculating bytes transferred: " +
-                  std::string(e.what()));
+    Logger::error(LogCategory::METRICS,
+                  "Error calculating bytes transferred: " +
+                      std::string(e.what()));
   }
 
   return 0;
-}
-
-double MetricsCollector::calculatePercentile(const std::vector<double> &values,
-                                             double percentile) {
-  if (values.empty())
-    return 0.0;
-
-  size_t index =
-      static_cast<size_t>((percentile / 100.0) * (values.size() - 1));
-  return values[index];
-}
-
-void MetricsCollector::measureQueryLatency(const std::string &query,
-                                           double &latency_ms) {
-  try {
-    pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
-    pqxx::work txn(conn);
-
-    auto start = std::chrono::high_resolution_clock::now();
-    txn.exec(query);
-    auto end = std::chrono::high_resolution_clock::now();
-
-    auto duration =
-        std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    latency_ms = duration.count() / 1000.0;
-
-    txn.commit();
-  } catch (const std::exception &e) {
-    Logger::error(LogCategory::METRICS, "Error measuring query latency: " + std::string(e.what()));
-    latency_ms = 0.0;
-  }
 }

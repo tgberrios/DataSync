@@ -221,7 +221,6 @@ app.get("/api/dashboard/stats", async (req, res) => {
         COUNT(*) FILTER (WHERE status = 'PROCESSING' AND completed_at IS NULL) as active_transfers,
         ROUND(AVG(memory_used_mb)::numeric, 2) as avg_memory_used,
         ROUND(AVG(io_operations_per_second)::numeric, 2) as avg_iops,
-        ROUND(AVG(avg_latency_ms)::numeric, 2) as avg_latency,
         SUM(bytes_transferred) as total_bytes
       FROM metadata.transfer_metrics
       WHERE created_at > NOW() - INTERVAL '5 minutes'
@@ -405,7 +404,6 @@ app.get("/api/dashboard/stats", async (req, res) => {
       stats.engineMetrics[metric.db_engine] = {
         recordsPerSecond: 0,
         bytesTransferred: parseFloat(metric.total_bytes),
-        avgLatencyMs: parseFloat(metric.avg_latency),
         cpuUsage: 0,
         memoryUsed: parseFloat(metric.avg_memory_used),
         iops: parseFloat(metric.avg_iops),
