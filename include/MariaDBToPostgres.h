@@ -115,14 +115,14 @@ public:
       auto results = txn.exec(
           "SELECT schema_name, table_name, cluster_name, db_engine, "
           "connection_string, last_sync_time, last_sync_column, "
-          "status, last_offset "
+          "status, last_offset, table_size "
           "FROM metadata.catalog "
           "WHERE active=true AND db_engine='MariaDB' AND status != 'NO_DATA' "
-          "ORDER BY schema_name, table_name;");
+          "ORDER BY table_size ASC, schema_name, table_name;");
       txn.commit();
 
       for (const auto &row : results) {
-        if (row.size() < 9)
+        if (row.size() < 10)
           continue;
 
         TableInfo t;

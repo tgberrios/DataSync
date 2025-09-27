@@ -52,9 +52,11 @@ public:
       }
 
       pqxx::work txn(pgConn);
-      auto results = txn.exec("SELECT schema_name, table_name, "
-                              "connection_string, status FROM metadata.catalog "
-                              "WHERE db_engine='PostgreSQL' AND active=true;");
+      auto results = txn.exec(
+          "SELECT schema_name, table_name, "
+          "connection_string, status, table_size FROM metadata.catalog "
+          "WHERE db_engine='PostgreSQL' AND active=true "
+          "ORDER BY table_size ASC, schema_name, table_name;");
 
       Logger::info(LogCategory::TRANSFER,
                    "PostgreSQL catalog query executed - found " +
@@ -67,7 +69,7 @@ public:
           std::tuple<std::string, std::string, std::string, std::string>>
           tables;
       for (const auto &row : results) {
-        if (row.size() < 4)
+        if (row.size() < 5)
           continue;
         tables.emplace_back(row[0].as<std::string>(), // schema_name
                             row[1].as<std::string>(), // table_name
@@ -464,10 +466,133 @@ private:
 
       if (lastOffsetNum >= sourceCount) {
         updateStatus(pgConn, schemaName, tableName, "PERFECT_MATCH",
-                     targetCount);
+                     sourceCount);
+
+        // OPTIMIZED: Update last_processed_pk for PERFECT_MATCH tables
+        std::string pkStrategy =
+            getPKStrategyFromCatalog(pgConn, schemaName, tableName);
+        std::vector<std::string> pkColumns =
+            getPKColumnsFromCatalog(pgConn, schemaName, tableName);
+
+        if (pkStrategy == "PK" && !pkColumns.empty()) {
+          try {
+            // Obtener el último PK de la tabla para marcar como
+            // completamente procesada
+            std::string maxPKQuery = "SELECT ";
+            for (size_t i = 0; i < pkColumns.size(); ++i) {
+              if (i > 0)
+                maxPKQuery += ", ";
+              maxPKQuery += "\"" + pkColumns[i] + "\"";
+            }
+            maxPKQuery +=
+                " FROM \"" + schemaName + "\".\"" + tableName + "\" ORDER BY ";
+            for (size_t i = 0; i < pkColumns.size(); ++i) {
+              if (i > 0)
+                maxPKQuery += ", ";
+              maxPKQuery += "\"" + pkColumns[i] + "\"";
+            }
+            maxPKQuery += " DESC LIMIT 1;";
+
+            pqxx::work sourceTxn(*sourceConn);
+            auto maxPKResults = sourceTxn.exec(maxPKQuery);
+            sourceTxn.commit();
+
+            if (!maxPKResults.empty() && !maxPKResults[0].empty()) {
+              std::string lastPK;
+              for (size_t i = 0; i < maxPKResults[0].size(); ++i) {
+                if (i > 0)
+                  lastPK += "|";
+                lastPK += maxPKResults[0][i].is_null()
+                              ? "NULL"
+                              : maxPKResults[0][i].as<std::string>();
+              }
+
+              updateLastProcessedPK(pgConn, schemaName, tableName, lastPK);
+              Logger::info(LogCategory::TRANSFER,
+                           "Updated last_processed_pk to " + lastPK +
+                               " for PERFECT_MATCH table " + schemaName + "." +
+                               tableName);
+            }
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::TRANSFER,
+                          "ERROR: Failed to update last_processed_pk for "
+                          "PERFECT_MATCH table " +
+                              schemaName + "." + tableName + ": " +
+                              std::string(e.what()));
+          }
+        }
       } else {
         updateStatus(pgConn, schemaName, tableName, "LISTENING_CHANGES",
-                     targetCount);
+                     sourceCount);
+
+        // Actualizar last_processed_pk para tablas ya sincronizadas
+        std::string pkStrategy =
+            getPKStrategyFromCatalog(pgConn, schemaName, tableName);
+        std::vector<std::string> pkColumns =
+            getPKColumnsFromCatalog(pgConn, schemaName, tableName);
+
+        if (pkStrategy == "PK" && !pkColumns.empty()) {
+          try {
+            // Obtener el último PK de la tabla para marcar como procesada
+            std::string maxPKQuery = "SELECT ";
+            for (size_t i = 0; i < pkColumns.size(); ++i) {
+              if (i > 0)
+                maxPKQuery += ", ";
+              maxPKQuery += "\"" + pkColumns[i] + "\"";
+            }
+            maxPKQuery +=
+                " FROM \"" + schemaName + "\".\"" + tableName + "\" ORDER BY ";
+            for (size_t i = 0; i < pkColumns.size(); ++i) {
+              if (i > 0)
+                maxPKQuery += ", ";
+              maxPKQuery += "\"" + pkColumns[i] + "\"";
+            }
+            maxPKQuery += " DESC LIMIT 1;";
+
+            pqxx::work sourceTxn(*sourceConn);
+            auto maxPKResults = sourceTxn.exec(maxPKQuery);
+            sourceTxn.commit();
+
+            if (!maxPKResults.empty() && !maxPKResults[0].empty()) {
+              std::string lastPK;
+              for (size_t i = 0; i < maxPKResults[0].size(); ++i) {
+                if (i > 0)
+                  lastPK += "|";
+                lastPK += maxPKResults[0][i].is_null()
+                              ? "NULL"
+                              : maxPKResults[0][i].as<std::string>();
+              }
+
+              updateLastProcessedPK(pgConn, schemaName, tableName, lastPK);
+              Logger::info(LogCategory::TRANSFER,
+                           "Updated last_processed_pk to " + lastPK +
+                               " for synchronized table " + schemaName + "." +
+                               tableName);
+            } else {
+              Logger::warning(
+                  LogCategory::TRANSFER,
+                  "No PK data found for synchronized table " + schemaName +
+                      "." + tableName + " - maxPKResults.empty()=" +
+                      (maxPKResults.empty() ? "true" : "false") +
+                      ", first row empty=" +
+                      (!maxPKResults.empty() && maxPKResults[0].empty()
+                           ? "true"
+                           : "false"));
+            }
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::TRANSFER,
+                          "ERROR: Failed to update last_processed_pk for "
+                          "synchronized table " +
+                              schemaName + "." + tableName + ": " +
+                              std::string(e.what()));
+          }
+        } else {
+          Logger::warning(LogCategory::TRANSFER,
+                          "DEBUG: Skipping last_processed_pk update for " +
+                              schemaName + "." + tableName + " - pkStrategy: " +
+                              pkStrategy + ", pkColumns empty: " +
+                              (pkColumns.empty() ? "true" : "false"));
+        }
       }
     } else if (sourceCount < targetCount) {
       // Hay registros eliminados en el origen - procesar DELETEs por Primary
@@ -853,8 +978,7 @@ private:
         }
       }
 
-      updateStatus(pgConn, schemaName, tableName, "PERFECT_MATCH",
-                   totalProcessed);
+      updateStatus(pgConn, schemaName, tableName, "PERFECT_MATCH", sourceCount);
 
       // OPTIMIZED: Update last_processed_pk for completed transfer (even if
       // single chunk)
@@ -924,11 +1048,20 @@ private:
       pqxx::connection updateConn(
           DatabaseConfig::getPostgresConnectionString());
       pqxx::work txn(updateConn);
-      txn.exec("UPDATE metadata.catalog SET status='" + status +
-               "' "
-               "WHERE schema_name='" +
-               escapeSQL(schemaName) + "' AND table_name='" +
-               escapeSQL(tableName) + "';");
+
+      std::string updateQuery =
+          "UPDATE metadata.catalog SET status='" + status + "'";
+
+      // Actualizar last_offset para todos los status que requieren tracking
+      if (status == "FULL_LOAD" || status == "RESET" ||
+          status == "PERFECT_MATCH" || status == "LISTENING_CHANGES") {
+        updateQuery += ", last_offset='" + std::to_string(count) + "'";
+      }
+
+      updateQuery += " WHERE schema_name='" + escapeSQL(schemaName) +
+                     "' AND table_name='" + escapeSQL(tableName) + "';";
+
+      txn.exec(updateQuery);
       txn.commit();
     } catch (const std::exception &e) {
       Logger::error(LogCategory::TRANSFER, "updateStatus",
