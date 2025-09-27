@@ -79,3 +79,6 @@ Mes 8: Optimización y features adicionales
 - **Deployment**: Docker + Kubernetes
 
 ¿Quieres que detalle alguna parte específica o que prepare un plan de desarrollo?
+
+
+metodo de recuperacion
