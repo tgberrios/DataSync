@@ -209,7 +209,9 @@ app.get("/api/dashboard/stats", async (req, res) => {
       currentProcessingTable.rows.length > 0
         ? `${currentProcessingTable.rows[0].schema_name}.${
             currentProcessingTable.rows[0].table_name
-          } (${currentProcessingTable.rows[0].last_offset || 0} records)`
+          } [${currentProcessingTable.rows[0].db_engine}] (${
+            currentProcessingTable.rows[0].last_offset || 0
+          } records) - Status: ${currentProcessingTable.rows[0].status}`
         : "No active transfers";
 
     // 2. TRANSFER PERFORMANCE BY ENGINE

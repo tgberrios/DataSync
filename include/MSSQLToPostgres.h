@@ -22,24 +22,9 @@
 
 class MSSQLToPostgres {
 private:
-  SQLHENV mssqlEnv = nullptr;
-  SQLHDBC mssqlConn = nullptr;
-  std::string currentConnectionString;
-  std::mutex connectionMutex;
-
 public:
   MSSQLToPostgres() = default;
-  ~MSSQLToPostgres() {
-    if (mssqlConn) {
-      SQLDisconnect(mssqlConn);
-      SQLFreeHandle(SQL_HANDLE_DBC, mssqlConn);
-      mssqlConn = nullptr;
-    }
-    if (mssqlEnv) {
-      SQLFreeHandle(SQL_HANDLE_ENV, mssqlEnv);
-      mssqlEnv = nullptr;
-    }
-  }
+  ~MSSQLToPostgres() = default;
 
   static std::unordered_map<std::string, std::string> dataTypeMap;
   static std::unordered_map<std::string, std::string> collationMap;
@@ -57,8 +42,6 @@ public:
   };
 
   SQLHDBC getMSSQLConnection(const std::string &connectionString) {
-    std::lock_guard<std::mutex> lock(connectionMutex);
-
     // Crear nueva conexión para cada consulta para evitar "Connection is busy"
     SQLHENV tempEnv = nullptr;
     SQLHDBC tempConn = nullptr;
@@ -375,86 +358,23 @@ public:
           std::string columnDefault = col[7];
 
           std::string pgType = "TEXT";
-          if (dataType == "int") {
-            pgType = "INTEGER";
-          } else if (dataType == "bigint") {
-            pgType = "BIGINT";
-          } else if (dataType == "smallint") {
-            pgType = "SMALLINT";
-          } else if (dataType == "tinyint") {
-            pgType = "SMALLINT";
-          } else if (dataType == "bit") {
-            pgType = "BOOLEAN";
-          } else if (dataType == "decimal") {
-            // Para decimal, usar la precisión y escala de MSSQL
+          if (dataType == "decimal" || dataType == "numeric") {
+            // Para decimal/numeric, usar la precisión y escala de MSSQL
             if (!numericPrecision.empty() && numericPrecision != "NULL" &&
                 !numericScale.empty() && numericScale != "NULL") {
               pgType = "NUMERIC(" + numericPrecision + "," + numericScale + ")";
             } else {
               pgType = "NUMERIC(18,4)";
             }
-          } else if (dataType == "numeric") {
-            // Para numeric, usar la precisión y escala de MSSQL
-            if (!numericPrecision.empty() && numericPrecision != "NULL" &&
-                !numericScale.empty() && numericScale != "NULL") {
-              pgType = "NUMERIC(" + numericPrecision + "," + numericScale + ")";
-            } else {
-              pgType = "NUMERIC(18,4)";
-            }
-          } else if (dataType == "float") {
-            pgType = "REAL";
-          } else if (dataType == "real") {
-            pgType = "REAL";
-          } else if (dataType == "money") {
-            pgType = "NUMERIC(19,4)";
-          } else if (dataType == "smallmoney") {
-            pgType = "NUMERIC(10,4)";
-          } else if (dataType == "varchar") {
+          } else if (dataType == "varchar" || dataType == "nvarchar") {
             pgType =
                 (!maxLength.empty() && maxLength != "NULL" && maxLength != "-1")
                     ? "VARCHAR(" + maxLength + ")"
                     : "VARCHAR";
-          } else if (dataType == "nvarchar") {
-            pgType =
-                (!maxLength.empty() && maxLength != "NULL" && maxLength != "-1")
-                    ? "VARCHAR(" + maxLength + ")"
-                    : "VARCHAR";
-          } else if (dataType == "char") {
+          } else if (dataType == "char" || dataType == "nchar") {
             pgType = (!maxLength.empty() && maxLength != "NULL")
                          ? "CHAR(" + maxLength + ")"
                          : "CHAR(1)";
-          } else if (dataType == "nchar") {
-            pgType = (!maxLength.empty() && maxLength != "NULL")
-                         ? "CHAR(" + maxLength + ")"
-                         : "CHAR(1)";
-          } else if (dataType == "text") {
-            pgType = "TEXT";
-          } else if (dataType == "ntext") {
-            pgType = "TEXT";
-          } else if (dataType == "datetime") {
-            pgType = "TIMESTAMP";
-          } else if (dataType == "datetime2") {
-            pgType = "TIMESTAMP";
-          } else if (dataType == "smalldatetime") {
-            pgType = "TIMESTAMP";
-          } else if (dataType == "date") {
-            pgType = "DATE";
-          } else if (dataType == "time") {
-            pgType = "TIME";
-          } else if (dataType == "datetimeoffset") {
-            pgType = "TIMESTAMP WITH TIME ZONE";
-          } else if (dataType == "uniqueidentifier") {
-            pgType = "UUID";
-          } else if (dataType == "varbinary") {
-            pgType = "BYTEA";
-          } else if (dataType == "image") {
-            pgType = "BYTEA";
-          } else if (dataType == "binary") {
-            pgType = "BYTEA";
-          } else if (dataType == "xml") {
-            pgType = "TEXT";
-          } else if (dataType == "sql_variant") {
-            pgType = "TEXT";
           } else if (dataTypeMap.count(dataType)) {
             pgType = dataTypeMap[dataType];
           }
@@ -883,6 +803,7 @@ public:
 
         // Transferir datos faltantes usando CURSOR-BASED PAGINATION
         bool hasMoreData = true;
+        size_t currentOffset = 0; // Usar variable separada para OFFSET
         while (hasMoreData) {
           const size_t CHUNK_SIZE = SyncConfig::getChunkSize();
 
@@ -937,9 +858,9 @@ public:
                            std::to_string(CHUNK_SIZE) + " ROWS ONLY;";
           } else {
             // FALLBACK: Usar OFFSET pagination para tablas sin PK
-            selectQuery += " ORDER BY 1 OFFSET " + std::to_string(targetCount) +
-                           " ROWS FETCH NEXT " + std::to_string(CHUNK_SIZE) +
-                           " ROWS ONLY;";
+            selectQuery += " ORDER BY 1 OFFSET " +
+                           std::to_string(currentOffset) + " ROWS FETCH NEXT " +
+                           std::to_string(CHUNK_SIZE) + " ROWS ONLY;";
           }
 
           std::vector<std::vector<std::string>> results =
@@ -1010,12 +931,16 @@ public:
                           "Error processing data: " + std::string(e.what()));
           }
 
-          // Always update targetCount and last_offset, even if COPY failed
+          // Always update targetCount and currentOffset, even if COPY failed
           targetCount += rowsInserted;
+          currentOffset +=
+              rowsInserted; // Incrementar OFFSET para la siguiente iteración
 
           // If COPY failed but we have data, advance the offset by 1
           if (rowsInserted == 0 && !results.empty()) {
             targetCount += 1; // Advance by 1 to skip the problematic record
+            currentOffset +=
+                1; // Advance OFFSET by 1 to skip the problematic record
             Logger::info(LogCategory::TRANSFER,
                          "COPY failed, advancing offset by 1 to skip "
                          "problematic record for " +
@@ -1035,7 +960,7 @@ public:
           try {
             pqxx::work updateTxn(pgConn);
             updateTxn.exec("UPDATE metadata.catalog SET last_offset='" +
-                           std::to_string(targetCount) +
+                           std::to_string(currentOffset) +
                            "' WHERE schema_name='" + escapeSQL(schema_name) +
                            "' AND table_name='" + escapeSQL(table_name) + "';");
             updateTxn.commit();
@@ -1169,9 +1094,13 @@ public:
         lastSyncColumn = columnQuery[0][0].as<std::string>();
       }
 
-      std::string updateQuery = "UPDATE metadata.catalog SET status='" +
-                                status + "', last_offset='" +
-                                std::to_string(offset) + "'";
+      std::string updateQuery =
+          "UPDATE metadata.catalog SET status='" + status + "'";
+
+      // Solo actualizar last_offset si es mayor que el actual
+      if (offset > 0) {
+        updateQuery += ", last_offset='" + std::to_string(offset) + "'";
+      }
 
       if (!lastSyncColumn.empty()) {
 
@@ -2085,17 +2014,64 @@ private:
     std::transform(upperType.begin(), upperType.end(), upperType.begin(),
                    ::toupper);
 
-    if (cleanValue.empty()) {
-      return "NULL";
-    }
+    // Detectar valores NULL de MSSQL - SIMPLIFICADO
+    bool isNull =
+        (cleanValue.empty() || cleanValue == "NULL" || cleanValue == "null" ||
+         cleanValue == "\\N" || cleanValue == "\\0" || cleanValue == "0" ||
+         cleanValue.find("0000-") != std::string::npos ||
+         cleanValue.find("1900-01-01") != std::string::npos ||
+         cleanValue.find("1970-01-01") != std::string::npos);
 
-    // Limpiar caracteres de control
+    // Limpiar caracteres de control y caracteres problemáticos
     for (char &c : cleanValue) {
-      if (static_cast<unsigned char>(c) > 127) {
-        c = '?';
+      if (static_cast<unsigned char>(c) > 127 || c < 32) {
+        isNull = true;
+        break;
       }
     }
 
+    // Para fechas, cualquier valor que no sea una fecha válida = NULL
+    if (upperType.find("TIMESTAMP") != std::string::npos ||
+        upperType.find("DATETIME") != std::string::npos ||
+        upperType.find("DATE") != std::string::npos) {
+      if (cleanValue.length() < 10 ||
+          cleanValue.find("-") == std::string::npos ||
+          cleanValue.find("0000") != std::string::npos) {
+        isNull = true;
+      }
+    }
+
+    // Si es NULL, generar valor por defecto en lugar de NULL
+    if (isNull) {
+      if (upperType.find("INTEGER") != std::string::npos ||
+          upperType.find("BIGINT") != std::string::npos ||
+          upperType.find("SMALLINT") != std::string::npos) {
+        return "0"; // Valor por defecto para enteros
+      } else if (upperType.find("REAL") != std::string::npos ||
+                 upperType.find("FLOAT") != std::string::npos ||
+                 upperType.find("DOUBLE") != std::string::npos ||
+                 upperType.find("NUMERIC") != std::string::npos) {
+        return "0.0"; // Valor por defecto para números decimales
+      } else if (upperType.find("VARCHAR") != std::string::npos ||
+                 upperType.find("TEXT") != std::string::npos ||
+                 upperType.find("CHAR") != std::string::npos) {
+        return "DEFAULT"; // Valor por defecto para texto
+      } else if (upperType.find("TIMESTAMP") != std::string::npos ||
+                 upperType.find("DATETIME") != std::string::npos) {
+        return "1970-01-01 00:00:00"; // Valor por defecto para fechas
+      } else if (upperType.find("DATE") != std::string::npos) {
+        return "1970-01-01"; // Valor por defecto para fechas
+      } else if (upperType.find("TIME") != std::string::npos) {
+        return "00:00:00"; // Valor por defecto para tiempo
+      } else if (upperType.find("BOOLEAN") != std::string::npos ||
+                 upperType.find("BOOL") != std::string::npos) {
+        return "false"; // Valor por defecto para booleanos
+      } else {
+        return "DEFAULT"; // Valor por defecto genérico
+      }
+    }
+
+    // Limpiar caracteres de control restantes
     cleanValue.erase(std::remove_if(cleanValue.begin(), cleanValue.end(),
                                     [](unsigned char c) {
                                       return c < 32 && c != 9 && c != 10 &&
@@ -2114,32 +2090,11 @@ private:
         cleanValue = "true";
       }
     } else if (upperType.find("BIT") != std::string::npos) {
-      if (cleanValue == "0" || cleanValue == "false" || cleanValue == "FALSE" ||
-          cleanValue.empty()) {
-        return "NULL";
+      if (cleanValue == "0" || cleanValue == "false" || cleanValue == "FALSE") {
+        cleanValue = "false";
       } else if (cleanValue == "1" || cleanValue == "true" ||
                  cleanValue == "TRUE") {
-        cleanValue = "1";
-      } else {
-        return "NULL";
-      }
-    } else if (upperType.find("TIMESTAMP") != std::string::npos ||
-               upperType.find("DATETIME") != std::string::npos ||
-               upperType.find("DATE") != std::string::npos) {
-      if (cleanValue == "0000-00-00 00:00:00" || cleanValue == "0000-00-00") {
-        cleanValue = "1970-01-01 00:00:00";
-      } else if (cleanValue.find("0000-00-00") != std::string::npos) {
-        cleanValue = "1970-01-01 00:00:00";
-      } else if (cleanValue.find("-00 00:00:00") != std::string::npos) {
-        size_t pos = cleanValue.find("-00 00:00:00");
-        if (pos != std::string::npos) {
-          cleanValue.replace(pos, 3, "-01");
-        }
-      } else if (cleanValue.find("-00") != std::string::npos) {
-        size_t pos = cleanValue.find("-00");
-        if (pos != std::string::npos) {
-          cleanValue.replace(pos, 3, "-01");
-        }
+        cleanValue = "true";
       }
     }
 

@@ -77,6 +77,15 @@ const Dashboard = () => {
     description: 'Tamaño de lote para procesamiento de datos',
     updated_at: new Date().toISOString()
   });
+
+  // Función para formatear números con separadores de miles
+  const formatNumber = (text: string): string => {
+    // Buscar patrones de números en el texto (ej: "3649000 records")
+    return text.replace(/(\d+)(\s+records?)/g, (match, number, suffix) => {
+      const formattedNumber = parseInt(number).toLocaleString('en-US');
+      return `${formattedNumber}${suffix}`;
+    });
+  };
   const [stats, setStats] = useState<DashboardStats>({
     syncStatus: {
       progress: 75,
@@ -191,7 +200,7 @@ const Dashboard = () => {
               <Value>No Data: {stats.syncStatus.noData}</Value>
               <Value>Errors: {stats.syncStatus.errors}</Value>
             </Grid>
-            <Value style={{ marginTop: '20px' }}>► Currently Processing: {stats.syncStatus.currentProcess}</Value>
+            <Value style={{ marginTop: '20px' }}>► Currently Processing: {formatNumber(stats.syncStatus.currentProcess)}</Value>
           </Section>
 
 

@@ -20,18 +20,10 @@
 
 class MariaDBToPostgres {
 private:
-  MYSQL *mariadbConn = nullptr;
-  std::string currentConnectionString;
-  std::mutex connectionMutex;
 
 public:
   MariaDBToPostgres() = default;
-  ~MariaDBToPostgres() {
-    if (mariadbConn) {
-      mysql_close(mariadbConn);
-      mariadbConn = nullptr;
-    }
-  }
+  ~MariaDBToPostgres() = default;
 
   static std::unordered_map<std::string, std::string> dataTypeMap;
   static std::unordered_map<std::string, std::string> collationMap;
@@ -49,19 +41,6 @@ public:
   };
 
   MYSQL *getMariaDBConnection(const std::string &connectionString) {
-    std::lock_guard<std::mutex> lock(connectionMutex);
-
-    // Si ya tenemos una conexión para esta connection string, la reutilizamos
-    if (mariadbConn && currentConnectionString == connectionString) {
-      return mariadbConn;
-    }
-
-    // Si tenemos una conexión diferente, la cerramos
-    if (mariadbConn) {
-      mysql_close(mariadbConn);
-      mariadbConn = nullptr;
-    }
-
     // Parsear connection string
     std::string host, user, password, db, port;
     std::istringstream ss(connectionString);
@@ -88,9 +67,9 @@ public:
         port = value;
     }
 
-    // Crear nueva conexión
-    mariadbConn = mysql_init(nullptr);
-    if (!mariadbConn) {
+    // Crear nueva conexión directa (sin mutex)
+    MYSQL *conn = mysql_init(nullptr);
+    if (!conn) {
       Logger::error(LogCategory::TRANSFER, "getMariaDBConnection",
                     "mysql_init() failed");
       return nullptr;
@@ -105,14 +84,13 @@ public:
       }
     }
 
-    if (mysql_real_connect(mariadbConn, host.c_str(), user.c_str(),
+    if (mysql_real_connect(conn, host.c_str(), user.c_str(),
                            password.c_str(), db.c_str(), portNum, nullptr,
                            0) == nullptr) {
       Logger::error(LogCategory::TRANSFER, "getMariaDBConnection",
                     "MariaDB connection failed: " +
-                        std::string(mysql_error(mariadbConn)));
-      mysql_close(mariadbConn);
-      mariadbConn = nullptr;
+                        std::string(mysql_error(conn)));
+      mysql_close(conn);
       return nullptr;
     }
 
@@ -125,11 +103,10 @@ public:
           std::string(", net_write_timeout = 600") +        // 10 minutos
           std::string(", innodb_lock_wait_timeout = 600") + // 10 minutos
           std::string(", lock_wait_timeout = 600");         // 10 minutos
-      mysql_query(mariadbConn, timeoutQuery.c_str());
+      mysql_query(conn, timeoutQuery.c_str());
     }
 
-    currentConnectionString = connectionString;
-    return mariadbConn;
+    return conn;
   }
 
   std::vector<TableInfo> getActiveTables(pqxx::connection &pgConn) {
@@ -216,6 +193,9 @@ public:
                           "': " + std::string(e.what()));
       }
     }
+
+    // Cerrar conexión MariaDB
+    mysql_close(mariadbConn);
   }
 
   void setupTableTargetMariaDBToPostgres() {
@@ -343,7 +323,7 @@ public:
           std::transform(colName.begin(), colName.end(), colName.begin(),
                          ::tolower);
           std::string dataType = col.size() > 1 ? col[1] : "varchar";
-          std::string nullable = "";
+          std::string isNullable = col.size() > 2 ? col[2] : "YES";
           std::string columnKey = col.size() > 3 ? col[3] : "";
           std::string extra = col.size() > 4 ? col[4] : "";
           std::string maxLength = col.size() > 5 ? col[5] : "";
@@ -365,7 +345,8 @@ public:
             pgType = dataTypeMap[dataType];
           }
 
-          std::string columnDef = "\"" + colName + "\" " + pgType + nullable;
+          // Crear todas las columnas como nullable para evitar problemas con valores NULL
+          std::string columnDef = "\"" + colName + "\" " + pgType;
           columnDefinitions.push_back(columnDef);
 
           if (columnKey == "PRI")
@@ -405,6 +386,9 @@ public:
 
         // No actualizar la columna de tiempo aquí - ya fue detectada
         // correctamente en catalog_manager.h
+        
+        // Cerrar conexión MariaDB
+        mysql_close(mariadbConn);
       }
     } catch (const std::exception &e) {
       Logger::error(LogCategory::TRANSFER,
@@ -1207,6 +1191,7 @@ public:
 
         bool hasMoreData = true;
         size_t chunkNumber = 0;
+        size_t currentOffset = 0; // Usar variable separada para OFFSET
 
         while (hasMoreData) {
           chunkNumber++;
@@ -1217,7 +1202,7 @@ public:
                        "Processing chunk " + std::to_string(chunkNumber) +
                            " for table " + schema_name + "." + table_name +
                            " (size: " + std::to_string(CHUNK_SIZE) +
-                           ", offset: " + std::to_string(targetCount) + ")");
+                           ", offset: " + std::to_string(currentOffset) + ")");
 
           // OPTIMIZED: Usar cursor-based pagination con primary key
           std::string selectQuery =
@@ -1268,7 +1253,7 @@ public:
           } else {
             // FALLBACK: Usar OFFSET pagination para tablas sin PK
             selectQuery += " LIMIT " + std::to_string(CHUNK_SIZE) + " OFFSET " +
-                           std::to_string(targetCount) + ";";
+                           std::to_string(currentOffset) + ";";
           }
 
           Logger::info(LogCategory::TRANSFER,
@@ -1348,10 +1333,12 @@ public:
                               std::string(e.what()));
           }
 
-          // Update targetCount and last_offset based on actual processed rows
+          // Update targetCount and currentOffset based on actual processed rows
           targetCount += rowsInserted;
+          currentOffset += rowsInserted; // Incrementar OFFSET para la siguiente iteración
           Logger::info(
               "Updated target count to " + std::to_string(targetCount) +
+              " and current offset to " + std::to_string(currentOffset) +
               " after processing chunk " + std::to_string(chunkNumber));
 
           // OPTIMIZED: Update last_processed_pk for cursor-based pagination
@@ -1380,11 +1367,11 @@ public:
           try {
             Logger::info(LogCategory::TRANSFER,
                          "Updating last_offset to " +
-                             std::to_string(targetCount) + " for table " +
+                             std::to_string(currentOffset) + " for table " +
                              schema_name + "." + table_name);
             pqxx::work updateTxn(pgConn);
             updateTxn.exec("UPDATE metadata.catalog SET last_offset='" +
-                           std::to_string(targetCount) +
+                           std::to_string(currentOffset) +
                            "' WHERE schema_name='" + escapeSQL(schema_name) +
                            "' AND table_name='" + escapeSQL(table_name) + "';");
             updateTxn.commit();
@@ -1399,7 +1386,15 @@ public:
                               " - this may cause infinite loops");
           }
 
-          if (targetCount >= sourceCount) {
+          // Verificar si hemos procesado todos los datos disponibles
+          if (results.size() < CHUNK_SIZE) {
+            Logger::info(LogCategory::TRANSFER,
+                         "Retrieved " + std::to_string(results.size()) +
+                             " rows (less than chunk size " +
+                             std::to_string(CHUNK_SIZE) +
+                             ") - ending data transfer");
+            hasMoreData = false;
+          } else if (targetCount >= sourceCount) {
             Logger::info(LogCategory::TRANSFER,
                          "Target count (" + std::to_string(targetCount) +
                              ") >= source count (" +
@@ -1504,6 +1499,9 @@ public:
 
         Logger::info(LogCategory::TRANSFER, "Table processing completed for " +
                                                 schema_name + "." + table_name);
+        
+        // Cerrar conexión MariaDB
+        mysql_close(mariadbConn);
       }
 
       Logger::info(
@@ -1534,8 +1532,12 @@ public:
       }
 
       std::string updateQuery = "UPDATE metadata.catalog SET status='" +
-                                status + "', last_offset='" +
-                                std::to_string(offset) + "'";
+                                status + "'";
+      
+      // Solo actualizar last_offset si el status requiere reset (FULL_LOAD, RESET)
+      if (status == "FULL_LOAD" || status == "RESET") {
+        updateQuery += ", last_offset='" + std::to_string(offset) + "'";
+      }
 
       if (!lastSyncColumn.empty()) {
 
@@ -2031,59 +2033,56 @@ private:
     std::transform(upperType.begin(), upperType.end(), upperType.begin(),
                    ::toupper);
 
-    if (cleanValue.empty()) {
-      return "NULL";
-    }
+    // Detectar valores NULL de MariaDB - SIMPLIFICADO
+    bool isNull = (cleanValue.empty() || cleanValue == "NULL" || cleanValue == "null" || 
+                   cleanValue == "\\N" || cleanValue == "\\0" || cleanValue == "0" ||
+                   cleanValue.find("0000-") != std::string::npos ||
+                   cleanValue.find("1900-01-01") != std::string::npos ||
+                   cleanValue.find("1970-01-01") != std::string::npos);
 
-    // Limpiar caracteres de control
+    // Limpiar caracteres de control y caracteres problemáticos
     for (char &c : cleanValue) {
-      if (static_cast<unsigned char>(c) > 127) {
-        c = '?';
+      if (static_cast<unsigned char>(c) > 127 || c < 32) {
+        isNull = true;
+        break;
       }
     }
 
-    cleanValue.erase(std::remove_if(cleanValue.begin(), cleanValue.end(),
-                                    [](unsigned char c) {
-                                      return c < 32 && c != 9 && c != 10 &&
-                                             c != 13;
-                                    }),
-                     cleanValue.end());
+    // Para fechas, cualquier valor que no sea una fecha válida = NULL
+    if (upperType.find("TIMESTAMP") != std::string::npos ||
+        upperType.find("DATETIME") != std::string::npos ||
+        upperType.find("DATE") != std::string::npos) {
+      if (cleanValue.length() < 10 || 
+          cleanValue.find("-") == std::string::npos ||
+          cleanValue.find("0000") != std::string::npos) {
+        isNull = true;
+      }
+    }
 
-    // Manejar tipos específicos
-    if (upperType.find("BOOLEAN") != std::string::npos ||
-        upperType.find("BOOL") != std::string::npos) {
-      if (cleanValue == "N" || cleanValue == "0" || cleanValue == "false" ||
-          cleanValue == "FALSE") {
-        cleanValue = "false";
-      } else if (cleanValue == "Y" || cleanValue == "1" ||
-                 cleanValue == "true" || cleanValue == "TRUE") {
-        cleanValue = "true";
-      }
-    } else if (upperType.find("BIT") != std::string::npos) {
-      if (cleanValue == "0" || cleanValue == "false" || cleanValue == "FALSE" ||
-          cleanValue.empty()) {
-        return "NULL";
-      } else if (cleanValue == "1" || cleanValue == "true" ||
-                 cleanValue == "TRUE") {
-        cleanValue = "1";
+    // Si es NULL, generar valor por defecto en lugar de NULL
+    if (isNull) {
+      if (upperType.find("INTEGER") != std::string::npos || 
+          upperType.find("BIGINT") != std::string::npos ||
+          upperType.find("SMALLINT") != std::string::npos) {
+        return "0"; // Valor por defecto para enteros
+      } else if (upperType.find("REAL") != std::string::npos ||
+                 upperType.find("FLOAT") != std::string::npos ||
+                 upperType.find("DOUBLE") != std::string::npos ||
+                 upperType.find("NUMERIC") != std::string::npos) {
+        return "0.0"; // Valor por defecto para números decimales
+      } else if (upperType.find("VARCHAR") != std::string::npos ||
+                 upperType.find("TEXT") != std::string::npos ||
+                 upperType.find("CHAR") != std::string::npos) {
+        return "DEFAULT"; // Valor por defecto para texto
+      } else if (upperType.find("TIMESTAMP") != std::string::npos ||
+                 upperType.find("DATETIME") != std::string::npos) {
+        return "1970-01-01 00:00:00"; // Valor por defecto para fechas
+      } else if (upperType.find("DATE") != std::string::npos) {
+        return "1970-01-01"; // Valor por defecto para fechas
+      } else if (upperType.find("TIME") != std::string::npos) {
+        return "00:00:00"; // Valor por defecto para tiempo
       } else {
-        return "NULL";
-      }
-    } else if (upperType.find("TIMESTAMP") != std::string::npos ||
-               upperType.find("DATETIME") != std::string::npos ||
-               upperType.find("DATE") != std::string::npos) {
-      // Convertir fechas inválidas de MariaDB a NULL para PostgreSQL
-      if (cleanValue == "0000-00-00 00:00:00" || cleanValue == "0000-00-00" ||
-          cleanValue == "0000-01-01" || cleanValue == "0000-01-01 00:00:00") {
-        return "NULL";
-      } else if (cleanValue.find("0000-00-00") != std::string::npos) {
-        return "NULL";
-      } else if (cleanValue.find("0000-01-01") != std::string::npos) {
-        return "NULL";
-      } else if (cleanValue.find("-00 00:00:00") != std::string::npos) {
-        return "NULL";
-      } else if (cleanValue.find("-00") != std::string::npos) {
-        return "NULL";
+        return "DEFAULT"; // Valor por defecto genérico
       }
     }
 
