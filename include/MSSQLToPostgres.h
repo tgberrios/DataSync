@@ -614,10 +614,72 @@ public:
 
           if (lastOffset >= sourceCount) {
             updateStatus(pgConn, schema_name, table_name, "PERFECT_MATCH",
-                         targetCount);
+                         sourceCount);
           } else {
             updateStatus(pgConn, schema_name, table_name, "LISTENING_CHANGES",
-                         targetCount);
+                         sourceCount);
+
+            // Actualizar last_processed_pk para tablas ya sincronizadas
+            std::string pkStrategy =
+                getPKStrategyFromCatalog(pgConn, schema_name, table_name);
+            std::vector<std::string> pkColumns =
+                getPKColumnsFromCatalog(pgConn, schema_name, table_name);
+
+            if (pkStrategy == "PK" && !pkColumns.empty()) {
+              try {
+                // Obtener el último PK de la tabla para marcar como procesada
+                std::string maxPKQuery = "SELECT ";
+                for (size_t i = 0; i < pkColumns.size(); ++i) {
+                  if (i > 0)
+                    maxPKQuery += ", ";
+                  maxPKQuery += "[" + pkColumns[i] + "]";
+                }
+                maxPKQuery += " FROM [" + schema_name + "].[" + table_name +
+                              "] ORDER BY ";
+                for (size_t i = 0; i < pkColumns.size(); ++i) {
+                  if (i > 0)
+                    maxPKQuery += ", ";
+                  maxPKQuery += "[" + pkColumns[i] + "]";
+                }
+                maxPKQuery += " DESC OFFSET 0 ROWS FETCH NEXT 1 ROWS ONLY;";
+
+                std::vector<std::vector<std::string>> maxPKResults =
+                    executeQueryMSSQL(dbc, maxPKQuery);
+
+                if (!maxPKResults.empty() && !maxPKResults[0].empty()) {
+                  std::string lastPK;
+                  for (size_t i = 0; i < maxPKResults[0].size(); ++i) {
+                    if (i > 0)
+                      lastPK += "|";
+                    lastPK += maxPKResults[0][i];
+                  }
+
+                  updateLastProcessedPK(pgConn, schema_name, table_name,
+                                        lastPK);
+                  Logger::info(LogCategory::TRANSFER,
+                               "Updated last_processed_pk to " + lastPK +
+                                   " for synchronized table " + schema_name +
+                                   "." + table_name);
+                } else {
+                  Logger::warning(LogCategory::TRANSFER,
+                                  "No PK data found for synchronized table " +
+                                      schema_name + "." + table_name);
+                }
+              } catch (const std::exception &e) {
+                Logger::error(LogCategory::TRANSFER,
+                              "ERROR: Failed to update last_processed_pk for "
+                              "synchronized table " +
+                                  schema_name + "." + table_name + ": " +
+                                  std::string(e.what()));
+              }
+            } else {
+              Logger::warning(LogCategory::TRANSFER,
+                              "DEBUG: Skipping last_processed_pk update for " +
+                                  schema_name + "." + table_name +
+                                  " - pkStrategy: " + pkStrategy +
+                                  ", pkColumns empty: " +
+                                  (pkColumns.empty() ? "true" : "false"));
+            }
           }
           continue;
         }
@@ -854,8 +916,8 @@ public:
                 selectQuery += ", ";
               selectQuery += "[" + pkColumns[i] + "]";
             }
-            selectQuery += " OFFSET 0 ROWS FETCH NEXT " +
-                           std::to_string(CHUNK_SIZE) + " ROWS ONLY;";
+            selectQuery +=
+                " FETCH NEXT " + std::to_string(CHUNK_SIZE) + " ROWS ONLY;";
           } else {
             // FALLBACK: Usar OFFSET pagination para tablas sin PK
             selectQuery += " ORDER BY 1 OFFSET " +
@@ -981,7 +1043,7 @@ public:
                          "Table " + schema_name + "." + table_name +
                              " synchronized - PERFECT_MATCH");
             updateStatus(pgConn, schema_name, table_name, "PERFECT_MATCH",
-                         targetCount);
+                         sourceCount);
 
             // OPTIMIZED: Update last_processed_pk for completed transfer (even
             // if single chunk)
@@ -1097,8 +1159,9 @@ public:
       std::string updateQuery =
           "UPDATE metadata.catalog SET status='" + status + "'";
 
-      // Solo actualizar last_offset si es mayor que el actual
-      if (offset > 0) {
+      // Actualizar last_offset para todos los status que requieren tracking
+      if (status == "FULL_LOAD" || status == "RESET" ||
+          status == "PERFECT_MATCH" || status == "LISTENING_CHANGES") {
         updateQuery += ", last_offset='" + std::to_string(offset) + "'";
       }
 
