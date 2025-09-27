@@ -196,9 +196,13 @@ app.get("/api/dashboard/stats", async (req, res) => {
       FROM metadata.catalog
     `);
 
-    // Get currently processing table using the new query
+    // Get currently processing table with progress calculation
     const currentProcessingTable = await pool.query(`
-      SELECT t.*
+      SELECT t.*,
+             CASE 
+               WHEN t.table_size > 0 THEN ROUND((t.last_offset::numeric / t.table_size::numeric) * 100, 1)
+               ELSE 0 
+             END as progress_percentage
       FROM metadata.catalog t
       WHERE status = 'FULL_LOAD'
       ORDER BY last_offset desc
@@ -211,7 +215,9 @@ app.get("/api/dashboard/stats", async (req, res) => {
             currentProcessingTable.rows[0].table_name
           } [${currentProcessingTable.rows[0].db_engine}] (${
             currentProcessingTable.rows[0].last_offset || 0
-          } records) - Status: ${currentProcessingTable.rows[0].status}`
+          }/${currentProcessingTable.rows[0].table_size || 0} - ${
+            currentProcessingTable.rows[0].progress_percentage || 0
+          }%) - Status: ${currentProcessingTable.rows[0].status}`
         : "No active transfers";
 
     // 2. TRANSFER PERFORMANCE BY ENGINE
@@ -310,6 +316,26 @@ app.get("/api/dashboard/stats", async (req, res) => {
         SUM(bytes_transferred) as total_bytes
       FROM metadata.transfer_metrics
       WHERE created_at > NOW() - INTERVAL '1 hour'
+    `);
+
+    // 7. ACTIVE TRANSFERS PROGRESS
+    const activeTransfersProgress = await pool.query(`
+      SELECT 
+        schema_name,
+        table_name,
+        db_engine,
+        last_offset,
+        table_size,
+        status,
+        CASE 
+          WHEN table_size > 0 THEN ROUND((last_offset::numeric / table_size::numeric) * 100, 1)
+          ELSE 0 
+        END as progress_percentage,
+        last_sync_time
+      FROM metadata.catalog
+      WHERE status = 'FULL_LOAD' AND active = true
+      ORDER BY progress_percentage DESC
+      LIMIT 10
     `);
 
     // Construir el objeto de respuesta
@@ -423,6 +449,18 @@ app.get("/api/dashboard/stats", async (req, res) => {
       lastTransfer: recentActivity.rows[0]?.last_transfer || null,
       uptime: formatUptime(dbHealth.rows[0]?.uptime_seconds || 0),
     };
+
+    // Agregar progreso de transferencias activas
+    stats.activeTransfersProgress = activeTransfersProgress.rows.map((row) => ({
+      schemaName: row.schema_name,
+      tableName: row.table_name,
+      dbEngine: row.db_engine,
+      lastOffset: parseInt(row.last_offset || 0),
+      tableSize: parseInt(row.table_size || 0),
+      progressPercentage: parseFloat(row.progress_percentage || 0),
+      status: row.status,
+      lastSyncTime: row.last_sync_time,
+    }));
 
     console.log("Sending dashboard stats");
     res.json(stats);

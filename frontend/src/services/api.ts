@@ -67,6 +67,16 @@ export interface DashboardStats {
       activeTransfers: number;
     };
   };
+  activeTransfersProgress?: {
+    schemaName: string;
+    tableName: string;
+    dbEngine: string;
+    lastOffset: number;
+    tableSize: number;
+    progressPercentage: number;
+    status: string;
+    lastSyncTime: string;
+  }[];
 }
 
 export const dashboardApi = {

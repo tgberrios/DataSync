@@ -233,6 +233,58 @@ const Dashboard = () => {
             </Grid>
           </Section>
 
+          {stats.activeTransfersProgress && stats.activeTransfersProgress.length > 0 && (
+            <Section>
+              <SectionTitle>📊 ACTIVE TRANSFERS PROGRESS</SectionTitle>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {stats.activeTransfersProgress.map((transfer, index) => (
+                  <div key={index} style={{ 
+                    padding: '10px', 
+                    backgroundColor: '#f9f9f9', 
+                    borderRadius: '5px',
+                    border: '1px solid #ddd'
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+                      <strong>{transfer.schemaName}.{transfer.tableName} [{transfer.dbEngine}]</strong>
+                      <span style={{ 
+                        color: transfer.progressPercentage >= 90 ? '#4CAF50' : 
+                               transfer.progressPercentage >= 50 ? '#FF9800' : '#2196F3',
+                        fontWeight: 'bold'
+                      }}>
+                        {transfer.progressPercentage.toFixed(1)}%
+                      </span>
+                    </div>
+                    <div style={{ 
+                      width: '100%', 
+                      height: '20px', 
+                      backgroundColor: '#e0e0e0', 
+                      borderRadius: '10px',
+                      overflow: 'hidden'
+                    }}>
+                      <div style={{
+                        width: `${Math.min(transfer.progressPercentage, 100)}%`,
+                        height: '100%',
+                        backgroundColor: transfer.progressPercentage >= 90 ? '#4CAF50' : 
+                                       transfer.progressPercentage >= 50 ? '#FF9800' : '#2196F3',
+                        transition: 'width 0.3s ease'
+                      }} />
+                    </div>
+                    <div style={{ 
+                      fontSize: '0.9em', 
+                      color: '#666', 
+                      marginTop: '5px',
+                      display: 'flex',
+                      justifyContent: 'space-between'
+                    }}>
+                      <span>{transfer.lastOffset.toLocaleString()} / {transfer.tableSize.toLocaleString()} records</span>
+                      <span>Status: {transfer.status}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Section>
+          )}
+
           {/* Connection pooling section removed - using direct connections now */}
         </>
       )}
