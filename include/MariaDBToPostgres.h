@@ -20,7 +20,6 @@
 
 class MariaDBToPostgres {
 private:
-
 public:
   MariaDBToPostgres() = default;
   ~MariaDBToPostgres() = default;
@@ -84,9 +83,8 @@ public:
       }
     }
 
-    if (mysql_real_connect(conn, host.c_str(), user.c_str(),
-                           password.c_str(), db.c_str(), portNum, nullptr,
-                           0) == nullptr) {
+    if (mysql_real_connect(conn, host.c_str(), user.c_str(), password.c_str(),
+                           db.c_str(), portNum, nullptr, 0) == nullptr) {
       Logger::error(LogCategory::TRANSFER, "getMariaDBConnection",
                     "MariaDB connection failed: " +
                         std::string(mysql_error(conn)));
@@ -345,7 +343,8 @@ public:
             pgType = dataTypeMap[dataType];
           }
 
-          // Crear todas las columnas como nullable para evitar problemas con valores NULL
+          // Crear todas las columnas como nullable para evitar problemas con
+          // valores NULL
           std::string columnDef = "\"" + colName + "\" " + pgType;
           columnDefinitions.push_back(columnDef);
 
@@ -386,7 +385,7 @@ public:
 
         // No actualizar la columna de tiempo aquí - ya fue detectada
         // correctamente en catalog_manager.h
-        
+
         // Cerrar conexión MariaDB
         mysql_close(mariadbConn);
       }
@@ -966,7 +965,7 @@ public:
 
           if (lastOffset >= sourceCount) {
             updateStatus(pgConn, schema_name, table_name, "PERFECT_MATCH",
-                         targetCount);
+                         sourceCount);
 
             // OPTIMIZED: Update last_processed_pk for PERFECT_MATCH tables
             std::string pkStrategy =
@@ -1022,6 +1021,67 @@ public:
           } else {
             updateStatus(pgConn, schema_name, table_name, "LISTENING_CHANGES",
                          targetCount);
+
+            // Actualizar last_processed_pk para tablas ya sincronizadas
+            std::string pkStrategy =
+                getPKStrategyFromCatalog(pgConn, schema_name, table_name);
+            std::vector<std::string> pkColumns =
+                getPKColumnsFromCatalog(pgConn, schema_name, table_name);
+
+            Logger::info(
+                LogCategory::TRANSFER,
+                "DEBUG: Table " + schema_name + "." + table_name +
+                    " - pkStrategy: " + pkStrategy +
+                    ", pkColumns size: " + std::to_string(pkColumns.size()) +
+                    ", sourceCount: " + std::to_string(sourceCount) +
+                    ", targetCount: " + std::to_string(targetCount));
+
+            if (pkStrategy == "PK" && !pkColumns.empty()) {
+              try {
+                std::string maxPKQuery = "SELECT ";
+                for (size_t i = 0; i < pkColumns.size(); ++i) {
+                  if (i > 0)
+                    maxPKQuery += ", ";
+                  maxPKQuery += "`" + pkColumns[i] + "`";
+                }
+                maxPKQuery += " FROM `" + schema_name + "`.`" + table_name +
+                              "` ORDER BY ";
+                for (size_t i = 0; i < pkColumns.size(); ++i) {
+                  if (i > 0)
+                    maxPKQuery += ", ";
+                  maxPKQuery += "`" + pkColumns[i] + "`";
+                }
+                maxPKQuery += " DESC LIMIT 1;";
+
+                std::vector<std::vector<std::string>> maxPKResults =
+                    executeQueryMariaDB(mariadbConn, maxPKQuery);
+
+                if (!maxPKResults.empty() && !maxPKResults[0].empty()) {
+                  std::string lastPK;
+                  for (size_t i = 0; i < maxPKResults[0].size(); ++i) {
+                    if (i > 0)
+                      lastPK += "|";
+                    lastPK += maxPKResults[0][i];
+                  }
+
+                  updateLastProcessedPK(pgConn, schema_name, table_name,
+                                        lastPK);
+                }
+              } catch (const std::exception &e) {
+                Logger::error(LogCategory::TRANSFER,
+                              "ERROR: Failed to update last_processed_pk for "
+                              "synchronized table " +
+                                  schema_name + "." + table_name + ": " +
+                                  std::string(e.what()));
+              }
+            } else {
+              Logger::warning(LogCategory::TRANSFER,
+                              "DEBUG: Skipping last_processed_pk update for " +
+                                  schema_name + "." + table_name +
+                                  " - pkStrategy: " + pkStrategy +
+                                  ", pkColumns empty: " +
+                                  (pkColumns.empty() ? "true" : "false"));
+            }
           }
           continue;
         }
@@ -1335,7 +1395,8 @@ public:
 
           // Update targetCount and currentOffset based on actual processed rows
           targetCount += rowsInserted;
-          currentOffset += rowsInserted; // Incrementar OFFSET para la siguiente iteración
+          currentOffset +=
+              rowsInserted; // Incrementar OFFSET para la siguiente iteración
           Logger::info(
               "Updated target count to " + std::to_string(targetCount) +
               " and current offset to " + std::to_string(currentOffset) +
@@ -1427,8 +1488,17 @@ public:
             }
             maxPKQuery += " DESC LIMIT 1;";
 
+            Logger::info(LogCategory::TRANSFER,
+                         "DEBUG: Executing maxPKQuery for " + schema_name +
+                             "." + table_name + ": " + maxPKQuery);
+
             std::vector<std::vector<std::string>> maxPKResults =
                 executeQueryMariaDB(mariadbConn, maxPKQuery);
+
+            Logger::info(LogCategory::TRANSFER,
+                         "DEBUG: maxPKQuery result for " + schema_name + "." +
+                             table_name + " - rows returned: " +
+                             std::to_string(maxPKResults.size()));
 
             if (!maxPKResults.empty() && !maxPKResults[0].empty()) {
               std::string lastPK;
@@ -1438,11 +1508,25 @@ public:
                 lastPK += maxPKResults[0][i];
               }
 
+              Logger::info(LogCategory::TRANSFER,
+                           "DEBUG: Updating last_processed_pk to " + lastPK +
+                               " for " + schema_name + "." + table_name);
+
               updateLastProcessedPK(pgConn, schema_name, table_name, lastPK);
               Logger::info(LogCategory::TRANSFER,
                            "Updated last_processed_pk to " + lastPK +
-                               " for completed table " + schema_name + "." +
+                               " for synchronized table " + schema_name + "." +
                                table_name);
+            } else {
+              Logger::warning(
+                  LogCategory::TRANSFER,
+                  "No PK data found for synchronized table " + schema_name +
+                      "." + table_name + " - maxPKResults.empty()=" +
+                      (maxPKResults.empty() ? "true" : "false") +
+                      ", first row empty=" +
+                      (!maxPKResults.empty() && maxPKResults[0].empty()
+                           ? "true"
+                           : "false"));
             }
           } catch (const std::exception &e) {
             Logger::error(LogCategory::TRANSFER,
@@ -1462,7 +1546,7 @@ public:
                              ", target: " + std::to_string(targetCount) + ")");
             try {
               updateStatus(pgConn, schema_name, table_name, "PERFECT_MATCH",
-                           targetCount);
+                           sourceCount);
               Logger::info(LogCategory::TRANSFER,
                            "Successfully updated status to PERFECT_MATCH for " +
                                schema_name + "." + table_name);
@@ -1499,7 +1583,7 @@ public:
 
         Logger::info(LogCategory::TRANSFER, "Table processing completed for " +
                                                 schema_name + "." + table_name);
-        
+
         // Cerrar conexión MariaDB
         mysql_close(mariadbConn);
       }
@@ -1531,11 +1615,12 @@ public:
         lastSyncColumn = columnQuery[0][0].as<std::string>();
       }
 
-      std::string updateQuery = "UPDATE metadata.catalog SET status='" +
-                                status + "'";
-      
-      // Solo actualizar last_offset si el status requiere reset (FULL_LOAD, RESET)
-      if (status == "FULL_LOAD" || status == "RESET") {
+      std::string updateQuery =
+          "UPDATE metadata.catalog SET status='" + status + "'";
+
+      // Actualizar last_offset para todos los status que requieren tracking
+      if (status == "FULL_LOAD" || status == "RESET" ||
+          status == "PERFECT_MATCH" || status == "LISTENING_CHANGES") {
         updateQuery += ", last_offset='" + std::to_string(offset) + "'";
       }
 
@@ -2034,11 +2119,12 @@ private:
                    ::toupper);
 
     // Detectar valores NULL de MariaDB - SIMPLIFICADO
-    bool isNull = (cleanValue.empty() || cleanValue == "NULL" || cleanValue == "null" || 
-                   cleanValue == "\\N" || cleanValue == "\\0" || cleanValue == "0" ||
-                   cleanValue.find("0000-") != std::string::npos ||
-                   cleanValue.find("1900-01-01") != std::string::npos ||
-                   cleanValue.find("1970-01-01") != std::string::npos);
+    bool isNull =
+        (cleanValue.empty() || cleanValue == "NULL" || cleanValue == "null" ||
+         cleanValue == "\\N" || cleanValue == "\\0" || cleanValue == "0" ||
+         cleanValue.find("0000-") != std::string::npos ||
+         cleanValue.find("1900-01-01") != std::string::npos ||
+         cleanValue.find("1970-01-01") != std::string::npos);
 
     // Limpiar caracteres de control y caracteres problemáticos
     for (char &c : cleanValue) {
@@ -2052,7 +2138,7 @@ private:
     if (upperType.find("TIMESTAMP") != std::string::npos ||
         upperType.find("DATETIME") != std::string::npos ||
         upperType.find("DATE") != std::string::npos) {
-      if (cleanValue.length() < 10 || 
+      if (cleanValue.length() < 10 ||
           cleanValue.find("-") == std::string::npos ||
           cleanValue.find("0000") != std::string::npos) {
         isNull = true;
@@ -2061,7 +2147,7 @@ private:
 
     // Si es NULL, generar valor por defecto en lugar de NULL
     if (isNull) {
-      if (upperType.find("INTEGER") != std::string::npos || 
+      if (upperType.find("INTEGER") != std::string::npos ||
           upperType.find("BIGINT") != std::string::npos ||
           upperType.find("SMALLINT") != std::string::npos) {
         return "0"; // Valor por defecto para enteros
