@@ -88,11 +88,7 @@ void Logger::loadDebugConfig() {
 
     txn.commit();
 
-    // Log successful config load
-    if (logFile.is_open()) {
-      logFile << "-- Debug configuration loaded from database successfully"
-              << std::endl;
-    }
+    // Removed debug config load log to reduce noise
 
   } catch (const pqxx::sql_error &e) {
     std::cerr << "Logger::loadDebugConfig: SQL error: " << e.what()
@@ -197,10 +193,7 @@ void Logger::initialize(const std::string &fileName) {
     return;
   }
 
-  // Test write permissions
-  logFile << "-- Logger initialized at "
-          << std::chrono::system_clock::now().time_since_epoch().count()
-          << std::endl;
+  // Removed logger initialization log to reduce noise
   if (!logFile.good()) {
     std::cerr << "Logger::initialize: Failed to write to log file: "
               << logFileName << std::endl;

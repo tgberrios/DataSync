@@ -490,33 +490,7 @@ El problema **NO es la ubicación** de la lógica FULL_LOAD. El problema es que:
 ¿Quieres que revise específicamente cómo manejar los errores de transacciones abortadas en el loop interno?
 
 
-
-2025-09-27 22:28:10.204[INFO][SYSTEM][DATABASE]Table size for dbo.test_parent_table: 1000
-
-2025-09-27 22:28:09.706[INFO][TRANSFER][39/39]SportBook.public_marketing_content (status: LISTENING_CHANGES)
-2025-09-27 22:28:09.706[INFO][TRANSFER][38/39]SportBook.property_lease_agreements (status: LISTENING_CHANGES)
-2025-09-27 22:28:09.706[INFO][TRANSFER][37/39]SportBook.production_quality_checks (status: LISTENING_CHANGES)
-2025-09-27 22:28:09.706[INFO][TRANSFER][36/39]SportBook.patient_medical_records (status: LISTENING_CHANGES)
-2025-09-27 22:28:09.706[INFO][TRANSFER][35/39]SportBook.order_transactions (status: LISTENING_CHANGES)
-2025-09-27 22:28:09.706[INFO][TRANSFER][34/39]SportBook.numeros (status: LISTENING_CHANGES)
-
-
-2025-09-27 22:28:09.702[INFO][SYSTEM][METRICS]=== END REPORT ===
-2025-09-27 22:28:09.702[INFO][SYSTEM][METRICS]Total I/O Operations: 18291018
-2025-09-27 22:28:09.702[INFO][SYSTEM][METRICS]Average Memory Used: 27.918889 MB
-2025-09-27 22:28:09.702[INFO][SYSTEM][METRICS]Total Data Transferred: 753.820312 MB
-2025-09-27 22:28:09.702[INFO][SYSTEM][METRICS]Total Records Transferred: 3341119
-2025-09-27 22:28:09.702[INFO][SYSTEM][METRICS]Success Rate: 100.000000%
-2025-09-27 22:28:09.702[INFO][SYSTEM][METRICS]Pending Transfers: 0
-2025-09-27 22:28:09.702[INFO][SYSTEM][METRICS]Failed Transfers: 0
-2025-09-27 22:28:09.702[INFO][SYSTEM][METRICS]Successful Transfers: 27
-2025-09-27 22:28:09.702[INFO][SYSTEM][METRICS]Total Tables: 27
-2025-09-27 22:28:09.702[INFO][SYSTEM][METRICS]=== METRICS REPORT ===
-
 Creo que esos logs no los ocupo los podrias quitar porfavor 
-
-[UNKNOWN][UNKNOWN]-- Debug configuration loaded from database successfully
-[UNKNOWN][UNKNOWN]-- Logger initialized at 1759034448552006206
 
 2025-09-27 22:40:48.562[WARNING][SYSTEM][DATABASE]Could not get table size for SportBook.access_permissions: ERROR: column "table_rows" does not exist
 
