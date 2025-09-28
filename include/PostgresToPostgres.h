@@ -19,20 +19,50 @@ public:
   ~PostgresToPostgres() = default;
 
   pqxx::connection *getPostgresConnection(const std::string &connectionString) {
+    // Validate input parameters
+    if (connectionString.empty()) {
+      Logger::error(LogCategory::TRANSFER, "getPostgresConnection",
+                    "Connection string is empty");
+      return nullptr;
+    }
+
+    // Check for required parameters
+    if (connectionString.find("host=") == std::string::npos ||
+        connectionString.find("dbname=") == std::string::npos ||
+        connectionString.find("user=") == std::string::npos) {
+      Logger::error(
+          LogCategory::TRANSFER, "getPostgresConnection",
+          "Missing required connection parameters (host, dbname, user)");
+      return nullptr;
+    }
+
     // Crear nueva conexión directa para cada consulta
     try {
       auto *conn = new pqxx::connection(connectionString);
       if (conn->is_open()) {
+        // Test connection with a simple query
+        pqxx::work testTxn(*conn);
+        testTxn.exec("SELECT 1");
+        testTxn.commit();
         return conn;
       } else {
-        Logger::error(LogCategory::TRANSFER,
+        Logger::error(LogCategory::TRANSFER, "getPostgresConnection",
                       "Failed to open PostgreSQL connection");
         delete conn;
         return nullptr;
       }
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(LogCategory::TRANSFER, "getPostgresConnection",
+                    "SQL ERROR: " + std::string(e.what()) +
+                        " [SQL State: " + e.sqlstate() + "]");
+      return nullptr;
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::TRANSFER, "getPostgresConnection",
+                    "CONNECTION ERROR: " + std::string(e.what()));
+      return nullptr;
     } catch (const std::exception &e) {
-      Logger::error(LogCategory::TRANSFER,
-                    "Connection failed: " + std::string(e.what()));
+      Logger::error(LogCategory::TRANSFER, "getPostgresConnection",
+                    "ERROR: " + std::string(e.what()));
       return nullptr;
     }
   }
@@ -140,10 +170,16 @@ public:
 
       txn.commit();
       Logger::info(LogCategory::TRANSFER, "Target table setup completed");
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(LogCategory::TRANSFER, "setupTableTargetPostgresToPostgres",
+                    "SQL ERROR: " + std::string(e.what()) +
+                        " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::TRANSFER, "setupTableTargetPostgresToPostgres",
+                    "CONNECTION ERROR: " + std::string(e.what()));
     } catch (const std::exception &e) {
-      Logger::error(LogCategory::TRANSFER,
-                    "Error in setupTableTargetPostgresToPostgres: " +
-                        std::string(e.what()));
+      Logger::error(LogCategory::TRANSFER, "setupTableTargetPostgresToPostgres",
+                    "ERROR: " + std::string(e.what()));
     }
   }
 
@@ -258,11 +294,18 @@ public:
       }
 
       Logger::info(
+          LogCategory::TRANSFER, "transferDataPostgresToPostgres",
           "PostgreSQL to PostgreSQL data transfer completed successfully");
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(LogCategory::TRANSFER, "transferDataPostgresToPostgres",
+                    "SQL ERROR: " + std::string(e.what()) +
+                        " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::TRANSFER, "transferDataPostgresToPostgres",
+                    "CONNECTION ERROR: " + std::string(e.what()));
     } catch (const std::exception &e) {
-      Logger::error(LogCategory::TRANSFER,
-                    "CRITICAL ERROR in transferDataPostgresToPostgres: " +
-                        std::string(e.what()) +
+      Logger::error(LogCategory::TRANSFER, "transferDataPostgresToPostgres",
+                    "CRITICAL ERROR: " + std::string(e.what()) +
                         " - PostgreSQL data transfer completely failed");
     }
   }
@@ -345,9 +388,20 @@ private:
       createQuery += ");";
 
       return createQuery;
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(
+          LogCategory::TRANSFER, "buildCreateTableQuery",
+          "SQL ERROR building create table query: " + std::string(e.what()) +
+              " [SQL State: " + e.sqlstate() + "]");
+      return "";
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::TRANSFER, "buildCreateTableQuery",
+                    "CONNECTION ERROR building create table query: " +
+                        std::string(e.what()));
+      return "";
     } catch (const std::exception &e) {
       Logger::error(LogCategory::TRANSFER, "buildCreateTableQuery",
-                    "Error building create table query: " +
+                    "ERROR building create table query: " +
                         std::string(e.what()));
       return "";
     }
@@ -762,9 +816,19 @@ private:
         return result[0][0].as<int>();
       }
       return 0;
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(LogCategory::TRANSFER, "getSourceCount",
+                    "SQL ERROR getting source count: " + std::string(e.what()) +
+                        " [SQL State: " + e.sqlstate() + "]");
+      return 0;
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::TRANSFER, "getSourceCount",
+                    "CONNECTION ERROR getting source count: " +
+                        std::string(e.what()));
+      return 0;
     } catch (const std::exception &e) {
       Logger::error(LogCategory::TRANSFER, "getSourceCount",
-                    "Error getting source count: " + std::string(e.what()));
+                    "ERROR getting source count: " + std::string(e.what()));
       return 0;
     }
   }
@@ -782,9 +846,19 @@ private:
         return result[0][0].as<int>();
       }
       return 0;
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(LogCategory::TRANSFER, "getTargetCount",
+                    "SQL ERROR getting target count: " + std::string(e.what()) +
+                        " [SQL State: " + e.sqlstate() + "]");
+      return 0;
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::TRANSFER, "getTargetCount",
+                    "CONNECTION ERROR getting target count: " +
+                        std::string(e.what()));
+      return 0;
     } catch (const std::exception &e) {
       Logger::error(LogCategory::TRANSFER, "getTargetCount",
-                    "Error getting target count: " + std::string(e.what()));
+                    "ERROR getting target count: " + std::string(e.what()));
       return 0;
     }
   }
@@ -794,6 +868,13 @@ private:
                            const std::string &schemaName,
                            const std::string &tableName,
                            const std::string &lastOffset, int sourceCount) {
+    // Validate input parameters
+    if (schemaName.empty() || tableName.empty()) {
+      Logger::error(LogCategory::TRANSFER, "performDataTransfer",
+                    "Schema name or table name is empty");
+      return;
+    }
+
     try {
       Logger::info(LogCategory::TRANSFER, "performDataTransfer",
                    "Transferring data for " + schemaName + "." + tableName);
@@ -1026,9 +1107,19 @@ private:
                        std::to_string(totalProcessed) + " records for " +
                        schemaName + "." + tableName);
 
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(LogCategory::TRANSFER, "performDataTransfer",
+                    "SQL ERROR transferring data: " + std::string(e.what()) +
+                        " [SQL State: " + e.sqlstate() + "]");
+      updateStatus(pgConn, schemaName, tableName, "ERROR", 0);
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::TRANSFER, "performDataTransfer",
+                    "CONNECTION ERROR transferring data: " +
+                        std::string(e.what()));
+      updateStatus(pgConn, schemaName, tableName, "ERROR", 0);
     } catch (const std::exception &e) {
       Logger::error(LogCategory::TRANSFER, "performDataTransfer",
-                    "Error transferring data: " + std::string(e.what()));
+                    "ERROR transferring data: " + std::string(e.what()));
       updateStatus(pgConn, schemaName, tableName, "ERROR", 0);
     }
   }
@@ -1055,9 +1146,17 @@ private:
 
       txn.exec(updateQuery);
       txn.commit();
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(LogCategory::TRANSFER, "updateStatus",
+                    "SQL ERROR updating status: " + std::string(e.what()) +
+                        " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::TRANSFER, "updateStatus",
+                    "CONNECTION ERROR updating status: " +
+                        std::string(e.what()));
     } catch (const std::exception &e) {
       Logger::error(LogCategory::TRANSFER, "updateStatus",
-                    "Error updating status: " + std::string(e.what()));
+                    "ERROR updating status: " + std::string(e.what()));
     }
   }
 
@@ -1086,9 +1185,17 @@ private:
       if (!result.empty() && !result[0][0].is_null()) {
         return result[0][0].as<std::string>();
       }
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(LogCategory::TRANSFER, "getPKStrategyFromCatalog",
+                    "SQL ERROR getting PK strategy: " + std::string(e.what()) +
+                        " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::TRANSFER, "getPKStrategyFromCatalog",
+                    "CONNECTION ERROR getting PK strategy: " +
+                        std::string(e.what()));
     } catch (const std::exception &e) {
-      Logger::error(LogCategory::TRANSFER,
-                    "Error getting PK strategy: " + std::string(e.what()));
+      Logger::error(LogCategory::TRANSFER, "getPKStrategyFromCatalog",
+                    "ERROR getting PK strategy: " + std::string(e.what()));
     }
     return "OFFSET";
   }
@@ -1109,9 +1216,17 @@ private:
         std::string pkColumnsJson = result[0][0].as<std::string>();
         return parseJSONArray(pkColumnsJson);
       }
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(LogCategory::TRANSFER, "getPKColumnsFromCatalog",
+                    "SQL ERROR getting PK columns: " + std::string(e.what()) +
+                        " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::TRANSFER, "getPKColumnsFromCatalog",
+                    "CONNECTION ERROR getting PK columns: " +
+                        std::string(e.what()));
     } catch (const std::exception &e) {
-      Logger::error(LogCategory::TRANSFER,
-                    "Error getting PK columns: " + std::string(e.what()));
+      Logger::error(LogCategory::TRANSFER, "getPKColumnsFromCatalog",
+                    "ERROR getting PK columns: " + std::string(e.what()));
     }
     return {};
   }
@@ -1317,9 +1432,18 @@ private:
                          " from " + schema_name + "." + table_name);
       }
 
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(LogCategory::TRANSFER, "processDeletesByPrimaryKey",
+                    "SQL ERROR processing deletes for " + schema_name + "." +
+                        table_name + ": " + std::string(e.what()) +
+                        " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::TRANSFER, "processDeletesByPrimaryKey",
+                    "CONNECTION ERROR processing deletes for " + schema_name +
+                        "." + table_name + ": " + std::string(e.what()));
     } catch (const std::exception &e) {
       Logger::error(LogCategory::TRANSFER, "processDeletesByPrimaryKey",
-                    "Error processing deletes for " + schema_name + "." +
+                    "ERROR processing deletes for " + schema_name + "." +
                         table_name + ": " + std::string(e.what()));
     }
   }
@@ -1433,9 +1557,18 @@ private:
                          " records in " + schema_name + "." + table_name);
       }
 
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(LogCategory::TRANSFER, "processUpdatesByPrimaryKey",
+                    "SQL ERROR processing updates for " + schema_name + "." +
+                        table_name + ": " + std::string(e.what()) +
+                        " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::TRANSFER, "processUpdatesByPrimaryKey",
+                    "CONNECTION ERROR processing updates for " + schema_name +
+                        "." + table_name + ": " + std::string(e.what()));
     } catch (const std::exception &e) {
       Logger::error(LogCategory::TRANSFER, "processUpdatesByPrimaryKey",
-                    "Error processing updates for " + schema_name + "." +
+                    "ERROR processing updates for " + schema_name + "." +
                         table_name + ": " + std::string(e.what()));
     }
   }
@@ -1444,6 +1577,13 @@ private:
                                                 const std::string &schema_name,
                                                 const std::string &table_name) {
     std::vector<std::string> pkColumns;
+
+    // Validate input parameters
+    if (schema_name.empty() || table_name.empty()) {
+      Logger::error(LogCategory::TRANSFER, "getPrimaryKeyColumns",
+                    "Schema name or table name is empty");
+      return pkColumns;
+    }
 
     std::string query = "SELECT kcu.column_name "
                         "FROM information_schema.table_constraints tc "
@@ -1472,9 +1612,18 @@ private:
           pkColumns.push_back(colName);
         }
       }
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(
+          LogCategory::TRANSFER, "getPrimaryKeyColumns",
+          "SQL ERROR getting primary key columns: " + std::string(e.what()) +
+              " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::TRANSFER, "getPrimaryKeyColumns",
+                    "CONNECTION ERROR getting primary key columns: " +
+                        std::string(e.what()));
     } catch (const std::exception &e) {
       Logger::error(LogCategory::TRANSFER, "getPrimaryKeyColumns",
-                    "Error getting primary key columns: " +
+                    "ERROR getting primary key columns: " +
                         std::string(e.what()));
     }
 
@@ -1549,9 +1698,20 @@ private:
             deletedPKs.push_back(pgPKs[i]);
           }
         }
+      } catch (const pqxx::sql_error &e) {
+        Logger::error(LogCategory::TRANSFER, "findDeletedPrimaryKeys",
+                      "SQL ERROR checking deleted primary keys: " +
+                          std::string(e.what()) +
+                          " [SQL State: " + e.sqlstate() + "]");
+        break;
+      } catch (const pqxx::broken_connection &e) {
+        Logger::error(LogCategory::TRANSFER, "findDeletedPrimaryKeys",
+                      "CONNECTION ERROR checking deleted primary keys: " +
+                          std::string(e.what()));
+        break;
       } catch (const std::exception &e) {
         Logger::error(LogCategory::TRANSFER, "findDeletedPrimaryKeys",
-                      "Error checking deleted primary keys: " +
+                      "ERROR checking deleted primary keys: " +
                           std::string(e.what()));
         break;
       }
@@ -1603,9 +1763,17 @@ private:
       txn.commit();
       deletedCount = result.affected_rows();
 
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(LogCategory::TRANSFER, "deleteRecordsByPrimaryKey",
+                    "SQL ERROR deleting records: " + std::string(e.what()) +
+                        " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::TRANSFER, "deleteRecordsByPrimaryKey",
+                    "CONNECTION ERROR deleting records: " +
+                        std::string(e.what()));
     } catch (const std::exception &e) {
       Logger::error(LogCategory::TRANSFER, "deleteRecordsByPrimaryKey",
-                    "Error deleting records: " + std::string(e.what()));
+                    "ERROR deleting records: " + std::string(e.what()));
     }
 
     return deletedCount;
@@ -1681,9 +1849,20 @@ private:
 
       return hasChanges;
 
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(
+          LogCategory::TRANSFER, "compareAndUpdateRecord",
+          "SQL ERROR comparing/updating record: " + std::string(e.what()) +
+              " [SQL State: " + e.sqlstate() + "]");
+      return false;
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::TRANSFER, "compareAndUpdateRecord",
+                    "CONNECTION ERROR comparing/updating record: " +
+                        std::string(e.what()));
+      return false;
     } catch (const std::exception &e) {
       Logger::error(LogCategory::TRANSFER, "compareAndUpdateRecord",
-                    "Error comparing/updating record: " +
+                    "ERROR comparing/updating record: " +
                         std::string(e.what()));
       return false;
     }
@@ -1769,9 +1948,19 @@ private:
                         " rows with UPSERT for " + sourceSchemaName + "." +
                         tableName);
 
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(LogCategory::TRANSFER, "performBulkUpsert",
+                    "SQL ERROR in bulk upsert: " + std::string(e.what()) +
+                        " [SQL State: " + e.sqlstate() + "]");
+      throw;
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::TRANSFER, "performBulkUpsert",
+                    "CONNECTION ERROR in bulk upsert: " +
+                        std::string(e.what()));
+      throw;
     } catch (const std::exception &e) {
       Logger::error(LogCategory::TRANSFER, "performBulkUpsert",
-                    "Error in bulk upsert: " + std::string(e.what()));
+                    "ERROR in bulk upsert: " + std::string(e.what()));
       throw;
     }
   }
@@ -1848,9 +2037,19 @@ private:
                                              " rows with INSERT for " +
                                              lowerSchemaName + "." + tableName);
 
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(LogCategory::TRANSFER, "performBulkInsert",
+                    "SQL ERROR in bulk insert: " + std::string(e.what()) +
+                        " [SQL State: " + e.sqlstate() + "]");
+      throw;
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::TRANSFER, "performBulkInsert",
+                    "CONNECTION ERROR in bulk insert: " +
+                        std::string(e.what()));
+      throw;
     } catch (const std::exception &e) {
       Logger::error(LogCategory::TRANSFER, "performBulkInsert",
-                    "Error in bulk insert: " + std::string(e.what()));
+                    "ERROR in bulk insert: " + std::string(e.what()));
       throw;
     }
   }
@@ -1982,9 +2181,17 @@ private:
           pkColumns.push_back(colName);
         }
       }
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(LogCategory::TRANSFER, "getPrimaryKeyColumnsFromPostgres",
+                    "SQL ERROR getting PK columns: " + std::string(e.what()) +
+                        " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::TRANSFER, "getPrimaryKeyColumnsFromPostgres",
+                    "CONNECTION ERROR getting PK columns: " +
+                        std::string(e.what()));
     } catch (const std::exception &e) {
       Logger::error(LogCategory::TRANSFER, "getPrimaryKeyColumnsFromPostgres",
-                    "Error getting PK columns: " + std::string(e.what()));
+                    "ERROR getting PK columns: " + std::string(e.what()));
     }
 
     return pkColumns;

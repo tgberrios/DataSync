@@ -129,6 +129,7 @@ carpeta de pending
 
 mecanismo para para el thread desde la ui 
 
+poder reseatear los threads tambien 
 
 valgrind --tool=callgrind ./tu_programa
 suma de total de rows 
