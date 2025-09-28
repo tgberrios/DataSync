@@ -218,12 +218,13 @@ para que hace eso ?
 
 si va bien pero cuando lo rebotee ? luego de que procesa una full_load como que se queda atrapado haciendo incrementales y deltas
 
-
+hay que quitar perfect match de dashboard 
+tambien hay que arreglar los logs
 
 ► Currently Processing: crm.AFF_TEMP [MariaDB] (518,000/967,109 - 53.6%) - Status: FULL_LOAD
 la query si funciona pero tiene que ser cualquier status no solo ese 
 
-
+2025-09-27 22:28:09.672[ERROR][DDL_EXPORT][DDLExporter]MSSQL server parameter is empty
 
 SELECT COUNT(*) - COUNT(DISTINCT ctid) FROM "promotions_service_jetu_cr_v2"."PrizeTemplateRules";
 
