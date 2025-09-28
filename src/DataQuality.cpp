@@ -3,19 +3,30 @@
 
 std::string cleanSchemaNameForPostgres(const std::string &schemaName) {
   std::string cleaned = schemaName;
-  // Remove semicolons and other problematic characters
+
+  // Only remove truly problematic characters for SQL injection
   cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), ';'),
                 cleaned.end());
-  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '.'),
+  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '\''),
                 cleaned.end());
-  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '-'),
+  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '"'),
                 cleaned.end());
-  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), ' '),
+  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '\n'),
+                cleaned.end());
+  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '\r'),
+                cleaned.end());
+  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '\t'),
                 cleaned.end());
 
-  // If empty after cleaning, use default
+  // Trim leading/trailing whitespace
+  cleaned.erase(0, cleaned.find_first_not_of(" \t"));
+  cleaned.erase(cleaned.find_last_not_of(" \t") + 1);
+
+  // If empty after cleaning, throw error instead of using default
   if (cleaned.empty()) {
-    cleaned = "default_schema";
+    throw std::invalid_argument(
+        "Schema name is empty or contains only invalid characters: " +
+        schemaName);
   }
 
   return cleaned;
@@ -25,6 +36,30 @@ bool DataQuality::validateTable(pqxx::connection &conn,
                                 const std::string &schema,
                                 const std::string &table,
                                 const std::string &engine) {
+  // Validate input parameters
+  if (schema.empty() || table.empty() || engine.empty()) {
+    Logger::error(LogCategory::QUALITY, "validateTable",
+                  "Schema, table, and engine cannot be empty");
+    return false;
+  }
+
+  // Validate connection
+  if (!conn.is_open()) {
+    Logger::error(LogCategory::QUALITY, "validateTable",
+                  "Database connection is not open");
+    return false;
+  }
+
+  // Basic SQL injection prevention
+  if (schema.find("'") != std::string::npos ||
+      schema.find(";") != std::string::npos ||
+      table.find("'") != std::string::npos ||
+      table.find(";") != std::string::npos) {
+    Logger::error(LogCategory::QUALITY, "validateTable",
+                  "Schema and table names contain invalid characters");
+    return false;
+  }
+
   auto start = std::chrono::high_resolution_clock::now();
 
   try {
@@ -46,8 +81,8 @@ bool DataQuality::validateTable(pqxx::connection &conn,
     metrics.validation_status = determineValidationStatus(metrics);
     return saveMetrics(conn, metrics);
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::QUALITY, "Error validating table " + schema + "." + table + ": " +
-                  e.what());
+    Logger::error(LogCategory::QUALITY, "Error validating table " + schema +
+                                            "." + table + ": " + e.what());
     return false;
   }
 }
@@ -75,9 +110,21 @@ DataQuality::collectMetrics(pqxx::connection &conn, const std::string &schema,
     // Calculate final quality score
     calculateQualityScore(metrics);
 
+  } catch (const pqxx::sql_error &e) {
+    Logger::error(LogCategory::QUALITY, "collectMetrics",
+                  "SQL error collecting metrics: " + std::string(e.what()) +
+                      " [SQL State: " + e.sqlstate() + "]");
+    metrics.error_details = "SQL Error: " + std::string(e.what());
+    metrics.validation_status = "FAILED";
+  } catch (const std::invalid_argument &e) {
+    Logger::error(LogCategory::QUALITY, "collectMetrics",
+                  "Invalid argument error: " + std::string(e.what()));
+    metrics.error_details = "Invalid Argument: " + std::string(e.what());
+    metrics.validation_status = "FAILED";
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::QUALITY, "Error collecting metrics: " + std::string(e.what()));
-    metrics.error_details = e.what();
+    Logger::error(LogCategory::QUALITY, "collectMetrics",
+                  "General error collecting metrics: " + std::string(e.what()));
+    metrics.error_details = "General Error: " + std::string(e.what());
     metrics.validation_status = "FAILED";
   }
 
@@ -103,26 +150,66 @@ bool DataQuality::checkDataTypes(pqxx::connection &conn,
       std::string column = row[0].as<std::string>();
       std::string type = row[1].as<std::string>();
 
-      // Check for type-specific issues
+      // Check for type-specific issues with improved performance
       std::string cleanSchema = cleanSchemaNameForPostgres(metrics.schema_name);
-      auto type_check = txn.exec(
-          "SELECT COUNT(*) FROM \"" + cleanSchema + "\".\"" +
-          metrics.table_name + "\" WHERE \"" + column + "\" IS NOT NULL AND " +
-          "NOT pg_typeof(\"" + column + "\")::text = " + txn.quote(type));
 
-      size_t invalid_count = type_check[0][0].as<size_t>();
-      if (invalid_count > 0) {
+      // Use sampling for large tables to improve performance
+      std::string typeQuery;
+      try {
+        // First check table size to determine sampling strategy
+        auto sizeResult = txn.exec("SELECT COUNT(*) FROM \"" + cleanSchema +
+                                   "\".\"" + metrics.table_name + "\"");
+        size_t tableSize = sizeResult[0][0].as<size_t>();
+
+        if (tableSize > 1000000) {
+          // Use sampling for large tables
+          typeQuery = "SELECT COUNT(*) FROM \"" + cleanSchema + "\".\"" +
+                      metrics.table_name + "\" TABLESAMPLE SYSTEM(5) WHERE \"" +
+                      column + "\" IS NOT NULL AND " + "NOT pg_typeof(\"" +
+                      column + "\")::text = " + txn.quote(type);
+        } else {
+          // Use full table for smaller tables
+          typeQuery = "SELECT COUNT(*) FROM \"" + cleanSchema + "\".\"" +
+                      metrics.table_name + "\" WHERE \"" + column +
+                      "\" IS NOT NULL AND " + "NOT pg_typeof(\"" + column +
+                      "\")::text = " + txn.quote(type);
+        }
+
+        auto type_check = txn.exec(typeQuery);
+        size_t invalid_count = type_check[0][0].as<size_t>();
+
+        // Adjust count for sampled data
+        if (tableSize > 1000000) {
+          invalid_count = static_cast<size_t>(
+              invalid_count * 20); // 5% sample -> multiply by 20
+        }
+
+        if (invalid_count > 0) {
+          type_mismatches[column] = {{"expected_type", type},
+                                     {"invalid_count", invalid_count}};
+          metrics.invalid_type_count += invalid_count;
+        }
+      } catch (const pqxx::sql_error &e) {
+        // Handle specific SQL errors (e.g., unsupported types)
+        Logger::warning(LogCategory::QUALITY, "checkDataTypes",
+                        "Could not check type for column " + column + ": " +
+                            e.what());
         type_mismatches[column] = {{"expected_type", type},
-                                   {"invalid_count", invalid_count}};
-        metrics.invalid_type_count += invalid_count;
+                                   {"error", e.what()}};
       }
     }
 
     metrics.type_mismatch_details = type_mismatches;
     txn.commit();
     return true;
+  } catch (const pqxx::sql_error &e) {
+    Logger::error(LogCategory::QUALITY, "checkDataTypes",
+                  "SQL error checking data types: " + std::string(e.what()) +
+                      " [SQL State: " + e.sqlstate() + "]");
+    return false;
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::QUALITY, "Error checking data types: " + std::string(e.what()));
+    Logger::error(LogCategory::QUALITY, "checkDataTypes",
+                  "Error checking data types: " + std::string(e.what()));
     return false;
   }
 }
@@ -147,21 +234,46 @@ bool DataQuality::checkNullCounts(pqxx::connection &conn,
       return true;
     }
 
-    // Get total rows and null counts
-    auto result = txn.exec(
-        "SELECT COUNT(*) as total, "
-        "SUM(CASE WHEN EXISTS (SELECT 1 FROM json_each_text(to_json(t)) j "
-        "WHERE j.value IS NULL) THEN 1 ELSE 0 END) as null_rows "
-        "FROM \"" +
-        cleanSchema + "\".\"" + metrics.table_name + "\" t");
+    // Get total rows efficiently
+    auto totalResult = txn.exec("SELECT COUNT(*) FROM \"" + cleanSchema +
+                                "\".\"" + metrics.table_name + "\"");
+    metrics.total_rows =
+        totalResult[0][0].is_null() ? 0 : totalResult[0][0].as<size_t>();
 
-    metrics.total_rows = result[0][0].is_null() ? 0 : result[0][0].as<size_t>();
-    metrics.null_count = result[0][1].is_null() ? 0 : result[0][1].as<size_t>();
+    // Calculate NULL count more efficiently by checking each column
+    // individually
+    metrics.null_count = 0;
+
+    // Get column list
+    auto columnsResult =
+        txn.exec("SELECT column_name FROM information_schema.columns "
+                 "WHERE table_schema = " +
+                 txn.quote(cleanSchema) +
+                 " AND table_name = " + txn.quote(metrics.table_name));
+
+    for (const auto &colRow : columnsResult) {
+      std::string columnName = colRow[0].as<std::string>();
+
+      try {
+        // Count NULL values in this specific column
+        auto nullResult = txn.exec("SELECT COUNT(*) FROM \"" + cleanSchema +
+                                   "\".\"" + metrics.table_name +
+                                   "\" WHERE \"" + columnName + "\" IS NULL");
+
+        size_t columnNulls = nullResult[0][0].as<size_t>();
+        metrics.null_count += columnNulls;
+      } catch (const std::exception &e) {
+        Logger::warning(LogCategory::QUALITY, "checkNullCounts",
+                        "Could not count NULLs in column " + columnName + ": " +
+                            e.what());
+      }
+    }
 
     txn.commit();
     return true;
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::QUALITY, "Error checking null counts: " + std::string(e.what()));
+    Logger::error(LogCategory::QUALITY,
+                  "Error checking null counts: " + std::string(e.what()));
     return false;
   }
 }
@@ -185,18 +297,40 @@ bool DataQuality::checkDuplicates(pqxx::connection &conn,
       return true;
     }
 
-    // Count duplicates using a simpler approach
-    auto result =
-        txn.exec("SELECT COUNT(*) - COUNT(DISTINCT ctid) as dup_count FROM \"" +
-                 cleanSchema + "\".\"" + metrics.table_name + "\"");
+    // Count duplicates with sampling for large tables
+    std::string duplicateQuery;
 
+    // First check table size
+    auto sizeResult = txn.exec("SELECT COUNT(*) FROM \"" + cleanSchema +
+                               "\".\"" + metrics.table_name + "\"");
+    size_t tableSize = sizeResult[0][0].as<size_t>();
+
+    if (tableSize > 1000000) {
+      // Use sampling for large tables
+      duplicateQuery = "SELECT COUNT(*) - COUNT(DISTINCT ctid) FROM \"" +
+                       cleanSchema + "\".\"" + metrics.table_name +
+                       "\" TABLESAMPLE SYSTEM(10)";
+    } else {
+      // Use full table for smaller tables
+      duplicateQuery = "SELECT COUNT(*) - COUNT(DISTINCT ctid) FROM \"" +
+                       cleanSchema + "\".\"" + metrics.table_name + "\"";
+    }
+
+    auto result = txn.exec(duplicateQuery);
     metrics.duplicate_count =
         result[0][0].is_null() ? 0 : result[0][0].as<size_t>();
+
+    // Adjust count for sampled data
+    if (tableSize > 1000000) {
+      metrics.duplicate_count = static_cast<size_t>(
+          metrics.duplicate_count * 10); // 10% sample -> multiply by 10
+    }
 
     txn.commit();
     return true;
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::QUALITY, "Error checking duplicates: " + std::string(e.what()));
+    Logger::error(LogCategory::QUALITY,
+                  "Error checking duplicates: " + std::string(e.what()));
     return false;
   }
 }
@@ -207,32 +341,70 @@ bool DataQuality::checkConstraints(pqxx::connection &conn,
     pqxx::work txn(conn);
     json constraint_issues;
 
-    // Check foreign key constraints
-    auto fk_result =
-        txn.exec("SELECT COUNT(*) "
-                 "FROM information_schema.referential_constraints rc "
-                 "JOIN information_schema.key_column_usage kcu "
-                 "ON rc.constraint_name = kcu.constraint_name "
-                 "WHERE kcu.table_schema = " +
-                 txn.quote(metrics.schema_name) +
-                 " AND kcu.table_name = " + txn.quote(metrics.table_name));
+    // Check foreign key constraints properly
+    std::string fkQuery =
+        "SELECT rc.constraint_name, kcu.column_name, "
+        "ccu.table_name AS referenced_table, ccu.column_name AS "
+        "referenced_column "
+        "FROM information_schema.referential_constraints rc "
+        "JOIN information_schema.key_column_usage kcu "
+        "ON rc.constraint_name = kcu.constraint_name "
+        "JOIN information_schema.constraint_column_usage ccu "
+        "ON rc.unique_constraint_name = ccu.constraint_name "
+        "WHERE kcu.table_schema = " +
+        txn.quote(metrics.schema_name) +
+        " AND kcu.table_name = " + txn.quote(metrics.table_name);
 
-    if (fk_result[0][0].as<int>() > 0) {
-      // If there are foreign keys, check for violations
-      auto violations =
-          txn.exec("SELECT COUNT(*) "
-                   "FROM " +
-                   metrics.schema_name + "." + metrics.table_name +
-                   " WHERE NOT EXISTS (SELECT 1 FROM referenced_table WHERE id "
-                   "= foreign_key)");
-      metrics.referential_integrity_errors = violations[0][0].as<size_t>();
+    auto fk_result = txn.exec(fkQuery);
+    metrics.referential_integrity_errors = 0;
+
+    // Check each foreign key constraint for violations
+    for (const auto &fk_row : fk_result) {
+      std::string constraintName = fk_row[0].as<std::string>();
+      std::string columnName = fk_row[1].as<std::string>();
+      std::string referencedTable = fk_row[2].as<std::string>();
+      std::string referencedColumn = fk_row[3].as<std::string>();
+
+      try {
+        // Build proper violation check query
+        std::string violationQuery =
+            "SELECT COUNT(*) FROM \"" + metrics.schema_name + "\".\"" +
+            metrics.table_name +
+            "\" t "
+            "WHERE \"" +
+            columnName +
+            "\" IS NOT NULL AND "
+            "NOT EXISTS (SELECT 1 FROM \"" +
+            metrics.schema_name + "\".\"" + referencedTable +
+            "\" r "
+            "WHERE r.\"" +
+            referencedColumn + "\" = t.\"" + columnName + "\")";
+
+        auto violations = txn.exec(violationQuery);
+        size_t constraintViolations = violations[0][0].as<size_t>();
+        metrics.referential_integrity_errors += constraintViolations;
+
+        if (constraintViolations > 0) {
+          constraint_issues[constraintName] = {
+              {"column", columnName},
+              {"referenced_table", referencedTable},
+              {"referenced_column", referencedColumn},
+              {"violations", constraintViolations}};
+        }
+      } catch (const std::exception &e) {
+        Logger::warning(LogCategory::QUALITY, "checkConstraints",
+                        "Could not check constraint " + constraintName + ": " +
+                            e.what());
+        constraint_issues[constraintName] = {{"error", e.what()}};
+      }
     }
 
     metrics.integrity_check_details = constraint_issues;
     txn.commit();
     return true;
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::QUALITY, "Error checking constraints: " + std::string(e.what()));
+    Logger::error(LogCategory::QUALITY,
+                  "Error checking constraints: " + std::string(e.what()));
     return false;
   }
 }
@@ -308,7 +480,8 @@ bool DataQuality::saveMetrics(pqxx::connection &conn,
     txn.commit();
     return true;
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::QUALITY, "Error saving metrics: " + std::string(e.what()));
+    Logger::error(LogCategory::QUALITY,
+                  "Error saving metrics: " + std::string(e.what()));
     return false;
   }
 }
@@ -373,7 +546,8 @@ DataQuality::getLatestMetrics(pqxx::connection &conn,
 
     txn.commit();
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::QUALITY, "Error getting latest metrics: " + std::string(e.what()));
+    Logger::error(LogCategory::QUALITY,
+                  "Error getting latest metrics: " + std::string(e.what()));
   }
 
   return results;
