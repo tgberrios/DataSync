@@ -221,8 +221,7 @@ public:
         return;
       }
 
-      // Sort tables by priority: FULL_LOAD, RESET, PERFECT_MATCH,
-      // LISTENING_CHANGES
+      // Sort tables by priority: FULL_LOAD, RESET, LISTENING_CHANGES
       std::sort(
           tables.begin(), tables.end(),
           [](const TableInfo &a, const TableInfo &b) {
@@ -233,10 +232,6 @@ public:
             if (a.status == "RESET" && b.status != "RESET")
               return true;
             if (a.status != "RESET" && b.status == "RESET")
-              return false;
-            if (a.status == "PERFECT_MATCH" && b.status != "PERFECT_MATCH")
-              return true;
-            if (a.status != "PERFECT_MATCH" && b.status == "PERFECT_MATCH")
               return false;
             if (a.status == "LISTENING_CHANGES" &&
                 b.status != "LISTENING_CHANGES")
@@ -442,8 +437,7 @@ public:
         return;
       }
 
-      // Sort tables by priority: FULL_LOAD, RESET, PERFECT_MATCH,
-      // LISTENING_CHANGES
+      // Sort tables by priority: FULL_LOAD, RESET, LISTENING_CHANGES
       std::sort(
           tables.begin(), tables.end(),
           [](const TableInfo &a, const TableInfo &b) {
@@ -454,10 +448,6 @@ public:
             if (a.status == "RESET" && b.status != "RESET")
               return true;
             if (a.status != "RESET" && b.status == "RESET")
-              return false;
-            if (a.status == "PERFECT_MATCH" && b.status != "PERFECT_MATCH")
-              return true;
-            if (a.status != "PERFECT_MATCH" && b.status == "PERFECT_MATCH")
               return false;
             if (a.status == "LISTENING_CHANGES" &&
                 b.status != "LISTENING_CHANGES")
@@ -612,73 +602,56 @@ public:
             lastOffset = 0;
           }
 
-          if (lastOffset >= sourceCount) {
-            updateStatus(pgConn, schema_name, table_name, "PERFECT_MATCH",
-                         sourceCount);
-          } else {
-            updateStatus(pgConn, schema_name, table_name, "LISTENING_CHANGES",
-                         sourceCount);
+          // Simplificado: Siempre usar LISTENING_CHANGES para sincronización incremental
+          updateStatus(pgConn, schema_name, table_name, "LISTENING_CHANGES",
+                       sourceCount);
 
-            // Actualizar last_processed_pk para tablas ya sincronizadas
-            std::string pkStrategy =
-                getPKStrategyFromCatalog(pgConn, schema_name, table_name);
-            std::vector<std::string> pkColumns =
-                getPKColumnsFromCatalog(pgConn, schema_name, table_name);
+          // Actualizar last_processed_pk para tablas sincronizadas
+          std::string pkStrategy =
+              getPKStrategyFromCatalog(pgConn, schema_name, table_name);
+          std::vector<std::string> pkColumns =
+              getPKColumnsFromCatalog(pgConn, schema_name, table_name);
 
-            if (pkStrategy == "PK" && !pkColumns.empty()) {
-              try {
-                // Obtener el último PK de la tabla para marcar como procesada
-                std::string maxPKQuery = "SELECT ";
-                for (size_t i = 0; i < pkColumns.size(); ++i) {
-                  if (i > 0)
-                    maxPKQuery += ", ";
-                  maxPKQuery += "[" + pkColumns[i] + "]";
-                }
-                maxPKQuery += " FROM [" + schema_name + "].[" + table_name +
-                              "] ORDER BY ";
-                for (size_t i = 0; i < pkColumns.size(); ++i) {
-                  if (i > 0)
-                    maxPKQuery += ", ";
-                  maxPKQuery += "[" + pkColumns[i] + "]";
-                }
-                maxPKQuery += " DESC OFFSET 0 ROWS FETCH NEXT 1 ROWS ONLY;";
-
-                std::vector<std::vector<std::string>> maxPKResults =
-                    executeQueryMSSQL(dbc, maxPKQuery);
-
-                if (!maxPKResults.empty() && !maxPKResults[0].empty()) {
-                  std::string lastPK;
-                  for (size_t i = 0; i < maxPKResults[0].size(); ++i) {
-                    if (i > 0)
-                      lastPK += "|";
-                    lastPK += maxPKResults[0][i];
-                  }
-
-                  updateLastProcessedPK(pgConn, schema_name, table_name,
-                                        lastPK);
-                  Logger::info(LogCategory::TRANSFER,
-                               "Updated last_processed_pk to " + lastPK +
-                                   " for synchronized table " + schema_name +
-                                   "." + table_name);
-                } else {
-                  Logger::warning(LogCategory::TRANSFER,
-                                  "No PK data found for synchronized table " +
-                                      schema_name + "." + table_name);
-                }
-              } catch (const std::exception &e) {
-                Logger::error(LogCategory::TRANSFER,
-                              "ERROR: Failed to update last_processed_pk for "
-                              "synchronized table " +
-                                  schema_name + "." + table_name + ": " +
-                                  std::string(e.what()));
+          if (pkStrategy == "PK" && !pkColumns.empty()) {
+            try {
+              // Obtener el último PK de la tabla para marcar como procesada
+              std::string maxPKQuery = "SELECT ";
+              for (size_t i = 0; i < pkColumns.size(); ++i) {
+                if (i > 0)
+                  maxPKQuery += ", ";
+                maxPKQuery += "[" + pkColumns[i] + "]";
               }
-            } else {
-              Logger::warning(LogCategory::TRANSFER,
-                              "DEBUG: Skipping last_processed_pk update for " +
-                                  schema_name + "." + table_name +
-                                  " - pkStrategy: " + pkStrategy +
-                                  ", pkColumns empty: " +
-                                  (pkColumns.empty() ? "true" : "false"));
+              maxPKQuery += " FROM [" + schema_name + "].[" + table_name +
+                            "] ORDER BY ";
+              for (size_t i = 0; i < pkColumns.size(); ++i) {
+                if (i > 0)
+                  maxPKQuery += ", ";
+                maxPKQuery += "[" + pkColumns[i] + "]";
+              }
+              maxPKQuery += " DESC OFFSET 0 ROWS FETCH NEXT 1 ROWS ONLY;";
+
+              std::vector<std::vector<std::string>> maxPKResults =
+                  executeQueryMSSQL(dbc, maxPKQuery);
+
+              if (!maxPKResults.empty() && !maxPKResults[0].empty()) {
+                std::string lastPK;
+                for (size_t i = 0; i < maxPKResults[0].size(); ++i) {
+                  if (i > 0)
+                    lastPK += "|";
+                  lastPK += maxPKResults[0][i];
+                }
+
+                updateLastProcessedPK(pgConn, schema_name, table_name, lastPK);
+                Logger::info(LogCategory::TRANSFER,
+                             "Updated last_processed_pk to " + lastPK +
+                                 " for synchronized table " + schema_name + "." + table_name);
+              }
+            } catch (const std::exception &e) {
+              Logger::error(LogCategory::TRANSFER,
+                            "ERROR: Failed to update last_processed_pk for "
+                            "synchronized table " +
+                                schema_name + "." + table_name + ": " +
+                                std::string(e.what()));
             }
           }
           continue;
@@ -1038,66 +1011,55 @@ public:
         }
 
         if (targetCount > 0) {
-          if (targetCount >= sourceCount) {
-            Logger::info(LogCategory::TRANSFER,
-                         "Table " + schema_name + "." + table_name +
-                             " synchronized - PERFECT_MATCH");
-            updateStatus(pgConn, schema_name, table_name, "PERFECT_MATCH",
-                         sourceCount);
+          // Simplificado: Siempre usar LISTENING_CHANGES para sincronización incremental
+          Logger::info(LogCategory::TRANSFER,
+                       "Table " + schema_name + "." + table_name +
+                           " synchronized - LISTENING_CHANGES");
+          updateStatus(pgConn, schema_name, table_name, "LISTENING_CHANGES",
+                       targetCount);
 
-            // OPTIMIZED: Update last_processed_pk for completed transfer (even
-            // if single chunk)
-            if (pkStrategy == "PK" && !pkColumns.empty()) {
-              try {
-                // Obtener el último PK de la tabla para marcar como
-                // completamente procesada
-                std::string maxPKQuery = "SELECT ";
-                for (size_t i = 0; i < pkColumns.size(); ++i) {
-                  if (i > 0)
-                    maxPKQuery += ", ";
-                  maxPKQuery += "[" + pkColumns[i] + "]";
-                }
-                maxPKQuery += " FROM [" + schema_name + "].[" + table_name +
-                              "] ORDER BY ";
-                for (size_t i = 0; i < pkColumns.size(); ++i) {
-                  if (i > 0)
-                    maxPKQuery += ", ";
-                  maxPKQuery += "[" + pkColumns[i] + "]";
-                }
-                maxPKQuery += " DESC OFFSET 0 ROWS FETCH NEXT 1 ROWS ONLY;";
-
-                std::vector<std::vector<std::string>> maxPKResults =
-                    executeQueryMSSQL(dbc, maxPKQuery);
-
-                if (!maxPKResults.empty() && !maxPKResults[0].empty()) {
-                  std::string lastPK;
-                  for (size_t i = 0; i < maxPKResults[0].size(); ++i) {
-                    if (i > 0)
-                      lastPK += "|";
-                    lastPK += maxPKResults[0][i];
-                  }
-
-                  updateLastProcessedPK(pgConn, schema_name, table_name,
-                                        lastPK);
-                  Logger::info(LogCategory::TRANSFER,
-                               "Updated last_processed_pk to " + lastPK +
-                                   " for completed table " + schema_name + "." +
-                                   table_name);
-                }
-              } catch (const std::exception &e) {
-                Logger::error(LogCategory::TRANSFER,
-                              "ERROR: Failed to update last_processed_pk for "
-                              "completed table " +
-                                  schema_name + "." + table_name + ": " +
-                                  std::string(e.what()));
+          // OPTIMIZED: Update last_processed_pk for completed transfer
+          if (pkStrategy == "PK" && !pkColumns.empty()) {
+            try {
+              // Obtener el último PK de la tabla para marcar como procesada
+              std::string maxPKQuery = "SELECT ";
+              for (size_t i = 0; i < pkColumns.size(); ++i) {
+                if (i > 0)
+                  maxPKQuery += ", ";
+                maxPKQuery += "[" + pkColumns[i] + "]";
               }
+              maxPKQuery += " FROM [" + schema_name + "].[" + table_name +
+                            "] ORDER BY ";
+              for (size_t i = 0; i < pkColumns.size(); ++i) {
+                if (i > 0)
+                  maxPKQuery += ", ";
+                maxPKQuery += "[" + pkColumns[i] + "]";
+              }
+              maxPKQuery += " DESC OFFSET 0 ROWS FETCH NEXT 1 ROWS ONLY;";
+
+              std::vector<std::vector<std::string>> maxPKResults =
+                  executeQueryMSSQL(dbc, maxPKQuery);
+
+              if (!maxPKResults.empty() && !maxPKResults[0].empty()) {
+                std::string lastPK;
+                for (size_t i = 0; i < maxPKResults[0].size(); ++i) {
+                  if (i > 0)
+                    lastPK += "|";
+                  lastPK += maxPKResults[0][i];
+                }
+
+                updateLastProcessedPK(pgConn, schema_name, table_name, lastPK);
+                Logger::info(LogCategory::TRANSFER,
+                             "Updated last_processed_pk to " + lastPK +
+                                 " for completed table " + schema_name + "." + table_name);
+              }
+            } catch (const std::exception &e) {
+              Logger::error(LogCategory::TRANSFER,
+                            "ERROR: Failed to update last_processed_pk for "
+                            "completed table " +
+                                schema_name + "." + table_name + ": " +
+                                std::string(e.what()));
             }
-          } else {
-            Logger::info(LogCategory::TRANSFER,
-                         "Table " + schema_name + "." + table_name +
-                             " partially synchronized - LISTENING_CHANGES");
-            updateStatus(pgConn, schema_name, table_name, "LISTENING_CHANGES",
-                         targetCount);
           }
         }
 
@@ -1161,7 +1123,7 @@ public:
 
       // Actualizar last_offset para todos los status que requieren tracking
       if (status == "FULL_LOAD" || status == "RESET" ||
-          status == "PERFECT_MATCH" || status == "LISTENING_CHANGES") {
+          status == "LISTENING_CHANGES") {
         updateQuery += ", last_offset='" + std::to_string(offset) + "'";
       }
 

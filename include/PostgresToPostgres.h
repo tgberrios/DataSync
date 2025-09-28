@@ -63,8 +63,7 @@ public:
                        std::to_string(results.size()) +
                        " active PostgreSQL tables");
 
-      // Sort tables by priority: FULL_LOAD, RESET, PERFECT_MATCH,
-      // LISTENING_CHANGES
+      // Sort tables by priority: FULL_LOAD, RESET, LISTENING_CHANGES
       std::vector<
           std::tuple<std::string, std::string, std::string, std::string>>
           tables;
@@ -88,10 +87,6 @@ public:
         if (statusA == "RESET" && statusB != "RESET")
           return true;
         if (statusA != "RESET" && statusB == "RESET")
-          return false;
-        if (statusA == "PERFECT_MATCH" && statusB != "PERFECT_MATCH")
-          return true;
-        if (statusA != "PERFECT_MATCH" && statusB == "PERFECT_MATCH")
           return false;
         if (statusA == "LISTENING_CHANGES" && statusB != "LISTENING_CHANGES")
           return true;
@@ -180,8 +175,7 @@ public:
                          std::to_string(results.size()) +
                          " active PostgreSQL tables for transfer");
 
-        // Sort tables by priority: FULL_LOAD, RESET, PERFECT_MATCH,
-        // LISTENING_CHANGES
+        // Sort tables by priority: FULL_LOAD, RESET, LISTENING_CHANGES
         std::vector<
             std::tuple<std::string, std::string, std::string, std::string,
                        std::string, std::string, std::string>>
@@ -201,30 +195,26 @@ public:
           );
         }
 
-        std::sort(
-            tables.begin(), tables.end(), [](const auto &a, const auto &b) {
-              std::string statusA = std::get<4>(a);
-              std::string statusB = std::get<4>(b);
-              if (statusA == "FULL_LOAD" && statusB != "FULL_LOAD")
-                return true;
-              if (statusA != "FULL_LOAD" && statusB == "FULL_LOAD")
-                return false;
-              if (statusA == "RESET" && statusB != "RESET")
-                return true;
-              if (statusA != "RESET" && statusB == "RESET")
-                return false;
-              if (statusA == "PERFECT_MATCH" && statusB != "PERFECT_MATCH")
-                return true;
-              if (statusA != "PERFECT_MATCH" && statusB == "PERFECT_MATCH")
-                return false;
-              if (statusA == "LISTENING_CHANGES" &&
-                  statusB != "LISTENING_CHANGES")
-                return true;
-              if (statusA != "LISTENING_CHANGES" &&
-                  statusB == "LISTENING_CHANGES")
-                return false;
-              return false;
-            });
+        std::sort(tables.begin(), tables.end(),
+                  [](const auto &a, const auto &b) {
+                    std::string statusA = std::get<4>(a);
+                    std::string statusB = std::get<4>(b);
+                    if (statusA == "FULL_LOAD" && statusB != "FULL_LOAD")
+                      return true;
+                    if (statusA != "FULL_LOAD" && statusB == "FULL_LOAD")
+                      return false;
+                    if (statusA == "RESET" && statusB != "RESET")
+                      return true;
+                    if (statusA != "RESET" && statusB == "RESET")
+                      return false;
+                    if (statusA == "LISTENING_CHANGES" &&
+                        statusB != "LISTENING_CHANGES")
+                      return true;
+                    if (statusA != "LISTENING_CHANGES" &&
+                        statusB == "LISTENING_CHANGES")
+                      return false;
+                    return false;
+                  });
 
         Logger::info(LogCategory::TRANSFER, "transferDataPostgresToPostgres",
                      "Processing " + std::to_string(tables.size()) +
@@ -465,10 +455,10 @@ private:
       }
 
       if (lastOffsetNum >= sourceCount) {
-        updateStatus(pgConn, schemaName, tableName, "PERFECT_MATCH",
+        updateStatus(pgConn, schemaName, tableName, "LISTENING_CHANGES",
                      sourceCount);
 
-        // OPTIMIZED: Update last_processed_pk for PERFECT_MATCH tables
+        // OPTIMIZED: Update last_processed_pk for LISTENING_CHANGES tables
         std::string pkStrategy =
             getPKStrategyFromCatalog(pgConn, schemaName, tableName);
         std::vector<std::string> pkColumns =
@@ -497,7 +487,7 @@ private:
             auto maxPKResults = sourceTxn.exec(maxPKQuery);
             sourceTxn.commit();
 
-            if (!maxPKResults.empty() && !maxPKResults[0].empty()) {
+            if (!maxPKResults.empty() && maxPKResults[0].size() > 0) {
               std::string lastPK;
               for (size_t i = 0; i < maxPKResults[0].size(); ++i) {
                 if (i > 0)
@@ -510,13 +500,13 @@ private:
               updateLastProcessedPK(pgConn, schemaName, tableName, lastPK);
               Logger::info(LogCategory::TRANSFER,
                            "Updated last_processed_pk to " + lastPK +
-                               " for PERFECT_MATCH table " + schemaName + "." +
-                               tableName);
+                               " for LISTENING_CHANGES table " + schemaName +
+                               "." + tableName);
             }
           } catch (const std::exception &e) {
             Logger::error(LogCategory::TRANSFER,
                           "ERROR: Failed to update last_processed_pk for "
-                          "PERFECT_MATCH table " +
+                          "LISTENING_CHANGES table " +
                               schemaName + "." + tableName + ": " +
                               std::string(e.what()));
           }
@@ -553,7 +543,7 @@ private:
             auto maxPKResults = sourceTxn.exec(maxPKQuery);
             sourceTxn.commit();
 
-            if (!maxPKResults.empty() && !maxPKResults[0].empty()) {
+            if (!maxPKResults.empty() && maxPKResults[0].size() > 0) {
               std::string lastPK;
               for (size_t i = 0; i < maxPKResults[0].size(); ++i) {
                 if (i > 0)
@@ -575,7 +565,7 @@ private:
                       "." + tableName + " - maxPKResults.empty()=" +
                       (maxPKResults.empty() ? "true" : "false") +
                       ", first row empty=" +
-                      (!maxPKResults.empty() && maxPKResults[0].empty()
+                      (!maxPKResults.empty() && maxPKResults[0].size() == 0
                            ? "true"
                            : "false"));
             }
@@ -697,7 +687,8 @@ private:
                       ", Target: " + std::to_string(targetCount));
 
     if (sourceCount == targetCount) {
-      updateStatus(pgConn, schemaName, tableName, "PERFECT_MATCH", sourceCount);
+      updateStatus(pgConn, schemaName, tableName, "LISTENING_CHANGES",
+                   sourceCount);
     } else if (sourceCount == 0) {
       updateStatus(pgConn, schemaName, tableName, "NO_DATA", 0);
     } else if (sourceCount < targetCount) {
@@ -978,7 +969,8 @@ private:
         }
       }
 
-      updateStatus(pgConn, schemaName, tableName, "PERFECT_MATCH", sourceCount);
+      updateStatus(pgConn, schemaName, tableName, "LISTENING_CHANGES",
+                   sourceCount);
 
       // OPTIMIZED: Update last_processed_pk for completed transfer (even if
       // single chunk)
@@ -1054,7 +1046,7 @@ private:
 
       // Actualizar last_offset para todos los status que requieren tracking
       if (status == "FULL_LOAD" || status == "RESET" ||
-          status == "PERFECT_MATCH" || status == "LISTENING_CHANGES") {
+          status == "LISTENING_CHANGES") {
         updateQuery += ", last_offset='" + std::to_string(count) + "'";
       }
 
