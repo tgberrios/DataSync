@@ -32,7 +32,6 @@ export interface BatchConfig {
 export interface DashboardStats {
   syncStatus: {
     progress: number;
-    perfectMatch: number;
     listeningChanges: number;
     pending: number;
     fullLoadActive: number;

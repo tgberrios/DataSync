@@ -385,7 +385,6 @@ app.get("/api/dashboard/stats", async (req, res) => {
     const stats = {
       syncStatus: {
         progress: 0,
-        perfectMatch: parseInt(syncStatus.rows[0]?.perfect_match || 0),
         listeningChanges: parseInt(syncStatus.rows[0]?.listening_changes || 0),
         pending: parseInt(syncStatus.rows[0]?.pending || 0),
         fullLoadActive: parseInt(syncStatus.rows[0]?.full_load_active || 0),
@@ -432,28 +431,24 @@ app.get("/api/dashboard/stats", async (req, res) => {
 
     // Calcular progreso total - solo contar registros activos
     const total =
-      stats.syncStatus.perfectMatch +
       stats.syncStatus.listeningChanges +
       stats.syncStatus.fullLoadActive +
       stats.syncStatus.fullLoadInactive +
       stats.syncStatus.noData +
       stats.syncStatus.errors;
 
-    // El progreso se calcula como: (Perfect Match + Listening Changes + No Data) / Total * 100
+    // El progreso se calcula como: (Listening Changes + No Data) / Total * 100
     // NO_DATA también es un estado exitoso (no hay datos que sincronizar)
     stats.syncStatus.progress =
       total > 0
         ? Math.round(
-            ((stats.syncStatus.perfectMatch +
-              stats.syncStatus.listeningChanges +
-              stats.syncStatus.noData) /
+            ((stats.syncStatus.listeningChanges + stats.syncStatus.noData) /
               total) *
               100
           )
         : 0;
 
     console.log("Progress calculation:", {
-      perfectMatch: stats.syncStatus.perfectMatch,
       listeningChanges: stats.syncStatus.listeningChanges,
       noData: stats.syncStatus.noData,
       fullLoadActive: stats.syncStatus.fullLoadActive,
@@ -461,9 +456,7 @@ app.get("/api/dashboard/stats", async (req, res) => {
       errors: stats.syncStatus.errors,
       total: total,
       successfulStates:
-        stats.syncStatus.perfectMatch +
-        stats.syncStatus.listeningChanges +
-        stats.syncStatus.noData,
+        stats.syncStatus.listeningChanges + stats.syncStatus.noData,
       progress: stats.syncStatus.progress + "%",
     });
 

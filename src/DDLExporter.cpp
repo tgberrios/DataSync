@@ -1099,6 +1099,14 @@ void DDLExporter::exportMSSQLDDL(const SchemaInfo &schema) {
   try {
     std::string connStr = getConnectionString(schema);
 
+    // Validate connection string is not empty
+    if (connStr.empty()) {
+      Logger::warning(LogCategory::DDL_EXPORT, "DDLExporter",
+                      "MSSQL connection string is empty for schema: " +
+                          schema.schema_name + " - skipping DDL export");
+      return;
+    }
+
     // Parse MSSQL connection string
     std::string server, database, username, password, port;
     std::istringstream ss(connStr);
@@ -1116,22 +1124,25 @@ void DDLExporter::exportMSSQLDDL(const SchemaInfo &schema) {
       value.erase(0, value.find_first_not_of(" \t\r\n"));
       value.erase(value.find_last_not_of(" \t\r\n") + 1);
 
-      if (key == "server")
+      if (key == "server" || key == "SERVER")
         server = value;
-      else if (key == "database")
+      else if (key == "database" || key == "DATABASE")
         database = value;
-      else if (key == "username")
+      else if (key == "username" || key == "UID")
         username = value;
-      else if (key == "password")
+      else if (key == "password" || key == "PWD")
         password = value;
-      else if (key == "port")
+      else if (key == "port" || key == "PORT")
         port = value;
     }
 
     // Validate connection parameters
     if (server.empty()) {
-      Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
-                    "MSSQL server parameter is empty");
+      Logger::warning(
+          LogCategory::DDL_EXPORT, "DDLExporter",
+          "MSSQL server parameter is empty for schema: " + schema.schema_name +
+              " - connection string: " + connStr.substr(0, 100) +
+              "... - skipping DDL export");
       return;
     }
 

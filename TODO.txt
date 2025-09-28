@@ -216,9 +216,4 @@ para que hace eso ?
 2025-09-27 17:14:43.932[INFO][SYSTEM][TRANSFER]Processing chunk 167 for table crm.AFF_TEMP (size: 1000, offset: 166000)
 2025-09-27 17:14:43.932[INFO][SYSTEM][TRANSFER]Updating last_offset to 166000 for table crm.AFF_TEMP
 
-si va bien pero cuando lo rebotee ? luego de que procesa una full_load como que se queda atrapado haciendo incrementales y deltas
-
-hay que quitar perfect match de dashboard 
-
-
-2025-09-27 22:57:52.688[ERROR][DDL_EXPORT][DDLExporter]MSSQL server parameter is empty
+2025-09-27 23:25:40.201[WARNING][SYSTEM][MONITORING]Chunk size value out of range (1KB-1GB): 1
