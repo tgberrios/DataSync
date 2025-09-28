@@ -84,20 +84,24 @@ void DataGovernance::runDiscovery() {
 
   try {
     std::vector<TableMetadata> tables = discoverTables();
-    Logger::info(LogCategory::GOVERNANCE, "Discovered " + std::to_string(tables.size()) + " tables");
+    Logger::info(LogCategory::GOVERNANCE,
+                 "Discovered " + std::to_string(tables.size()) + " tables");
 
     for (const auto &table : tables) {
       try {
         storeMetadata(table);
       } catch (const std::exception &e) {
-        Logger::error(LogCategory::GOVERNANCE, "Error processing table " + table.schema_name + "." +
-                      table.table_name + ": " + std::string(e.what()));
+        Logger::error(LogCategory::GOVERNANCE,
+                      "Error processing table " + table.schema_name + "." +
+                          table.table_name + ": " + std::string(e.what()));
       }
     }
 
-    Logger::info(LogCategory::GOVERNANCE, "Data governance discovery completed");
+    Logger::info(LogCategory::GOVERNANCE,
+                 "Data governance discovery completed");
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::GOVERNANCE, "Error in discovery process: " + std::string(e.what()));
+    Logger::error(LogCategory::GOVERNANCE,
+                  "Error in discovery process: " + std::string(e.what()));
   }
 }
 
@@ -127,10 +131,12 @@ std::vector<TableMetadata> DataGovernance::discoverTables() {
       tables.push_back(metadata);
     }
 
-    Logger::info(LogCategory::GOVERNANCE, "Discovered " + std::to_string(tables.size()) +
-                 " tables from DataLake");
+    Logger::info(LogCategory::GOVERNANCE, "Discovered " +
+                                              std::to_string(tables.size()) +
+                                              " tables from DataLake");
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::GOVERNANCE, "Error discovering tables: " + std::string(e.what()));
+    Logger::error(LogCategory::GOVERNANCE,
+                  "Error discovering tables: " + std::string(e.what()));
   }
 
   return tables;
@@ -139,12 +145,44 @@ std::vector<TableMetadata> DataGovernance::discoverTables() {
 TableMetadata
 DataGovernance::extractTableMetadata(const std::string &schema_name,
                                      const std::string &table_name) {
+  // Validate input parameters
+  if (schema_name.empty() || table_name.empty()) {
+    throw std::invalid_argument("Schema name and table name cannot be empty");
+  }
+
+  // Basic validation for SQL injection prevention
+  if (schema_name.find("'") != std::string::npos ||
+      schema_name.find(";") != std::string::npos ||
+      table_name.find("'") != std::string::npos ||
+      table_name.find(";") != std::string::npos) {
+    throw std::invalid_argument(
+        "Schema name and table name contain invalid characters");
+  }
+
   TableMetadata metadata;
   metadata.schema_name = schema_name;
   metadata.table_name = table_name;
 
   try {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
+
+    // Verify that the table exists before analyzing
+    pqxx::work checkTxn(conn);
+    std::string checkTableQuery =
+        "SELECT COUNT(*) FROM information_schema.tables "
+        "WHERE table_schema = '" +
+        escapeSQL(schema_name) +
+        "' "
+        "AND table_name = '" +
+        escapeSQL(table_name) + "';";
+
+    auto checkResult = checkTxn.exec(checkTableQuery);
+    checkTxn.commit();
+
+    if (checkResult.empty() || checkResult[0][0].as<int>() == 0) {
+      throw std::runtime_error("Table '" + schema_name + "." + table_name +
+                               "' does not exist");
+    }
 
     analyzeTableStructure(conn, schema_name, table_name, metadata);
     analyzeDataQuality(conn, schema_name, table_name, metadata);
@@ -167,8 +205,9 @@ DataGovernance::extractTableMetadata(const std::string &schema_name,
     metadata.last_analyzed = getCurrentTimestamp();
 
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::GOVERNANCE, "Error extracting metadata for " + schema_name + "." +
-                  table_name + ": " + std::string(e.what()));
+    Logger::error(LogCategory::GOVERNANCE, "Error extracting metadata for " +
+                                               schema_name + "." + table_name +
+                                               ": " + std::string(e.what()));
   }
 
   return metadata;
@@ -250,7 +289,8 @@ void DataGovernance::analyzeTableStructure(pqxx::connection &conn,
 
     txn.commit();
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::GOVERNANCE, "Error analyzing table structure: " + std::string(e.what()));
+    Logger::error(LogCategory::GOVERNANCE,
+                  "Error analyzing table structure: " + std::string(e.what()));
   }
 }
 
@@ -261,43 +301,107 @@ void DataGovernance::analyzeDataQuality(pqxx::connection &conn,
   try {
     pqxx::work txn(conn);
 
-    std::string nullQuery =
-        "SELECT "
-        "COUNT(*) as total_rows,"
-        "COUNT(*) FILTER (WHERE column_name IS NULL) as null_count "
-        "FROM information_schema.columns "
-        "WHERE table_schema = '" +
-        escapeSQL(schema_name) +
-        "' "
-        "AND table_name = '" +
-        escapeSQL(table_name) + "';";
+    // Analyze actual NULL values in data, not just nullable columns
+    std::string nullQuery = "SELECT column_name, data_type, is_nullable "
+                            "FROM information_schema.columns "
+                            "WHERE table_schema = '" +
+                            escapeSQL(schema_name) +
+                            "' "
+                            "AND table_name = '" +
+                            escapeSQL(table_name) +
+                            "' "
+                            "ORDER BY ordinal_position;";
 
     auto nullResult = txn.exec(nullQuery);
     if (!nullResult.empty()) {
-      int totalColumns = nullResult[0][0].as<int>();
-      int nullColumns = nullResult[0][1].as<int>();
+      int totalColumns = nullResult.size();
+      int nullableColumns = 0;
+      int columnsWithNulls = 0;
+
+      for (const auto &columnRow : nullResult) {
+        std::string columnName = columnRow[0].as<std::string>();
+        std::string dataType = columnRow[1].as<std::string>();
+        std::string isNullable = columnRow[2].as<std::string>();
+
+        if (isNullable == "YES") {
+          nullableColumns++;
+
+          // Check for actual NULL values in this column
+          std::string columnNullQuery = "SELECT COUNT(*) as total_rows, "
+                                        "COUNT(*) FILTER (WHERE \"" +
+                                        escapeSQL(columnName) +
+                                        "\" IS NULL) as null_count "
+                                        "FROM \"" +
+                                        escapeSQL(schema_name) + "\".\"" +
+                                        escapeSQL(table_name) + "\";";
+
+          try {
+            auto columnNullResult = txn.exec(columnNullQuery);
+            if (!columnNullResult.empty()) {
+              long long totalRows = columnNullResult[0][0].as<long long>();
+              long long nullCount = columnNullResult[0][1].as<long long>();
+
+              if (totalRows > 0 && nullCount > 0) {
+                columnsWithNulls++;
+              }
+            }
+          } catch (const std::exception &e) {
+            // Skip columns that can't be analyzed (e.g., complex types)
+            Logger::warning(LogCategory::GOVERNANCE, "analyzeDataQuality",
+                            "Could not analyze NULLs in column " + columnName +
+                                ": " + e.what());
+          }
+        }
+      }
+
       if (totalColumns > 0) {
-        metadata.null_percentage = (double)nullColumns / totalColumns * 100.0;
+        // Calculate percentage based on columns that actually have NULL values
+        metadata.null_percentage =
+            (double)columnsWithNulls / totalColumns * 100.0;
       }
     }
 
-    std::string duplicateQuery =
-        "SELECT COUNT(*) - COUNT(DISTINCT ctid) FROM \"" +
-        escapeSQL(schema_name) + "\".\"" + escapeSQL(table_name) + "\";";
+    // Use sampling for large tables to improve performance
+    std::string duplicateQuery;
+    if (metadata.total_rows > 1000000) {
+      duplicateQuery = "SELECT COUNT(*) - COUNT(DISTINCT ctid) FROM \"" +
+                       escapeSQL(schema_name) + "\".\"" +
+                       escapeSQL(table_name) +
+                       "\" TABLESAMPLE SYSTEM(10);"; // 10% sample
+    } else {
+      duplicateQuery = "SELECT COUNT(*) - COUNT(DISTINCT ctid) FROM \"" +
+                       escapeSQL(schema_name) + "\".\"" +
+                       escapeSQL(table_name) + "\";";
+    }
+
     try {
       auto duplicateResult = txn.exec(duplicateQuery);
       if (!duplicateResult.empty() && metadata.total_rows > 0) {
         long long duplicates = duplicateResult[0][0].as<long long>();
-        metadata.duplicate_percentage =
-            (double)duplicates / metadata.total_rows * 100.0;
+        // Adjust percentage for sampled data
+        if (metadata.total_rows > 1000000) {
+          metadata.duplicate_percentage =
+              (double)duplicates / (metadata.total_rows * 0.1) * 100.0;
+        } else {
+          metadata.duplicate_percentage =
+              (double)duplicates / metadata.total_rows * 100.0;
+        }
       }
-    } catch (...) {
+    } catch (const pqxx::sql_error &e) {
+      Logger::warning(LogCategory::GOVERNANCE, "analyzeDataQuality",
+                      "SQL error calculating duplicates: " +
+                          std::string(e.what()));
+      metadata.duplicate_percentage = 0.0;
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::GOVERNANCE, "analyzeDataQuality",
+                    "Error calculating duplicates: " + std::string(e.what()));
       metadata.duplicate_percentage = 0.0;
     }
 
     txn.commit();
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::GOVERNANCE, "Error analyzing data quality: " + std::string(e.what()));
+    Logger::error(LogCategory::GOVERNANCE,
+                  "Error analyzing data quality: " + std::string(e.what()));
   }
 }
 
@@ -308,6 +412,7 @@ void DataGovernance::analyzeUsageStatistics(pqxx::connection &conn,
   try {
     pqxx::work txn(conn);
 
+    // Add timeout and limits for performance
     std::string usageQuery = "SELECT "
                              "last_autoanalyze,"
                              "last_autovacuum,"
@@ -323,7 +428,9 @@ void DataGovernance::analyzeUsageStatistics(pqxx::connection &conn,
                              escapeSQL(schema_name) +
                              "' "
                              "AND relname = '" +
-                             escapeSQL(table_name) + "';";
+                             escapeSQL(table_name) +
+                             "' "
+                             "LIMIT 1;";
 
     auto usageResult = txn.exec(usageQuery);
     if (!usageResult.empty()) {
@@ -356,7 +463,8 @@ void DataGovernance::analyzeUsageStatistics(pqxx::connection &conn,
 
     txn.commit();
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::GOVERNANCE, "Error analyzing usage statistics: " + std::string(e.what()));
+    Logger::error(LogCategory::GOVERNANCE,
+                  "Error analyzing usage statistics: " + std::string(e.what()));
   }
 }
 
@@ -377,7 +485,9 @@ void DataGovernance::analyzeHealthStatus(pqxx::connection &conn,
                               escapeSQL(schema_name) +
                               "' "
                               "AND relname = '" +
-                              escapeSQL(table_name) + "';";
+                              escapeSQL(table_name) +
+                              "' "
+                              "LIMIT 1;";
 
     auto healthResult = txn.exec(healthQuery);
     if (!healthResult.empty()) {
@@ -400,7 +510,8 @@ void DataGovernance::analyzeHealthStatus(pqxx::connection &conn,
 
     txn.commit();
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::GOVERNANCE, "Error analyzing health status: " + std::string(e.what()));
+    Logger::error(LogCategory::GOVERNANCE,
+                  "Error analyzing health status: " + std::string(e.what()));
   }
 }
 
@@ -508,7 +619,8 @@ void DataGovernance::storeMetadata(const TableMetadata &metadata) {
 
     txn.commit();
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::GOVERNANCE, "Error storing metadata: " + std::string(e.what()));
+    Logger::error(LogCategory::GOVERNANCE,
+                  "Error storing metadata: " + std::string(e.what()));
   }
 }
 
@@ -592,7 +704,8 @@ void DataGovernance::updateExistingMetadata(const TableMetadata &metadata) {
     txn.commit();
 
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::GOVERNANCE, "Error updating metadata: " + std::string(e.what()));
+    Logger::error(LogCategory::GOVERNANCE,
+                  "Error updating metadata: " + std::string(e.what()));
   }
 }
 
@@ -628,7 +741,8 @@ void DataGovernance::generateReport() {
       double totalSize = row[6].is_null() ? 0.0 : row[6].as<double>();
     }
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::GOVERNANCE, "Error generating report: " + std::string(e.what()));
+    Logger::error(LogCategory::GOVERNANCE,
+                  "Error generating report: " + std::string(e.what()));
   }
 }
 
@@ -705,7 +819,35 @@ std::string
 DataGovernance::determineDataCategory(const std::string &table_name,
                                       const std::string &schema_name) {
   std::string name = table_name;
+  std::string schema = schema_name;
   std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+  std::transform(schema.begin(), schema.end(), schema.begin(), ::tolower);
+
+  // Use schema context for better classification
+  if (schema.find("analytics") != std::string::npos ||
+      schema.find("reports") != std::string::npos ||
+      schema.find("metrics") != std::string::npos ||
+      schema.find("logs") != std::string::npos) {
+    return "ANALYTICAL";
+  }
+
+  if (schema.find("master") != std::string::npos ||
+      schema.find("reference") != std::string::npos ||
+      schema.find("lookup") != std::string::npos) {
+    return "REFERENCE";
+  }
+
+  if (schema.find("transaction") != std::string::npos ||
+      schema.find("operational") != std::string::npos ||
+      schema.find("business") != std::string::npos) {
+    return "TRANSACTIONAL";
+  }
+
+  if (schema.find("sport") != std::string::npos ||
+      schema.find("betting") != std::string::npos ||
+      schema.find("bookmaker") != std::string::npos) {
+    return "SPORTS";
+  }
 
   // ANALYTICAL - Logs, metrics, analytics
   if (name.find("log") != std::string::npos ||
