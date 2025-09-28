@@ -199,11 +199,42 @@ const Dashboard = () => {
             <Grid>
               <Value>Perfect Match: {stats.syncStatus.perfectMatch}</Value>
               <Value>Listening Changes: {stats.syncStatus.listeningChanges}</Value>
+              <Value>Pending: {stats.syncStatus.pending}</Value>
               <Value>Active: {stats.syncStatus.fullLoadActive}</Value>
               <Value>Inactive: {stats.syncStatus.fullLoadInactive}</Value>
               <Value>No Data: {stats.syncStatus.noData}</Value>
               <Value>Errors: {stats.syncStatus.errors}</Value>
             </Grid>
+            
+            {/* Data Progress Metrics */}
+            <div style={{ marginTop: '20px' }}>
+              <SectionTitle style={{ fontSize: '1em', marginBottom: '10px' }}>■ DATA PROGRESS METRICS</SectionTitle>
+              <Grid>
+                <Value>
+                  <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>Records Processed</div>
+                  <div style={{ fontSize: '1.2em', color: '#333' }}>
+                    {formatNumberWithCommas(stats.syncStatus.totalLastOffset || 0)}
+                  </div>
+                  <div style={{ fontSize: '0.8em', color: '#666' }}>Total processed</div>
+                </Value>
+                <Value>
+                  <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>Estimated Total Data</div>
+                  <div style={{ fontSize: '1.2em', color: '#333' }}>
+                    {formatNumberWithCommas(stats.syncStatus.totalData || 0)}
+                  </div>
+                  <div style={{ fontSize: '0.8em', color: '#666' }}>Records to process</div>
+                </Value>
+                <Value>
+                  <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>Progress Percentage</div>
+                  <div style={{ fontSize: '1.2em', color: '#333' }}>
+                    {stats.syncStatus.totalData > 0 
+                      ? Math.min(((stats.syncStatus.totalLastOffset || 0) / stats.syncStatus.totalData * 100), 100).toFixed(1)
+                      : 0}%
+                  </div>
+                  <div style={{ fontSize: '0.8em', color: '#666' }}>Overall completion</div>
+                </Value>
+              </Grid>
+            </div>
             <Value style={{ marginTop: '20px' }}>► Currently Processing: {formatNumber(stats.syncStatus.currentProcess)}</Value>
           </Section>
 

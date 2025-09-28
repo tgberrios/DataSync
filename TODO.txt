@@ -51,24 +51,6 @@
 2025-09-27 14:33:28.043[ERROR][SYSTEM][TRANSFER]Error in bulk upsert: ERROR: ON CONFLICT DO UPDATE command cannot affect row a second time
 2025-09-27 14:31:23.005[ERROR][TRANSFER][performBulkUpsert]Skipping problematic record in batch: ERROR: current transaction is aborted, commands ignored until end of
 
-carpeta de pending
-
-mecanismo para para el thread desde la ui 
-
-poder reseatear los threads tambien 
-
-valgrind --tool=callgrind ./tu_programa
-suma de total de rows 
-
-
-SELECT SUM(last_offset) AS total_last_offset
-FROM metadata.catalog
-WHERE status != 'SKIP' AND status = 'LISTENING_CHANGES';
-
-
-SELECT SUM(table_size) AS total_data
-FROM metadata.catalog
-
 
 2025-09-27 15:04:39.829[ERROR][SYSTEM][TRANSFER]CRITICAL ERROR: Bulk upsert failed for chunk 1715 in table crm.leads: ERROR: ON CONFLICT DO UPDATE command cannot affect row a second time
 2025-09-27 15:04:39.829[ERROR][SYSTEM][TRANSFER]Error in bulk upsert: ERROR: ON CONFLICT DO UPDATE command cannot affect row a second time
@@ -84,10 +66,6 @@ FROM metadata.catalog
 veo que el codigo hace eso que me imagino que son incrementales pero no lo veo subir en el last_offset? ni el pk 
 
 INSERT INTO "scrubber_service_jetu_cr"."transaction" ("id", "merchant_id", "password", "session_id", "user_name", "user_number", "player_status", "reg_date", "reg_ip_address", "reg_device_id", "first_name", "last_name", "email", "address1", "city", "province", "postal_code", "country", "phone1", "dob", "id_type", "id_value", "gender", "first_dep_date", "first_with_date", "dep_count", "with_count", "current_balance", "pay_method_type", "dl_min", "dl_max", "dl_weekly", "dl_monthly", "trans_id", "billing_first_name", "billing_last_name", "billing_email", "billing_address1", "billing_city", "billing_province", "billing_postal_code", "billing_country", "billing_phone1", "billing_dob", "billing_id_type", "billing_id_value", "billing_gender", "bin", "last_digits", "card_hash", "amount", "currency", "time", "status", "ip", "device_id", "io_bb", "quantity", "local_time", "source", "website", "custom_variable", "created_at", "updated_at", "score", "transaction_type", "gateway_settings_id") VALUES ('12403800', 'CDN-2pt
-
-
-► Currently Processing: crm.contacts_users [MariaDB] (0/0 - 0%) - Status: FULL_LOAD
-necesito un trigger o algo que realmente me capture la que se esta pasando !
 
 
 2025-09-27 17:09:59.628[INFO][SYSTEM][TRANSFER]Executing bulk upsert for chunk 926
@@ -509,28 +487,6 @@ El problema **NO es la ubicación** de la lógica FULL_LOAD. El problema es que:
 **La lógica de FULL_LOAD está bien ubicada, el problema es el manejo de errores en el loop interno.**
 
 ¿Quieres que revise específicamente cómo manejar los errores de transacciones abortadas en el loop interno?
-
-SELECT SUM(table_size) AS total_data
-FROM metadata.catalog
-
-
-select count(status) from metadata.catalog
-where status = 'LISTENING_CHANGES'
-
-select count(status) from metadata.catalog
-where status = 'NO_DATA'
-
-select count(active) from metadata.catalog
-where active = true
-
-
-
-SELECT
-  ( (SELECT COUNT(*) FROM metadata.catalog WHERE status = 'LISTENING_CHANGES')
-  + (SELECT COUNT(*) FROM metadata.catalog WHERE status = 'NO_DATA')
-  - (SELECT COUNT(*) FROM metadata.catalog WHERE active = true)
-  ) AS final_result;
-
 
 
 

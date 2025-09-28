@@ -217,12 +217,22 @@ app.get("/api/dashboard/stats", async (req, res) => {
     const syncStatus = await pool.query(`
       SELECT 
         COUNT(*) FILTER (WHERE active = true AND status = 'LISTENING_CHANGES') as listening_changes,
+        COUNT(*) FILTER (WHERE active = true AND status = 'PENDING') as pending,
         COUNT(*) FILTER (WHERE active = true) as full_load_active,
         COUNT(*) FILTER (WHERE active = false) as full_load_inactive,
         COUNT(*) FILTER (WHERE active = false AND status = 'NO_DATA') as no_data,
         COUNT(*) FILTER (WHERE active = true AND status = 'ERROR') as errors,
         '' as current_process
       FROM metadata.catalog
+    `);
+
+    // 2. DATA PROGRESS METRICS - total last_offset y total_data
+    const dataProgress = await pool.query(`
+      SELECT 
+        COALESCE(SUM(last_offset), 0) as total_last_offset,
+        COALESCE(SUM(table_size), 0) as total_data
+      FROM metadata.catalog
+      WHERE status != 'SKIP' AND status = 'LISTENING_CHANGES'
     `);
 
     // Get currently processing table with progress calculation
@@ -377,11 +387,14 @@ app.get("/api/dashboard/stats", async (req, res) => {
         progress: 0,
         perfectMatch: parseInt(syncStatus.rows[0]?.perfect_match || 0),
         listeningChanges: parseInt(syncStatus.rows[0]?.listening_changes || 0),
+        pending: parseInt(syncStatus.rows[0]?.pending || 0),
         fullLoadActive: parseInt(syncStatus.rows[0]?.full_load_active || 0),
         fullLoadInactive: parseInt(syncStatus.rows[0]?.full_load_inactive || 0),
         noData: parseInt(syncStatus.rows[0]?.no_data || 0),
         errors: parseInt(syncStatus.rows[0]?.errors || 0),
         currentProcess: currentProcessText,
+        totalLastOffset: parseInt(dataProgress.rows[0]?.total_last_offset || 0),
+        totalData: parseInt(dataProgress.rows[0]?.total_data || 0),
       },
       systemResources: {
         cpuUsage:
