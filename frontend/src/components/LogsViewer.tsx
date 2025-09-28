@@ -339,7 +339,7 @@ const LogsViewer = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [lines, setLines] = useState(100);
+  const [lines, setLines] = useState(10000);
   const [level, setLevel] = useState('ALL');
   const [category, setCategory] = useState('ALL');
   const [search, setSearch] = useState('');
@@ -438,7 +438,7 @@ const LogsViewer = () => {
   };
 
   const clearFilters = () => {
-    setLines(100);
+    setLines(10000);
     setLevel('ALL');
     setCategory('ALL');
     setSearch('');
@@ -624,9 +624,9 @@ const LogsViewer = () => {
             <Input
               type="number"
               value={lines}
-              onChange={(e) => setLines(Math.max(10, parseInt(e.target.value) || 100))}
+              onChange={(e) => setLines(Math.max(10, parseInt(e.target.value) || 10000))}
               min="10"
-              max="10000"
+              max="100000"
             />
           </ControlGroup>
           

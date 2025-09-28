@@ -984,9 +984,17 @@ app.get("/api/logs", async (req, res) => {
 
     // Leer el archivo de logs
     const logContent = fs.readFileSync(logFilePath, "utf8");
-    const allLines = logContent
-      .split("\n")
-      .filter((line) => line.trim() !== "");
+    let allLines = logContent.split("\n").filter((line) => line.trim() !== "");
+
+    // Si se solicitan muchas líneas, devolver todas las líneas del archivo
+    const requestedLines = parseInt(lines);
+    if (requestedLines >= 10000 || requestedLines >= allLines.length) {
+      // Devolver todas las líneas
+      allLines = allLines;
+    } else {
+      // Limitar a las últimas N líneas
+      allLines = allLines.slice(-requestedLines);
+    }
 
     // Parsear logs y aplicar filtros
     let filteredLines = allLines.map((line) => {
