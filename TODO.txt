@@ -1,6 +1,3 @@
-ERRORES EN EL FLOW Y LA LOGICA DE STREAMING DATA CHEQUEAR
-
-
 2025-09-27 14:26:38.874[ERROR][TRANSFER][performBulkUpsert]Skipping problematic record in batch: ERROR: current transaction is aborted, commands ignored until end of transaction block
 2025-09-27 14:26:38.874[ERROR][TRANSFER][performBulkUpsert]Skipping problematic record in batch: ERROR: current transaction is aborted, commands ignored until end of transaction block
 2025-09-27 14:26:38.874[ERROR][TRANSFER][performBulkUpsert]Skipping problematic record in batch: ERROR: current transaction is aborted, commands ignored until end of transaction block
@@ -53,77 +50,6 @@ ERRORES EN EL FLOW Y LA LOGICA DE STREAMING DATA CHEQUEAR
 2025-09-27 14:33:28.043[ERROR][SYSTEM][TRANSFER]CRITICAL ERROR: Bulk upsert failed for chunk 770 in table crm.prospect_lists_prospects: ERROR: ON CONFLICT DO UPDATE command cannot affect row a second time
 2025-09-27 14:33:28.043[ERROR][SYSTEM][TRANSFER]Error in bulk upsert: ERROR: ON CONFLICT DO UPDATE command cannot affect row a second time
 2025-09-27 14:31:23.005[ERROR][TRANSFER][performBulkUpsert]Skipping problematic record in batch: ERROR: current transaction is aborted, commands ignored until end of
-
-## Errores pendientes en StreamingData.h
-
-### **Error 1: Falta de validación de conexiones**
-```cpp
-// Líneas 446, 659: No verifica si la conexión es válida antes de usar
-pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
-// Usa pgConn sin verificar si is_open() - ya está corregido en línea 448
-```
-
-### **Error 2: Threads sin control de parada segura**
-```cpp
-// Líneas 258, 353, 383, 412, 442, 566, 654: while (running)
-while (running) {
-  // ... lógica larga sin puntos de parada ...
-  std::this_thread::sleep_for(std::chrono::seconds(30));
-}
-```
-
-**Problema**: Los threads pueden ejecutar operaciones muy largas sin verificar `running` periódicamente, lo que puede causar:
-- Shutdown lento (hasta 30-120 segundos)
-- Operaciones que continúan después de `shutdown()`
-- Recursos no liberados correctamente
-
-**Solución recomendada**: Agregar verificaciones de `running` en puntos estratégicos dentro de los loops largos.
-
-### **Error 3: Manejo de excepciones en threads paralelos**
-```cpp
-// Líneas 267-307: Excepciones capturadas pero no manejadas adecuadamente
-std::vector<std::exception_ptr> exceptions;
-// ... captura excepciones ...
-if (!exceptions.empty()) {
-  Logger::error(LogCategory::MONITORING, "CRITICAL: " + std::to_string(exceptions.size()) +
-                " catalog sync operations failed - system may be in "
-                "inconsistent state");
-}
-```
-
-**Problema**: Las excepciones se capturan pero no se re-lanzan, lo que puede ocultar errores críticos.
-
-### **Error 4: Falta de timeout en operaciones de base de datos**
-```cpp
-// Líneas 446-453: No hay timeout para conexiones
-pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
-if (!pgConn.is_open()) {
-  Logger::error(LogCategory::MONITORING, "CRITICAL ERROR: Cannot establish PostgreSQL "
-                "connection for data quality validation");
-  std::this_thread::sleep_for(std::chrono::seconds(60));
-  continue;
-}
-```
-
-**Problema**: No hay timeout configurado para las conexiones, lo que puede causar bloqueos indefinidos.
-
-### **Error 5: Recursos no liberados en caso de excepción**
-```cpp
-// Líneas 446-453: Conexión no se cierra explícitamente en caso de excepción
-pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
-// ... uso de pgConn ...
-// No hay cleanup explícito si ocurre excepción
-```
-
-**Problema**: Aunque `pqxx::connection` tiene RAII, no hay cleanup explícito en caso de excepciones.
-
-### **Resumen de errores críticos en StreamingData.h:**
-1. **Threads sin control de parada segura** (más crítico)
-2. **Falta de timeout en conexiones de base de datos**
-3. **Manejo inadecuado de excepciones en threads paralelos**
-4. **Falta de cleanup explícito de recursos**
-
-¿Quieres que corrija alguno de estos errores específicos?
 
 carpeta de pending
 

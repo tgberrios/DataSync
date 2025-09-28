@@ -374,8 +374,9 @@ private:
                          "MariaDB catalog sync completed successfully");
           } catch (const std::exception &e) {
             Logger::error(
+                LogCategory::MONITORING,
                 "ERROR in MariaDB catalog sync: " + std::string(e.what()) +
-                " - MariaDB catalog may be out of sync");
+                    " - MariaDB catalog may be out of sync");
             std::lock_guard<std::mutex> lock(exceptionMutex);
             exceptions.push_back(std::current_exception());
           }
@@ -390,8 +391,9 @@ private:
                          "MSSQL catalog sync completed successfully");
           } catch (const std::exception &e) {
             Logger::error(
+                LogCategory::MONITORING,
                 "ERROR in MSSQL catalog sync: " + std::string(e.what()) +
-                " - MSSQL catalog may be out of sync");
+                    " - MSSQL catalog may be out of sync");
             std::lock_guard<std::mutex> lock(exceptionMutex);
             exceptions.push_back(std::current_exception());
           }
@@ -406,8 +408,9 @@ private:
                          "PostgreSQL catalog sync completed successfully");
           } catch (const std::exception &e) {
             Logger::error(
+                LogCategory::MONITORING,
                 "ERROR in PostgreSQL catalog sync: " + std::string(e.what()) +
-                " - PostgreSQL catalog may be out of sync");
+                    " - PostgreSQL catalog may be out of sync");
             std::lock_guard<std::mutex> lock(exceptionMutex);
             exceptions.push_back(std::current_exception());
           }
@@ -445,8 +448,9 @@ private:
                        "No-data table deactivation completed successfully");
         } catch (const std::exception &e) {
           Logger::error(
+              LogCategory::MONITORING,
               "ERROR in no-data table deactivation: " + std::string(e.what()) +
-              " - Inactive tables may not be properly marked");
+                  " - Inactive tables may not be properly marked");
         }
 
         Logger::info(LogCategory::MONITORING,
@@ -517,9 +521,10 @@ private:
                          std::to_string(duration.count()) + " seconds");
       } catch (const std::exception &e) {
         Logger::error(
+            LogCategory::MONITORING,
             "CRITICAL ERROR in MSSQL transfer cycle: " + std::string(e.what()) +
-            " - MSSQL data sync failed, retrying in " +
-            std::to_string(SyncConfig::getSyncInterval()) + " seconds");
+                " - MSSQL data sync failed, retrying in " +
+                std::to_string(SyncConfig::getSyncInterval()) + " seconds");
       }
 
       std::this_thread::sleep_for(std::chrono::seconds(
@@ -787,8 +792,9 @@ private:
                        "Catalog cleanup maintenance completed");
         } catch (const std::exception &e) {
           Logger::error(
+              LogCategory::MONITORING,
               "ERROR in catalog cleanup maintenance: " + std::string(e.what()) +
-              " - Catalog may contain stale entries");
+                  " - Catalog may contain stale entries");
         }
 
         try {
