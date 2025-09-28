@@ -450,29 +450,13 @@ void MetricsCollector::generateMetricsReport() {
       // Convert bytes to MB for readability
       double totalMB = totalBytes / (1024.0 * 1024.0);
 
-      // Log the metrics report
-      Logger::info(LogCategory::METRICS, "=== METRICS REPORT ===");
+      // Log simplified metrics summary
       Logger::info(LogCategory::METRICS,
-                   "Total Tables: " + std::to_string(totalTables));
-      Logger::info(LogCategory::METRICS,
-                   "Successful Transfers: " +
-                       std::to_string(successfulTransfers));
-      Logger::info(LogCategory::METRICS,
-                   "Failed Transfers: " + std::to_string(failedTransfers));
-      Logger::info(LogCategory::METRICS,
-                   "Pending Transfers: " + std::to_string(pendingTransfers));
-      Logger::info(LogCategory::METRICS,
-                   "Success Rate: " + std::to_string(successRate) + "%");
-      Logger::info(LogCategory::METRICS, "Total Records Transferred: " +
-                                             std::to_string(totalRecords));
-      Logger::info(LogCategory::METRICS, "Total Data Transferred: " +
-                                             std::to_string(totalMB) + " MB");
-      Logger::info(LogCategory::METRICS,
-                   "Average Memory Used: " + std::to_string(avgMemoryUsed) +
-                       " MB");
-      Logger::info(LogCategory::METRICS, "Total I/O Operations: " +
-                                             std::to_string(totalIOOperations));
-      Logger::info(LogCategory::METRICS, "=== END REPORT ===");
+                   "Metrics Summary: " + std::to_string(successfulTransfers) +
+                       "/" + std::to_string(totalTables) +
+                       " tables synced successfully, " +
+                       std::to_string(totalRecords) + " records, " +
+                       std::to_string(totalMB) + "MB transferred");
     } else {
       Logger::warning(LogCategory::METRICS, "No metrics data found for report");
     }

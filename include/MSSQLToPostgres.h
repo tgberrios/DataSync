@@ -352,15 +352,7 @@ public:
       Logger::info(LogCategory::TRANSFER,
                    "Processing " + std::to_string(tables.size()) +
                        " MSSQL tables in priority order");
-      for (size_t i = 0; i < tables.size(); ++i) {
-        if (tables[i].db_engine == "MSSQL") {
-          Logger::info(LogCategory::TRANSFER,
-                       "[" + std::to_string(i + 1) + "/" +
-                           std::to_string(tables.size()) + "] " +
-                           tables[i].schema_name + "." + tables[i].table_name +
-                           " (status: " + tables[i].status + ")");
-        }
-      }
+      // Removed individual table status logs to reduce noise
 
       for (const auto &table : tables) {
         if (table.db_engine != "MSSQL") {
@@ -370,10 +362,6 @@ public:
                               table.table_name);
           continue;
         }
-
-        Logger::info(LogCategory::TRANSFER,
-                     "Setting up MSSQL table: " + table.schema_name + "." +
-                         table.table_name + " (status: " + table.status + ")");
 
         SQLHDBC dbc = getMSSQLConnection(table.connection_string);
         if (!dbc) {
@@ -568,15 +556,7 @@ public:
       Logger::info(LogCategory::TRANSFER,
                    "Processing " + std::to_string(tables.size()) +
                        " MSSQL tables in priority order");
-      for (size_t i = 0; i < tables.size(); ++i) {
-        if (tables[i].db_engine == "MSSQL") {
-          Logger::info(LogCategory::TRANSFER,
-                       "[" + std::to_string(i + 1) + "/" +
-                           std::to_string(tables.size()) + "] " +
-                           tables[i].schema_name + "." + tables[i].table_name +
-                           " (status: " + tables[i].status + ")");
-        }
-      }
+      // Removed individual table status logs to reduce noise
 
       for (auto &table : tables) {
         if (table.db_engine != "MSSQL") {
@@ -770,9 +750,7 @@ public:
           // IMPORTANTE: NO continuar con el procesamiento de datos si los
           // counts coinciden Solo procesar DELETEs si es necesario y luego
           // cerrar la conexión
-          Logger::info(LogCategory::TRANSFER,
-                       "Table " + schema_name + "." + table_name +
-                           " is already synchronized - skipping data transfer");
+          // Removed synchronized table log to reduce noise
 
           // Cerrar conexión MSSQL antes de continuar
           if (dbc) {
