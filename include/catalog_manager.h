@@ -47,9 +47,17 @@ public:
       updateClusterNames();
 
       Logger::info(LogCategory::DATABASE, "Catalog cleanup completed");
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(LogCategory::DATABASE, "cleanCatalog",
+                    "SQL ERROR cleaning catalog: " + std::string(e.what()) +
+                        " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::DATABASE, "cleanCatalog",
+                    "CONNECTION ERROR cleaning catalog: " +
+                        std::string(e.what()));
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "cleanCatalog",
-                    "Error cleaning catalog: " + std::string(e.what()));
+                    "ERROR cleaning catalog: " + std::string(e.what()));
     }
   }
 
@@ -81,9 +89,18 @@ public:
                        std::to_string(updateResult.affected_rows()) +
                        " NO_DATA tables");
 
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(
+          LogCategory::DATABASE, "deactivateNoDataTables",
+          "SQL ERROR deactivating NO_DATA tables: " + std::string(e.what()) +
+              " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::DATABASE, "deactivateNoDataTables",
+                    "CONNECTION ERROR deactivating NO_DATA tables: " +
+                        std::string(e.what()));
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "deactivateNoDataTables",
-                    "Error deactivating NO_DATA tables: " +
+                    "ERROR deactivating NO_DATA tables: " +
                         std::string(e.what()));
     }
   }
@@ -132,9 +149,18 @@ public:
       }
 
       Logger::info(LogCategory::DATABASE, "Cluster name updates completed");
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(
+          LogCategory::DATABASE, "updateClusterNames",
+          "SQL ERROR updating cluster names: " + std::string(e.what()) +
+              " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::DATABASE, "updateClusterNames",
+                    "CONNECTION ERROR updating cluster names: " +
+                        std::string(e.what()));
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "updateClusterNames",
-                    "Error updating cluster names: " + std::string(e.what()));
+                    "ERROR updating cluster names: " + std::string(e.what()));
     }
   }
 
@@ -240,9 +266,17 @@ public:
                        ", Reset: " + std::to_string(resetTables) +
                        ", Total: " + std::to_string(totalTables));
 
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(LogCategory::DATABASE, "validateSchemaConsistency",
+                    "SQL ERROR in schema validation: " + std::string(e.what()) +
+                        " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::DATABASE, "validateSchemaConsistency",
+                    "CONNECTION ERROR in schema validation: " +
+                        std::string(e.what()));
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "validateSchemaConsistency",
-                    "Error in schema validation: " + std::string(e.what()));
+                    "ERROR in schema validation: " + std::string(e.what()));
     }
   }
 
@@ -306,6 +340,14 @@ public:
             db = value;
           else if (key == "port")
             port = value;
+        }
+
+        // Validate connection parameters
+        if (host.empty() || user.empty() || db.empty()) {
+          Logger::error(
+              LogCategory::DATABASE, "syncCatalogMariaDBToPostgres",
+              "Missing required connection parameters (host, user, db)");
+          continue;
         }
 
         // Connect directly to MariaDB
@@ -523,7 +565,19 @@ public:
 
       // Actualizar cluster names después de la sincronización
       updateClusterNames();
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(LogCategory::DATABASE, "syncCatalogMariaDBToPostgres",
+                    "SQL ERROR in syncCatalogMariaDBToPostgres: " +
+                        std::string(e.what()) + " [SQL State: " + e.sqlstate() +
+                        "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::DATABASE, "syncCatalogMariaDBToPostgres",
+                    "CONNECTION ERROR in syncCatalogMariaDBToPostgres: " +
+                        std::string(e.what()));
     } catch (const std::exception &e) {
+      Logger::error(LogCategory::DATABASE, "syncCatalogMariaDBToPostgres",
+                    "ERROR in syncCatalogMariaDBToPostgres: " +
+                        std::string(e.what()));
     }
   }
 
@@ -784,9 +838,18 @@ public:
 
       // Actualizar cluster names después de la sincronización
       updateClusterNames();
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(
+          LogCategory::DATABASE, "syncCatalogMSSQLToPostgres",
+          "SQL ERROR in syncCatalogMSSQLToPostgres: " + std::string(e.what()) +
+              " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::DATABASE, "syncCatalogMSSQLToPostgres",
+                    "CONNECTION ERROR in syncCatalogMSSQLToPostgres: " +
+                        std::string(e.what()));
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "syncCatalogMSSQLToPostgres",
-                    "Error in syncCatalogMSSQLToPostgres: " +
+                    "ERROR in syncCatalogMSSQLToPostgres: " +
                         std::string(e.what()));
     }
   }
@@ -1009,9 +1072,18 @@ public:
 
       // Actualizar cluster names después de la sincronización
       updateClusterNames();
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(LogCategory::DATABASE, "syncCatalogPostgresToPostgres",
+                    "SQL ERROR in syncCatalogPostgresToPostgres: " +
+                        std::string(e.what()) + " [SQL State: " + e.sqlstate() +
+                        "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::DATABASE, "syncCatalogPostgresToPostgres",
+                    "CONNECTION ERROR in syncCatalogPostgresToPostgres: " +
+                        std::string(e.what()));
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "syncCatalogPostgresToPostgres",
-                    "Error in syncCatalogPostgresToPostgres: " +
+                    "ERROR in syncCatalogPostgresToPostgres: " +
                         std::string(e.what()));
     }
   }
@@ -1052,7 +1124,7 @@ private:
       }
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "detectPrimaryKeyColumns",
-                    "Error detecting primary key columns: " +
+                    "ERROR detecting primary key columns: " +
                         std::string(e.what()));
     }
     return pkColumns;
@@ -1113,7 +1185,7 @@ private:
       }
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "detectCandidateColumns",
-                    "Error detecting candidate columns: " +
+                    "ERROR detecting candidate columns: " +
                         std::string(e.what()));
     }
     return candidateColumns;
@@ -1185,7 +1257,7 @@ private:
       }
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "detectPrimaryKeyColumnsMSSQL",
-                    "Error detecting primary key columns: " +
+                    "ERROR detecting primary key columns: " +
                         std::string(e.what()));
     }
     return pkColumns;
@@ -1256,7 +1328,7 @@ private:
       }
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "detectCandidateColumnsMSSQL",
-                    "Error detecting candidate columns: " +
+                    "ERROR detecting candidate columns: " +
                         std::string(e.what()));
     }
     return candidateColumns;
@@ -1291,9 +1363,18 @@ private:
           pkColumns.push_back(row[0].as<std::string>());
         }
       }
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(
+          LogCategory::DATABASE, "detectPrimaryKeyColumnsPostgres",
+          "SQL ERROR detecting primary key columns: " + std::string(e.what()) +
+              " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::DATABASE, "detectPrimaryKeyColumnsPostgres",
+                    "CONNECTION ERROR detecting primary key columns: " +
+                        std::string(e.what()));
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "detectPrimaryKeyColumnsPostgres",
-                    "Error detecting primary key columns: " +
+                    "ERROR detecting primary key columns: " +
                         std::string(e.what()));
     }
     return pkColumns;
@@ -1399,9 +1480,18 @@ private:
           }
         }
       }
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(
+          LogCategory::DATABASE, "detectCandidateColumnsPostgres",
+          "SQL ERROR detecting candidate columns: " + std::string(e.what()) +
+              " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::DATABASE, "detectCandidateColumnsPostgres",
+                    "CONNECTION ERROR detecting candidate columns: " +
+                        std::string(e.what()));
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "detectCandidateColumnsPostgres",
-                    "Error detecting candidate columns: " +
+                    "ERROR detecting candidate columns: " +
                         std::string(e.what()));
     }
     return candidateColumns;
@@ -1437,7 +1527,7 @@ private:
       }
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "detectTimeColumnMSSQL",
-                    "Error detecting time column: " + std::string(e.what()));
+                    "ERROR detecting time column: " + std::string(e.what()));
     }
     return "";
   }
@@ -1470,7 +1560,7 @@ private:
       }
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "detectTimeColumnMariaDB",
-                    "Error detecting time column: " + std::string(e.what()));
+                    "ERROR detecting time column: " + std::string(e.what()));
     }
     return "";
   }
@@ -1505,9 +1595,18 @@ private:
         return results[0][0].as<std::string>();
       } else {
       }
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(
+          LogCategory::DATABASE, "detectTimeColumnPostgres",
+          "SQL ERROR detecting time column: " + std::string(e.what()) +
+              " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::DATABASE, "detectTimeColumnPostgres",
+                    "CONNECTION ERROR detecting time column: " +
+                        std::string(e.what()));
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "detectTimeColumnPostgres",
-                    "Error detecting time column: " + std::string(e.what()));
+                    "ERROR detecting time column: " + std::string(e.what()));
     }
     return "";
   }
@@ -1826,9 +1925,18 @@ private:
       }
 
       txn.commit();
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(
+          LogCategory::DATABASE, "cleanNonExistentPostgresTables",
+          "SQL ERROR cleaning PostgreSQL tables: " + std::string(e.what()) +
+              " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::DATABASE, "cleanNonExistentPostgresTables",
+                    "CONNECTION ERROR cleaning PostgreSQL tables: " +
+                        std::string(e.what()));
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "cleanNonExistentPostgresTables",
-                    "Error cleaning PostgreSQL tables: " +
+                    "ERROR cleaning PostgreSQL tables: " +
                         std::string(e.what()));
     }
   }
@@ -1971,9 +2079,18 @@ private:
       }
 
       txn.commit();
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(
+          LogCategory::DATABASE, "cleanNonExistentMariaDBTables",
+          "SQL ERROR cleaning MariaDB tables: " + std::string(e.what()) +
+              " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::DATABASE, "cleanNonExistentMariaDBTables",
+                    "CONNECTION ERROR cleaning MariaDB tables: " +
+                        std::string(e.what()));
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "cleanNonExistentMariaDBTables",
-                    "Error cleaning MariaDB tables: " + std::string(e.what()));
+                    "ERROR cleaning MariaDB tables: " + std::string(e.what()));
     }
   }
 
@@ -2114,9 +2231,18 @@ private:
       }
 
       txn.commit();
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(
+          LogCategory::DATABASE, "cleanNonExistentMSSQLTables",
+          "SQL ERROR cleaning MSSQL tables: " + std::string(e.what()) +
+              " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::DATABASE, "cleanNonExistentMSSQLTables",
+                    "CONNECTION ERROR cleaning MSSQL tables: " +
+                        std::string(e.what()));
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "cleanNonExistentMSSQLTables",
-                    "Error cleaning MSSQL tables: " + std::string(e.what()));
+                    "ERROR cleaning MSSQL tables: " + std::string(e.what()));
     }
   }
 
@@ -2137,9 +2263,18 @@ private:
                "schema_name='' OR table_name IS NULL OR table_name='';");
 
       txn.commit();
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(
+          LogCategory::DATABASE, "cleanOrphanedTables",
+          "SQL ERROR cleaning orphaned tables: " + std::string(e.what()) +
+              " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::DATABASE, "cleanOrphanedTables",
+                    "CONNECTION ERROR cleaning orphaned tables: " +
+                        std::string(e.what()));
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "cleanOrphanedTables",
-                    "Error cleaning orphaned tables: " + std::string(e.what()));
+                    "ERROR cleaning orphaned tables: " + std::string(e.what()));
     }
   }
 
@@ -2324,7 +2459,7 @@ private:
       return {sourceCount, targetCount};
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "getColumnCountsMariaDB",
-                    "Error getting column counts: " + std::string(e.what()));
+                    "ERROR getting column counts: " + std::string(e.what()));
       return {0, 0};
     }
   }
@@ -2409,7 +2544,7 @@ private:
       return {sourceCount, targetCount};
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "getColumnCountsMSSQL",
-                    "Error getting column counts: " + std::string(e.what()));
+                    "ERROR getting column counts: " + std::string(e.what()));
       return {0, 0};
     }
   }
@@ -2456,9 +2591,20 @@ private:
       }
 
       return {sourceCount, targetCount};
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(
+          LogCategory::DATABASE, "getColumnCountsPostgres",
+          "SQL ERROR getting column counts: " + std::string(e.what()) +
+              " [SQL State: " + e.sqlstate() + "]");
+      return {0, 0};
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::DATABASE, "getColumnCountsPostgres",
+                    "CONNECTION ERROR getting column counts: " +
+                        std::string(e.what()));
+      return {0, 0};
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "getColumnCountsPostgres",
-                    "Error getting column counts: " + std::string(e.what()));
+                    "ERROR getting column counts: " + std::string(e.what()));
       return {0, 0};
     }
   }
