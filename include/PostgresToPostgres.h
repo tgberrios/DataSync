@@ -1075,22 +1075,26 @@ private:
           }
         }
 
-        // Actualizar last_offset en la base de datos
-        try {
-          pqxx::work updateTxn(pgConn);
-          updateTxn.exec("UPDATE metadata.catalog SET last_offset='" +
-                         std::to_string(totalProcessed) +
-                         "' WHERE schema_name='" + escapeSQL(schemaName) +
-                         "' AND table_name='" + escapeSQL(tableName) + "';");
-          updateTxn.commit();
-          Logger::debug("performDataTransfer",
-                        "Updated last_offset to " +
-                            std::to_string(totalProcessed) + " for " +
-                            schemaName + "." + tableName);
-        } catch (const std::exception &e) {
-          Logger::warning(LogCategory::TRANSFER, "performDataTransfer",
-                          "Failed to update last_offset: " +
-                              std::string(e.what()));
+        // Actualizar last_offset en la base de datos solo para tablas sin PK
+        // (OFFSET pagination) Para tablas con PK se usa last_processed_pk en
+        // lugar de last_offset
+        if (pkStrategy != "PK") {
+          try {
+            pqxx::work updateTxn(pgConn);
+            updateTxn.exec("UPDATE metadata.catalog SET last_offset='" +
+                           std::to_string(totalProcessed) +
+                           "' WHERE schema_name='" + escapeSQL(schemaName) +
+                           "' AND table_name='" + escapeSQL(tableName) + "';");
+            updateTxn.commit();
+            Logger::debug("performDataTransfer",
+                          "Updated last_offset to " +
+                              std::to_string(totalProcessed) + " for " +
+                              schemaName + "." + tableName);
+          } catch (const std::exception &e) {
+            Logger::warning(LogCategory::TRANSFER, "performDataTransfer",
+                            "Failed to update last_offset: " +
+                                std::string(e.what()));
+          }
         }
 
         // Si obtuvimos menos registros que el chunk size, hemos terminado
