@@ -34,11 +34,14 @@ export interface DashboardStats {
     progress: number;
     perfectMatch: number;
     listeningChanges: number;
+    pending: number;
     fullLoadActive: number;
     fullLoadInactive: number;
     noData: number;
     errors: number;
     currentProcess: string;
+    totalLastOffset?: number;
+    totalData?: number;
   };
   systemResources: {
     cpuUsage: string;
