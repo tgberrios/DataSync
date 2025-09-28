@@ -93,7 +93,6 @@ const Dashboard = () => {
   const [stats, setStats] = useState<DashboardStats>({
     syncStatus: {
       progress: 75,
-      perfectMatch: 9,
       listeningChanges: 6,
       fullLoadActive: 0,
       fullLoadInactive: 0,
@@ -197,7 +196,6 @@ const Dashboard = () => {
             <SectionTitle>■ SYNCHRONIZATION STATUS</SectionTitle>
             <ProgressBar progress={stats.syncStatus.progress} />
             <Grid>
-              <Value>Perfect Match: {stats.syncStatus.perfectMatch}</Value>
               <Value>Listening Changes: {stats.syncStatus.listeningChanges}</Value>
               <Value>Pending: {stats.syncStatus.pending}</Value>
               <Value>Active: {stats.syncStatus.fullLoadActive}</Value>

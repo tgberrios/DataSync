@@ -181,17 +181,17 @@ private:
         if (key == "chunk_size") {
           try {
             size_t newSize = std::stoul(value);
-            // Validate reasonable range for chunk size (1KB to 1GB)
-            if (newSize >= 1024 && newSize <= 1024 * 1024 * 1024 &&
+            // Validate reasonable range for chunk size (1 to 1GB)
+            if (newSize >= 1 && newSize <= 1024 * 1024 * 1024 &&
                 newSize != SyncConfig::getChunkSize()) {
               Logger::info(LogCategory::MONITORING,
                            "Updating chunk_size from " +
                                std::to_string(SyncConfig::getChunkSize()) +
                                " to " + std::to_string(newSize));
               SyncConfig::setChunkSize(newSize);
-            } else if (newSize < 1024 || newSize > 1024 * 1024 * 1024) {
+            } else if (newSize < 1 || newSize > 1024 * 1024 * 1024) {
               Logger::warning(LogCategory::MONITORING,
-                              "Chunk size value out of range (1KB-1GB): " +
+                              "Chunk size value out of range (1-1GB): " +
                                   value);
             }
           } catch (const std::exception &e) {
