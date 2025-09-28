@@ -268,6 +268,8 @@ VALUES (
 
      termina una full_load y no continua con la otra
 
+     2025-09-27 22:57:52.688[ERROR][DDL_EXPORT][DDLExporter]MSSQL server parameter is empty
+
 
      RESPUESTA A TU PREGUNTA:
 LA LÓGICA DE FULL_LOAD ESTÁ EN EL NIVEL CORRECTO:
@@ -488,14 +490,3 @@ El problema **NO es la ubicación** de la lógica FULL_LOAD. El problema es que:
 **La lógica de FULL_LOAD está bien ubicada, el problema es el manejo de errores en el loop interno.**
 
 ¿Quieres que revise específicamente cómo manejar los errores de transacciones abortadas en el loop interno?
-
-
-Creo que esos logs no los ocupo los podrias quitar porfavor 
-
-2025-09-27 22:40:48.562[WARNING][SYSTEM][DATABASE]Could not get table size for SportBook.access_permissions: ERROR: column "table_rows" does not exist
-
-2025-09-27 22:40:48.562[INFO][SYSTEM][MONITORING]MariaDB catalog sync completed successfully
-[UNKNOWN][UNKNOWN] [SQL State: 25P02]
-2025-09-27 22:40:48.562[ERROR][DATABASE][syncCatalogMariaDBToPostgres]SQL ERROR in syncCatalogMariaDBToPostgres: ERROR: current transaction is aborted, commands ignored until end of transaction block
-[UNKNOWN][UNKNOWN] ^
-[UNKNOWN][UNKNOWN]LINE 1: SELECT table_rows FROM information_schema.tables WHERE table...
