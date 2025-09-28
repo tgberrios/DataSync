@@ -1,35 +1,64 @@
 #include "DDLExporter.h"
 #include <algorithm>
+#include <chrono>
 #include <fstream>
 #include <iostream>
-#include <mongoc/mongoc.h>
 #include <mysql/mysql.h>
 #include <sstream>
 
 void DDLExporter::exportAllDDL() {
+  auto startTime = std::chrono::high_resolution_clock::now();
 
   try {
     createFolderStructure();
     getSchemasFromCatalog();
 
-    Logger::info(LogCategory::DDL_EXPORT, "Found " +
+    Logger::info(LogCategory::DDL_EXPORT, "DDL export started - Found " +
                                               std::to_string(schemas.size()) +
                                               " schemas to export");
 
-    for (const auto &schema : schemas) {
+    size_t successCount = 0;
+    size_t errorCount = 0;
+
+    for (size_t i = 0; i < schemas.size(); ++i) {
+      const auto &schema = schemas[i];
       try {
+        Logger::info(LogCategory::DDL_EXPORT,
+                     "Exporting schema " + std::to_string(i + 1) + "/" +
+                         std::to_string(schemas.size()) + ": " +
+                         schema.schema_name);
+
         exportSchemaDDL(schema);
+        successCount++;
+
+        Logger::info(LogCategory::DDL_EXPORT,
+                     "Successfully exported schema: " + schema.schema_name);
       } catch (const std::exception &e) {
+        errorCount++;
         Logger::error(LogCategory::DDL_EXPORT, "Error exporting schema " +
                                                    schema.schema_name + ": " +
                                                    std::string(e.what()));
       }
     }
 
-    Logger::info(LogCategory::DDL_EXPORT, "DDL export process completed");
+    auto endTime = std::chrono::high_resolution_clock::now();
+    auto duration =
+        std::chrono::duration_cast<std::chrono::seconds>(endTime - startTime);
+
+    Logger::info(LogCategory::DDL_EXPORT,
+                 "DDL export process completed in " +
+                     std::to_string(duration.count()) +
+                     " seconds - Success: " + std::to_string(successCount) +
+                     ", Errors: " + std::to_string(errorCount));
   } catch (const std::exception &e) {
+    auto endTime = std::chrono::high_resolution_clock::now();
+    auto duration =
+        std::chrono::duration_cast<std::chrono::seconds>(endTime - startTime);
+
     Logger::error(LogCategory::DDL_EXPORT,
-                  "Error in DDL export process: " + std::string(e.what()));
+                  "Error in DDL export process after " +
+                      std::to_string(duration.count()) +
+                      " seconds: " + std::string(e.what()));
   }
 }
 
@@ -93,8 +122,6 @@ void DDLExporter::exportSchemaDDL(const SchemaInfo &schema) {
       exportMariaDBDDL(schema);
     } else if (schema.db_engine == "PostgreSQL") {
       exportPostgreSQLDDL(schema);
-    } else if (schema.db_engine == "MongoDB") {
-      exportMongoDBDDL(schema);
     } else if (schema.db_engine == "MSSQL") {
       exportMSSQLDDL(schema);
     } else {
@@ -164,6 +191,7 @@ void DDLExporter::createSchemaFolder(const std::string &cluster,
 
 void DDLExporter::exportMariaDBDDL(const SchemaInfo &schema) {
   try {
+    const unsigned int timeout_seconds = 30;
     std::string connStr = getConnectionString(schema);
 
     // Parse MariaDB connection string
@@ -195,6 +223,13 @@ void DDLExporter::exportMariaDBDDL(const SchemaInfo &schema) {
         port = value;
     }
 
+    // Validate connection parameters
+    if (host.empty() || user.empty() || db.empty()) {
+      Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                    "MariaDB connection parameters are incomplete");
+      return;
+    }
+
     // Connect to MariaDB using MySQL library
     MYSQL *conn = mysql_init(nullptr);
     if (!conn) {
@@ -203,12 +238,28 @@ void DDLExporter::exportMariaDBDDL(const SchemaInfo &schema) {
       return;
     }
 
+    // Set connection timeout
+    mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT,
+                  (const char *)&timeout_seconds);
+    mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, (const char *)&timeout_seconds);
+    mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT,
+                  (const char *)&timeout_seconds);
+
     unsigned int portNum = 3306;
     if (!port.empty()) {
       try {
         portNum = std::stoul(port);
-      } catch (...) {
-        portNum = 3306;
+        if (portNum == 0 || portNum > 65535) {
+          Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                        "Invalid port number: " + port);
+          mysql_close(conn);
+          return;
+        }
+      } catch (const std::exception &e) {
+        Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                      "Invalid port format: " + port + " - " + e.what());
+        mysql_close(conn);
+        return;
       }
     }
 
@@ -327,9 +378,8 @@ void DDLExporter::exportMariaDBDDL(const SchemaInfo &schema) {
     exportMariaDBEvents(conn, schema);
 
     mysql_close(conn);
-
-    // Logger::info(LogCategory::DDL_EXPORT, "DDLExporter",
-    //"Exported MariaDB DDL for schema: " + schema.schema_name);
+    Logger::info(LogCategory::DDL_EXPORT, "DDLExporter",
+                 "Exported MariaDB DDL for schema: " + schema.schema_name);
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error exporting MariaDB DDL: " + std::string(e.what()));
@@ -1045,259 +1095,6 @@ void DDLExporter::exportPostgreSQLTypes(pqxx::connection &conn,
   }
 }
 
-void DDLExporter::exportMongoDBDDL(const SchemaInfo &schema) {
-  try {
-    std::string connStr = getConnectionString(schema);
-
-    // Parse MongoDB connection string
-    std::string host, port, database, username, password;
-    std::istringstream ss(connStr);
-    std::string token;
-    while (std::getline(ss, token, ';')) {
-      auto pos = token.find('=');
-      if (pos == std::string::npos)
-        continue;
-      std::string key = token.substr(0, pos);
-      std::string value = token.substr(pos + 1);
-
-      // Trim whitespace
-      key.erase(0, key.find_first_not_of(" \t\r\n"));
-      key.erase(key.find_last_not_of(" \t\r\n") + 1);
-      value.erase(0, value.find_first_not_of(" \t\r\n"));
-      value.erase(value.find_last_not_of(" \t\r\n") + 1);
-
-      if (key == "host")
-        host = value;
-      else if (key == "port")
-        port = value;
-      else if (key == "database")
-        database = value;
-      else if (key == "username")
-        username = value;
-      else if (key == "password")
-        password = value;
-    }
-
-    if (host.empty())
-      host = "localhost";
-    if (port.empty())
-      port = "27017";
-    if (database.empty())
-      database = schema.schema_name;
-
-    // Build MongoDB URI
-    std::string uri = "mongodb://";
-    if (!username.empty() && !password.empty()) {
-      uri += username + ":" + password + "@";
-    }
-    uri += host + ":" + port + "/" + database;
-
-    // Initialize MongoDB client
-    mongoc_client_t *client = mongoc_client_new(uri.c_str());
-    if (!client) {
-      Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
-                    "Failed to create MongoDB client");
-      return;
-    }
-
-    // Export Collections (equivalent to tables)
-    exportMongoDBCollections(client, schema);
-
-    // Export Views
-    exportMongoDBViews(client, schema);
-
-    // Export Functions
-    exportMongoDBFunctions(client, schema);
-
-    mongoc_client_destroy(client);
-
-    Logger::info(LogCategory::DDL_EXPORT, "DDLExporter",
-                 "Exported MongoDB DDL for schema: " + schema.schema_name);
-  } catch (const std::exception &e) {
-    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
-                  "Error exporting MongoDB DDL: " + std::string(e.what()));
-  }
-}
-
-void DDLExporter::exportMongoDBCollections(mongoc_client_t *client,
-                                           const SchemaInfo &schema) {
-  try {
-    mongoc_database_t *database =
-        mongoc_client_get_database(client, schema.schema_name.c_str());
-    mongoc_collection_t *collection = nullptr;
-
-    // Get list of collections
-    bson_t *command = BCON_NEW("listCollections", BCON_INT32(1));
-    bson_t reply;
-    bson_error_t error;
-
-    if (mongoc_database_command_simple(database, command, nullptr, &reply,
-                                       &error)) {
-      bson_iter_t iter;
-      if (bson_iter_init(&iter, &reply) && bson_iter_find(&iter, "cursor")) {
-        bson_iter_t cursor_iter;
-        if (bson_iter_recurse(&iter, &cursor_iter) &&
-            bson_iter_find(&cursor_iter, "firstBatch")) {
-          bson_iter_t batch_iter;
-          if (bson_iter_recurse(&cursor_iter, &batch_iter)) {
-            while (bson_iter_next(&batch_iter)) {
-              bson_iter_t doc_iter;
-              if (bson_iter_recurse(&batch_iter, &doc_iter) &&
-                  bson_iter_find(&doc_iter, "name")) {
-                std::string collectionName = bson_iter_utf8(&doc_iter, nullptr);
-
-                // Export collection schema
-                std::string ddl =
-                    "-- MongoDB Collection: " + collectionName + "\n";
-                ddl += "-- Schema: " + schema.schema_name + "\n";
-                ddl += "-- Database: " + schema.database_name + "\n\n";
-                ddl += "db.createCollection(\"" + collectionName + "\");\n";
-
-                saveTableDDL(schema.cluster_name, schema.db_engine,
-                             schema.database_name, schema.schema_name,
-                             collectionName, ddl);
-              }
-            }
-          }
-        }
-      }
-    }
-
-    bson_destroy(command);
-    bson_destroy(&reply);
-    mongoc_database_destroy(database);
-
-    Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
-                  "Exported MongoDB collections for schema: " +
-                      schema.schema_name);
-  } catch (const std::exception &e) {
-    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
-                  "Error exporting MongoDB collections: " +
-                      std::string(e.what()));
-  }
-}
-
-void DDLExporter::exportMongoDBViews(mongoc_client_t *client,
-                                     const SchemaInfo &schema) {
-  try {
-    mongoc_database_t *database =
-        mongoc_client_get_database(client, schema.schema_name.c_str());
-
-    // Get list of views
-    bson_t *command = BCON_NEW("listCollections",
-                               BCON_NEW("filter", "{", "type", "view", "}"));
-    bson_t reply;
-    bson_error_t error;
-
-    if (mongoc_database_command_simple(database, command, nullptr, &reply,
-                                       &error)) {
-      bson_iter_t iter;
-      if (bson_iter_init(&iter, &reply) && bson_iter_find(&iter, "cursor")) {
-        bson_iter_t cursor_iter;
-        if (bson_iter_recurse(&iter, &cursor_iter) &&
-            bson_iter_find(&cursor_iter, "firstBatch")) {
-          bson_iter_t batch_iter;
-          if (bson_iter_recurse(&cursor_iter, &batch_iter)) {
-            while (bson_iter_next(&batch_iter)) {
-              bson_iter_t doc_iter;
-              if (bson_iter_recurse(&batch_iter, &doc_iter) &&
-                  bson_iter_find(&doc_iter, "name")) {
-                std::string viewName = bson_iter_utf8(&doc_iter, nullptr);
-
-                // Get view definition
-                bson_t *view_command =
-                    BCON_NEW("listCollections",
-                             BCON_NEW("filter", "{", "name",
-                                      BCON_UTF8(viewName.c_str()), "}"));
-                bson_t view_reply;
-                if (mongoc_database_command_simple(
-                        database, view_command, nullptr, &view_reply, &error)) {
-                  std::string ddl = "-- MongoDB View: " + viewName + "\n";
-                  ddl += "-- Schema: " + schema.schema_name + "\n";
-                  ddl += "-- Database: " + schema.database_name + "\n\n";
-                  ddl += "db.createView(\"" + viewName +
-                         "\", \"source_collection\", []);\n";
-
-                  saveTableDDL(schema.cluster_name, schema.db_engine,
-                               schema.database_name, schema.schema_name,
-                               viewName, ddl);
-                }
-                bson_destroy(view_command);
-                bson_destroy(&view_reply);
-              }
-            }
-          }
-        }
-      }
-    }
-
-    bson_destroy(command);
-    bson_destroy(&reply);
-    mongoc_database_destroy(database);
-
-    Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
-                  "Exported MongoDB views for schema: " + schema.schema_name);
-  } catch (const std::exception &e) {
-    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
-                  "Error exporting MongoDB views: " + std::string(e.what()));
-  }
-}
-
-void DDLExporter::exportMongoDBFunctions(mongoc_client_t *client,
-                                         const SchemaInfo &schema) {
-  try {
-    mongoc_database_t *database =
-        mongoc_client_get_database(client, schema.schema_name.c_str());
-
-    // Get system.js collection (where MongoDB stores functions)
-    mongoc_collection_t *collection =
-        mongoc_database_get_collection(database, "system.js");
-
-    bson_t *query = bson_new();
-    bson_t *opts = BCON_NEW("projection", "{", "value", BCON_INT32(1), "}");
-
-    mongoc_cursor_t *cursor =
-        mongoc_collection_find_with_opts(collection, query, opts, nullptr);
-    const bson_t *doc;
-
-    while (mongoc_cursor_next(cursor, &doc)) {
-      bson_iter_t iter;
-      if (bson_iter_init(&iter, doc) && bson_iter_find(&iter, "_id")) {
-        std::string functionName = bson_iter_utf8(&iter, nullptr);
-
-        if (bson_iter_find(&iter, "value")) {
-          bson_iter_t value_iter;
-          if (bson_iter_recurse(&iter, &value_iter)) {
-            std::string ddl = "-- MongoDB Function: " + functionName + "\n";
-            ddl += "-- Schema: " + schema.schema_name + "\n";
-            ddl += "-- Database: " + schema.database_name + "\n\n";
-            ddl += "db.system.js.insertOne({_id: \"" + functionName +
-                   "\", value: function() { /* function body */ }});\n";
-
-            saveFunctionDDL(schema.cluster_name, schema.db_engine,
-                            schema.database_name, schema.schema_name,
-                            functionName, ddl);
-          }
-        }
-      }
-    }
-
-    mongoc_cursor_destroy(cursor);
-    bson_destroy(query);
-    bson_destroy(opts);
-    mongoc_collection_destroy(collection);
-    mongoc_database_destroy(database);
-
-    Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
-                  "Exported MongoDB functions for schema: " +
-                      schema.schema_name);
-  } catch (const std::exception &e) {
-    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
-                  "Error exporting MongoDB functions: " +
-                      std::string(e.what()));
-  }
-}
-
 void DDLExporter::exportMSSQLDDL(const SchemaInfo &schema) {
   try {
     std::string connStr = getConnectionString(schema);
@@ -1331,12 +1128,33 @@ void DDLExporter::exportMSSQLDDL(const SchemaInfo &schema) {
         port = value;
     }
 
-    if (server.empty())
-      server = "localhost";
-    if (port.empty())
-      port = "1433";
-    if (database.empty())
+    // Validate connection parameters
+    if (server.empty()) {
+      Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                    "MSSQL server parameter is empty");
+      return;
+    }
+
+    if (database.empty()) {
       database = schema.schema_name;
+    }
+
+    if (port.empty()) {
+      port = "1433";
+    } else {
+      try {
+        int portNum = std::stoi(port);
+        if (portNum <= 0 || portNum > 65535) {
+          Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                        "Invalid port number: " + port);
+          return;
+        }
+      } catch (const std::exception &e) {
+        Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                      "Invalid port format: " + port + " - " + e.what());
+        return;
+      }
+    }
 
     // Get MSSQL connection string from configuration
     std::string odbcConnStr = getConnectionString(schema);
@@ -1370,6 +1188,10 @@ void DDLExporter::exportMSSQLDDL(const SchemaInfo &schema) {
       return;
     }
 
+    // Set connection timeout
+    SQLSetConnectAttr(conn, SQL_ATTR_CONNECTION_TIMEOUT, (SQLPOINTER)30, 0);
+    SQLSetConnectAttr(conn, SQL_ATTR_LOGIN_TIMEOUT, (SQLPOINTER)30, 0);
+
     ret = SQLDriverConnect(conn, nullptr, (SQLCHAR *)odbcConnStr.c_str(),
                            SQL_NTS, nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT);
     if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
@@ -1393,6 +1215,22 @@ void DDLExporter::exportMSSQLDDL(const SchemaInfo &schema) {
       SQLFreeHandle(SQL_HANDLE_DBC, conn);
       SQLFreeHandle(SQL_HANDLE_ENV, env);
       return;
+    }
+
+    // Test the connection with a simple query
+    SQLHSTMT testStmt;
+    ret = SQLAllocHandle(SQL_HANDLE_STMT, conn, &testStmt);
+    if (ret == SQL_SUCCESS) {
+      ret = SQLExecDirect(testStmt, (SQLCHAR *)"SELECT 1", SQL_NTS);
+      if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
+        Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                      "Connection test failed");
+        SQLFreeHandle(SQL_HANDLE_STMT, testStmt);
+        SQLFreeHandle(SQL_HANDLE_DBC, conn);
+        SQLFreeHandle(SQL_HANDLE_ENV, env);
+        return;
+      }
+      SQLFreeHandle(SQL_HANDLE_STMT, testStmt);
     }
 
     // Export Tables (already implemented in existing code)
@@ -1704,9 +1542,35 @@ void DDLExporter::saveTableDDL(const std::string &cluster,
                            sanitizeFileName(schema) + "/tables/" +
                            sanitizeFileName(table_name) + ".sql";
 
-    // Create directory if it doesn't exist
-    std::filesystem::create_directories(
-        std::filesystem::path(filePath).parent_path());
+    // Validate file path length
+    if (filePath.length() > 260) {
+      Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                    "File path too long: " + filePath);
+      return;
+    }
+
+    // Check if parent directory exists and is writable
+    std::filesystem::path parentPath =
+        std::filesystem::path(filePath).parent_path();
+    if (!std::filesystem::exists(parentPath)) {
+      try {
+        std::filesystem::create_directories(parentPath);
+      } catch (const std::filesystem::filesystem_error &e) {
+        Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                      "Failed to create directory: " + parentPath.string() +
+                          " - " + e.what());
+        return;
+      }
+    }
+
+    // Check available disk space
+    std::error_code ec;
+    auto space = std::filesystem::space(parentPath, ec);
+    if (!ec && space.available < 1024 * 1024) { // Less than 1MB available
+      Logger::warning(LogCategory::DDL_EXPORT, "DDLExporter",
+                      "Low disk space: " + std::to_string(space.available) +
+                          " bytes available");
+    }
 
     std::ofstream file(filePath);
     if (file.is_open()) {
@@ -1716,10 +1580,21 @@ void DDLExporter::saveTableDDL(const std::string &cluster,
       file << "-- Generated: " << std::time(nullptr) << std::endl;
       file << std::endl;
       file << ddl << std::endl;
-      file.close();
 
-      // Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter", "Saved table DDL:
-      // " + filePath);
+      if (file.good()) {
+        file.close();
+        Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
+                      "Saved table DDL: " + filePath);
+      } else {
+        Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                      "Error writing to file: " + filePath);
+        file.close();
+        // Try to remove the partial file
+        std::filesystem::remove(filePath);
+      }
+    } else {
+      Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+                    "Failed to open file for writing: " + filePath);
     }
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
