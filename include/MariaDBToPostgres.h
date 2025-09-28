@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <iostream>
 #include <mutex>
 #include <mysql/mysql.h>
@@ -1271,9 +1272,42 @@ public:
         size_t chunkNumber = 0;
         size_t currentOffset = totalProcessed; // Usar el last_offset de la BD
 
+        // CRITICAL: Add timeout to prevent infinite loops
+        auto startTime = std::chrono::steady_clock::now();
+        const auto MAX_PROCESSING_TIME =
+            std::chrono::hours(2); // 2 hours max per table
+
         while (hasMoreData) {
           chunkNumber++;
           const size_t CHUNK_SIZE = SyncConfig::getChunkSize();
+
+          // CRITICAL: Check timeout to prevent infinite loops
+          auto currentTime = std::chrono::steady_clock::now();
+          auto elapsedTime = currentTime - startTime;
+          if (elapsedTime > MAX_PROCESSING_TIME) {
+            Logger::error(
+                LogCategory::TRANSFER,
+                "CRITICAL: Maximum processing time reached (" +
+                    std::to_string(
+                        std::chrono::duration_cast<std::chrono::minutes>(
+                            elapsedTime)
+                            .count()) +
+                    " minutes) for table " + schema_name + "." + table_name +
+                    " - breaking to prevent infinite loop");
+            hasMoreData = false;
+            break;
+          }
+
+          // CRITICAL: Add maximum chunk limit to prevent infinite loops
+          if (chunkNumber > 10000) {
+            Logger::error(LogCategory::TRANSFER,
+                          "CRITICAL: Maximum chunk limit reached (" +
+                              std::to_string(chunkNumber) + ") for table " +
+                              schema_name + "." + table_name +
+                              " - breaking to prevent infinite loop");
+            hasMoreData = false;
+            break;
+          }
 
           Logger::info(LogCategory::TRANSFER,
                        "Processing chunk " + std::to_string(chunkNumber) +
@@ -1365,11 +1399,26 @@ public:
                                  std::to_string(rowsInserted) + " rows for " +
                                  schema_name + "." + table_name);
               } catch (const std::exception &e) {
+                std::string errorMsg = e.what();
                 Logger::error(LogCategory::TRANSFER,
                               "CRITICAL ERROR: Bulk upsert failed for chunk " +
                                   std::to_string(chunkNumber) + " in table " +
                                   schema_name + "." + table_name + ": " +
-                                  std::string(e.what()));
+                                  errorMsg);
+
+                // CRITICAL: Check for transaction abort errors that cause
+                // infinite loops
+                if (errorMsg.find("current transaction is aborted") !=
+                        std::string::npos ||
+                    errorMsg.find("previously aborted") != std::string::npos ||
+                    errorMsg.find("aborted transaction") != std::string::npos) {
+                  Logger::error(LogCategory::TRANSFER,
+                                "CRITICAL: Transaction abort detected - "
+                                "breaking loop to prevent infinite hang");
+                  hasMoreData = false;
+                  break;
+                }
+
                 rowsInserted = 0;
               }
             } else {
@@ -1380,11 +1429,26 @@ public:
             }
 
           } catch (const std::exception &e) {
+            std::string errorMsg = e.what();
             Logger::error(LogCategory::TRANSFER,
                           "ERROR processing data for chunk " +
                               std::to_string(chunkNumber) + " in table " +
-                              schema_name + "." + table_name + ": " +
-                              std::string(e.what()));
+                              schema_name + "." + table_name + ": " + errorMsg);
+
+            // CRITICAL: Check for critical errors that require breaking the
+            // loop
+            if (errorMsg.find("current transaction is aborted") !=
+                    std::string::npos ||
+                errorMsg.find("previously aborted") != std::string::npos ||
+                errorMsg.find("aborted transaction") != std::string::npos ||
+                errorMsg.find("connection") != std::string::npos ||
+                errorMsg.find("timeout") != std::string::npos) {
+              Logger::error(LogCategory::TRANSFER,
+                            "CRITICAL: Critical error detected - breaking loop "
+                            "to prevent infinite hang");
+              hasMoreData = false;
+              break;
+            }
           }
 
           // Update targetCount and currentOffset based on actual processed rows
@@ -1973,8 +2037,15 @@ private:
                 // Ignorar errores de rollback
               }
 
+              // CRITICAL: Limit individual processing to prevent infinite loops
+              size_t individualProcessed = 0;
+              const size_t MAX_INDIVIDUAL_PROCESSING = 100;
+
               // Procesar registros individualmente con nuevas transacciones
-              for (size_t i = batchStart; i < batchEnd; ++i) {
+              for (size_t i = batchStart;
+                   i < batchEnd &&
+                   individualProcessed < MAX_INDIVIDUAL_PROCESSING;
+                   ++i) {
                 try {
                   const auto &row = results[i];
                   if (row.size() != columnNames.size())
@@ -2007,6 +2078,7 @@ private:
                   singleTxn.exec(singleQuery);
                   singleTxn.commit();
                   totalProcessed++;
+                  individualProcessed++;
 
                 } catch (const std::exception &singleError) {
                   Logger::error(
@@ -2015,6 +2087,14 @@ private:
                           std::string(singleError.what()).substr(0, 100));
                   // Continuar con el siguiente registro
                 }
+              }
+
+              // CRITICAL: Log if we hit the processing limit
+              if (individualProcessed >= MAX_INDIVIDUAL_PROCESSING) {
+                Logger::warning(LogCategory::TRANSFER, "performBulkUpsert",
+                                "Hit maximum individual processing limit (" +
+                                    std::to_string(MAX_INDIVIDUAL_PROCESSING) +
+                                    ") - stopping to prevent infinite loop");
               }
             }
             // Manejo específico para errores de datos binarios inválidos
@@ -2028,9 +2108,16 @@ private:
                               "individually: " +
                                   errorMsg.substr(0, 100));
 
+              // CRITICAL: Limit individual processing to prevent infinite loops
+              size_t binaryErrorProcessed = 0;
+              const size_t MAX_BINARY_ERROR_PROCESSING = 50;
+
               // Procesar registros individualmente para identificar el
               // problemático
-              for (size_t i = batchStart; i < batchEnd; ++i) {
+              for (size_t i = batchStart;
+                   i < batchEnd &&
+                   binaryErrorProcessed < MAX_BINARY_ERROR_PROCESSING;
+                   ++i) {
                 try {
                   const auto &row = results[i];
                   if (row.size() != columnNames.size())
@@ -2059,6 +2146,7 @@ private:
                       upsertQuery + singleRowValues + conflictClause;
                   txn.exec(singleQuery);
                   totalProcessed++;
+                  binaryErrorProcessed++;
 
                 } catch (const std::exception &singleError) {
                   Logger::error(
@@ -2067,6 +2155,15 @@ private:
                           std::string(singleError.what()).substr(0, 100));
                   // Continuar con el siguiente registro
                 }
+              }
+
+              // CRITICAL: Log if we hit the processing limit
+              if (binaryErrorProcessed >= MAX_BINARY_ERROR_PROCESSING) {
+                Logger::warning(
+                    LogCategory::TRANSFER, "performBulkUpsert",
+                    "Hit maximum binary error processing limit (" +
+                        std::to_string(MAX_BINARY_ERROR_PROCESSING) +
+                        ") - stopping to prevent infinite loop");
               }
             } else {
               // Re-lanzar errores que no sean de datos binarios o transacciones
