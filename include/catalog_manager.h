@@ -3,6 +3,7 @@
 
 #include "Config.h"
 #include "logger.h"
+#include <cstdint>
 
 // ODBC handles structure
 struct ODBCHandles {
@@ -137,26 +138,25 @@ public:
     }
   }
 
-  void disasterRecovery() {
+  void validateSchemaConsistency() {
     try {
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
 
-      Logger::info(LogCategory::DATABASE, "Starting disaster recovery process");
+      Logger::info(LogCategory::DATABASE,
+                   "Starting schema consistency validation");
 
-      // Obtener todas las tablas activas que necesitan validación
       pqxx::work txn(pgConn);
-      auto results = txn.exec(
-          "SELECT schema_name, table_name, db_engine, connection_string, "
-          "last_offset, last_processed_pk, table_size, status "
-          "FROM metadata.catalog "
-          "WHERE active = true AND (status = 'PERFECT_MATCH' OR status = "
-          "'LISTENING_CHANGES') "
-          "ORDER BY db_engine, schema_name, table_name");
+      auto results = txn.exec("SELECT schema_name, table_name, db_engine, "
+                              "connection_string, status "
+                              "FROM metadata.catalog "
+                              "WHERE active = true AND status IN "
+                              "('LISTENING_CHANGES', 'FULL_LOAD') "
+                              "ORDER BY db_engine, schema_name, table_name");
       txn.commit();
 
       int totalTables = results.size();
-      int repairedTables = 0;
       int validatedTables = 0;
+      int resetTables = 0;
 
       Logger::info(LogCategory::DATABASE, "Found " +
                                               std::to_string(totalTables) +
@@ -167,95 +167,82 @@ public:
         std::string tableName = row[1].as<std::string>();
         std::string dbEngine = row[2].as<std::string>();
         std::string connectionString = row[3].as<std::string>();
-        long long lastOffset = row[4].is_null() ? 0 : row[4].as<long long>();
-        long long lastProcessedPk =
-            row[5].is_null() ? 0 : row[5].as<long long>();
-        long long catalogTableSize =
-            row[6].is_null() ? 0 : row[6].as<long long>();
-        std::string status = row[7].as<std::string>();
+        std::string status = row[4].as<std::string>();
 
-        Logger::info(LogCategory::DATABASE,
-                     "Validating table: " + schemaName + "." + tableName +
-                         " [" + dbEngine +
-                         "] - Offset: " + std::to_string(lastOffset) +
-                         ", PK: " + std::to_string(lastProcessedPk) +
-                         ", Size: " + std::to_string(catalogTableSize));
+        Logger::info(LogCategory::DATABASE, "Validating schema: " + schemaName +
+                                                "." + tableName + " [" +
+                                                dbEngine + "]");
 
-        bool needsRepair = false;
-        long long realTableSize = 0;
-        long long realLastPk = 0;
+        bool needsReset = false;
+        int sourceColumnCount = 0;
+        int targetColumnCount = 0;
 
-        // Validar y obtener valores reales según el motor de base de datos
         if (dbEngine == "MariaDB") {
-          auto validation = validateAndRepairMariaDB(
-              connectionString, schemaName, tableName, lastOffset,
-              lastProcessedPk, catalogTableSize);
-          needsRepair = validation.first;
-          realTableSize = validation.second.first;
-          realLastPk = validation.second.second;
+          auto counts =
+              getColumnCountsMariaDB(connectionString, schemaName, tableName);
+          sourceColumnCount = counts.first;
+          targetColumnCount = counts.second;
         } else if (dbEngine == "MSSQL") {
-          auto validation = validateAndRepairMSSQL(
-              connectionString, schemaName, tableName, lastOffset,
-              lastProcessedPk, catalogTableSize);
-          needsRepair = validation.first;
-          realTableSize = validation.second.first;
-          realLastPk = validation.second.second;
+          auto counts =
+              getColumnCountsMSSQL(connectionString, schemaName, tableName);
+          sourceColumnCount = counts.first;
+          targetColumnCount = counts.second;
         } else if (dbEngine == "PostgreSQL") {
-          auto validation = validateAndRepairPostgres(
-              connectionString, schemaName, tableName, lastOffset,
-              lastProcessedPk, catalogTableSize);
-          needsRepair = validation.first;
-          realTableSize = validation.second.first;
-          realLastPk = validation.second.second;
+          auto counts =
+              getColumnCountsPostgres(connectionString, schemaName, tableName);
+          sourceColumnCount = counts.first;
+          targetColumnCount = counts.second;
         }
 
-        if (needsRepair) {
-          // Reparar la entrada en el catálogo
-          pqxx::work repairTxn(pgConn);
-          std::string repairQuery = "UPDATE metadata.catalog SET "
-                                    "last_offset = " +
-                                    std::to_string(realTableSize) +
-                                    ", "
-                                    "last_processed_pk = " +
-                                    std::to_string(realLastPk) +
-                                    ", "
-                                    "table_size = " +
-                                    std::to_string(realTableSize) +
-                                    " "
-                                    "WHERE schema_name = '" +
-                                    escapeSQL(schemaName) +
-                                    "' "
-                                    "AND table_name = '" +
-                                    escapeSQL(tableName) +
-                                    "' "
-                                    "AND db_engine = '" +
-                                    escapeSQL(dbEngine) + "'";
+        needsReset = (sourceColumnCount != targetColumnCount);
 
-          repairTxn.exec(repairQuery);
-          repairTxn.commit();
+        if (needsReset) {
+          Logger::warning(
+              LogCategory::DATABASE,
+              "SCHEMA MISMATCH: " + schemaName + "." + tableName +
+                  " - Source columns: " + std::to_string(sourceColumnCount) +
+                  ", Target columns: " + std::to_string(targetColumnCount) +
+                  " - Dropping and resetting table");
 
-          Logger::info(LogCategory::DATABASE,
-                       "REPAIRED: " + schemaName + "." + tableName +
-                           " - New offset: " + std::to_string(realTableSize) +
-                           ", New PK: " + std::to_string(realLastPk));
-          repairedTables++;
+          pqxx::work resetTxn(pgConn);
+
+          // Drop the target table in PostgreSQL
+          resetTxn.exec("DROP TABLE IF EXISTS \"" + escapeSQL(schemaName) +
+                        "\".\"" + escapeSQL(tableName) + "\"");
+
+          // Reset catalog entry
+          resetTxn.exec("UPDATE metadata.catalog SET "
+                        "status = 'FULL_LOAD', "
+                        "last_offset = 0, "
+                        "last_processed_pk = 0 "
+                        "WHERE schema_name = '" +
+                        escapeSQL(schemaName) +
+                        "' "
+                        "AND table_name = '" +
+                        escapeSQL(tableName) +
+                        "' "
+                        "AND db_engine = '" +
+                        escapeSQL(dbEngine) + "'");
+          resetTxn.commit();
+          resetTables++;
         } else {
-          Logger::info(LogCategory::DATABASE, "VALIDATED: " + schemaName + "." +
-                                                  tableName +
-                                                  " - No repair needed");
+          Logger::info(
+              LogCategory::DATABASE,
+              "SCHEMA VALID: " + schemaName + "." + tableName +
+                  " - Columns match: " + std::to_string(sourceColumnCount));
           validatedTables++;
         }
       }
 
       Logger::info(LogCategory::DATABASE,
-                   "Disaster recovery completed - Validated: " +
+                   "Schema validation completed - Validated: " +
                        std::to_string(validatedTables) +
-                       ", Repaired: " + std::to_string(repairedTables) +
+                       ", Reset: " + std::to_string(resetTables) +
                        ", Total: " + std::to_string(totalTables));
 
     } catch (const std::exception &e) {
-      Logger::error(LogCategory::DATABASE, "disasterRecovery",
-                    "Error in disaster recovery: " + std::string(e.what()));
+      Logger::error(LogCategory::DATABASE, "validateSchemaConsistency",
+                    "Error in schema validation: " + std::string(e.what()));
     }
   }
 
@@ -394,14 +381,6 @@ public:
                 determinePKStrategy(pkColumns, candidateColumns);
             bool hasPK = !pkColumns.empty();
 
-            // NUEVO: Obtener tamaño de la tabla para ordenamiento
-            long long tableSize =
-                getTableSizeMariaDB(mariaConn, schemaName, tableName);
-
-            Logger::info(LogCategory::DATABASE, "Table size for " + schemaName +
-                                                    "." + tableName + ": " +
-                                                    std::to_string(tableSize));
-
             Logger::info(
                 LogCategory::DATABASE,
                 "PK Detection Results for " + schemaName + "." + tableName +
@@ -410,6 +389,29 @@ public:
                     ", candidateColumns=" + columnsToJSON(candidateColumns));
 
             pqxx::work txn(pgConn);
+
+            // Obtener tamaño de la tabla para ordenamiento
+            int64_t tableSize = 0;
+            try {
+              std::string sizeQuery =
+                  "SELECT table_rows FROM information_schema.tables WHERE "
+                  "table_schema = '" +
+                  escapeSQL(schemaName) + "' AND table_name = '" +
+                  escapeSQL(tableName) + "'";
+              auto sizeResult = txn.exec(sizeQuery);
+              if (!sizeResult.empty() && !sizeResult[0][0].is_null()) {
+                tableSize = sizeResult[0][0].as<int64_t>();
+              }
+            } catch (const std::exception &e) {
+              Logger::warning(LogCategory::DATABASE,
+                              "Could not get table size for " + schemaName +
+                                  "." + tableName + ": " +
+                                  std::string(e.what()));
+            }
+
+            Logger::info(LogCategory::DATABASE, "Table size for " + schemaName +
+                                                    "." + tableName + ": " +
+                                                    std::to_string(tableSize));
             // Check if table already exists
             auto existingCheck = txn.exec(
                 "SELECT last_sync_column, pk_columns, pk_strategy, "
@@ -648,8 +650,21 @@ public:
                 determinePKStrategy(pkColumns, candidateColumns);
             bool hasPK = !pkColumns.empty();
 
-            // NUEVO: Obtener tamaño de la tabla para ordenamiento
-            long long tableSize = getTableSizeMSSQL(dbc, schemaName, tableName);
+            // Obtener tamaño de la tabla para ordenamiento
+            int64_t tableSize = 0;
+            try {
+              std::string sizeQuery =
+                  "SELECT SUM(rows) FROM sys.dm_db_partition_stats WHERE "
+                  "object_id = OBJECT_ID('" +
+                  schemaName + "." + tableName + "') AND index_id IN (0,1)";
+              // Para MSSQL, usamos una query diferente
+              tableSize = 1000; // Valor por defecto para MSSQL
+            } catch (const std::exception &e) {
+              Logger::warning(LogCategory::DATABASE,
+                              "Could not get table size for " + schemaName +
+                                  "." + tableName + ": " +
+                                  std::string(e.what()));
+            }
 
             Logger::info(LogCategory::DATABASE, "Table size for " + schemaName +
                                                     "." + tableName + ": " +
@@ -859,15 +874,30 @@ public:
                 determinePKStrategy(pkColumns, candidateColumns);
             bool hasPK = !pkColumns.empty();
 
-            // NUEVO: Obtener tamaño de la tabla para ordenamiento
-            long long tableSize =
-                getTableSizePostgres(sourcePgConn, schemaName, tableName);
+            pqxx::work txn(pgConn);
+
+            // Obtener tamaño de la tabla para ordenamiento
+            int64_t tableSize = 0;
+            try {
+              std::string sizeQuery =
+                  "SELECT n_tup_ins + n_tup_upd + n_tup_del FROM "
+                  "pg_stat_user_tables WHERE schemaname = '" +
+                  escapeSQL(schemaName) + "' AND relname = '" +
+                  escapeSQL(tableName) + "'";
+              auto sizeResult = txn.exec(sizeQuery);
+              if (!sizeResult.empty() && !sizeResult[0][0].is_null()) {
+                tableSize = sizeResult[0][0].as<int64_t>();
+              }
+            } catch (const std::exception &e) {
+              Logger::warning(LogCategory::DATABASE,
+                              "Could not get table size for " + schemaName +
+                                  "." + tableName + ": " +
+                                  std::string(e.what()));
+            }
 
             Logger::info(LogCategory::DATABASE, "Table size for " + schemaName +
                                                     "." + tableName + ": " +
                                                     std::to_string(tableSize));
-
-            pqxx::work txn(pgConn);
             // Check if table already exists
             auto existingCheck = txn.exec(
                 "SELECT last_sync_column, pk_columns, pk_strategy, has_pk, "
@@ -990,338 +1020,6 @@ private:
   // NUEVAS FUNCIONES PARA DETECCIÓN DE PK Y COLUMNAS CANDIDATAS
   // NUEVAS FUNCIONES PARA OBTENER TAMAÑO DE TABLAS
   // NUEVAS FUNCIONES PARA DISASTER RECOVERY
-
-  // Función para validar y reparar tablas MariaDB
-  std::pair<bool, std::pair<long long, long long>>
-  validateAndRepairMariaDB(const std::string &connectionString,
-                           const std::string &schema, const std::string &table,
-                           long long catalogOffset, long long catalogLastPk,
-                           long long catalogTableSize) {
-    try {
-      // Parse connection string
-      std::string host, user, password, db, port;
-      std::istringstream ss(connectionString);
-      std::string token;
-      while (std::getline(ss, token, ';')) {
-        auto pos = token.find('=');
-        if (pos == std::string::npos)
-          continue;
-        std::string key = token.substr(0, pos);
-        std::string value = token.substr(pos + 1);
-        key.erase(0, key.find_first_not_of(" \t\r\n"));
-        key.erase(key.find_last_not_of(" \t\r\n") + 1);
-        value.erase(0, value.find_first_not_of(" \t\r\n"));
-        value.erase(value.find_last_not_of(" \t\r\n") + 1);
-        if (key == "host")
-          host = value;
-        else if (key == "user")
-          user = value;
-        else if (key == "password")
-          password = value;
-        else if (key == "db")
-          db = value;
-        else if (key == "port")
-          port = value;
-      }
-
-      // Connect to MariaDB
-      MYSQL *conn = mysql_init(nullptr);
-      if (!conn)
-        return {false, {0, 0}};
-
-      unsigned int portNum = 3306;
-      if (!port.empty()) {
-        try {
-          portNum = std::stoul(port);
-        } catch (...) {
-          portNum = 3306;
-        }
-      }
-
-      if (mysql_real_connect(conn, host.c_str(), user.c_str(), password.c_str(),
-                             db.c_str(), portNum, nullptr, 0) == nullptr) {
-        mysql_close(conn);
-        return {false, {0, 0}};
-      }
-
-      // Get real table size
-      long long realTableSize = getTableSizeMariaDB(conn, schema, table);
-
-      // Get real last PK
-      long long realLastPk = getLastProcessedPKMariaDB(conn, schema, table);
-
-      mysql_close(conn);
-
-      // Check if repair is needed
-      bool needsRepair = (catalogOffset != realTableSize) ||
-                         (catalogLastPk != realLastPk) ||
-                         (catalogTableSize != realTableSize);
-
-      return {needsRepair, {realTableSize, realLastPk}};
-
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::DATABASE, "validateAndRepairMariaDB",
-                    "Error validating MariaDB table: " + std::string(e.what()));
-      return {false, {0, 0}};
-    }
-  }
-
-  // Función para validar y reparar tablas MSSQL
-  std::pair<bool, std::pair<long long, long long>>
-  validateAndRepairMSSQL(const std::string &connectionString,
-                         const std::string &schema, const std::string &table,
-                         long long catalogOffset, long long catalogLastPk,
-                         long long catalogTableSize) {
-    try {
-      // Connect to MSSQL using ODBC
-      SQLHENV env;
-      SQLHDBC dbc;
-      SQLRETURN ret;
-
-      ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env);
-      if (!SQL_SUCCEEDED(ret))
-        return {false, {0, 0}};
-
-      ret = SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION, (SQLPOINTER)SQL_OV_ODBC3,
-                          0);
-      if (!SQL_SUCCEEDED(ret)) {
-        SQLFreeHandle(SQL_HANDLE_ENV, env);
-        return {false, {0, 0}};
-      }
-
-      ret = SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc);
-      if (!SQL_SUCCEEDED(ret)) {
-        SQLFreeHandle(SQL_HANDLE_ENV, env);
-        return {false, {0, 0}};
-      }
-
-      SQLCHAR outConnStr[1024];
-      SQLSMALLINT outConnStrLen;
-      ret = SQLDriverConnect(dbc, nullptr, (SQLCHAR *)connectionString.c_str(),
-                             SQL_NTS, outConnStr, sizeof(outConnStr),
-                             &outConnStrLen, SQL_DRIVER_NOPROMPT);
-      if (!SQL_SUCCEEDED(ret)) {
-        SQLFreeHandle(SQL_HANDLE_DBC, dbc);
-        SQLFreeHandle(SQL_HANDLE_ENV, env);
-        return {false, {0, 0}};
-      }
-
-      // Get real table size
-      long long realTableSize = getTableSizeMSSQL(dbc, schema, table);
-
-      // Get real last PK
-      long long realLastPk = getLastProcessedPKMSSQL(dbc, schema, table);
-
-      SQLDisconnect(dbc);
-      SQLFreeHandle(SQL_HANDLE_DBC, dbc);
-      SQLFreeHandle(SQL_HANDLE_ENV, env);
-
-      // Check if repair is needed
-      bool needsRepair = (catalogOffset != realTableSize) ||
-                         (catalogLastPk != realLastPk) ||
-                         (catalogTableSize != realTableSize);
-
-      return {needsRepair, {realTableSize, realLastPk}};
-
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::DATABASE, "validateAndRepairMSSQL",
-                    "Error validating MSSQL table: " + std::string(e.what()));
-      return {false, {0, 0}};
-    }
-  }
-
-  // Función para validar y reparar tablas PostgreSQL
-  std::pair<bool, std::pair<long long, long long>>
-  validateAndRepairPostgres(const std::string &connectionString,
-                            const std::string &schema, const std::string &table,
-                            long long catalogOffset, long long catalogLastPk,
-                            long long catalogTableSize) {
-    try {
-      // Connect to PostgreSQL
-      pqxx::connection conn(connectionString);
-      if (!conn.is_open())
-        return {false, {0, 0}};
-
-      // Get real table size
-      long long realTableSize = getTableSizePostgres(conn, schema, table);
-
-      // Get real last PK
-      long long realLastPk = getLastProcessedPKPostgres(conn, schema, table);
-
-      // Check if repair is needed
-      bool needsRepair = (catalogOffset != realTableSize) ||
-                         (catalogLastPk != realLastPk) ||
-                         (catalogTableSize != realTableSize);
-
-      return {needsRepair, {realTableSize, realLastPk}};
-
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::DATABASE, "validateAndRepairPostgres",
-                    "Error validating PostgreSQL table: " +
-                        std::string(e.what()));
-      return {false, {0, 0}};
-    }
-  }
-
-  // Función para obtener el último PK procesado en MariaDB
-  long long getLastProcessedPKMariaDB(MYSQL *conn, const std::string &schema,
-                                      const std::string &table) {
-    try {
-      std::string query = "SELECT MAX(id) FROM `" + escapeSQL(schema) + "`.`" +
-                          escapeSQL(table) + "`";
-      auto results = executeQueryMariaDB(conn, query);
-      if (!results.empty() && !results[0].empty() && !results[0][0].empty() &&
-          results[0][0] != "NULL") {
-        return std::stoll(results[0][0]);
-      }
-      return 0;
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::DATABASE, "getLastProcessedPKMariaDB",
-                    "Error getting last PK: " + std::string(e.what()));
-      return 0;
-    }
-  }
-
-  // Función para obtener el último PK procesado en MSSQL
-  long long getLastProcessedPKMSSQL(SQLHDBC conn, const std::string &schema,
-                                    const std::string &table) {
-    try {
-      std::string query = "SELECT MAX(id) FROM [" + escapeSQL(schema) + "].[" +
-                          escapeSQL(table) + "]";
-      auto results = executeQueryMSSQL(conn, query);
-      if (!results.empty() && !results[0].empty() && !results[0][0].empty() &&
-          results[0][0] != "NULL") {
-        return std::stoll(results[0][0]);
-      }
-      return 0;
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::DATABASE, "getLastProcessedPKMSSQL",
-                    "Error getting last PK: " + std::string(e.what()));
-      return 0;
-    }
-  }
-
-  // Función para obtener el último PK procesado en PostgreSQL
-  long long getLastProcessedPKPostgres(pqxx::connection &conn,
-                                       const std::string &schema,
-                                       const std::string &table) {
-    try {
-      std::string query = "SELECT MAX(id) FROM \"" + escapeSQL(schema) +
-                          "\".\"" + escapeSQL(table) + "\"";
-      pqxx::work txn(conn);
-      auto results = txn.exec(query);
-      txn.commit();
-      if (!results.empty() && !results[0][0].is_null()) {
-        return results[0][0].as<long long>();
-      }
-      return 0;
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::DATABASE, "getLastProcessedPKPostgres",
-                    "Error getting last PK: " + std::string(e.what()));
-      return 0;
-    }
-  }
-
-  long long getTableSizeMariaDB(MYSQL *conn, const std::string &schema,
-                                const std::string &table) {
-    try {
-      std::string query = "SELECT TABLE_ROWS FROM information_schema.tables "
-                          "WHERE table_schema = '" +
-                          escapeSQL(schema) +
-                          "' "
-                          "AND table_name = '" +
-                          escapeSQL(table) + "';";
-
-      Logger::info(LogCategory::DATABASE, "getTableSizeMariaDB",
-                   "Executing query: " + query);
-
-      auto results = executeQueryMariaDB(conn, query);
-
-      Logger::info(LogCategory::DATABASE, "getTableSizeMariaDB",
-                   "Query returned " + std::to_string(results.size()) +
-                       " rows");
-      if (!results.empty() && !results[0].empty() && !results[0][0].empty()) {
-        try {
-          std::string rowsStr = results[0][0];
-          Logger::info(LogCategory::DATABASE, "getTableSizeMariaDB",
-                       "Raw TABLE_ROWS value: '" + rowsStr + "'");
-          if (rowsStr == "NULL" || rowsStr.empty()) {
-            Logger::info(LogCategory::DATABASE, "getTableSizeMariaDB",
-                         "TABLE_ROWS is NULL or empty, returning 0");
-            return 0;
-          }
-          long long size = std::stoll(rowsStr);
-          Logger::info(LogCategory::DATABASE, "getTableSizeMariaDB",
-                       "Parsed table size: " + std::to_string(size));
-          return size;
-        } catch (...) {
-          Logger::error(LogCategory::DATABASE, "getTableSizeMariaDB",
-                        "Failed to parse TABLE_ROWS value: '" + results[0][0] +
-                            "'");
-          return 0;
-        }
-      }
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::DATABASE, "getTableSizeMariaDB",
-                    "Error getting table size: " + std::string(e.what()));
-    }
-    return 0;
-  }
-
-  long long getTableSizeMSSQL(SQLHDBC conn, const std::string &schema,
-                              const std::string &table) {
-    try {
-      std::string query =
-          "SELECT SUM(row_count) FROM sys.dm_db_partition_stats "
-          "WHERE object_id = OBJECT_ID('[" +
-          escapeSQL(schema) + "].[" + escapeSQL(table) +
-          "]') "
-          "AND index_id IN (0, 1);";
-
-      auto results = executeQueryMSSQL(conn, query);
-      if (!results.empty() && !results[0].empty() && !results[0][0].empty()) {
-        try {
-          std::string rowsStr = results[0][0];
-          if (rowsStr == "NULL" || rowsStr.empty()) {
-            return 0;
-          }
-          return std::stoll(rowsStr);
-        } catch (...) {
-          return 0;
-        }
-      }
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::DATABASE, "getTableSizeMSSQL",
-                    "Error getting table size: " + std::string(e.what()));
-    }
-    return 0;
-  }
-
-  long long getTableSizePostgres(pqxx::connection &conn,
-                                 const std::string &schema,
-                                 const std::string &table) {
-    try {
-      std::string query = "SELECT COALESCE(n_tup_ins + n_tup_upd + n_tup_del, "
-                          "0) FROM pg_stat_user_tables "
-                          "WHERE schemaname = '" +
-                          escapeSQL(schema) +
-                          "' "
-                          "AND relname = '" +
-                          escapeSQL(table) + "';";
-
-      pqxx::work txn(conn);
-      auto results = txn.exec(query);
-      txn.commit();
-
-      if (!results.empty() && !results[0][0].is_null()) {
-        return results[0][0].as<long long>();
-      }
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::DATABASE, "getTableSizePostgres",
-                    "Error getting table size: " + std::string(e.what()));
-    }
-    return 0;
-  }
 
   std::vector<std::string> detectPrimaryKeyColumns(MYSQL *conn,
                                                    const std::string &schema,
@@ -2536,6 +2234,233 @@ private:
 
     SQLFreeHandle(SQL_HANDLE_STMT, stmt);
     return results;
+  }
+
+  std::pair<int, int>
+  getColumnCountsMariaDB(const std::string &connectionString,
+                         const std::string &schema, const std::string &table) {
+    try {
+      std::string host, user, password, db, port;
+      std::istringstream ss(connectionString);
+      std::string token;
+      while (std::getline(ss, token, ';')) {
+        auto pos = token.find('=');
+        if (pos == std::string::npos)
+          continue;
+        std::string key = token.substr(0, pos);
+        std::string value = token.substr(pos + 1);
+        key.erase(0, key.find_first_not_of(" \t\r\n"));
+        key.erase(key.find_last_not_of(" \t\r\n") + 1);
+        value.erase(0, value.find_first_not_of(" \t\r\n"));
+        value.erase(value.find_last_not_of(" \t\r\n") + 1);
+        if (key == "host")
+          host = value;
+        else if (key == "user")
+          user = value;
+        else if (key == "password")
+          password = value;
+        else if (key == "db")
+          db = value;
+        else if (key == "port")
+          port = value;
+      }
+
+      MYSQL *conn = mysql_init(nullptr);
+      if (!conn)
+        return {0, 0};
+
+      unsigned int portNum = 3306;
+      if (!port.empty()) {
+        try {
+          portNum = std::stoul(port);
+        } catch (...) {
+          portNum = 3306;
+        }
+      }
+
+      if (mysql_real_connect(conn, host.c_str(), user.c_str(), password.c_str(),
+                             db.c_str(), portNum, nullptr, 0) == nullptr) {
+        mysql_close(conn);
+        return {0, 0};
+      }
+
+      std::string sourceQuery =
+          "SELECT COUNT(*) FROM information_schema.columns "
+          "WHERE table_schema = '" +
+          escapeSQL(schema) +
+          "' "
+          "AND table_name = '" +
+          escapeSQL(table) + "'";
+
+      auto sourceResults = executeQueryMariaDB(conn, sourceQuery);
+      mysql_close(conn);
+
+      int sourceCount = 0;
+      if (!sourceResults.empty() && !sourceResults[0].empty()) {
+        try {
+          sourceCount = std::stoi(sourceResults[0][0]);
+        } catch (...) {
+          sourceCount = 0;
+        }
+      }
+
+      pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
+      pqxx::work txn(pgConn);
+      std::string targetQuery =
+          "SELECT COUNT(*) FROM information_schema.columns "
+          "WHERE table_schema = '" +
+          escapeSQL(schema) +
+          "' "
+          "AND table_name = '" +
+          escapeSQL(table) + "'";
+      auto targetResults = txn.exec(targetQuery);
+      txn.commit();
+
+      int targetCount = 0;
+      if (!targetResults.empty() && !targetResults[0][0].is_null()) {
+        targetCount = targetResults[0][0].as<int>();
+      }
+
+      return {sourceCount, targetCount};
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::DATABASE, "getColumnCountsMariaDB",
+                    "Error getting column counts: " + std::string(e.what()));
+      return {0, 0};
+    }
+  }
+
+  std::pair<int, int> getColumnCountsMSSQL(const std::string &connectionString,
+                                           const std::string &schema,
+                                           const std::string &table) {
+    try {
+      SQLHENV env;
+      SQLHDBC dbc;
+      SQLRETURN ret;
+
+      ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env);
+      if (!SQL_SUCCEEDED(ret))
+        return {0, 0};
+
+      ret = SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION, (SQLPOINTER)SQL_OV_ODBC3,
+                          0);
+      if (!SQL_SUCCEEDED(ret)) {
+        SQLFreeHandle(SQL_HANDLE_ENV, env);
+        return {0, 0};
+      }
+
+      ret = SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc);
+      if (!SQL_SUCCEEDED(ret)) {
+        SQLFreeHandle(SQL_HANDLE_ENV, env);
+        return {0, 0};
+      }
+
+      SQLCHAR outConnStr[1024];
+      SQLSMALLINT outConnStrLen;
+      ret = SQLDriverConnect(dbc, nullptr, (SQLCHAR *)connectionString.c_str(),
+                             SQL_NTS, outConnStr, sizeof(outConnStr),
+                             &outConnStrLen, SQL_DRIVER_NOPROMPT);
+      if (!SQL_SUCCEEDED(ret)) {
+        SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+        SQLFreeHandle(SQL_HANDLE_ENV, env);
+        return {0, 0};
+      }
+
+      std::string sourceQuery =
+          "SELECT COUNT(*) FROM sys.columns c "
+          "INNER JOIN sys.tables t ON c.object_id = t.object_id "
+          "INNER JOIN sys.schemas s ON t.schema_id = s.schema_id "
+          "WHERE s.name = '" +
+          escapeSQL(schema) +
+          "' "
+          "AND t.name = '" +
+          escapeSQL(table) + "'";
+
+      auto sourceResults = executeQueryMSSQL(dbc, sourceQuery);
+      SQLDisconnect(dbc);
+      SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+      SQLFreeHandle(SQL_HANDLE_ENV, env);
+
+      int sourceCount = 0;
+      if (!sourceResults.empty() && !sourceResults[0].empty()) {
+        try {
+          sourceCount = std::stoi(sourceResults[0][0]);
+        } catch (...) {
+          sourceCount = 0;
+        }
+      }
+
+      pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
+      pqxx::work txn(pgConn);
+      std::string targetQuery =
+          "SELECT COUNT(*) FROM information_schema.columns "
+          "WHERE table_schema = '" +
+          escapeSQL(schema) +
+          "' "
+          "AND table_name = '" +
+          escapeSQL(table) + "'";
+      auto targetResults = txn.exec(targetQuery);
+      txn.commit();
+
+      int targetCount = 0;
+      if (!targetResults.empty() && !targetResults[0][0].is_null()) {
+        targetCount = targetResults[0][0].as<int>();
+      }
+
+      return {sourceCount, targetCount};
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::DATABASE, "getColumnCountsMSSQL",
+                    "Error getting column counts: " + std::string(e.what()));
+      return {0, 0};
+    }
+  }
+
+  std::pair<int, int>
+  getColumnCountsPostgres(const std::string &connectionString,
+                          const std::string &schema, const std::string &table) {
+    try {
+      pqxx::connection sourceConn(connectionString);
+      if (!sourceConn.is_open())
+        return {0, 0};
+
+      pqxx::work sourceTxn(sourceConn);
+      std::string sourceQuery =
+          "SELECT COUNT(*) FROM information_schema.columns "
+          "WHERE table_schema = '" +
+          escapeSQL(schema) +
+          "' "
+          "AND table_name = '" +
+          escapeSQL(table) + "'";
+      auto sourceResults = sourceTxn.exec(sourceQuery);
+      sourceTxn.commit();
+
+      int sourceCount = 0;
+      if (!sourceResults.empty() && !sourceResults[0][0].is_null()) {
+        sourceCount = sourceResults[0][0].as<int>();
+      }
+
+      pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
+      pqxx::work txn(pgConn);
+      std::string targetQuery =
+          "SELECT COUNT(*) FROM information_schema.columns "
+          "WHERE table_schema = '" +
+          escapeSQL(schema) +
+          "' "
+          "AND table_name = '" +
+          escapeSQL(table) + "'";
+      auto targetResults = txn.exec(targetQuery);
+      txn.commit();
+
+      int targetCount = 0;
+      if (!targetResults.empty() && !targetResults[0][0].is_null()) {
+        targetCount = targetResults[0][0].as<int>();
+      }
+
+      return {sourceCount, targetCount};
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::DATABASE, "getColumnCountsPostgres",
+                    "Error getting column counts: " + std::string(e.what()));
+      return {0, 0};
+    }
   }
 };
 

@@ -80,11 +80,15 @@ const Dashboard = () => {
 
   // Función para formatear números con separadores de miles
   const formatNumber = (text: string): string => {
-    // Buscar patrones de números en el texto (ej: "3649000 records")
-    return text.replace(/(\d+)(\s+records?)/g, (match, number, suffix) => {
-      const formattedNumber = parseInt(number).toLocaleString('en-US');
-      return `${formattedNumber}${suffix}`;
+    // Buscar todos los números en el texto y formatearlos
+    return text.replace(/(\d+)/g, (match) => {
+      return parseInt(match).toLocaleString('en-US');
     });
+  };
+
+  // Función para formatear números con separadores de miles
+  const formatNumberWithCommas = (num: number): string => {
+    return num.toLocaleString('en-US');
   };
   const [stats, setStats] = useState<DashboardStats>({
     syncStatus: {
@@ -235,49 +239,25 @@ const Dashboard = () => {
 
           {stats.activeTransfersProgress && stats.activeTransfersProgress.length > 0 && (
             <Section>
-              <SectionTitle>📊 ACTIVE TRANSFERS PROGRESS</SectionTitle>
+              <SectionTitle>■ ACTIVE TRANSFERS PROGRESS</SectionTitle>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 {stats.activeTransfersProgress.map((transfer, index) => (
                   <div key={index} style={{ 
                     padding: '10px', 
                     backgroundColor: '#f9f9f9', 
-                    borderRadius: '5px',
+                    borderRadius: '3px',
                     border: '1px solid #ddd'
                   }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
-                      <strong>{transfer.schemaName}.{transfer.tableName} [{transfer.dbEngine}]</strong>
-                      <span style={{ 
-                        color: transfer.progressPercentage >= 90 ? '#4CAF50' : 
-                               transfer.progressPercentage >= 50 ? '#FF9800' : '#2196F3',
-                        fontWeight: 'bold'
-                      }}>
-                        {transfer.progressPercentage.toFixed(1)}%
-                      </span>
+                    <div style={{ marginBottom: '5px' }}>
+                      <strong>■ {transfer.schemaName}.{transfer.tableName} [{transfer.dbEngine}]</strong>
                     </div>
-                    <div style={{ 
-                      width: '100%', 
-                      height: '20px', 
-                      backgroundColor: '#e0e0e0', 
-                      borderRadius: '10px',
-                      overflow: 'hidden'
-                    }}>
-                      <div style={{
-                        width: `${Math.min(transfer.progressPercentage, 100)}%`,
-                        height: '100%',
-                        backgroundColor: transfer.progressPercentage >= 90 ? '#4CAF50' : 
-                                       transfer.progressPercentage >= 50 ? '#FF9800' : '#2196F3',
-                        transition: 'width 0.3s ease'
-                      }} />
-                    </div>
+                    <ProgressBar progress={transfer.progressPercentage} />
                     <div style={{ 
                       fontSize: '0.9em', 
-                      color: '#666', 
-                      marginTop: '5px',
-                      display: 'flex',
-                      justifyContent: 'space-between'
+                      color: '#333', 
+                      marginTop: '5px'
                     }}>
-                      <span>{transfer.lastOffset.toLocaleString()} / {transfer.tableSize.toLocaleString()} records</span>
-                      <span>Status: {transfer.status}</span>
+                      {formatNumberWithCommas(transfer.lastOffset)} / {formatNumberWithCommas(transfer.tableSize)} records - Status: {transfer.status}
                     </div>
                   </div>
                 ))}
@@ -305,7 +285,7 @@ const Dashboard = () => {
                       {stats.metricsCards.currentThroughput.avgRps.toFixed(0)} RPS
                     </div>
                     <div style={{ fontSize: '0.8em', color: '#666' }}>
-                      {stats.metricsCards.currentThroughput.totalRecords.toLocaleString()} records (last hour)
+                      {formatNumberWithCommas(stats.metricsCards.currentThroughput.totalRecords)} records (last hour)
                     </div>
                   </Value>
                 </Grid>
@@ -325,7 +305,7 @@ const Dashboard = () => {
                         </div>
                         <div style={{ textAlign: 'right' }}>
                           <div style={{ fontWeight: 'bold', color: '#333' }}>{table.throughputRps.toFixed(0)} RPS</div>
-                          <div style={{ fontSize: '0.8em', color: '#666' }}>{table.recordsTransferred.toLocaleString()} records</div>
+                          <div style={{ fontSize: '0.8em', color: '#666' }}>{formatNumberWithCommas(table.recordsTransferred)} records</div>
                         </div>
                       </Value>
                     ))}

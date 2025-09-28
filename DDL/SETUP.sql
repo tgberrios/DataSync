@@ -81,7 +81,7 @@ COMMENT ON COLUMN metadata.catalog.table_name IS 'Table name';
 COMMENT ON COLUMN metadata.catalog.db_engine IS 'Source database engine (PostgreSQL, MongoDB, MSSQL, MariaDB)';
 COMMENT ON COLUMN metadata.catalog.connection_string IS 'Database connection string for source database';
 COMMENT ON COLUMN metadata.catalog.active IS 'Whether the table is actively synchronized';
-COMMENT ON COLUMN metadata.catalog.status IS 'Current synchronization status: FULL_LOAD, LISTENING_CHANGES, PERFECT_MATCH, NO_DATA, ERROR';
+COMMENT ON COLUMN metadata.catalog.status IS 'Current synchronization status: FULL_LOAD, LISTENING_CHANGES, NO_DATA, ERROR';
 COMMENT ON COLUMN metadata.catalog.last_sync_time IS 'Last successful synchronization timestamp';
 COMMENT ON COLUMN metadata.catalog.last_sync_column IS 'Column used for incremental synchronization (usually timestamp column)';
 COMMENT ON COLUMN metadata.catalog.last_offset IS 'Last offset value for incremental sync (row count processed)';

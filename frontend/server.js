@@ -186,11 +186,10 @@ app.get("/api/dashboard/stats", async (req, res) => {
     // 1. SYNCHRONIZATION STATUS - solo contar registros activos
     const syncStatus = await pool.query(`
       SELECT 
-        COUNT(*) FILTER (WHERE active = true AND status = 'PERFECT_MATCH') as perfect_match,
         COUNT(*) FILTER (WHERE active = true AND status = 'LISTENING_CHANGES') as listening_changes,
-        COUNT(*) FILTER (WHERE active = true AND status = 'FULL_LOAD_ACTIVE') as full_load_active,
-        COUNT(*) FILTER (WHERE active = true AND status = 'FULL_LOAD_INACTIVE') as full_load_inactive,
-        COUNT(*) FILTER (WHERE active = true AND status = 'NO_DATA') as no_data,
+        COUNT(*) FILTER (WHERE active = true) as full_load_active,
+        COUNT(*) FILTER (WHERE active = false) as full_load_inactive,
+        COUNT(*) FILTER (WHERE active = false AND status = 'NO_DATA') as no_data,
         COUNT(*) FILTER (WHERE active = true AND status = 'ERROR') as errors,
         '' as current_process
       FROM metadata.catalog
@@ -331,10 +330,14 @@ app.get("/api/dashboard/stats", async (req, res) => {
           WHEN table_size > 0 THEN ROUND((last_offset::numeric / table_size::numeric) * 100, 1)
           ELSE 0 
         END as progress_percentage,
-        last_sync_time
+        last_sync_time,
+        CASE 
+          WHEN last_offset > 0 THEN 1
+          ELSE 0 
+        END as is_processing
       FROM metadata.catalog
       WHERE status = 'FULL_LOAD' AND active = true
-      ORDER BY progress_percentage DESC
+      ORDER BY is_processing DESC, table_size ASC
       LIMIT 10
     `);
 
