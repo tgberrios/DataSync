@@ -1583,8 +1583,6 @@ void DDLExporter::saveTableDDL(const std::string &cluster,
 
       if (file.good()) {
         file.close();
-        Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter",
-                      "Saved table DDL: " + filePath);
       } else {
         Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
                       "Error writing to file: " + filePath);

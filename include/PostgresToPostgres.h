@@ -128,13 +128,7 @@ public:
       Logger::info(LogCategory::TRANSFER,
                    "Processing " + std::to_string(tables.size()) +
                        " PostgreSQL tables in priority order");
-      for (size_t i = 0; i < tables.size(); ++i) {
-        Logger::info(LogCategory::TRANSFER,
-                     "[" + std::to_string(i + 1) + "/" +
-                         std::to_string(tables.size()) + "] " +
-                         std::get<0>(tables[i]) + "." + std::get<1>(tables[i]) +
-                         " (status: " + std::get<3>(tables[i]) + ")");
-      }
+      // Removed individual table status logs to reduce noise
 
       for (const auto &table : tables) {
         std::string schemaName = std::get<0>(table);

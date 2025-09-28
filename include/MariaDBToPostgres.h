@@ -317,15 +317,7 @@ public:
       Logger::info(LogCategory::TRANSFER,
                    "Processing " + std::to_string(tables.size()) +
                        " MariaDB tables in priority order");
-      for (size_t i = 0; i < tables.size(); ++i) {
-        if (tables[i].db_engine == "MariaDB") {
-          Logger::info(LogCategory::TRANSFER,
-                       "[" + std::to_string(i + 1) + "/" +
-                           std::to_string(tables.size()) + "] " +
-                           tables[i].schema_name + "." + tables[i].table_name +
-                           " (status: " + tables[i].status + ")");
-        }
-      }
+      // Removed individual table status logs to reduce noise
 
       for (const auto &table : tables) {
         if (table.db_engine != "MariaDB")
@@ -864,15 +856,7 @@ public:
       Logger::info(LogCategory::TRANSFER,
                    "Processing " + std::to_string(tables.size()) +
                        " MariaDB tables in priority order");
-      for (size_t i = 0; i < tables.size(); ++i) {
-        if (tables[i].db_engine == "MariaDB") {
-          Logger::info(LogCategory::TRANSFER,
-                       "[" + std::to_string(i + 1) + "/" +
-                           std::to_string(tables.size()) + "] " +
-                           tables[i].schema_name + "." + tables[i].table_name +
-                           " (status: " + tables[i].status + ")");
-        }
-      }
+      // Removed individual table status logs to reduce noise
 
       for (auto &table : tables) {
         if (table.db_engine != "MariaDB") {
@@ -1098,9 +1082,7 @@ public:
           // IMPORTANTE: NO continuar con el procesamiento de datos si los
           // counts coinciden Solo procesar DELETEs si es necesario y luego
           // cerrar la conexión
-          Logger::info(LogCategory::TRANSFER,
-                       "Table " + schema_name + "." + table_name +
-                           " is already synchronized - skipping data transfer");
+          // Removed synchronized table log to reduce noise
 
           // Cerrar conexión MariaDB antes de continuar
           mysql_close(mariadbConn);

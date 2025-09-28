@@ -611,9 +611,7 @@ private:
               "db_engine = 'MariaDB' AND status = 'LISTENING_CHANGES'");
           txn.commit();
 
-          Logger::info(LogCategory::MONITORING,
-                       "Found " + std::to_string(mariaTables.size()) +
-                           " MariaDB tables to validate");
+          // Removed table count log to reduce noise
 
           for (const auto &row : mariaTables) {
             try {
@@ -649,9 +647,7 @@ private:
               "WHERE db_engine = 'MSSQL' AND status = 'LISTENING_CHANGES'");
           txn.commit();
 
-          Logger::info(LogCategory::MONITORING,
-                       "Found " + std::to_string(mssqlTables.size()) +
-                           " MSSQL tables to validate");
+          // Removed table count log to reduce noise
 
           for (const auto &row : mssqlTables) {
             try {
@@ -687,9 +683,7 @@ private:
               "db_engine = 'PostgreSQL' AND status IN ('LISTENING_CHANGES')");
           txn.commit();
 
-          Logger::info(LogCategory::MONITORING,
-                       "Found " + std::to_string(pgTables.size()) +
-                           " PostgreSQL tables to validate");
+          // Removed table count log to reduce noise
 
           for (const auto &row : pgTables) {
             try {

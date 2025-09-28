@@ -450,10 +450,6 @@ public:
                                   "." + tableName + ": " +
                                   std::string(e.what()));
             }
-
-            Logger::info(LogCategory::DATABASE, "Table size for " + schemaName +
-                                                    "." + tableName + ": " +
-                                                    std::to_string(tableSize));
             // Check if table already exists
             auto existingCheck = txn.exec(
                 "SELECT last_sync_column, pk_columns, pk_strategy, "
@@ -720,10 +716,6 @@ public:
                                   std::string(e.what()));
             }
 
-            Logger::info(LogCategory::DATABASE, "Table size for " + schemaName +
-                                                    "." + tableName + ": " +
-                                                    std::to_string(tableSize));
-
             pqxx::work txn(pgConn);
             // Verificar si la tabla ya existe (sin importar connection_string)
             auto existingCheck = txn.exec(
@@ -957,10 +949,6 @@ public:
                                   "." + tableName + ": " +
                                   std::string(e.what()));
             }
-
-            Logger::info(LogCategory::DATABASE, "Table size for " + schemaName +
-                                                    "." + tableName + ": " +
-                                                    std::to_string(tableSize));
             // Check if table already exists
             auto existingCheck = txn.exec(
                 "SELECT last_sync_column, pk_columns, pk_strategy, has_pk, "
