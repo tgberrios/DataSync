@@ -1195,7 +1195,7 @@ private:
           return "TEMPORAL_PK"; // Crear PK temporal usando columna candidata
         }
       }
-      return "ROWID"; // Usar ROWID como fallback
+      return "OFFSET"; // Usar OFFSET como fallback
     } else {
       return "OFFSET"; // Último recurso: OFFSET pagination
     }

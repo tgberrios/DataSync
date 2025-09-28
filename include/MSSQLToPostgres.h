@@ -1138,16 +1138,25 @@ public:
             }
           }
 
-          // Always update targetCount and currentOffset, even if COPY failed
+          // Always update targetCount, but only update currentOffset for non-PK
+          // tables
           targetCount += rowsInserted;
-          currentOffset +=
-              rowsInserted; // Incrementar OFFSET para la siguiente iteración
+
+          // Solo incrementar currentOffset para tablas sin PK (OFFSET
+          // pagination) Para tablas con PK se usa cursor-based pagination con
+          // last_processed_pk
+          if (pkStrategy != "PK") {
+            currentOffset += rowsInserted;
+          }
 
           // If COPY failed but we have data, advance the offset by 1
           if (rowsInserted == 0 && !results.empty()) {
             targetCount += 1; // Advance by 1 to skip the problematic record
-            currentOffset +=
-                1; // Advance OFFSET by 1 to skip the problematic record
+            // Solo avanzar currentOffset para tablas sin PK
+            if (pkStrategy != "PK") {
+              currentOffset +=
+                  1; // Advance OFFSET by 1 to skip the problematic record
+            }
             Logger::info(LogCategory::TRANSFER,
                          "COPY failed, advancing offset by 1 to skip "
                          "problematic record for " +
@@ -1163,18 +1172,23 @@ public:
             }
           }
 
-          // Update last_offset in database to prevent infinite loops
-          try {
-            pqxx::work updateTxn(pgConn);
-            updateTxn.exec("UPDATE metadata.catalog SET last_offset='" +
-                           std::to_string(currentOffset) +
-                           "' WHERE schema_name='" + escapeSQL(schema_name) +
-                           "' AND table_name='" + escapeSQL(table_name) + "';");
-            updateTxn.commit();
-          } catch (const std::exception &e) {
-            Logger::warning(LogCategory::TRANSFER,
-                            "Failed to update last_offset: " +
-                                std::string(e.what()));
+          // Update last_offset in database solo para tablas sin PK (OFFSET
+          // pagination) Para tablas con PK se usa last_processed_pk en lugar de
+          // last_offset
+          if (pkStrategy != "PK") {
+            try {
+              pqxx::work updateTxn(pgConn);
+              updateTxn.exec("UPDATE metadata.catalog SET last_offset='" +
+                             std::to_string(currentOffset) +
+                             "' WHERE schema_name='" + escapeSQL(schema_name) +
+                             "' AND table_name='" + escapeSQL(table_name) +
+                             "';");
+              updateTxn.commit();
+            } catch (const std::exception &e) {
+              Logger::warning(LogCategory::TRANSFER,
+                              "Failed to update last_offset: " +
+                                  std::string(e.what()));
+            }
           }
 
           if (targetCount >= sourceCount) {
