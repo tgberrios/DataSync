@@ -35,3 +35,6 @@ Thumbs.db
 # Backup files
 *.bak
 *.backup
+
+# Configuration files with credentials
+config.json
