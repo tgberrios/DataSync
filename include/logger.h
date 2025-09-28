@@ -183,8 +183,17 @@ private:
       return;
     }
 
+    // Try to reopen file if it's not open
     if (!logFile.is_open()) {
       logFile.open(logFileName, std::ios::app);
+      if (!logFile.is_open()) {
+        // If we can't open the log file, write to stderr as fallback
+        std::cerr << "[LOGGER ERROR] Cannot open log file: " << logFileName
+                  << std::endl;
+        std::cerr << "[FALLBACK LOG] " << getLevelString(level) << ": "
+                  << message << std::endl;
+        return;
+      }
     }
 
     checkFileSize();
@@ -199,6 +208,13 @@ private:
       logFile << " [" << function << "]";
     }
     logFile << " " << message << std::endl;
+
+    // Check if write was successful
+    if (!logFile.good()) {
+      std::cerr << "[LOGGER ERROR] Failed to write to log file" << std::endl;
+      logFile.close();
+      return;
+    }
 
     messageCount++;
     if (messageCount >= MAX_MESSAGES_BEFORE_FLUSH) {
@@ -230,6 +246,7 @@ public:
       logFile.flush();
       logFile.close();
     }
+    messageCount = 0;
   }
 
   // Convenience methods with categories
@@ -333,6 +350,7 @@ public:
 
   // Configuration management
   static void loadDebugConfig();
+  static void setDefaultConfig();
   static void setLogLevel(LogLevel level);
   static void setLogLevel(const std::string &levelStr);
   static LogLevel getCurrentLogLevel();
