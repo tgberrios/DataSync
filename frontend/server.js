@@ -7,16 +7,46 @@ import os from "os";
 import path from "path";
 import fs from "fs";
 
+// Load configuration from shared config file
+function loadConfig() {
+  try {
+    const configPath = path.join(process.cwd(), "..", "config.json");
+    const configData = fs.readFileSync(configPath, "utf8");
+    const config = JSON.parse(configData);
+
+    console.log("Configuration loaded from:", configPath);
+    return config;
+  } catch (error) {
+    console.error("Error loading config file:", error.message);
+    console.log("Using default configuration");
+
+    // Default configuration fallback
+    return {
+      database: {
+        postgres: {
+          host: "localhost",
+          port: 5432,
+          database: "DataLake",
+          user: "tomy.berrios",
+          password: "Yucaquemada1",
+        },
+      },
+    };
+  }
+}
+
+const config = loadConfig();
+
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 const pool = new Pool({
-  host: "localhost",
-  port: 5432,
-  database: "DataLake",
-  user: "tomy.berrios",
-  password: "Yucaquemada1",
+  host: config.database.postgres.host,
+  port: config.database.postgres.port,
+  database: config.database.postgres.database,
+  user: config.database.postgres.user,
+  password: config.database.postgres.password,
 });
 
 // Test connection
