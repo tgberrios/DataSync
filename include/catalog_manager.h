@@ -432,23 +432,25 @@ public:
 
             pqxx::work txn(pgConn);
 
-            // Obtener tamaño de la tabla para ordenamiento
+            // Obtener tamaño de la tabla para ordenamiento usando pg_class
             int64_t tableSize = 0;
             try {
               std::string sizeQuery =
-                  "SELECT table_rows FROM information_schema.tables WHERE "
-                  "table_schema = '" +
-                  escapeSQL(schemaName) + "' AND table_name = '" +
-                  escapeSQL(tableName) + "'";
+                  "SELECT COALESCE(reltuples::bigint, 0) FROM pg_class "
+                  "WHERE relname = '" +
+                  escapeSQL(tableName) +
+                  "' AND "
+                  "relnamespace = (SELECT oid FROM pg_namespace WHERE nspname "
+                  "= '" +
+                  escapeSQL(schemaName) + "')";
               auto sizeResult = txn.exec(sizeQuery);
               if (!sizeResult.empty() && !sizeResult[0][0].is_null()) {
                 tableSize = sizeResult[0][0].as<int64_t>();
               }
             } catch (const std::exception &e) {
-              Logger::warning(LogCategory::DATABASE,
-                              "Could not get table size for " + schemaName +
-                                  "." + tableName + ": " +
-                                  std::string(e.what()));
+              // Silently continue without table size - not critical for
+              // functionality
+              tableSize = 0;
             }
             // Check if table already exists
             auto existingCheck = txn.exec(
