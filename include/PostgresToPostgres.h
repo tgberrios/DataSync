@@ -4,6 +4,7 @@
 #include "Config.h"
 #include "catalog_manager.h"
 #include "logger.h"
+#include <chrono>
 #include <mutex>
 #include <pqxx/pqxx>
 #include <string>
@@ -886,10 +887,45 @@ private:
       const size_t CHUNK_SIZE = SyncConfig::getChunkSize();
       size_t totalProcessed = 0;
       bool hasMoreData = true;
+      size_t chunkNumber = 0;
+
+      // CRITICAL: Add timeout to prevent infinite loops
+      auto startTime = std::chrono::steady_clock::now();
+      const auto MAX_PROCESSING_TIME =
+          std::chrono::hours(2); // 2 hours max per table
 
       while (hasMoreData) {
+        chunkNumber++;
         std::string selectQuery =
             "SELECT * FROM \"" + schemaName + "\".\"" + tableName + "\"";
+
+        // CRITICAL: Check timeout to prevent infinite loops
+        auto currentTime = std::chrono::steady_clock::now();
+        auto elapsedTime = currentTime - startTime;
+        if (elapsedTime > MAX_PROCESSING_TIME) {
+          Logger::error(
+              LogCategory::TRANSFER,
+              "CRITICAL: Maximum processing time reached (" +
+                  std::to_string(
+                      std::chrono::duration_cast<std::chrono::minutes>(
+                          elapsedTime)
+                          .count()) +
+                  " minutes) for table " + schemaName + "." + tableName +
+                  " - breaking to prevent infinite loop");
+          hasMoreData = false;
+          break;
+        }
+
+        // CRITICAL: Add maximum chunk limit to prevent infinite loops
+        if (chunkNumber > 10000) {
+          Logger::error(LogCategory::TRANSFER,
+                        "CRITICAL: Maximum chunk limit reached (" +
+                            std::to_string(chunkNumber) + ") for table " +
+                            schemaName + "." + tableName +
+                            " - breaking to prevent infinite loop");
+          hasMoreData = false;
+          break;
+        }
 
         if (pkStrategy == "PK" && !pkColumns.empty()) {
           // CURSOR-BASED PAGINATION: Usar PK para paginación eficiente
@@ -983,8 +1019,27 @@ private:
           // Obtener tipos de columnas (asumir TEXT por defecto)
           std::vector<std::string> columnTypes(columnNames.size(), "TEXT");
 
-          performBulkUpsert(targetConn, results, columnNames, columnTypes,
-                            lowerSchemaName, tableName, schemaName);
+          try {
+            performBulkUpsert(targetConn, results, columnNames, columnTypes,
+                              lowerSchemaName, tableName, schemaName);
+          } catch (const std::exception &e) {
+            std::string errorMsg = e.what();
+            Logger::error(LogCategory::TRANSFER,
+                          "Bulk upsert failed: " + errorMsg);
+
+            // CRITICAL: Check for transaction abort errors that cause infinite
+            // loops
+            if (errorMsg.find("current transaction is aborted") !=
+                    std::string::npos ||
+                errorMsg.find("previously aborted") != std::string::npos ||
+                errorMsg.find("aborted transaction") != std::string::npos) {
+              Logger::error(LogCategory::TRANSFER,
+                            "CRITICAL: Transaction abort detected - breaking "
+                            "loop to prevent infinite hang");
+              hasMoreData = false;
+              break;
+            }
+          }
         }
 
         totalProcessed += sourceResult.size();
@@ -1931,12 +1986,81 @@ private:
           }
           batchQuery += conflictClause;
 
-          txn.exec(batchQuery);
-          totalProcessed += values.size();
+          try {
+            txn.exec(batchQuery);
+            totalProcessed += values.size();
+          } catch (const std::exception &e) {
+            std::string errorMsg = e.what();
+
+            // Detectar transacción abortada
+            if (errorMsg.find("current transaction is aborted") !=
+                    std::string::npos ||
+                errorMsg.find("previously aborted") != std::string::npos) {
+              Logger::warning(LogCategory::TRANSFER, "performBulkUpsert",
+                              "Transaction aborted detected, processing batch "
+                              "individually");
+
+              // Procesar registros individualmente con nuevas transacciones
+              for (size_t i = batchStart; i < batchEnd; ++i) {
+                try {
+                  const auto &row = results[i];
+                  if (row.size() != columnNames.size())
+                    continue;
+
+                  std::string singleRowValues = "(";
+                  for (size_t j = 0; j < row.size(); ++j) {
+                    if (j > 0)
+                      singleRowValues += ", ";
+
+                    if (row[j] == "NULL" || row[j].empty()) {
+                      singleRowValues += "NULL";
+                    } else {
+                      std::string cleanValue =
+                          cleanValueForPostgres(row[j], columnTypes[j]);
+                      singleRowValues += "'" + escapeSQL(cleanValue) + "'";
+                    }
+                  }
+                  singleRowValues += ")";
+
+                  // Crear nueva transacción para cada registro
+                  pqxx::work singleTxn(pgConn);
+                  singleTxn.exec("SET statement_timeout = '600s'");
+                  std::string singleQuery =
+                      upsertQuery + singleRowValues + conflictClause;
+                  singleTxn.exec(singleQuery);
+                  singleTxn.commit();
+                  totalProcessed++;
+
+                } catch (const std::exception &singleError) {
+                  Logger::error(
+                      LogCategory::TRANSFER, "performBulkUpsert",
+                      "Skipping problematic record: " +
+                          std::string(singleError.what()).substr(0, 100));
+                }
+              }
+            } else {
+              // Re-lanzar otros errores
+              throw;
+            }
+          }
         }
       }
 
-      txn.commit();
+      // Solo hacer commit si la transacción no fue abortada
+      try {
+        txn.commit();
+      } catch (const std::exception &commitError) {
+        if (std::string(commitError.what()).find("previously aborted") !=
+                std::string::npos ||
+            std::string(commitError.what()).find("aborted transaction") !=
+                std::string::npos) {
+          Logger::warning(LogCategory::TRANSFER, "performBulkUpsert",
+                          "Skipping commit for aborted transaction");
+        } else {
+          throw;
+        }
+      }
+
       Logger::debug("performBulkUpsert",
                     "Processed " + std::to_string(totalProcessed) +
                         " rows with UPSERT for " + sourceSchemaName + "." +
