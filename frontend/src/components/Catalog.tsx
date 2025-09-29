@@ -62,19 +62,19 @@ const StatusBadge = styled.span<{ $status: string }>`
   font-size: 0.9em;
   background: ${props => {
     switch (props.$status) {
-      case 'full_load': return '#e3f2fd';
-      case 'incremental': return '#e8f5e9';
-      case 'error': return '#ffebee';
-      case 'no_data': return '#fff3e0';
+      case 'ERROR': return '#ffebee';
+      case 'LISTENING_CHANGES': return '#e8f5e9';
+      case 'NO_DATA': return '#fff3e0';
+      case 'SKIP': return '#f5f5f5';
       default: return '#f5f5f5';
     }
   }};
   color: ${props => {
     switch (props.$status) {
-      case 'full_load': return '#1976d2';
-      case 'incremental': return '#2e7d32';
-      case 'error': return '#c62828';
-      case 'no_data': return '#ef6c00';
+      case 'ERROR': return '#c62828';
+      case 'LISTENING_CHANGES': return '#2e7d32';
+      case 'NO_DATA': return '#ef6c00';
+      case 'SKIP': return '#666666';
       default: return '#333';
     }
   }};
@@ -95,9 +95,25 @@ const ActionButton = styled.button`
   background: white;
   cursor: pointer;
   font-family: monospace;
+  margin-right: 5px;
   
   &:hover {
     background: #f5f5f5;
+  }
+`;
+
+const SkipButton = styled.button`
+  padding: 4px 8px;
+  border: 1px solid #ff9800;
+  border-radius: 4px;
+  background: #fff3e0;
+  color: #ef6c00;
+  cursor: pointer;
+  font-family: monospace;
+  margin-right: 5px;
+  
+  &:hover {
+    background: #ffecb3;
   }
 `;
 
@@ -400,6 +416,37 @@ const Catalog = () => {
     }
   };
 
+  const handleSkipTable = async (entry: CatalogEntry) => {
+    if (!confirm(`Are you sure you want to mark table "${entry.schema_name}.${entry.table_name}" as SKIP?\n\nThis will:\n- Set status to 'SKIP'\n- Set active to false (table will not be processed)\n- Reset offset to 0\n\nThis action CANNOT be undone.`)) {
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const result = await catalogApi.skipTable(
+        entry.schema_name,
+        entry.table_name,
+        entry.db_engine
+      );
+      
+      // Recargar datos después del skip
+      const response = await catalogApi.getCatalogEntries({
+        page,
+        limit: 10,
+        ...filter,
+        search
+      });
+      setData(response.data);
+      setPagination(response.pagination);
+      
+      alert(`Table "${entry.schema_name}.${entry.table_name}" marked as SKIP successfully.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error skipping table');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSchemaAction = async (value: string) => {
     if (!value || value === '') return;
     
@@ -493,10 +540,10 @@ const Catalog = () => {
           onChange={(e) => setFilter({...filter, status: e.target.value})}
         >
           <option value="">All Status</option>
-          <option value="full_load">Full Load</option>
-          <option value="incremental">Incremental</option>
-          <option value="error">Error</option>
-          <option value="no_data">No Data</option>
+          <option value="ERROR">ERROR</option>
+          <option value="LISTENING_CHANGES">LISTENING_CHANGES</option>
+          <option value="NO_DATA">NO_DATA</option>
+          <option value="SKIP">SKIP</option>
         </Select>
 
         <Select
@@ -570,6 +617,9 @@ const Catalog = () => {
                 <ActionButton onClick={() => setSelectedEntry(entry)}>
                   ✎ Edit
                 </ActionButton>
+                <SkipButton onClick={() => handleSkipTable(entry)}>
+                  ⏭ Skip
+                </SkipButton>
               </Td>
             </tr>
           ))}
