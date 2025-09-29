@@ -356,35 +356,13 @@ app.get("/api/dashboard/stats", async (req, res) => {
       WHERE created_at > NOW() - INTERVAL '1 hour'
     `);
 
-    // 7. ACTIVE TRANSFERS PROGRESS
-    const activeTransfersProgress = await pool.query(`
-      SELECT 
-        schema_name,
-        table_name,
-        db_engine,
-        last_offset,
-        table_size,
-        status,
-        CASE 
-          WHEN table_size > 0 THEN ROUND((last_offset::numeric / table_size::numeric) * 100, 1)
-          ELSE 0 
-        END as progress_percentage,
-        last_sync_time,
-        CASE 
-          WHEN last_offset > 0 THEN 1
-          ELSE 0 
-        END as is_processing
-      FROM metadata.catalog
-      WHERE status = 'FULL_LOAD' AND active = true
-      ORDER BY is_processing DESC, table_size ASC
-      LIMIT 10
-    `);
-
     // Construir el objeto de respuesta
-    const listeningChanges = parseInt(syncStatus.rows[0]?.listening_changes || 0);
+    const listeningChanges = parseInt(
+      syncStatus.rows[0]?.listening_changes || 0
+    );
     const fullLoadActive = parseInt(syncStatus.rows[0]?.full_load_active || 0);
     const pending = Math.max(0, fullLoadActive - listeningChanges);
-    
+
     const stats = {
       syncStatus: {
         progress: 0,
@@ -433,11 +411,12 @@ app.get("/api/dashboard/stats", async (req, res) => {
     };
 
     // Calcular progreso total - solo contar registros activos
-    const totalActive = stats.syncStatus.listeningChanges + stats.syncStatus.fullLoadActive + stats.syncStatus.errors;
+    const totalActive =
+      stats.syncStatus.listeningChanges +
+      stats.syncStatus.fullLoadActive +
+      stats.syncStatus.errors;
     const total =
-      totalActive +
-      stats.syncStatus.fullLoadInactive +
-      stats.syncStatus.noData;
+      totalActive + stats.syncStatus.fullLoadInactive + stats.syncStatus.noData;
 
     // El progreso se calcula como: Listening Changes / Total Active * 100
     // Representa qué porcentaje de tablas activas han llegado a LISTENING_CHANGES
@@ -486,18 +465,6 @@ app.get("/api/dashboard/stats", async (req, res) => {
       lastTransfer: recentActivity.rows[0]?.last_transfer || null,
       uptime: formatUptime(dbHealth.rows[0]?.uptime_seconds || 0),
     };
-
-    // Agregar progreso de transferencias activas
-    stats.activeTransfersProgress = activeTransfersProgress.rows.map((row) => ({
-      schemaName: row.schema_name,
-      tableName: row.table_name,
-      dbEngine: row.db_engine,
-      lastOffset: parseInt(row.last_offset || 0),
-      tableSize: parseInt(row.table_size || 0),
-      progressPercentage: parseFloat(row.progress_percentage || 0),
-      status: row.status,
-      lastSyncTime: row.last_sync_time,
-    }));
 
     // MÉTRICAS PARA CARDS INFORMATIVAS
 
@@ -1298,45 +1265,48 @@ app.get("/api/dashboard/currently-processing", async (req, res) => {
       ORDER BY processed_at DESC
       LIMIT 1
     `);
-    
+
     if (result.rows.length === 0) {
       return res.json(null);
     }
-    
+
     const processingTable = result.rows[0];
-    
+
     // Hacer COUNT de la tabla que se está procesando
     let countResult;
     try {
-      if (processingTable.db_engine === 'MariaDB') {
-        // Para MariaDB, usar la conexión directa
+      if (processingTable.db_engine === "MariaDB") {
+        // Para MariaDB, usar backticks para case-sensitive names
         countResult = await pool.query(`
           SELECT COUNT(*) as total_records
-          FROM ${processingTable.schema_name}.${processingTable.table_name}
+          FROM \`${processingTable.schema_name}\`.\`${processingTable.table_name}\`
         `);
-      } else if (processingTable.db_engine === 'MSSQL') {
-        // Para MSSQL, usar la conexión directa
+      } else if (processingTable.db_engine === "MSSQL") {
+        // Para MSSQL, usar brackets para case-sensitive names
         countResult = await pool.query(`
           SELECT COUNT(*) as total_records
           FROM [${processingTable.schema_name}].[${processingTable.table_name}]
         `);
       } else {
-        // Para PostgreSQL
+        // Para PostgreSQL, usar comillas dobles para case-sensitive names
         countResult = await pool.query(`
           SELECT COUNT(*) as total_records
           FROM "${processingTable.schema_name}"."${processingTable.table_name}"
         `);
       }
     } catch (countError) {
-      console.warn(`Could not get count for ${processingTable.schema_name}.${processingTable.table_name}:`, countError.message);
+      console.warn(
+        `Could not get count for ${processingTable.schema_name}.${processingTable.table_name}:`,
+        countError.message
+      );
       countResult = { rows: [{ total_records: 0 }] };
     }
-    
+
     const response = {
       ...processingTable,
-      total_records: parseInt(countResult.rows[0]?.total_records || 0)
+      total_records: parseInt(countResult.rows[0]?.total_records || 0),
     };
-    
+
     res.json(response);
   } catch (err) {
     console.error("Error getting currently processing table:", err);
