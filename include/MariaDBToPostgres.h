@@ -186,7 +186,8 @@ public:
         t.last_processed_pk = row[9].is_null() ? "" : row[9].as<std::string>();
         t.pk_strategy = row[10].is_null() ? "" : row[10].as<std::string>();
         t.pk_columns = row[11].is_null() ? "" : row[11].as<std::string>();
-        t.candidate_columns = row[12].is_null() ? "" : row[12].as<std::string>();
+        t.candidate_columns =
+            row[12].is_null() ? "" : row[12].as<std::string>();
         t.has_pk = row[13].is_null() ? false : row[13].as<bool>();
         data.push_back(t);
       }
@@ -1328,7 +1329,8 @@ public:
                            " (size: " + std::to_string(CHUNK_SIZE) +
                            ", offset: " + std::to_string(currentOffset) + ")");
 
-          // OPTIMIZED: Usar cursor-based pagination con primary key o columnas candidatas
+          // OPTIMIZED: Usar cursor-based pagination con primary key o columnas
+          // candidatas
           std::string selectQuery =
               "SELECT * FROM `" + schema_name + "`.`" + table_name + "`";
 
@@ -1352,17 +1354,19 @@ public:
             selectQuery += " ORDER BY `" + pkColumns[0] + "`";
             selectQuery += " LIMIT " + std::to_string(CHUNK_SIZE) + ";";
           } else if (pkStrategy == "TEMPORAL_PK" && !candidateColumns.empty()) {
-            // CURSOR-BASED PAGINATION: Usar columnas candidatas para paginación eficiente
+            // CURSOR-BASED PAGINATION: Usar columnas candidatas para paginación
+            // eficiente
             if (!lastProcessedPK.empty()) {
               selectQuery += " WHERE `" + candidateColumns[0] + "` > '" +
-                           escapeSQL(lastProcessedPK) + "'";
+                             escapeSQL(lastProcessedPK) + "'";
             }
 
             // Ordenar por la primera columna candidata
             selectQuery += " ORDER BY `" + candidateColumns[0] + "`";
             selectQuery += " LIMIT " + std::to_string(CHUNK_SIZE) + ";";
           } else {
-            // FALLBACK: Usar OFFSET pagination para tablas sin PK ni columnas candidatas
+            // FALLBACK: Usar OFFSET pagination para tablas sin PK ni columnas
+            // candidatas
             selectQuery += " LIMIT " + std::to_string(CHUNK_SIZE) + " OFFSET " +
                            std::to_string(currentOffset) + ";";
           }
@@ -1477,9 +1481,9 @@ public:
           // Update targetCount and currentOffset based on actual processed rows
           targetCount += rowsInserted;
 
-          // Solo incrementar currentOffset para tablas sin PK ni columnas candidatas (OFFSET
-          // pagination) Para tablas con PK o TEMPORAL_PK se usa cursor-based pagination con
-          // last_processed_pk
+          // Solo incrementar currentOffset para tablas sin PK ni columnas
+          // candidatas (OFFSET pagination) Para tablas con PK o TEMPORAL_PK se
+          // usa cursor-based pagination con last_processed_pk
           if (pkStrategy != "PK" && pkStrategy != "TEMPORAL_PK") {
             currentOffset += rowsInserted;
           }
@@ -1490,12 +1494,12 @@ public:
                   " after processing chunk " + std::to_string(chunkNumber));
 
           // OPTIMIZED: Update last_processed_pk for cursor-based pagination
-          if (((pkStrategy == "PK" && !pkColumns.empty()) || 
-               (pkStrategy == "TEMPORAL_PK" && !candidateColumns.empty())) && 
+          if (((pkStrategy == "PK" && !pkColumns.empty()) ||
+               (pkStrategy == "TEMPORAL_PK" && !candidateColumns.empty())) &&
               !results.empty()) {
             try {
               // Obtener el último PK del chunk procesado
-              std::vector<std::string> columnsToUse = 
+              std::vector<std::string> columnsToUse =
                   (pkStrategy == "PK") ? pkColumns : candidateColumns;
               std::string lastPK =
                   getLastPKFromResults(results, columnsToUse, columnNames);
@@ -1506,7 +1510,8 @@ public:
                 Logger::info(LogCategory::TRANSFER,
                              "Updated last_processed_pk to " + lastPK +
                                  " for table " + schema_name + "." +
-                                 table_name + " (strategy: " + pkStrategy + ")");
+                                 table_name + " (strategy: " + pkStrategy +
+                                 ")");
               }
             } catch (const std::exception &e) {
               Logger::error(
@@ -1518,9 +1523,9 @@ public:
           }
 
           // Update last_offset in database solo para tablas sin PK (OFFSET
-          // pagination) Para tablas con PK se usa last_processed_pk en lugar de
-          // last_offset
-          if (pkStrategy != "PK") {
+          // pagination) Para tablas con PK o TEMPORAL_PK se usa
+          // last_processed_pk en lugar de last_offset
+          if (pkStrategy != "PK" && pkStrategy != "TEMPORAL_PK") {
             try {
               Logger::info(LogCategory::TRANSFER,
                            "Updating last_offset to " +
@@ -2575,8 +2580,8 @@ private:
 
   std::vector<std::string>
   getCandidateColumnsFromCatalog(pqxx::connection &pgConn,
-                                const std::string &schema_name,
-                                const std::string &table_name) {
+                                 const std::string &schema_name,
+                                 const std::string &table_name) {
     std::vector<std::string> candidateColumns;
     try {
       pqxx::work txn(pgConn);
@@ -2592,7 +2597,8 @@ private:
       }
     } catch (const std::exception &e) {
       Logger::error(LogCategory::TRANSFER, "getCandidateColumnsFromCatalog",
-                    "Error getting candidate columns: " + std::string(e.what()));
+                    "Error getting candidate columns: " +
+                        std::string(e.what()));
     }
     return candidateColumns;
   }
@@ -2732,6 +2738,5 @@ std::unordered_map<std::string, std::string> MariaDBToPostgres::collationMap = {
     {"utf8mb4_general_ci", "en_US.utf8"},
     {"latin1_swedish_ci", "C"},
     {"ascii_general_ci", "C"}};
-
 
 #endif

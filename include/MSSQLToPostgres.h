@@ -1169,17 +1169,17 @@ public:
           targetCount += rowsInserted;
 
           // Solo incrementar currentOffset para tablas sin PK (OFFSET
-          // pagination) Para tablas con PK se usa cursor-based pagination con
-          // last_processed_pk
-          if (pkStrategy != "PK") {
+          // pagination) Para tablas con PK o TEMPORAL_PK se usa cursor-based
+          // pagination con last_processed_pk
+          if (pkStrategy != "PK" && pkStrategy != "TEMPORAL_PK") {
             currentOffset += rowsInserted;
           }
 
           // If COPY failed but we have data, advance the offset by 1
           if (rowsInserted == 0 && !results.empty()) {
             targetCount += 1; // Advance by 1 to skip the problematic record
-            // Solo avanzar currentOffset para tablas sin PK
-            if (pkStrategy != "PK") {
+            // Solo avanzar currentOffset para tablas sin PK ni TEMPORAL_PK
+            if (pkStrategy != "PK" && pkStrategy != "TEMPORAL_PK") {
               currentOffset +=
                   1; // Advance OFFSET by 1 to skip the problematic record
             }

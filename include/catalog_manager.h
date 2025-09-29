@@ -43,6 +43,9 @@ public:
       // Limpiar tablas huérfanas (sin conexión válida)
       cleanOrphanedTables(pgConn);
 
+      // Limpiar campos de paginación inconsistentes
+      cleanInconsistentPaginationFields();
+
       // Actualizar cluster names después de la limpieza
       updateClusterNames();
 
@@ -1187,9 +1190,10 @@ private:
     if (!pkColumns.empty()) {
       return "PK"; // Tabla tiene PK real
     } else if (!candidateColumns.empty()) {
-      // Si hay columnas candidatas, usar TEMPORAL_PK para cursor-based pagination
-      // Esto es más eficiente que OFFSET para tablas grandes
-      return "TEMPORAL_PK"; // Usar columnas candidatas para cursor-based pagination
+      // Si hay columnas candidatas, usar TEMPORAL_PK para cursor-based
+      // pagination Esto es más eficiente que OFFSET para tablas grandes
+      return "TEMPORAL_PK"; // Usar columnas candidatas para cursor-based
+                            // pagination
     } else {
       return "OFFSET"; // Último recurso: OFFSET pagination
     }
@@ -2259,6 +2263,116 @@ private:
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "cleanOrphanedTables",
                     "ERROR cleaning orphaned tables: " + std::string(e.what()));
+    }
+  }
+
+  void cleanInconsistentPaginationFields() {
+    try {
+      pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
+
+      Logger::info(LogCategory::DATABASE,
+                   "Starting pagination fields consistency cleanup");
+
+      pqxx::work txn(pgConn);
+
+      // Obtener todas las tablas con sus estrategias de paginación
+      auto results =
+          txn.exec("SELECT schema_name, table_name, pk_strategy, last_offset, "
+                   "last_processed_pk "
+                   "FROM metadata.catalog "
+                   "WHERE active = true AND pk_strategy IS NOT NULL");
+
+      int cleanedTables = 0;
+
+      for (const auto &row : results) {
+        std::string schemaName = row[0].as<std::string>();
+        std::string tableName = row[1].as<std::string>();
+        std::string pkStrategy = row[2].as<std::string>();
+        std::string lastOffset =
+            row[3].is_null() ? "" : row[3].as<std::string>();
+        std::string lastProcessedPK =
+            row[4].is_null() ? "" : row[4].as<std::string>();
+
+        bool needsUpdate = false;
+        std::string updateQuery = "UPDATE metadata.catalog SET ";
+
+        if (pkStrategy == "PK" || pkStrategy == "TEMPORAL_PK") {
+          // Para PK y TEMPORAL_PK: last_processed_pk debe tener valor,
+          // last_offset debe ser 0
+          if (lastOffset != "0" && !lastOffset.empty()) {
+            if (needsUpdate)
+              updateQuery += ", ";
+            updateQuery += "last_offset = '0'";
+            needsUpdate = true;
+            Logger::info(LogCategory::DATABASE,
+                         "Cleaning last_offset for " + schemaName + "." +
+                             tableName + " (strategy: " + pkStrategy +
+                             ") - was: " + lastOffset);
+          }
+
+          if (lastProcessedPK.empty()) {
+            if (needsUpdate)
+              updateQuery += ", ";
+            updateQuery += "last_processed_pk = ''";
+            needsUpdate = true;
+            Logger::info(LogCategory::DATABASE,
+                         "Clearing last_processed_pk for " + schemaName + "." +
+                             tableName + " (strategy: " + pkStrategy +
+                             ") - was empty");
+          }
+        } else if (pkStrategy == "OFFSET") {
+          // Para OFFSET: last_offset debe tener valor, last_processed_pk debe
+          // estar vacío
+          if (!lastProcessedPK.empty()) {
+            if (needsUpdate)
+              updateQuery += ", ";
+            updateQuery += "last_processed_pk = ''";
+            needsUpdate = true;
+            Logger::info(LogCategory::DATABASE,
+                         "Clearing last_processed_pk for " + schemaName + "." +
+                             tableName + " (strategy: " + pkStrategy +
+                             ") - was: " + lastProcessedPK);
+          }
+
+          if (lastOffset.empty()) {
+            if (needsUpdate)
+              updateQuery += ", ";
+            updateQuery += "last_offset = '0'";
+            needsUpdate = true;
+            Logger::info(LogCategory::DATABASE,
+                         "Setting last_offset to 0 for " + schemaName + "." +
+                             tableName + " (strategy: " + pkStrategy +
+                             ") - was empty");
+          }
+        }
+
+        if (needsUpdate) {
+          updateQuery += " WHERE schema_name = '" + escapeSQL(schemaName) +
+                         "' AND table_name = '" + escapeSQL(tableName) + "'";
+          txn.exec(updateQuery);
+          cleanedTables++;
+        }
+      }
+
+      txn.commit();
+
+      Logger::info(LogCategory::DATABASE,
+                   "Pagination fields consistency cleanup completed - " +
+                       std::to_string(cleanedTables) + " tables cleaned");
+
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(
+          LogCategory::DATABASE, "cleanInconsistentPaginationFields",
+          "SQL ERROR cleaning pagination fields: " + std::string(e.what()) +
+              " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::DATABASE, "cleanInconsistentPaginationFields",
+                    "CONNECTION ERROR cleaning pagination fields: " +
+                        std::string(e.what()));
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::DATABASE, "cleanInconsistentPaginationFields",
+                    "ERROR cleaning pagination fields: " +
+                        std::string(e.what()));
     }
   }
 

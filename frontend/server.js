@@ -1307,7 +1307,7 @@ app.get("/api/dashboard/currently-processing", async (req, res) => {
         processed_at
       FROM metadata.processing_log
       WHERE processed_at > NOW() - INTERVAL '5 minutes'
-      ORDER BY processed_at DESC
+      ORDER BY processed_at ASC
       LIMIT 1
     `);
 
@@ -1479,22 +1479,26 @@ app.get("/api/monitor/processing-logs", async (req, res) => {
     const total = parseInt(countResult.rows[0].total);
     const totalPages = Math.ceil(total / limit);
 
-    // Get paginated data
+    // Get paginated data with pk_strategy from catalog
     const result = await pool.query(
       `
       SELECT 
-        id,
-        schema_name,
-        table_name,
-        db_engine,
-        old_offset,
-        new_offset,
-        old_pk,
-        new_pk,
-        status,
-        processed_at
-      FROM metadata.processing_log
-      ORDER BY processed_at ASC
+        pl.id,
+        pl.schema_name,
+        pl.table_name,
+        pl.db_engine,
+        pl.old_offset,
+        pl.new_offset,
+        pl.old_pk,
+        pl.new_pk,
+        pl.status,
+        pl.processed_at,
+        c.pk_strategy
+      FROM metadata.processing_log pl
+      LEFT JOIN metadata.catalog c ON pl.schema_name = c.schema_name 
+        AND pl.table_name = c.table_name 
+        AND pl.db_engine = c.db_engine
+      ORDER BY pl.processed_at ASC
       LIMIT $1 OFFSET $2
     `,
       [limit, offset]
