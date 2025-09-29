@@ -66,6 +66,9 @@ const Layout = () => {
         <NavItem to="/monitor">
           ● Monitor
         </NavItem>
+        <NavItem to="/live-changes">
+          ⚡ Live Changes
+        </NavItem>
         <NavItem to="/quality">
           ◆ Quality
         </NavItem>

@@ -1,19 +1,6 @@
-debug_show_timestamps,true,Show timestamps in log messages,2025-09-10 23:03:09.492771
-debug_show_thread_id,false,Show thread ID in log messages,2025-09-10 23:03:09.493108
-debug_show_file_line,false,Show file and line number in log messages,2025-09-10 23:03:09.494544
-debug_level,DEBUG,"Debug level: DEBUG, INFO, WARN, ERROR, FATAL",2025-09-10 23:03:09.491382
-sync_interval,120,Intervalo de sincronización en segundos,2025-09-10 23:03:09.489658
-chunk_size,1,Número de filas por chunk en las sincronizaciones,2025-09-10 23:03:09.474597
-
-
-verificar que el archivo C si use el json de config y eso parece que esta fallando ! 
-
-hay que corregir la validacion DE FULL_LOAD para truncar ahora que no todas usan last_offset
-
-
-
-
-en que punto es que se empiezan a hacer UPDATES Y DROPS y cuales la query ? luego de procesar todos los FULL_LOADS no ?
 
 metodo para limpiar esa tabla triggers y una nueva pagina para ver como se mueve esa tabla en tiempo real
 
+
+
+fix en catalog

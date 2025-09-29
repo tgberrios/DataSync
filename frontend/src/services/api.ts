@@ -318,6 +318,59 @@ export const monitorApi = {
       throw error;
     }
   },
+
+  getProcessingLogs: async (page: number = 1, limit: number = 20) => {
+    try {
+      const response = await api.get(
+        `/monitor/processing-logs?page=${page}&limit=${limit}`
+      );
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching processing logs:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getProcessingStats: async () => {
+    try {
+      const response = await api.get("/monitor/processing-logs/stats");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching processing stats:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  cleanupOldProcessingLogs: async () => {
+    try {
+      const response = await api.post("/monitor/processing-logs/cleanup");
+      return response.data;
+    } catch (error) {
+      console.error("Error cleaning up old processing logs:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
 };
 
 export const catalogApi = {
