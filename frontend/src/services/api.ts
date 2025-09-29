@@ -132,7 +132,9 @@ export const dashboardApi = {
   },
   getCurrentlyProcessing: async () => {
     try {
-      const response = await api.get<CurrentlyProcessing | null>("/dashboard/currently-processing");
+      const response = await api.get<CurrentlyProcessing | null>(
+        "/dashboard/currently-processing"
+      );
       return response.data;
     } catch (error) {
       console.error("Error fetching currently processing table:", error);
@@ -399,6 +401,29 @@ export const catalogApi = {
       return response.data;
     } catch (error) {
       console.error("Error fetching schemas:", error);
+      throw error;
+    }
+  },
+
+  // Marcar tabla como SKIP
+  skipTable: async (
+    schema_name: string,
+    table_name: string,
+    db_engine: string
+  ) => {
+    try {
+      const response = await api.patch<{
+        message: string;
+        affectedRows: number;
+        entry: CatalogEntry;
+      }>("/catalog/skip-table", {
+        schema_name,
+        table_name,
+        db_engine,
+      });
+      return response.data;
+    } catch (error) {
+      console.error("Error skipping table:", error);
       throw error;
     }
   },

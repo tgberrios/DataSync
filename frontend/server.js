@@ -185,6 +185,33 @@ app.get("/api/catalog/schemas", async (req, res) => {
   }
 });
 
+// Marcar tabla como SKIP
+app.patch("/api/catalog/skip-table", async (req, res) => {
+  const { schema_name, table_name, db_engine } = req.body;
+  try {
+    const result = await pool.query(
+      `UPDATE metadata.catalog 
+       SET status = 'SKIP', last_offset = 0, active = false
+       WHERE schema_name = $1 AND table_name = $2 AND db_engine = $3
+       RETURNING *`,
+      [schema_name, table_name, db_engine]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Table not found" });
+    }
+
+    res.json({
+      message: `Table ${schema_name}.${table_name} marked as SKIP`,
+      affectedRows: result.rows.length,
+      entry: result.rows[0],
+    });
+  } catch (err) {
+    console.error("Database error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Desactivar schema completo
 app.patch("/api/catalog/deactivate-schema", async (req, res) => {
   const { schema_name } = req.body;
