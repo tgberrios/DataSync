@@ -2,10 +2,10 @@
 #include "logger.h"
 
 // Static member definitions
-std::string DatabaseConfig::POSTGRES_HOST = "10.12.240.40";
+std::string DatabaseConfig::POSTGRES_HOST = "localhost";
 std::string DatabaseConfig::POSTGRES_DB = "DataLake";
-std::string DatabaseConfig::POSTGRES_USER = "Datalake_User";
-std::string DatabaseConfig::POSTGRES_PASSWORD = "keepprofessional";
+std::string DatabaseConfig::POSTGRES_USER = "tomy.berrios";
+std::string DatabaseConfig::POSTGRES_PASSWORD = "Yucaquemada1";
 std::string DatabaseConfig::POSTGRES_PORT = "5432";
 
 size_t SyncConfig::CHUNK_SIZE = SyncConfig::DEFAULT_CHUNK_SIZE;
