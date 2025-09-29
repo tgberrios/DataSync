@@ -1,0 +1,158 @@
+debug_show_timestamps,true,Show timestamps in log messages,2025-09-10 23:03:09.492771
+debug_show_thread_id,false,Show thread ID in log messages,2025-09-10 23:03:09.493108
+debug_show_file_line,false,Show file and line number in log messages,2025-09-10 23:03:09.494544
+debug_level,DEBUG,"Debug level: DEBUG, INFO, WARN, ERROR, FATAL",2025-09-10 23:03:09.491382
+sync_interval,120,Intervalo de sincronización en segundos,2025-09-10 23:03:09.489658
+chunk_size,1,Número de filas por chunk en las sincronizaciones,2025-09-10 23:03:09.474597
+
+
+verificar que el archivo C si use el json de config y eso parece que esta fallando ! 
+
+
+
+
+
+
+
+
+hay que corregir la validacion DE FULL_LOAD para truncar ahora que no todas usan last_offset
+
+
+
+
+en que punto es que se empiezan a hacer UPDATES Y DROPS y cuales la query ? 
+
+metodo para limpiar esa tabla
+
+
+
+talvez lo que podriamos hacer es que el count sea cada 30 segundos o 10 segundos para no sea tan pesado ? 
+
+0] Sending dashboard stats
+[0] Could not get count for promotions_service_jetu_cr_v2.PendingPromotionRequirements: relation "promotions_service_jetu_cr_v2.pendingpromotionrequirements" does not exist
+[0] Could not get count for promotions_service_jetu_cr_v2.PendingPromotionRequirements: relation "promotions_service_jetu_cr_v2.pendingpromotionrequirements" does not exist
+[0] Could not get count for promotions_service_jetu_cr_v2.PendingPromotionRequirements: relation "promotions_service_jetu_cr_v2.pendingpromotionrequirements" does not exist
+[0] Could not get count for promotions_service_jetu_cr_v2.PendingPromotionRequirements: relation "promotions_service_jetu_cr_v2.pendingpromotionrequirements" does not exist
+[0] Could not get count for promotions_service_jetu_cr_v2.PendingPromotionRequirements: relation "promotions_service_jetu_cr_v2.pendingpromotionrequirements" does not exist
+[0] Could not get count for promotions_service_jetu_cr_v2.PendingPromotionRequirements: relation "promotions_service_jetu_cr_v2.pendingpromotionrequirements" does not exist
+[0] Could not get count for promotions_service_jetu_cr_v2.PendingPromotionRequirements: relation "promotions_service_jetu_cr_v2.pendingpromotionrequirements" does not exist
+
+lo tiene que encerrar en parentesis aveces
+
+[0] Sending dashboard stats
+[0] Could not get count for promotions_service_jetu_cr_v2.PendingPromotionRequirements: relation "promotions_service_jetu_cr_v2.pendingpromotionrequirements" does not exist
+[0] Could not get count for promotions_service_jetu_cr_v2.PendingPromotionRequirements: relation "promotions_service_jetu_cr_v2.pendingpromotionrequirements" does not exist
+[0] Could not get count for promotions_service_jetu_cr_v2.PendingPromotionRequirements: relation "promotions_service_jetu_cr_v2.pendingpromotionrequirements" does not exist
+[0] Could not get count for promotions_service_jetu_cr_v2.PendingPromotionRequirements: relation "promotions_service_jetu_cr_v2.pendingpromotionrequirements" does not exist
+[0] Could not get count for promotions_service_jetu_cr_v2.PendingPromotionRequirements: relation "promotions_service_jetu_cr_v2.pendingpromotionrequirements" does not exist
+
+
+
+■ ACTIVE TRANSFERS PROGRESS
+■ casino.game_borders [MariaDB]
+0 / -1 records - Status: FULL_LOAD
+■ casino.game_launch_tokens [MariaDB]
+0 / -1 records - Status: FULL_LOAD
+■ crm.projects_opportunities [MariaDB]
+0 / -1 records - Status: FULL_LOAD
+■ crm.notes_cstm [MariaDB]
+0 / -1 records - Status: FULL_LOAD
+■ scrubber_service_jetu_cr.customer_questions [MariaDB]
+0 / -1 records - Status: FULL_LOAD
+■ crm.aop_case_events [MariaDB]
+0 / -1 records - Status: FULL_LOAD
+■ crm.aop_case_events_audit [MariaDB]
+0 / -1 records - Status: FULL_LOAD
+■ crm.aop_case_updates_audit [MariaDB]
+0 / -1 records - Status: FULL_LOAD
+■ crm.aor_charts [MariaDB]
+0 / -1 records - Status: FULL_LOAD
+■ crm.aor_reports_audit [MariaDB]
+0 / -1 records - Status: FULL_LOAD
+
+
+
+Current IO Operations
+0.00 IOPS
+Average (last hour)
+Current Throughput
+0 RPS
+0 records (last hour)
+
+
+boton para setear la tabla skip
+
+
+SELECT * FROM tabla OFFSET 10000 LIMIT 10;
+
+SELECT * FROM tabla WHERE id > 10000 ORDER BY id ASC LIMIT 10;
+
+cuanto ya no existan full_load que pasara y todas sean listening_changes
+
+
+REVISAR QUE QUEDE BIEN INTEGRADO
+¡Exacto! Tienes razón. Mirando los datos que me muestras:
+
+## **Análisis de la Estrategia:**
+
+```sql
+-- Tabla 1: automated_report_bi.xtreme_push_automated_report
+last_offset: 0
+pk_strategy: TEMPORAL_PK
+pk_columns: []
+has_pk: false
+
+-- Tabla 2: communication_service.xtreme_push_automated_report  
+last_offset: 3189000
+pk_strategy: TEMPORAL_PK
+pk_columns: []
+has_pk: false
+```
+
+## **Problema Identificado:**
+
+1. **`pk_strategy: TEMPORAL_PK`** - Indica que debería usar columnas candidatas
+2. **`pk_columns: []`** - Pero no tiene columnas PK reales
+3. **`has_pk: false`** - Confirma que no tiene PK
+4. **`last_offset: 3189000`** - Está usando OFFSET, no TEMPORAL_PK
+
+## **Inconsistencia:**
+
+- **La estrategia dice `TEMPORAL_PK`** pero **está usando `OFFSET`**
+- **Debería usar las columnas candidatas** `["user_id", "formatted_timestamp"]` para cursor-based pagination
+- **En su lugar está usando `last_offset`** para paginación tradicional
+
+## **Causa Raíz:**
+
+En `catalog_manager.h` líneas 1187-1202, la función `determinePKStrategy()` está configurando `TEMPORAL_PK` cuando encuentra columnas candidatas, pero en `MariaDBToPostgres.h` el código de transferencia está ignorando esta estrategia y usando `OFFSET` por defecto.
+
+## **Solución Necesaria:**
+
+El código de transferencia debería:
+1. **Leer `pk_strategy`** de la tabla `metadata.catalog`
+2. **Si es `TEMPORAL_PK`**, usar las columnas candidatas para cursor-based pagination
+3. **Si es `OFFSET`**, usar `last_offset` para paginación tradicional
+
+¿Quieres que revise y corrija esta inconsistencia en el código de transferencia?
+
+
+Orden de Implementación Sugerido:
+catalog_manager.h - Asegurar detección correcta
+MariaDBToPostgres.h - Implementar y probar
+MSSQLToPostgres.h - Replicar lógica
+PostgresToPostgres.h - Replicar lógica
+
+
+3. Funciones específicas por motor
+MariaDB: useCursorBasedPaginationMariaDB()
+MSSQL: useCursorBasedPaginationMSSQL()
+PostgreSQL: useCursorBasedPaginationPostgres()
+Orden de Implementación Sugerido:
+
+
+
+2025-09-28 14:52:10.430[ERROR][SYSTEM][TRANSFER]CRITICAL ERROR: Bulk upsert failed for chunk 4165 in table crm.calls_cstm: ERROR: ON CONFLICT DO UPDATE command cannot affect row a second time
+2025-09-28 14:52:10.430[ERROR][SYSTEM][TRANSFER]Error in bulk upsert: ERROR: ON CONFLICT DO UPDATE command cannot affect row a second time
+2025-09-28 14:52:07.385[ERROR][SYSTEM][TRANSFER]CRITICAL ERROR: Bulk upsert failed for chunk 4091 in table crm.calls_cstm: ERROR: ON CONFLICT DO UPDATE command cannot affect row a second time
+2025-09-28 14:52:07.385[ERROR][SYSTEM][TRANSFER]Error in bulk upsert: ERROR: ON CONFLICT DO UPDATE command cannot affect row a second time
+
