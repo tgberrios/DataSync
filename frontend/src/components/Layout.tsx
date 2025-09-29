@@ -61,19 +61,19 @@ const Layout = () => {
           ■ Dashboard
         </NavItem>
         <NavItem to="/catalog">
-          ▲ Catalog
+          ■ Catalog
         </NavItem>
         <NavItem to="/monitor">
-          ● Monitor
+          ■ Monitor
         </NavItem>
         <NavItem to="/live-changes">
-          ⚡ Live Changes
+          ■ Live Changes
         </NavItem>
         <NavItem to="/quality">
-          ◆ Quality
+          ■ Quality
         </NavItem>
         <NavItem to="/governance">
-          ⬡ Governance
+          ■ Governance
         </NavItem>
         <NavItem to="/security">
           ■ Security
@@ -82,7 +82,7 @@ const Layout = () => {
           ■ Logs
         </NavItem>
         <NavItem to="/config">
-          ⚙ Config
+          ■ Config
         </NavItem>
       </Sidebar>
       <MainContent>
