@@ -1,0 +1,2 @@
+pending de review TEMPORAL PK EN MSSQL
+docker para POSTGRES Y TESTEAR TODO AL MAXIMO

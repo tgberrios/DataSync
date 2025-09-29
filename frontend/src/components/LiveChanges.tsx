@@ -487,11 +487,15 @@ const LiveChanges = () => {
                       {showPK && (
                         <>
                           <DataCell>
-                            <div style={{ fontSize: '0.8em', color: '#666', marginBottom: '2px' }}>Old PK</div>
+                            <div style={{ fontSize: '0.8em', color: '#666', marginBottom: '2px' }}>
+                              {processing.pk_strategy === 'TEMPORAL_PK' ? 'Old Offset' : 'Old PK'}
+                            </div>
                             {processing.old_pk || 'N/A'}
                           </DataCell>
                           <DataCell>
-                            <div style={{ fontSize: '0.8em', color: '#666', marginBottom: '2px' }}>New PK</div>
+                            <div style={{ fontSize: '0.8em', color: '#666', marginBottom: '2px' }}>
+                              {processing.pk_strategy === 'TEMPORAL_PK' ? 'New Offset' : 'New PK'}
+                            </div>
                             {processing.new_pk || 'N/A'}
                           </DataCell>
                         </>
