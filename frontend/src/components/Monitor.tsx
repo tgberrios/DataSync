@@ -20,43 +20,9 @@ const Header = styled.div`
   border-radius: 4px;
 `;
 
-const FilterContainer = styled.div`
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 15px;
-  margin-bottom: 20px;
-  padding: 15px;
-  background-color: #f8f8f8;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-`;
-
-const FilterLabel = styled.label`
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.9em;
-  color: #333;
-  cursor: pointer;
-`;
-
-const FilterCheckbox = styled.input`
-  width: 16px;
-  height: 16px;
-  cursor: pointer;
-`;
-
-const QueryCount = styled.div`
-  font-size: 0.9em;
-  color: #666;
-  background-color: #e8f5e9;
-  padding: 5px 10px;
-  border-radius: 3px;
-`;
 
 const CopyButton = styled.button`
-  background-color: #2196f3;
+  background-color: #424242;
   color: white;
   border: none;
   padding: 6px 12px;
@@ -68,11 +34,11 @@ const CopyButton = styled.button`
   margin-top: 10px;
   
   &:hover {
-    background-color: #1976d2;
+    background-color: #616161;
   }
   
   &:active {
-    background-color: #1565c0;
+    background-color: #303030;
   }
 `;
 
@@ -180,7 +146,6 @@ const Monitor = () => {
   const [error, setError] = useState<string | null>(null);
   const [queries, setQueries] = useState<any[]>([]);
   const [openQueryId, setOpenQueryId] = useState<number | null>(null);
-  const [showDataLakeOnly, setShowDataLakeOnly] = useState(true);
   const [copiedQueryId, setCopiedQueryId] = useState<number | null>(null);
 
   useEffect(() => {
@@ -225,17 +190,8 @@ const Monitor = () => {
     }
   };
 
-  // Filtrar queries para mostrar solo DataLake
-  const filteredQueries = queries.filter(query => {
-    if (!showDataLakeOnly) return true;
-    
-    // Filtrar solo por nombre de base de datos que sea exactamente "DataLake" o contenga "datalake"
-    const isDataLakeDB = query.datname && 
-      (query.datname === 'DataLake' || 
-       query.datname.toLowerCase().includes('datalake'));
-    
-    return isDataLakeDB;
-  });
+  // Mostrar todas las queries sin filtrar
+  const filteredQueries = queries;
 
   return (
     <MonitorContainer>
@@ -243,21 +199,6 @@ const Monitor = () => {
         Query Monitor
       </Header>
 
-      {!loading && !error && (
-        <FilterContainer>
-          <FilterLabel>
-            <FilterCheckbox
-              type="checkbox"
-              checked={showDataLakeOnly}
-              onChange={(e) => setShowDataLakeOnly(e.target.checked)}
-            />
-            Show only DataLake queries
-          </FilterLabel>
-          <QueryCount>
-            {filteredQueries.length} of {queries.length} queries
-          </QueryCount>
-        </FilterContainer>
-      )}
 
       {loading && (
         <div style={{ textAlign: 'center', padding: '20px', color: '#666' }}>
@@ -275,10 +216,7 @@ const Monitor = () => {
         <QueryList>
           {filteredQueries.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '20px', color: '#666' }}>
-              {showDataLakeOnly 
-                ? 'No DataLake queries found' 
-                : 'No active queries found'
-              }
+              No active queries found
             </div>
           ) : (
             filteredQueries.map((query) => (

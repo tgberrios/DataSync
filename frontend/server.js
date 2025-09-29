@@ -714,7 +714,25 @@ app.get("/api/quality/metrics", async (req, res) => {
       `
       WITH latest_checks AS (
         SELECT DISTINCT ON (schema_name, table_name, source_db_engine)
-          id
+          id,
+          schema_name,
+          table_name,
+          source_db_engine,
+          check_timestamp,
+          total_rows,
+          null_count,
+          duplicate_count,
+          invalid_type_count,
+          type_mismatch_details,
+          out_of_range_count,
+          referential_integrity_errors,
+          constraint_violation_count,
+          integrity_check_details,
+          validation_status,
+          error_details,
+          quality_score,
+          check_duration_ms,
+          updated_at
         FROM metadata.data_quality
         ORDER BY schema_name, table_name, source_db_engine, updated_at DESC
       )

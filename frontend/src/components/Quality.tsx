@@ -235,24 +235,6 @@ const Quality = () => {
 
   const formatNumber = (num: number) => num.toLocaleString();
 
-  const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setSearch(e.target.value);
-    setPage(1);
-  };
-
-  const handleStatusChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    setStatus(e.target.value);
-    setPage(1);
-  };
-
-  const handleScoreChange = (value: number, type: 'min' | 'max') => {
-    if (type === 'min') {
-      setMinScore(Math.min(value, maxScore));
-    } else {
-      setMaxScore(Math.max(value, minScore));
-    }
-    setPage(1);
-  };
 
   return (
     <QualityContainer>
