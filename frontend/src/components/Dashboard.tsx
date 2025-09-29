@@ -283,33 +283,6 @@ const Dashboard = () => {
             </Grid>
           </Section>
 
-          {stats.activeTransfersProgress && stats.activeTransfersProgress.length > 0 && (
-            <Section>
-              <SectionTitle>■ ACTIVE TRANSFERS PROGRESS</SectionTitle>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {stats.activeTransfersProgress.map((transfer, index) => (
-                  <div key={index} style={{ 
-                    padding: '10px', 
-                    backgroundColor: '#f9f9f9', 
-                    borderRadius: '3px',
-                    border: '1px solid #ddd'
-                  }}>
-                    <div style={{ marginBottom: '5px' }}>
-                      <strong>■ {transfer.schemaName}.{transfer.tableName} [{transfer.dbEngine}]</strong>
-                    </div>
-                    <ProgressBar progress={transfer.progressPercentage} />
-                    <div style={{ 
-                      fontSize: '0.9em', 
-                      color: '#333', 
-                      marginTop: '5px'
-                    }}>
-                      {formatNumberWithCommas(transfer.lastOffset)} / {formatNumberWithCommas(transfer.tableSize)} records - Status: {transfer.status}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </Section>
-          )}
 
           {/* MÉTRICAS CARDS */}
           {stats.metricsCards && (
