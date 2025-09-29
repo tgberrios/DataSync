@@ -881,6 +881,8 @@ private:
           getPKStrategyFromCatalog(pgConn, schemaName, tableName);
       std::vector<std::string> pkColumns =
           getPKColumnsFromCatalog(pgConn, schemaName, tableName);
+      std::vector<std::string> candidateColumns =
+          getCandidateColumnsFromCatalog(pgConn, schemaName, tableName);
       std::string lastProcessedPK =
           getLastProcessedPKFromCatalog(pgConn, schemaName, tableName);
 
@@ -969,9 +971,21 @@ private:
             selectQuery += "\"" + pkColumns[i] + "\"";
           }
           selectQuery += " LIMIT " + std::to_string(CHUNK_SIZE) + ";";
+        } else if (pkStrategy == "TEMPORAL_PK" && !candidateColumns.empty()) {
+          // CURSOR-BASED PAGINATION: Usar columnas candidatas para paginación
+          // eficiente
+          if (!lastProcessedPK.empty()) {
+            selectQuery += " WHERE \"" + candidateColumns[0] + "\" > '" +
+                           escapeSQL(lastProcessedPK) + "'";
+          }
+
+          // Ordenar por la primera columna candidata
+          selectQuery += " ORDER BY \"" + candidateColumns[0] + "\"";
+          selectQuery += " LIMIT " + std::to_string(CHUNK_SIZE) + ";";
         } else {
           // FALLBACK: Usar OFFSET pagination para tablas sin PK
-          selectQuery += " LIMIT " + std::to_string(CHUNK_SIZE) + " OFFSET " +
+          selectQuery += " ORDER BY (SELECT NULL) LIMIT " +
+                         std::to_string(CHUNK_SIZE) + " OFFSET " +
                          std::to_string(totalProcessed) + ";";
         }
 
@@ -1068,17 +1082,31 @@ private:
             resultsVector.push_back(rowData);
           }
 
-          std::string lastPK =
-              getLastPKFromResults(resultsVector, pkColumns, columnNames);
-          if (!lastPK.empty()) {
-            updateLastProcessedPK(pgConn, schemaName, tableName, lastPK);
+          // OPTIMIZED: Update last_processed_pk for cursor-based pagination
+          if (((pkStrategy == "PK" && !pkColumns.empty()) ||
+               (pkStrategy == "TEMPORAL_PK" && !candidateColumns.empty())) &&
+              !resultsVector.empty()) {
+            try {
+              // Obtener el último PK del chunk procesado
+              std::vector<std::string> columnsToUse =
+                  (pkStrategy == "PK") ? pkColumns : candidateColumns;
+              std::string lastPK = getLastPKFromResults(
+                  resultsVector, columnsToUse, columnNames);
+              if (!lastPK.empty()) {
+                updateLastProcessedPK(pgConn, schemaName, tableName, lastPK);
+              }
+            } catch (const std::exception &e) {
+              Logger::error(LogCategory::TRANSFER, "updateLastProcessedPK",
+                            "Error updating last processed PK: " +
+                                std::string(e.what()));
+            }
           }
         }
 
         // Actualizar last_offset en la base de datos solo para tablas sin PK
-        // (OFFSET pagination) Para tablas con PK se usa last_processed_pk en
-        // lugar de last_offset
-        if (pkStrategy != "PK") {
+        // (OFFSET pagination) Para tablas con PK o TEMPORAL_PK se usa
+        // last_processed_pk en lugar de last_offset
+        if (pkStrategy != "PK" && pkStrategy != "TEMPORAL_PK") {
           try {
             pqxx::work updateTxn(pgConn);
             updateTxn.exec("UPDATE metadata.catalog SET last_offset='" +
@@ -2412,5 +2440,62 @@ std::unordered_map<std::string, std::string> PostgresToPostgres::dataTypeMap = {
     {"path", "PATH"},
     {"polygon", "POLYGON"},
     {"circle", "CIRCLE"}};
+
+// CURSOR-BASED PAGINATION HELPER FUNCTIONS
+std::vector<std::string>
+getCandidateColumnsFromCatalog(pqxx::connection &pgConn,
+                               const std::string &schema_name,
+                               const std::string &table_name) {
+  std::vector<std::string> candidateColumns;
+  try {
+    pqxx::work txn(pgConn);
+    auto result = txn.exec("SELECT candidate_columns FROM metadata.catalog "
+                           "WHERE schema_name='" +
+                           escapeSQL(schema_name) + "' AND table_name='" +
+                           escapeSQL(table_name) + "'");
+    txn.commit();
+
+    if (!result.empty() && !result[0][0].is_null()) {
+      std::string candidateColumnsJSON = result[0][0].as<std::string>();
+      candidateColumns = parseJSONArray(candidateColumnsJSON);
+    }
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "getCandidateColumnsFromCatalog",
+                  "Error getting candidate columns: " + std::string(e.what()));
+  }
+  return candidateColumns;
+}
+
+std::vector<std::string> parseJSONArray(const std::string &jsonArray) {
+  std::vector<std::string> result;
+  try {
+    // Simple JSON array parser for ["col1", "col2", "col3"]
+    if (jsonArray.empty() || jsonArray == "[]") {
+      return result;
+    }
+
+    std::string content = jsonArray;
+    // Remove brackets
+    if (content.front() == '[' && content.back() == ']') {
+      content = content.substr(1, content.length() - 2);
+    }
+
+    // Split by comma and remove quotes
+    std::istringstream ss(content);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+      // Remove quotes and whitespace
+      item.erase(std::remove(item.begin(), item.end(), '"'), item.end());
+      item.erase(std::remove(item.begin(), item.end(), ' '), item.end());
+      if (!item.empty()) {
+        result.push_back(item);
+      }
+    }
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "parseJSONArray",
+                  "Error parsing JSON array: " + std::string(e.what()));
+  }
+  return result;
+}
 
 #endif // POSTGRESTOPOSTGRES_H

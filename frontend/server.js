@@ -24,11 +24,11 @@ function loadConfig() {
     return {
       database: {
         postgres: {
-          host: "localhost",
+          host: "10.12.240.40",
           port: 5432,
           database: "DataLake",
-          user: "tomy.berrios",
-          password: "Yucaquemada1",
+          user: "Datalake_User",
+          password: "keepprofessional",
         },
       },
     };
@@ -217,7 +217,6 @@ app.get("/api/dashboard/stats", async (req, res) => {
     const syncStatus = await pool.query(`
       SELECT 
         COUNT(*) FILTER (WHERE active = true AND status = 'LISTENING_CHANGES') as listening_changes,
-        COUNT(*) FILTER (WHERE active = true AND status = 'PENDING') as pending,
         COUNT(*) FILTER (WHERE active = true) as full_load_active,
         COUNT(*) FILTER (WHERE active = false) as full_load_inactive,
         COUNT(*) FILTER (WHERE active = false AND status = 'NO_DATA') as no_data,
@@ -232,7 +231,7 @@ app.get("/api/dashboard/stats", async (req, res) => {
         COALESCE(SUM(last_offset), 0) as total_last_offset,
         COALESCE(SUM(table_size), 0) as total_data
       FROM metadata.catalog
-      WHERE status != 'SKIP' AND status = 'LISTENING_CHANGES'
+      WHERE active = true AND status IN ('LISTENING_CHANGES', 'FULL_LOAD')
     `);
 
     // Get currently processing table with progress calculation
@@ -382,12 +381,16 @@ app.get("/api/dashboard/stats", async (req, res) => {
     `);
 
     // Construir el objeto de respuesta
+    const listeningChanges = parseInt(syncStatus.rows[0]?.listening_changes || 0);
+    const fullLoadActive = parseInt(syncStatus.rows[0]?.full_load_active || 0);
+    const pending = Math.max(0, fullLoadActive - listeningChanges);
+    
     const stats = {
       syncStatus: {
         progress: 0,
-        listeningChanges: parseInt(syncStatus.rows[0]?.listening_changes || 0),
-        pending: parseInt(syncStatus.rows[0]?.pending || 0),
-        fullLoadActive: parseInt(syncStatus.rows[0]?.full_load_active || 0),
+        listeningChanges: listeningChanges,
+        pending: pending,
+        fullLoadActive: fullLoadActive,
         fullLoadInactive: parseInt(syncStatus.rows[0]?.full_load_inactive || 0),
         noData: parseInt(syncStatus.rows[0]?.no_data || 0),
         errors: parseInt(syncStatus.rows[0]?.errors || 0),
@@ -430,33 +433,28 @@ app.get("/api/dashboard/stats", async (req, res) => {
     };
 
     // Calcular progreso total - solo contar registros activos
+    const totalActive = stats.syncStatus.listeningChanges + stats.syncStatus.fullLoadActive + stats.syncStatus.errors;
     const total =
-      stats.syncStatus.listeningChanges +
-      stats.syncStatus.fullLoadActive +
+      totalActive +
       stats.syncStatus.fullLoadInactive +
-      stats.syncStatus.noData +
-      stats.syncStatus.errors;
+      stats.syncStatus.noData;
 
-    // El progreso se calcula como: (Listening Changes + No Data) / Total * 100
-    // NO_DATA también es un estado exitoso (no hay datos que sincronizar)
+    // El progreso se calcula como: Listening Changes / Total Active * 100
+    // Representa qué porcentaje de tablas activas han llegado a LISTENING_CHANGES
     stats.syncStatus.progress =
-      total > 0
-        ? Math.round(
-            ((stats.syncStatus.listeningChanges + stats.syncStatus.noData) /
-              total) *
-              100
-          )
+      totalActive > 0
+        ? Math.round((stats.syncStatus.listeningChanges / totalActive) * 100)
         : 0;
 
     console.log("Progress calculation:", {
       listeningChanges: stats.syncStatus.listeningChanges,
+      pending: stats.syncStatus.pending,
       noData: stats.syncStatus.noData,
       fullLoadActive: stats.syncStatus.fullLoadActive,
       fullLoadInactive: stats.syncStatus.fullLoadInactive,
       errors: stats.syncStatus.errors,
+      totalActive: totalActive,
       total: total,
-      successfulStates:
-        stats.syncStatus.listeningChanges + stats.syncStatus.noData,
       progress: stats.syncStatus.progress + "%",
     });
 
@@ -1280,6 +1278,69 @@ app.delete("/api/logs", async (req, res) => {
       error: "Error clearing logs",
       details: err.message,
     });
+  }
+});
+
+// Endpoint para obtener tabla actualmente procesándose
+app.get("/api/dashboard/currently-processing", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        schema_name,
+        table_name,
+        db_engine,
+        new_offset,
+        new_pk,
+        status,
+        processed_at
+      FROM metadata.processing_log
+      WHERE processed_at > NOW() - INTERVAL '5 minutes'
+      ORDER BY processed_at DESC
+      LIMIT 1
+    `);
+    
+    if (result.rows.length === 0) {
+      return res.json(null);
+    }
+    
+    const processingTable = result.rows[0];
+    
+    // Hacer COUNT de la tabla que se está procesando
+    let countResult;
+    try {
+      if (processingTable.db_engine === 'MariaDB') {
+        // Para MariaDB, usar la conexión directa
+        countResult = await pool.query(`
+          SELECT COUNT(*) as total_records
+          FROM ${processingTable.schema_name}.${processingTable.table_name}
+        `);
+      } else if (processingTable.db_engine === 'MSSQL') {
+        // Para MSSQL, usar la conexión directa
+        countResult = await pool.query(`
+          SELECT COUNT(*) as total_records
+          FROM [${processingTable.schema_name}].[${processingTable.table_name}]
+        `);
+      } else {
+        // Para PostgreSQL
+        countResult = await pool.query(`
+          SELECT COUNT(*) as total_records
+          FROM "${processingTable.schema_name}"."${processingTable.table_name}"
+        `);
+      }
+    } catch (countError) {
+      console.warn(`Could not get count for ${processingTable.schema_name}.${processingTable.table_name}:`, countError.message);
+      countResult = { rows: [{ total_records: 0 }] };
+    }
+    
+    const response = {
+      ...processingTable,
+      total_records: parseInt(countResult.rows[0]?.total_records || 0)
+    };
+    
+    res.json(response);
+  } catch (err) {
+    console.error("Error getting currently processing table:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 

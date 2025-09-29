@@ -1187,15 +1187,9 @@ private:
     if (!pkColumns.empty()) {
       return "PK"; // Tabla tiene PK real
     } else if (!candidateColumns.empty()) {
-      // Verificar si podemos crear PK temporal
-      for (const auto &col : candidateColumns) {
-        if (col == "id" || col.find("_id") != std::string::npos ||
-            col.find("_pk") != std::string::npos ||
-            col.find("_key") != std::string::npos) {
-          return "TEMPORAL_PK"; // Crear PK temporal usando columna candidata
-        }
-      }
-      return "OFFSET"; // Usar OFFSET como fallback
+      // Si hay columnas candidatas, usar TEMPORAL_PK para cursor-based pagination
+      // Esto es más eficiente que OFFSET para tablas grandes
+      return "TEMPORAL_PK"; // Usar columnas candidatas para cursor-based pagination
     } else {
       return "OFFSET"; // Último recurso: OFFSET pagination
     }
