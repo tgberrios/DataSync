@@ -3,6 +3,7 @@ import Layout from './components/Layout'
 import Dashboard from './components/Dashboard'
 import Catalog from './components/Catalog'
 import Monitor from './components/Monitor'
+import LiveChanges from './components/LiveChanges'
 import Quality from './components/Quality'
 import Governance from './components/Governance'
 import Security from './components/Security'
@@ -17,6 +18,7 @@ function App() {
           <Route index element={<Dashboard />} />
           <Route path="catalog" element={<Catalog />} />
           <Route path="monitor" element={<Monitor />} />
+          <Route path="live-changes" element={<LiveChanges />} />
           <Route path="quality" element={<Quality />} />
           <Route path="governance" element={<Governance />} />
           <Route path="security" element={<Security />} />

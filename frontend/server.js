@@ -1463,6 +1463,107 @@ app.get("/api/security/data", async (req, res) => {
   }
 });
 
+// Endpoints para Live Changes (Processing Logs)
+app.get("/api/monitor/processing-logs", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = (page - 1) * limit;
+
+    // Get total count
+    const countResult = await pool.query(`
+      SELECT COUNT(*) as total
+      FROM metadata.processing_log
+    `);
+
+    const total = parseInt(countResult.rows[0].total);
+    const totalPages = Math.ceil(total / limit);
+
+    // Get paginated data
+    const result = await pool.query(
+      `
+      SELECT 
+        id,
+        schema_name,
+        table_name,
+        db_engine,
+        old_offset,
+        new_offset,
+        old_pk,
+        new_pk,
+        status,
+        processed_at
+      FROM metadata.processing_log
+      ORDER BY processed_at ASC
+      LIMIT $1 OFFSET $2
+    `,
+      [limit, offset]
+    );
+
+    res.json({
+      data: result.rows,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages,
+        hasNext: page < totalPages,
+        hasPrev: page > 1,
+      },
+    });
+  } catch (err) {
+    console.error("Error getting processing logs:", err);
+    res.status(500).json({
+      error: "Error al obtener logs de procesamiento",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/monitor/processing-logs/stats", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        COUNT(*) as total,
+        COUNT(*) FILTER (WHERE processed_at > NOW() - INTERVAL '24 hours') as last24h,
+        COUNT(*) FILTER (WHERE status = 'LISTENING_CHANGES') as listeningChanges,
+        COUNT(*) FILTER (WHERE status = 'FULL_LOAD') as fullLoad,
+        COUNT(*) FILTER (WHERE status = 'ERROR') as errors
+      FROM metadata.processing_log
+    `);
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("Error getting processing stats:", err);
+    res.status(500).json({
+      error: "Error al obtener estadísticas de procesamiento",
+      details: err.message,
+    });
+  }
+});
+
+app.post("/api/monitor/processing-logs/cleanup", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      DELETE FROM metadata.processing_log 
+      WHERE processed_at < NOW() - INTERVAL '24 hours'
+    `);
+
+    res.json({
+      success: true,
+      message: `Cleaned up ${result.rowCount} old processing log entries`,
+      deletedCount: result.rowCount,
+      cleanedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error("Error cleaning up processing logs:", err);
+    res.status(500).json({
+      error: "Error al limpiar logs antiguos",
+      details: err.message,
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
