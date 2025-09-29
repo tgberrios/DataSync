@@ -1,9 +1,0 @@
-fix en catalog
-
-
-[0] Could not get count for dbo.test_medium_table: syntax error at or near "["
-[0] Could not get count for dbo.test_medium_table: syntax error at or near "["
-[0] Could not get count for dbo.test_medium_table: syntax error at or near "["
-[0] Could not get count for dbo.test_medium_table: syntax error at or near "["
-^C[0] node server.js exited with code SIGINT
-[1] vite exited with code SIGIN

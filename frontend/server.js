@@ -1318,27 +1318,14 @@ app.get("/api/dashboard/currently-processing", async (req, res) => {
     const processingTable = result.rows[0];
 
     // Hacer COUNT de la tabla que se está procesando
+    // Todas las consultas se ejecutan en PostgreSQL, usar sintaxis de PostgreSQL
     let countResult;
     try {
-      if (processingTable.db_engine === "MariaDB") {
-        // Para MariaDB, usar backticks para case-sensitive names
-        countResult = await pool.query(`
-          SELECT COUNT(*) as total_records
-          FROM \`${processingTable.schema_name}\`.\`${processingTable.table_name}\`
-        `);
-      } else if (processingTable.db_engine === "MSSQL") {
-        // Para MSSQL, usar brackets para case-sensitive names
-        countResult = await pool.query(`
-          SELECT COUNT(*) as total_records
-          FROM [${processingTable.schema_name}].[${processingTable.table_name}]
-        `);
-      } else {
-        // Para PostgreSQL, usar comillas dobles para case-sensitive names
-        countResult = await pool.query(`
-          SELECT COUNT(*) as total_records
-          FROM "${processingTable.schema_name}"."${processingTable.table_name}"
-        `);
-      }
+      // Para todas las bases de datos, usar sintaxis: schema."TableName"
+      countResult = await pool.query(`
+        SELECT COUNT(*) as total_records
+        FROM ${processingTable.schema_name}."${processingTable.table_name}"
+      `);
     } catch (countError) {
       console.warn(
         `Could not get count for ${processingTable.schema_name}.${processingTable.table_name}:`,
