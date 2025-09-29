@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import styled from 'styled-components';
 import { dashboardApi, configApi } from '../services/api';
-import type { DashboardStats, BatchConfig } from '../services/api';
+import type { DashboardStats, BatchConfig, CurrentlyProcessing } from '../services/api';
 
 const DashboardContainer = styled.div`
   background-color: white;
@@ -77,6 +77,7 @@ const Dashboard = () => {
     description: 'Tamaño de lote para procesamiento de datos',
     updated_at: new Date().toISOString()
   });
+  const [currentlyProcessing, setCurrentlyProcessing] = useState<CurrentlyProcessing | null>(null);
 
   // Función para formatear números con separadores de miles
   const formatNumber = (text: string): string => {
@@ -136,10 +137,27 @@ const Dashboard = () => {
       }
     };
 
+    const fetchCurrentlyProcessing = async () => {
+      try {
+        const data = await dashboardApi.getCurrentlyProcessing();
+        setCurrentlyProcessing(data);
+      } catch (err) {
+        console.error('Error fetching currently processing table:', err);
+      }
+    };
+
     fetchStats();
-    // Actualizar cada 30 segundos
-    const interval = setInterval(fetchStats, 30000);
-    return () => clearInterval(interval);
+    fetchCurrentlyProcessing();
+    
+    // Actualizar stats cada 30 segundos
+    const statsInterval = setInterval(fetchStats, 30000);
+    // Actualizar tabla procesándose cada 2 segundos
+    const processingInterval = setInterval(fetchCurrentlyProcessing, 2000);
+    
+    return () => {
+      clearInterval(statsInterval);
+      clearInterval(processingInterval);
+    };
   }, []);
 
   return (
@@ -209,31 +227,30 @@ const Dashboard = () => {
               <SectionTitle style={{ fontSize: '1em', marginBottom: '10px' }}>■ DATA PROGRESS METRICS</SectionTitle>
               <Grid>
                 <Value>
-                  <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>Records Processed</div>
-                  <div style={{ fontSize: '1.2em', color: '#333' }}>
-                    {formatNumberWithCommas(stats.syncStatus.totalLastOffset || 0)}
-                  </div>
-                  <div style={{ fontSize: '0.8em', color: '#666' }}>Total processed</div>
-                </Value>
-                <Value>
                   <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>Estimated Total Data</div>
                   <div style={{ fontSize: '1.2em', color: '#333' }}>
                     {formatNumberWithCommas(stats.syncStatus.totalData || 0)}
                   </div>
-                  <div style={{ fontSize: '0.8em', color: '#666' }}>Records to process</div>
+                  <div style={{ fontSize: '0.8em', color: '#666' }}>Total estimated rows</div>
                 </Value>
                 <Value>
                   <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>Progress Percentage</div>
                   <div style={{ fontSize: '1.2em', color: '#333' }}>
-                    {stats.syncStatus.totalData > 0 
-                      ? Math.min(((stats.syncStatus.totalLastOffset || 0) / stats.syncStatus.totalData * 100), 100).toFixed(1)
+                    {stats.syncStatus.fullLoadActive > 0 
+                      ? ((stats.syncStatus.listeningChanges / stats.syncStatus.fullLoadActive) * 100).toFixed(1)
                       : 0}%
                   </div>
                   <div style={{ fontSize: '0.8em', color: '#666' }}>Overall completion</div>
                 </Value>
               </Grid>
             </div>
-            <Value style={{ marginTop: '20px' }}>► Currently Processing: {formatNumber(stats.syncStatus.currentProcess)}</Value>
+            <Value style={{ marginTop: '20px' }}>
+              ► Currently Processing: {
+                currentlyProcessing 
+                  ? `${currentlyProcessing.schema_name}.${currentlyProcessing.table_name} [${currentlyProcessing.db_engine}] (${formatNumberWithCommas(currentlyProcessing.total_records)} records) - ${currentlyProcessing.status}`
+                  : 'No active processing detected'
+              }
+            </Value>
           </Section>
 
 

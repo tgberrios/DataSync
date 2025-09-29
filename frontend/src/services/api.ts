@@ -101,6 +101,17 @@ export interface DashboardStats {
   };
 }
 
+export interface CurrentlyProcessing {
+  schema_name: string;
+  table_name: string;
+  db_engine: string;
+  new_offset: number;
+  new_pk: string;
+  status: string;
+  processed_at: string;
+  total_records: number;
+}
+
 export const dashboardApi = {
   getDashboardStats: async () => {
     try {
@@ -108,6 +119,23 @@ export const dashboardApi = {
       return response.data;
     } catch (error) {
       console.error("Error fetching dashboard stats:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        console.error("Server error details:", error.response.data);
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+  getCurrentlyProcessing: async () => {
+    try {
+      const response = await api.get<CurrentlyProcessing | null>("/dashboard/currently-processing");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching currently processing table:", error);
       if (axios.isAxiosError(error) && error.response) {
         console.error("Server error details:", error.response.data);
         throw new Error(
