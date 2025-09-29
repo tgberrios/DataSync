@@ -13,7 +13,7 @@ hay que corregir la validacion DE FULL_LOAD para truncar ahora que no todas usan
 
 
 
-en que punto es que se empiezan a hacer UPDATES Y DROPS y cuales la query ? 
+en que punto es que se empiezan a hacer UPDATES Y DROPS y cuales la query ? luego de procesar todos los FULL_LOADS no ?
 
 metodo para limpiar esa tabla triggers y una nueva pagina para ver como se mueve esa tabla en tiempo real
 

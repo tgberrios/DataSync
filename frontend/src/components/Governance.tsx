@@ -64,42 +64,72 @@ const Badge = styled.span<{ type: string }>`
   background-color: ${props => {
     switch (props.type) {
       // Health Status
+      case 'EXCELLENT': return '#e8f5e9';
       case 'HEALTHY': return '#e8f5e9';
       case 'WARNING': return '#fff3e0';
       case 'CRITICAL': return '#ffebee';
+      case 'EMERGENCY': return '#fce4ec';
       // Access Frequency
+      case 'REAL_TIME': return '#e1f5fe';
       case 'HIGH': return '#e3f2fd';
       case 'MEDIUM': return '#f3e5f5';
       case 'LOW': return '#fafafa';
+      case 'RARE': return '#f5f5f5';
+      case 'ARCHIVED': return '#eeeeee';
       // Sensitivity Level
-      case 'HIGH_SENSITIVITY': return '#ffebee';
-      case 'MEDIUM_SENSITIVITY': return '#fff3e0';
+      case 'PUBLIC_SENSITIVITY': return '#f1f8e9';
       case 'LOW_SENSITIVITY': return '#f1f8e9';
+      case 'MEDIUM_SENSITIVITY': return '#fff3e0';
+      case 'HIGH_SENSITIVITY': return '#ffebee';
+      case 'CRITICAL_SENSITIVITY': return '#fce4ec';
       // Data Category
       case 'TRANSACTIONAL': return '#e8eaf6';
       case 'ANALYTICAL': return '#f3e5f5';
       case 'REFERENCE': return '#e0f2f1';
+      case 'MASTER_DATA': return '#e8f5e9';
+      case 'OPERATIONAL': return '#fff3e0';
+      case 'TEMPORAL': return '#e1f5fe';
+      case 'GEOSPATIAL': return '#f1f8e9';
+      case 'FINANCIAL': return '#ffebee';
+      case 'COMPLIANCE': return '#fce4ec';
+      case 'TECHNICAL': return '#f5f5f5';
+      case 'SPORTS': return '#e3f2fd';
       default: return '#f5f5f5';
     }
   }};
   color: ${props => {
     switch (props.type) {
       // Health Status
+      case 'EXCELLENT': return '#1b5e20';
       case 'HEALTHY': return '#2e7d32';
       case 'WARNING': return '#ef6c00';
       case 'CRITICAL': return '#c62828';
+      case 'EMERGENCY': return '#ad1457';
       // Access Frequency
+      case 'REAL_TIME': return '#0277bd';
       case 'HIGH': return '#1565c0';
       case 'MEDIUM': return '#6a1b9a';
       case 'LOW': return '#616161';
+      case 'RARE': return '#757575';
+      case 'ARCHIVED': return '#9e9e9e';
       // Sensitivity Level
-      case 'HIGH_SENSITIVITY': return '#c62828';
-      case 'MEDIUM_SENSITIVITY': return '#ef6c00';
+      case 'PUBLIC_SENSITIVITY': return '#388e3c';
       case 'LOW_SENSITIVITY': return '#558b2f';
+      case 'MEDIUM_SENSITIVITY': return '#ef6c00';
+      case 'HIGH_SENSITIVITY': return '#c62828';
+      case 'CRITICAL_SENSITIVITY': return '#ad1457';
       // Data Category
       case 'TRANSACTIONAL': return '#3949ab';
       case 'ANALYTICAL': return '#7b1fa2';
       case 'REFERENCE': return '#00796b';
+      case 'MASTER_DATA': return '#2e7d32';
+      case 'OPERATIONAL': return '#f57c00';
+      case 'TEMPORAL': return '#0277bd';
+      case 'GEOSPATIAL': return '#388e3c';
+      case 'FINANCIAL': return '#d32f2f';
+      case 'COMPLIANCE': return '#c2185b';
+      case 'TECHNICAL': return '#616161';
+      case 'SPORTS': return '#1976d2';
       default: return '#757575';
     }
   }};
@@ -309,6 +339,14 @@ const Governance = () => {
           <option value="TRANSACTIONAL">Transactional</option>
           <option value="ANALYTICAL">Analytical</option>
           <option value="REFERENCE">Reference</option>
+          <option value="MASTER_DATA">Master Data</option>
+          <option value="OPERATIONAL">Operational</option>
+          <option value="TEMPORAL">Temporal</option>
+          <option value="GEOSPATIAL">Geospatial</option>
+          <option value="FINANCIAL">Financial</option>
+          <option value="COMPLIANCE">Compliance</option>
+          <option value="TECHNICAL">Technical</option>
+          <option value="SPORTS">Sports</option>
         </Select>
 
         <Select
@@ -316,9 +354,11 @@ const Governance = () => {
           onChange={(e) => setFilter({...filter, health: e.target.value})}
         >
           <option value="">All Health Status</option>
+          <option value="EXCELLENT">Excellent</option>
           <option value="HEALTHY">Healthy</option>
           <option value="WARNING">Warning</option>
           <option value="CRITICAL">Critical</option>
+          <option value="EMERGENCY">Emergency</option>
         </Select>
 
         <Select
@@ -326,9 +366,39 @@ const Governance = () => {
           onChange={(e) => setFilter({...filter, sensitivity: e.target.value})}
         >
           <option value="">All Sensitivity</option>
+          <option value="PUBLIC">Public</option>
           <option value="LOW">Low</option>
           <option value="MEDIUM">Medium</option>
           <option value="HIGH">High</option>
+          <option value="CRITICAL">Critical</option>
+        </Select>
+
+        <Select
+          value={filter.domain}
+          onChange={(e) => setFilter({...filter, domain: e.target.value})}
+        >
+          <option value="">All Domains</option>
+          <option value="CUSTOMER">Customer</option>
+          <option value="SALES">Sales</option>
+          <option value="MARKETING">Marketing</option>
+          <option value="HR">HR</option>
+          <option value="FINANCE">Finance</option>
+          <option value="INVENTORY">Inventory</option>
+          <option value="OPERATIONS">Operations</option>
+          <option value="SUPPORT">Support</option>
+          <option value="SECURITY">Security</option>
+          <option value="ANALYTICS">Analytics</option>
+          <option value="COMMUNICATION">Communication</option>
+          <option value="LEGAL">Legal</option>
+          <option value="RESEARCH">Research</option>
+          <option value="MANUFACTURING">Manufacturing</option>
+          <option value="LOGISTICS">Logistics</option>
+          <option value="HEALTHCARE">Healthcare</option>
+          <option value="EDUCATION">Education</option>
+          <option value="REAL_ESTATE">Real Estate</option>
+          <option value="INSURANCE">Insurance</option>
+          <option value="SPORTS">Sports</option>
+          <option value="GENERAL">General</option>
         </Select>
       </FiltersContainer>
 
