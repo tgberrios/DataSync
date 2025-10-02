@@ -28,9 +28,15 @@ add_executable(DataSync
     src/Config.cpp 
     src/logger.cpp 
     src/DataGovernance.cpp 
-    src/DataClassifier.cpp
-    src/DataQualityCalculator.cpp
+    src/DataClassifier.cpp 
+    src/DataQualityCalculator.cpp 
     src/DDLExporter.cpp 
+    src/DatabaseConnectionManager.cpp
+    src/DDLFileManager.cpp
+    src/DDLExporterInterface.cpp
+    src/MariaDBDDLExporter.cpp
+    src/PostgreSQLDDLExporter.cpp
+    src/MSSQLDDLExporter.cpp
     src/MetricsCollector.cpp 
     src/DataQuality.cpp
     src/catalog_manager.cpp
