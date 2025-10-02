@@ -31,6 +31,7 @@ add_executable(DataSync
     src/DDLExporter.cpp 
     src/MetricsCollector.cpp 
     src/DataQuality.cpp
+    src/catalog_manager.cpp
 )
 
 # Configurar para que el ejecutable se genere en el directorio raíz

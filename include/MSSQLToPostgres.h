@@ -1595,7 +1595,8 @@ public:
           if (i > 0)
             whereClause += " AND ";
           std::string lowerPkColumn = pkColumns[i];
-          std::transform(lowerPkColumn.begin(), lowerPkColumn.end(), lowerPkColumn.begin(), ::tolower);
+          std::transform(lowerPkColumn.begin(), lowerPkColumn.end(),
+                         lowerPkColumn.begin(), ::tolower);
           whereClause += "\"" + lowerPkColumn + "\" = " +
                          (record[pkIndex].empty()
                               ? "NULL"
@@ -1677,8 +1678,10 @@ public:
           if (newValue.empty()) {
             valueToSet = "NULL";
           } else {
-            // Usar cleanValueForPostgres para manejar fechas inválidas y otros valores problemáticos
-            // TODO: Necesitamos obtener el tipo real de la columna, por ahora usar TEXT como fallback
+            // Usar cleanValueForPostgres para manejar fechas inválidas y otros
+            // valores problemáticos
+            // TODO: Necesitamos obtener el tipo real de la columna, por ahora
+            // usar TEXT como fallback
             std::string cleanedValue = cleanValueForPostgres(newValue, "TEXT");
             if (cleanedValue == "NULL") {
               valueToSet = "NULL";
@@ -2430,7 +2433,8 @@ private:
                  upperType.find("NUMERIC") != std::string::npos) {
         return "0.0"; // Valor por defecto para números decimales
       } else if (upperType == "TEXT") {
-        // Fallback para TEXT: devolver NULL para que PostgreSQL use el valor por defecto de la columna
+        // Fallback para TEXT: devolver NULL para que PostgreSQL use el valor
+        // por defecto de la columna
         return "NULL";
       } else if (upperType.find("VARCHAR") != std::string::npos ||
                  upperType.find("TEXT") != std::string::npos ||

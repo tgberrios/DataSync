@@ -226,7 +226,9 @@ void DDLExporter::exportMariaDBDDL(const SchemaInfo &schema) {
     // Validate connection parameters
     if (host.empty() || user.empty() || db.empty()) {
       Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
-                    "MariaDB connection parameters are incomplete");
+                    "MariaDB connection parameters are incomplete - host: '" +
+                        host + "', user: '" + user + "', db: '" + db +
+                        "', connection string: " + connStr);
       return;
     }
 
