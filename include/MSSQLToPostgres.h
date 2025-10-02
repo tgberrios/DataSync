@@ -354,16 +354,12 @@ public:
         return;
       }
 
-      // Sort tables by priority: FULL_LOAD, RESET, LISTENING_CHANGES
+      // Sort tables by priority: FULL_LOAD, LISTENING_CHANGES
       std::sort(tables.begin(), tables.end(),
                 [](const TableInfo &a, const TableInfo &b) {
                   if (a.status == "FULL_LOAD" && b.status != "FULL_LOAD")
                     return true;
                   if (a.status != "FULL_LOAD" && b.status == "FULL_LOAD")
-                    return false;
-                  if (a.status == "RESET" && b.status != "RESET")
-                    return true;
-                  if (a.status != "RESET" && b.status == "RESET")
                     return false;
                   if (a.status == "LISTENING_CHANGES" &&
                       b.status != "LISTENING_CHANGES")
@@ -562,16 +558,12 @@ public:
         return;
       }
 
-      // Sort tables by priority: FULL_LOAD, RESET, LISTENING_CHANGES
+      // Sort tables by priority: FULL_LOAD, LISTENING_CHANGES
       std::sort(tables.begin(), tables.end(),
                 [](const TableInfo &a, const TableInfo &b) {
                   if (a.status == "FULL_LOAD" && b.status != "FULL_LOAD")
                     return true;
                   if (a.status != "FULL_LOAD" && b.status == "FULL_LOAD")
-                    return false;
-                  if (a.status == "RESET" && b.status != "RESET")
-                    return true;
-                  if (a.status != "RESET" && b.status == "RESET")
                     return false;
                   if (a.status == "LISTENING_CHANGES" &&
                       b.status != "LISTENING_CHANGES")
@@ -1343,8 +1335,7 @@ public:
           "UPDATE metadata.catalog SET status='" + status + "'";
 
       // Actualizar last_offset para todos los status que requieren tracking
-      if (status == "FULL_LOAD" || status == "RESET" ||
-          status == "LISTENING_CHANGES") {
+      if (status == "FULL_LOAD" || status == "LISTENING_CHANGES") {
         updateQuery += ", last_offset='" + std::to_string(offset) + "'";
       }
 
