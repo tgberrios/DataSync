@@ -13,3 +13,10 @@ UPDATE metadata.catalog SET
     pk_strategy = 'OFFSET',
     has_pk = FALSE,
     candidate_columns = NULL;
+
+
+    que me confirme cuantas estrategias estamos usando!
+
+    ya podemos hacer que catalog y transfer se ejecuten al mismo tiempo no tienen porque tener mutex
+
+    eliminar la de temporal PK

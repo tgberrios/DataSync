@@ -56,13 +56,22 @@ void MariaDBDataTransfer::processFullLoad(MYSQL *mariadbConn,
     return;
   }
 
+  Logger::getInstance().info(LogCategory::TRANSFER,
+                             "Found " + std::to_string(columns.size()) +
+                                 " columns for table " + table.schema_name +
+                                 "." + table.table_name);
+
   // Prepare column names and types
   std::vector<std::string> columnNames;
   std::vector<std::string> columnTypes;
 
   for (const auto &col : columns) {
-    if (col.size() < 6)
+    if (col.size() < 6) {
+      Logger::getInstance().warning(
+          LogCategory::TRANSFER, "Skipping column with insufficient data: " +
+                                     std::to_string(col.size()) + " elements");
       continue;
+    }
 
     std::string colName = col[0];
     std::transform(colName.begin(), colName.end(), colName.begin(), ::tolower);
@@ -101,6 +110,19 @@ void MariaDBDataTransfer::processFullLoad(MYSQL *mariadbConn,
     columnTypes.push_back(pgType);
   }
 
+  Logger::getInstance().info(LogCategory::TRANSFER,
+                             "Processed " + std::to_string(columnNames.size()) +
+                                 " columns for table " + table.schema_name +
+                                 "." + table.table_name);
+
+  if (columnNames.empty()) {
+    Logger::getInstance().error(LogCategory::TRANSFER,
+                                "No valid columns processed for table " +
+                                    table.schema_name + "." + table.table_name +
+                                    " - skipping transfer");
+    return;
+  }
+
   // Get row count
   size_t sourceCount = queryExecutor.getTableRowCount(
       mariadbConn, table.schema_name, table.table_name);
@@ -122,15 +144,30 @@ void MariaDBDataTransfer::processFullLoad(MYSQL *mariadbConn,
   size_t offset = 0;
   size_t totalProcessed = 0;
 
+  Logger::getInstance().info(
+      LogCategory::TRANSFER,
+      "Starting data processing loop for " + table.schema_name + "." +
+          table.table_name + " with chunk size: " + std::to_string(CHUNK_SIZE));
+
   while (offset < sourceCount) {
+    Logger::getInstance().info(LogCategory::TRANSFER,
+                               "Processing chunk at offset " +
+                                   std::to_string(offset) + " for " +
+                                   table.schema_name + "." + table.table_name);
+
     std::string selectQuery = "SELECT * FROM `" + table.schema_name + "`.`" +
                               table.table_name + "` " + "LIMIT " +
                               std::to_string(CHUNK_SIZE) + " OFFSET " +
                               std::to_string(offset) + ";";
 
     auto results = queryExecutor.executeQuery(mariadbConn, selectQuery);
-    if (results.empty())
+    if (results.empty()) {
+      Logger::getInstance().info(
+          LogCategory::TRANSFER,
+          "No more results at offset " + std::to_string(offset) + " for " +
+              table.schema_name + "." + table.table_name);
       break;
+    }
 
     std::string lowerSchema = table.schema_name;
     std::transform(lowerSchema.begin(), lowerSchema.end(), lowerSchema.begin(),
@@ -141,6 +178,13 @@ void MariaDBDataTransfer::processFullLoad(MYSQL *mariadbConn,
 
     totalProcessed += results.size();
     offset += CHUNK_SIZE;
+
+    Logger::getInstance().info(
+        LogCategory::TRANSFER,
+        "Completed chunk processing at offset " + std::to_string(offset) +
+            " for " + table.schema_name + "." + table.table_name +
+            " - processed " + std::to_string(totalProcessed) +
+            " records so far");
 
     Logger::getInstance().info(LogCategory::TRANSFER,
                                "Processed " + std::to_string(totalProcessed) +
@@ -246,7 +290,25 @@ void MariaDBDataTransfer::updateTableStatus(pqxx::connection &pgConn,
 
     if (status == "FULL_LOAD" || status == "RESET" ||
         status == "LISTENING_CHANGES") {
-      updateQuery += ", last_offset='" + std::to_string(offset) + "'";
+
+      // Get PK strategy to determine which field to update
+      auto pkStrategyResult = txn.exec(
+          "SELECT pk_strategy FROM metadata.catalog WHERE schema_name='" +
+          escapeSQL(schema_name) + "' AND table_name='" +
+          escapeSQL(table_name) + "'");
+
+      if (!pkStrategyResult.empty() && !pkStrategyResult[0][0].is_null()) {
+        std::string pkStrategy = pkStrategyResult[0][0].as<std::string>();
+
+        if (pkStrategy == "PK") {
+          updateQuery += ", last_processed_pk='" + std::to_string(offset) + "'";
+        } else {
+          updateQuery += ", last_offset='" + std::to_string(offset) + "'";
+        }
+      } else {
+        // Default to OFFSET if strategy not found
+        updateQuery += ", last_offset='" + std::to_string(offset) + "'";
+      }
     }
 
     updateQuery += ", last_sync_time=NOW()";
@@ -275,34 +337,78 @@ void MariaDBDataTransfer::performBulkUpsert(
   if (results.empty())
     return;
 
+  Logger::getInstance().info(LogCategory::TRANSFER,
+                             "Starting performBulkUpsert for " +
+                                 lowerSchemaName + "." + tableName + " with " +
+                                 std::to_string(results.size()) + " records");
+
   try {
     // Get primary key columns
+    Logger::getInstance().info(LogCategory::TRANSFER,
+                               "Getting primary key columns for " +
+                                   lowerSchemaName + "." + tableName);
+
     auto pkColumns =
         getPrimaryKeyColumnsFromPostgres(pgConn, lowerSchemaName, tableName);
 
+    Logger::getInstance().info(LogCategory::TRANSFER,
+                               "Found " + std::to_string(pkColumns.size()) +
+                                   " primary key columns");
+
     if (pkColumns.empty()) {
       // No primary key, use simple insert
+      Logger::getInstance().info(
+          LogCategory::TRANSFER,
+          "No primary key found, using simple insert for " + lowerSchemaName +
+              "." + tableName);
       performBulkInsert(pgConn, results, columnNames, columnTypes,
                         lowerSchemaName, tableName);
       return;
     }
 
     // Build upsert query
+    Logger::getInstance().info(LogCategory::TRANSFER,
+                               "Building upsert query for " + lowerSchemaName +
+                                   "." + tableName);
+
     std::string upsertQuery =
         buildUpsertQuery(columnNames, pkColumns, lowerSchemaName, tableName);
     std::string conflictClause =
         buildUpsertConflictClause(columnNames, pkColumns);
 
+    Logger::getInstance().info(LogCategory::TRANSFER,
+                               "Upsert query built successfully");
+
+    Logger::getInstance().info(LogCategory::TRANSFER,
+                               "Starting database transaction for " +
+                                   lowerSchemaName + "." + tableName);
+
     pqxx::work txn(pgConn);
     txn.exec("SET statement_timeout = '600s'");
 
+    Logger::getInstance().info(LogCategory::TRANSFER,
+                               "Transaction started, processing batches");
+
     // Process in batches
-    const size_t BATCH_SIZE =
-        std::min(SyncConfig::getChunkSize() / 2, static_cast<size_t>(500));
+    const size_t CHUNK_SIZE_VALUE = SyncConfig::getChunkSize();
+    const size_t BATCH_SIZE = CHUNK_SIZE_VALUE;
+
+    Logger::getInstance().info(
+        LogCategory::TRANSFER,
+        "Processing " + std::to_string(results.size()) +
+            " records in batches of " + std::to_string(BATCH_SIZE) +
+            " (chunk_size: " + std::to_string(CHUNK_SIZE_VALUE) + ")");
 
     for (size_t batchStart = 0; batchStart < results.size();
          batchStart += BATCH_SIZE) {
       size_t batchEnd = std::min(batchStart + BATCH_SIZE, results.size());
+
+      Logger::getInstance().info(
+          LogCategory::TRANSFER,
+          "Processing batch " + std::to_string(batchStart) + " to " +
+              std::to_string(batchEnd) + " for " + lowerSchemaName + "." +
+              tableName + " (total results: " + std::to_string(results.size()) +
+              ", BATCH_SIZE: " + std::to_string(BATCH_SIZE) + ")");
 
       std::string batchQuery = upsertQuery;
       std::vector<std::string> values;
@@ -343,7 +449,18 @@ void MariaDBDataTransfer::performBulkUpsert(
 
         txn.exec(batchQuery);
       }
+
+      Logger::getInstance().info(LogCategory::TRANSFER,
+                                 "Completed batch " +
+                                     std::to_string(batchStart) + " to " +
+                                     std::to_string(batchEnd) + " for " +
+                                     lowerSchemaName + "." + tableName);
     }
+
+    Logger::getInstance().info(LogCategory::TRANSFER,
+                               "All batches completed for " + lowerSchemaName +
+                                   "." + tableName +
+                                   " - committing transaction");
 
     txn.commit();
     Logger::getInstance().info(

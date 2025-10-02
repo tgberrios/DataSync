@@ -2,7 +2,9 @@
 #include "DDLExporter.h"
 #include "DataGovernance.h"
 #include "catalog_manager.h"
+#include <chrono>
 #include <pqxx/pqxx>
+#include <thread>
 
 StreamingData::StreamingData() {
   // Initialize components
@@ -162,6 +164,20 @@ void StreamingData::catalogSyncThread() {
 
     while (threadManager->isRunning()) {
       try {
+        // Wait for transfer to complete before starting catalog sync
+        while (transferRunning.load() && threadManager->isRunning()) {
+          Logger::getInstance().info(
+              LogCategory::MONITORING,
+              "Catalog sync waiting for transfer to complete...");
+          std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+
+        if (!threadManager->isRunning())
+          break;
+
+        // Mark catalog sync as running
+        catalogSyncRunning.store(true);
+
         Logger::getInstance().info(LogCategory::MONITORING,
                                    "Starting catalog synchronization cycle");
 
@@ -179,7 +195,12 @@ void StreamingData::catalogSyncThread() {
 
         Logger::getInstance().info(LogCategory::MONITORING,
                                    "Catalog synchronization cycle completed");
+
+        // Mark catalog sync as completed
+        catalogSyncRunning.store(false);
+
       } catch (const std::exception &e) {
+        catalogSyncRunning.store(false);
         Logger::getInstance().error(LogCategory::MONITORING,
                                     "Error in catalog sync cycle: " +
                                         std::string(e.what()));
@@ -192,6 +213,7 @@ void StreamingData::catalogSyncThread() {
     Logger::getInstance().info(LogCategory::MONITORING,
                                "Catalog sync thread stopped");
   } catch (const std::exception &e) {
+    catalogSyncRunning.store(false);
     Logger::getInstance().error(LogCategory::MONITORING,
                                 "Critical error in catalog sync thread: " +
                                     std::string(e.what()));
@@ -205,20 +227,45 @@ void StreamingData::transferThread() {
 
     while (threadManager->isRunning()) {
       try {
+        // Wait for catalog sync to complete before starting transfer
+        while (catalogSyncRunning.load() && threadManager->isRunning()) {
+          Logger::getInstance().info(
+              LogCategory::MONITORING,
+              "Transfer waiting for catalog sync to complete...");
+          std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+
+        if (!threadManager->isRunning())
+          break;
+
+        // Mark transfer as running
+        transferRunning.store(true);
+
+        Logger::getInstance().info(LogCategory::MONITORING,
+                                   "Starting transfer process...");
+
         transferOrchestrator->runTransfers();
+
+        Logger::getInstance().info(LogCategory::MONITORING,
+                                   "Transfer process completed");
+
+        // Mark transfer as completed
+        transferRunning.store(false);
+
       } catch (const std::exception &e) {
+        transferRunning.store(false);
         Logger::getInstance().error(LogCategory::MONITORING,
                                     "Error in transfer thread: " +
                                         std::string(e.what()));
       }
 
-      threadManager->sleepFor("transfer",
-                              5); // Short sleep between transfer cycles
+      threadManager->sleepFor("transfer", 10); // Sleep between transfer cycles
     }
 
     Logger::getInstance().info(LogCategory::MONITORING,
                                "Transfer thread stopped");
   } catch (const std::exception &e) {
+    transferRunning.store(false);
     Logger::getInstance().error(LogCategory::MONITORING,
                                 "Critical error in transfer thread: " +
                                     std::string(e.what()));

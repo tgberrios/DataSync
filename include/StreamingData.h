@@ -7,6 +7,7 @@
 #include "ThreadManager.h"
 #include "TransferOrchestrator.h"
 #include "logger.h"
+#include <atomic>
 #include <memory>
 
 class StreamingData {
@@ -26,6 +27,10 @@ private:
   std::unique_ptr<TransferOrchestrator> transferOrchestrator;
   std::unique_ptr<MonitoringService> monitoringService;
   std::unique_ptr<MaintenanceService> maintenanceService;
+
+  // Process synchronization
+  std::atomic<bool> catalogSyncRunning{false};
+  std::atomic<bool> transferRunning{false};
 
   // Thread functions
   void initializationThread();
