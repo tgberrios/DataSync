@@ -12,18 +12,21 @@ void CatalogManager::cleanCatalog() {
     cleanInconsistentPaginationFields();
     updateClusterNames();
 
-    Logger::getInstance().info(LogCategory::DATABASE, "Catalog cleanup completed");
+    Logger::getInstance().info(LogCategory::DATABASE,
+                               "Catalog cleanup completed");
   } catch (const pqxx::sql_error &e) {
-    Logger::getInstance().error(LogCategory::DATABASE, "cleanCatalog",
-                  "SQL ERROR cleaning catalog: " + std::string(e.what()) +
-                      " [SQL State: " + e.sqlstate() + "]");
+    Logger::getInstance().error(
+        LogCategory::DATABASE, "cleanCatalog",
+        "SQL ERROR cleaning catalog: " + std::string(e.what()) +
+            " [SQL State: " + e.sqlstate() + "]");
   } catch (const pqxx::broken_connection &e) {
     Logger::getInstance().error(LogCategory::DATABASE, "cleanCatalog",
-                  "CONNECTION ERROR cleaning catalog: " +
-                      std::string(e.what()));
+                                "CONNECTION ERROR cleaning catalog: " +
+                                    std::string(e.what()));
   } catch (const std::exception &e) {
     Logger::getInstance().error(LogCategory::DATABASE, "cleanCatalog",
-                  "ERROR cleaning catalog: " + std::string(e.what()));
+                                "ERROR cleaning catalog: " +
+                                    std::string(e.what()));
   }
 }
 
@@ -47,9 +50,10 @@ void CatalogManager::deactivateNoDataTables() {
 
     txn.commit();
 
-    Logger::getInstance().info(LogCategory::DATABASE,
-                 "Deactivated " + std::to_string(updateResult.affected_rows()) +
-                     " NO_DATA tables");
+    Logger::getInstance().info(
+        LogCategory::DATABASE,
+        "Deactivated " + std::to_string(updateResult.affected_rows()) +
+            " NO_DATA tables");
 
   } catch (const pqxx::sql_error &e) {
     Logger::getInstance().error(
@@ -57,13 +61,14 @@ void CatalogManager::deactivateNoDataTables() {
         "SQL ERROR deactivating NO_DATA tables: " + std::string(e.what()) +
             " [SQL State: " + e.sqlstate() + "]");
   } catch (const pqxx::broken_connection &e) {
-    Logger::getInstance().error(LogCategory::DATABASE, "deactivateNoDataTables",
-                  "CONNECTION ERROR deactivating NO_DATA tables: " +
-                      std::string(e.what()));
+    Logger::getInstance().error(
+        LogCategory::DATABASE, "deactivateNoDataTables",
+        "CONNECTION ERROR deactivating NO_DATA tables: " +
+            std::string(e.what()));
   } catch (const std::exception &e) {
     Logger::getInstance().error(LogCategory::DATABASE, "deactivateNoDataTables",
-                  "ERROR deactivating NO_DATA tables: " +
-                      std::string(e.what()));
+                                "ERROR deactivating NO_DATA tables: " +
+                                    std::string(e.what()));
   }
 }
 
@@ -101,25 +106,28 @@ void CatalogManager::updateClusterNames() {
             escapeSQL(dbEngine) + "'");
         updateTxn.commit();
 
-        Logger::getInstance().info(LogCategory::DATABASE,
-                     "Updated cluster_name to '" + clusterName + "' for " +
-                         std::to_string(updateResult.affected_rows()) +
-                         " tables");
+        Logger::getInstance().info(
+            LogCategory::DATABASE,
+            "Updated cluster_name to '" + clusterName + "' for " +
+                std::to_string(updateResult.affected_rows()) + " tables");
       }
     }
 
-    Logger::getInstance().info(LogCategory::DATABASE, "Cluster name updates completed");
+    Logger::getInstance().info(LogCategory::DATABASE,
+                               "Cluster name updates completed");
   } catch (const pqxx::sql_error &e) {
-    Logger::getInstance().error(LogCategory::DATABASE, "updateClusterNames",
-                  "SQL ERROR updating cluster names: " + std::string(e.what()) +
-                      " [SQL State: " + e.sqlstate() + "]");
+    Logger::getInstance().error(
+        LogCategory::DATABASE, "updateClusterNames",
+        "SQL ERROR updating cluster names: " + std::string(e.what()) +
+            " [SQL State: " + e.sqlstate() + "]");
   } catch (const pqxx::broken_connection &e) {
     Logger::getInstance().error(LogCategory::DATABASE, "updateClusterNames",
-                  "CONNECTION ERROR updating cluster names: " +
-                      std::string(e.what()));
+                                "CONNECTION ERROR updating cluster names: " +
+                                    std::string(e.what()));
   } catch (const std::exception &e) {
     Logger::getInstance().error(LogCategory::DATABASE, "updateClusterNames",
-                  "ERROR updating cluster names: " + std::string(e.what()));
+                                "ERROR updating cluster names: " +
+                                    std::string(e.what()));
   }
 }
 
@@ -127,27 +135,30 @@ void CatalogManager::validateSchemaConsistency() {
   try {
     pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
     Logger::getInstance().info(LogCategory::DATABASE,
-                 "Starting schema consistency validation");
+                               "Starting schema consistency validation");
 
     auto tablesToValidate = getTablesForValidation(pgConn);
     Logger::getInstance().info(LogCategory::DATABASE,
-                 "Found " + std::to_string(tablesToValidate.size()) +
-                     " tables to validate");
+                               "Found " +
+                                   std::to_string(tablesToValidate.size()) +
+                                   " tables to validate");
 
     ValidationResults results = validateAllTables(pgConn, tablesToValidate);
     logValidationResults(results);
 
   } catch (const pqxx::sql_error &e) {
-    Logger::getInstance().error(LogCategory::DATABASE, "validateSchemaConsistency",
-                  "SQL ERROR in schema validation: " + std::string(e.what()) +
-                      " [SQL State: " + e.sqlstate() + "]");
+    Logger::getInstance().error(
+        LogCategory::DATABASE, "validateSchemaConsistency",
+        "SQL ERROR in schema validation: " + std::string(e.what()) +
+            " [SQL State: " + e.sqlstate() + "]");
   } catch (const pqxx::broken_connection &e) {
-    Logger::getInstance().error(LogCategory::DATABASE, "validateSchemaConsistency",
-                  "CONNECTION ERROR in schema validation: " +
-                      std::string(e.what()));
+    Logger::getInstance().error(
+        LogCategory::DATABASE, "validateSchemaConsistency",
+        "CONNECTION ERROR in schema validation: " + std::string(e.what()));
   } catch (const std::exception &e) {
-    Logger::getInstance().error(LogCategory::DATABASE, "validateSchemaConsistency",
-                  "ERROR in schema validation: " + std::string(e.what()));
+    Logger::getInstance().error(
+        LogCategory::DATABASE, "validateSchemaConsistency",
+        "ERROR in schema validation: " + std::string(e.what()));
   }
 }
 
@@ -157,13 +168,13 @@ void CatalogManager::syncCatalogMariaDBToPostgres() {
     pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
 
     auto connections = getMariaDBConnections(pgConn);
-    Logger::getInstance().info(LogCategory::DATABASE, "Found " +
-                                            std::to_string(connections.size()) +
-                                            " MariaDB connection(s)");
+    Logger::getInstance().info(LogCategory::DATABASE,
+                               "Found " + std::to_string(connections.size()) +
+                                   " MariaDB connection(s)");
 
     if (connections.empty()) {
       Logger::getInstance().warning(LogCategory::DATABASE,
-                      "No MariaDB connections found in catalog");
+                                    "No MariaDB connections found in catalog");
       return;
     }
 
@@ -187,13 +198,14 @@ void CatalogManager::syncCatalogMariaDBToPostgres() {
         "SQL ERROR in syncCatalogMariaDBToPostgres: " + std::string(e.what()) +
             " [SQL State: " + e.sqlstate() + "]");
   } catch (const pqxx::broken_connection &e) {
-    Logger::getInstance().error(LogCategory::DATABASE, "syncCatalogMariaDBToPostgres",
-                  "CONNECTION ERROR in syncCatalogMariaDBToPostgres: " +
-                      std::string(e.what()));
+    Logger::getInstance().error(
+        LogCategory::DATABASE, "syncCatalogMariaDBToPostgres",
+        "CONNECTION ERROR in syncCatalogMariaDBToPostgres: " +
+            std::string(e.what()));
   } catch (const std::exception &e) {
-    Logger::getInstance().error(LogCategory::DATABASE, "syncCatalogMariaDBToPostgres",
-                  "ERROR in syncCatalogMariaDBToPostgres: " +
-                      std::string(e.what()));
+    Logger::getInstance().error(
+        LogCategory::DATABASE, "syncCatalogMariaDBToPostgres",
+        "ERROR in syncCatalogMariaDBToPostgres: " + std::string(e.what()));
   }
 }
 
@@ -232,8 +244,9 @@ CatalogManager::validateAllTables(pqxx::connection &pgConn,
 
   for (const auto &table : tables) {
     Logger::getInstance().info(LogCategory::DATABASE,
-                 "Validating schema: " + table.schemaName + "." +
-                     table.tableName + " [" + table.dbEngine + "]");
+                               "Validating schema: " + table.schemaName + "." +
+                                   table.tableName + " [" + table.dbEngine +
+                                   "]");
 
     if (validateTableSchema(pgConn, table)) {
       results.validatedTables++;
@@ -247,11 +260,12 @@ CatalogManager::validateAllTables(pqxx::connection &pgConn,
 }
 
 void CatalogManager::logValidationResults(const ValidationResults &results) {
-  Logger::getInstance().info(LogCategory::DATABASE,
-               "Schema validation completed - Validated: " +
-                   std::to_string(results.validatedTables) +
-                   ", Reset: " + std::to_string(results.resetTables) +
-                   ", Total: " + std::to_string(results.totalTables));
+  Logger::getInstance().info(
+      LogCategory::DATABASE,
+      "Schema validation completed - Validated: " +
+          std::to_string(results.validatedTables) +
+          ", Reset: " + std::to_string(results.resetTables) +
+          ", Total: " + std::to_string(results.totalTables));
 }
 
 bool CatalogManager::validateTableSchema(pqxx::connection &pgConn,
@@ -271,9 +285,10 @@ bool CatalogManager::validateTableSchema(pqxx::connection &pgConn,
             " - Dropping and resetting table");
     return false;
   } else {
-    Logger::getInstance().info(LogCategory::DATABASE,
-                 "SCHEMA VALID: " + table.schemaName + "." + table.tableName +
-                     " - Columns match: " + std::to_string(sourceColumnCount));
+    Logger::getInstance().info(
+        LogCategory::DATABASE,
+        "SCHEMA VALID: " + table.schemaName + "." + table.tableName +
+            " - Columns match: " + std::to_string(sourceColumnCount));
     return true;
   }
 }
@@ -403,15 +418,17 @@ MYSQL *CatalogManager::establishMariaDBConnection(
 
   // Validate required parameters
   if (host.empty() || user.empty() || db.empty()) {
-    Logger::getInstance().error(LogCategory::DATABASE, "establishMariaDBConnection",
-                  "Missing required connection parameters (host, user, or db)");
+    Logger::getInstance().error(
+        LogCategory::DATABASE, "establishMariaDBConnection",
+        "Missing required connection parameters (host, user, or db)");
     return nullptr;
   }
 
   MYSQL *conn = mysql_init(nullptr);
   if (!conn) {
-    Logger::getInstance().error(LogCategory::DATABASE, "establishMariaDBConnection",
-                  "mysql_init() failed");
+    Logger::getInstance().error(LogCategory::DATABASE,
+                                "establishMariaDBConnection",
+                                "mysql_init() failed");
     return nullptr;
   }
 
@@ -420,14 +437,16 @@ MYSQL *CatalogManager::establishMariaDBConnection(
     try {
       portNum = std::stoul(port);
       if (portNum == 0 || portNum > 65535) {
-        Logger::getInstance().warning(LogCategory::DATABASE, "establishMariaDBConnection",
-                        "Invalid port number " + port + ", using default 3306");
+        Logger::getInstance().warning(
+            LogCategory::DATABASE, "establishMariaDBConnection",
+            "Invalid port number " + port + ", using default 3306");
         portNum = 3306;
       }
     } catch (const std::exception &e) {
-      Logger::getInstance().warning(LogCategory::DATABASE, "establishMariaDBConnection",
-                      "Could not parse port " + port + ": " +
-                          std::string(e.what()) + ", using default 3306");
+      Logger::getInstance().warning(
+          LogCategory::DATABASE, "establishMariaDBConnection",
+          "Could not parse port " + port + ": " + std::string(e.what()) +
+              ", using default 3306");
       portNum = 3306;
     }
   }
@@ -435,10 +454,11 @@ MYSQL *CatalogManager::establishMariaDBConnection(
   if (mysql_real_connect(conn, host.c_str(), user.c_str(), password.c_str(),
                          db.c_str(), portNum, nullptr, 0) == nullptr) {
     std::string errorMsg = mysql_error(conn);
-    Logger::getInstance().error(LogCategory::DATABASE, "establishMariaDBConnection",
-                  "MariaDB connection failed: " + errorMsg + " (host: " + host +
-                      ", user: " + user + ", db: " + db +
-                      ", port: " + std::to_string(portNum) + ")");
+    Logger::getInstance().error(
+        LogCategory::DATABASE, "establishMariaDBConnection",
+        "MariaDB connection failed: " + errorMsg + " (host: " + host +
+            ", user: " + user + ", db: " + db +
+            ", port: " + std::to_string(portNum) + ")");
     mysql_close(conn);
     return nullptr;
   }
@@ -446,8 +466,9 @@ MYSQL *CatalogManager::establishMariaDBConnection(
   // Test connection with a simple query
   if (mysql_query(conn, "SELECT 1")) {
     std::string errorMsg = mysql_error(conn);
-    Logger::getInstance().error(LogCategory::DATABASE, "establishMariaDBConnection",
-                  "Connection test failed: " + errorMsg);
+    Logger::getInstance().error(LogCategory::DATABASE,
+                                "establishMariaDBConnection",
+                                "Connection test failed: " + errorMsg);
     mysql_close(conn);
     return nullptr;
   }
@@ -499,13 +520,15 @@ CatalogManager::analyzeTableMetadata(MYSQL *conn, const std::string &schemaName,
   metadata.hasPK = !metadata.pkColumns.empty();
 
   Logger::getInstance().info(LogCategory::DATABASE,
-               "Detecting PK for table: " + schemaName + "." + tableName);
-  Logger::getInstance().info(LogCategory::DATABASE,
-               "PK Detection Results for " + schemaName + "." + tableName +
-                   ": hasPK=" + (metadata.hasPK ? "true" : "false") +
-                   ", pkStrategy=" + metadata.pkStrategy + ", pkColumns=" +
-                   columnsToJSON(metadata.pkColumns) + ", candidateColumns=" +
-                   columnsToJSON(metadata.candidateColumns));
+                             "Detecting PK for table: " + schemaName + "." +
+                                 tableName);
+  Logger::getInstance().info(
+      LogCategory::DATABASE,
+      "PK Detection Results for " + schemaName + "." + tableName +
+          ": hasPK=" + (metadata.hasPK ? "true" : "false") +
+          ", pkStrategy=" + metadata.pkStrategy +
+          ", pkColumns=" + columnsToJSON(metadata.pkColumns) +
+          ", candidateColumns=" + columnsToJSON(metadata.candidateColumns));
 
   return metadata;
 }
@@ -674,13 +697,14 @@ CatalogManager::processMariaDBConnection(pqxx::connection &pgConn,
 }
 
 void CatalogManager::logSyncResults(const SyncResults &results) {
-  Logger::getInstance().info(LogCategory::DATABASE,
-               "MariaDB sync completed - Connections: " +
-                   std::to_string(results.processedConnections) + "/" +
-                   std::to_string(results.totalConnections) +
-                   ", Tables: " + std::to_string(results.totalTables) +
-                   ", Updated: " + std::to_string(results.updatedTables) +
-                   ", New: " + std::to_string(results.newTables));
+  Logger::getInstance().info(
+      LogCategory::DATABASE,
+      "MariaDB sync completed - Connections: " +
+          std::to_string(results.processedConnections) + "/" +
+          std::to_string(results.totalConnections) +
+          ", Tables: " + std::to_string(results.totalTables) +
+          ", Updated: " + std::to_string(results.updatedTables) +
+          ", New: " + std::to_string(results.newTables));
 }
 
 // MSSQL sync functions
@@ -689,13 +713,13 @@ void CatalogManager::syncCatalogMSSQLToPostgres() {
     pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
 
     auto connections = getMSSQLConnections(pgConn);
-    Logger::getInstance().info(LogCategory::DATABASE, "Found " +
-                                            std::to_string(connections.size()) +
-                                            " MSSQL connection(s)");
+    Logger::getInstance().info(LogCategory::DATABASE,
+                               "Found " + std::to_string(connections.size()) +
+                                   " MSSQL connection(s)");
 
     if (connections.empty()) {
       Logger::getInstance().warning(LogCategory::DATABASE,
-                      "No MSSQL connections found in catalog");
+                                    "No MSSQL connections found in catalog");
       return;
     }
 
@@ -727,13 +751,14 @@ void CatalogManager::syncCatalogMSSQLToPostgres() {
         "SQL ERROR in syncCatalogMSSQLToPostgres: " + std::string(e.what()) +
             " [SQL State: " + e.sqlstate() + "]");
   } catch (const pqxx::broken_connection &e) {
-    Logger::getInstance().error(LogCategory::DATABASE, "syncCatalogMSSQLToPostgres",
-                  "CONNECTION ERROR in syncCatalogMSSQLToPostgres: " +
-                      std::string(e.what()));
+    Logger::getInstance().error(
+        LogCategory::DATABASE, "syncCatalogMSSQLToPostgres",
+        "CONNECTION ERROR in syncCatalogMSSQLToPostgres: " +
+            std::string(e.what()));
   } catch (const std::exception &e) {
-    Logger::getInstance().error(LogCategory::DATABASE, "syncCatalogMSSQLToPostgres",
-                  "ERROR in syncCatalogMSSQLToPostgres: " +
-                      std::string(e.what()));
+    Logger::getInstance().error(
+        LogCategory::DATABASE, "syncCatalogMSSQLToPostgres",
+        "ERROR in syncCatalogMSSQLToPostgres: " + std::string(e.what()));
   }
 }
 
@@ -837,23 +862,26 @@ CatalogManager::establishMSSQLConnection(const std::string &connectionString) {
 
   ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env);
   if (ret != SQL_SUCCESS) {
-    Logger::getInstance().error(LogCategory::DATABASE, "establishMSSQLConnection",
-                  "Failed to allocate environment handle");
+    Logger::getInstance().error(LogCategory::DATABASE,
+                                "establishMSSQLConnection",
+                                "Failed to allocate environment handle");
     return SQL_NULL_HDBC;
   }
 
   ret = SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION, (void *)SQL_OV_ODBC3, 0);
   if (ret != SQL_SUCCESS) {
-    Logger::getInstance().error(LogCategory::DATABASE, "establishMSSQLConnection",
-                  "Failed to set ODBC version");
+    Logger::getInstance().error(LogCategory::DATABASE,
+                                "establishMSSQLConnection",
+                                "Failed to set ODBC version");
     SQLFreeHandle(SQL_HANDLE_ENV, env);
     return SQL_NULL_HDBC;
   }
 
   ret = SQLAllocHandle(SQL_HANDLE_DBC, env, &conn);
   if (ret != SQL_SUCCESS) {
-    Logger::getInstance().error(LogCategory::DATABASE, "establishMSSQLConnection",
-                  "Failed to allocate connection handle");
+    Logger::getInstance().error(LogCategory::DATABASE,
+                                "establishMSSQLConnection",
+                                "Failed to allocate connection handle");
     SQLFreeHandle(SQL_HANDLE_ENV, env);
     return SQL_NULL_HDBC;
   }
@@ -862,8 +890,9 @@ CatalogManager::establishMSSQLConnection(const std::string &connectionString) {
   ret = SQLDriverConnect(conn, NULL, (SQLCHAR *)connectionString.c_str(),
                          SQL_NTS, NULL, 0, NULL, SQL_DRIVER_NOPROMPT);
   if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
-    Logger::getInstance().error(LogCategory::DATABASE, "establishMSSQLConnection",
-                  "Failed to connect to MSSQL server");
+    Logger::getInstance().error(LogCategory::DATABASE,
+                                "establishMSSQLConnection",
+                                "Failed to connect to MSSQL server");
     SQLFreeHandle(SQL_HANDLE_DBC, conn);
     SQLFreeHandle(SQL_HANDLE_ENV, env);
     return SQL_NULL_HDBC;
@@ -900,13 +929,15 @@ CatalogTableMetadata CatalogManager::analyzeMSSQLTableMetadata(
   metadata.hasPK = !metadata.pkColumns.empty();
 
   Logger::getInstance().info(LogCategory::DATABASE,
-               "Detecting PK for table: " + schemaName + "." + tableName);
-  Logger::getInstance().info(LogCategory::DATABASE,
-               "PK Detection Results for " + schemaName + "." + tableName +
-                   ": hasPK=" + (metadata.hasPK ? "true" : "false") +
-                   ", pkStrategy=" + metadata.pkStrategy + ", pkColumns=" +
-                   columnsToJSON(metadata.pkColumns) + ", candidateColumns=" +
-                   columnsToJSON(metadata.candidateColumns));
+                             "Detecting PK for table: " + schemaName + "." +
+                                 tableName);
+  Logger::getInstance().info(
+      LogCategory::DATABASE,
+      "PK Detection Results for " + schemaName + "." + tableName +
+          ": hasPK=" + (metadata.hasPK ? "true" : "false") +
+          ", pkStrategy=" + metadata.pkStrategy +
+          ", pkColumns=" + columnsToJSON(metadata.pkColumns) +
+          ", candidateColumns=" + columnsToJSON(metadata.candidateColumns));
 
   return metadata;
 }
@@ -951,13 +982,13 @@ void CatalogManager::syncCatalogPostgresToPostgres() {
     pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
 
     auto connections = getPostgresConnections(pgConn);
-    Logger::getInstance().info(LogCategory::DATABASE, "Found " +
-                                            std::to_string(connections.size()) +
-                                            " PostgreSQL connection(s)");
+    Logger::getInstance().info(LogCategory::DATABASE,
+                               "Found " + std::to_string(connections.size()) +
+                                   " PostgreSQL connection(s)");
 
     if (connections.empty()) {
-      Logger::getInstance().warning(LogCategory::DATABASE,
-                      "No PostgreSQL connections found in catalog");
+      Logger::getInstance().warning(
+          LogCategory::DATABASE, "No PostgreSQL connections found in catalog");
       return;
     }
 
@@ -989,13 +1020,14 @@ void CatalogManager::syncCatalogPostgresToPostgres() {
         "SQL ERROR in syncCatalogPostgresToPostgres: " + std::string(e.what()) +
             " [SQL State: " + e.sqlstate() + "]");
   } catch (const pqxx::broken_connection &e) {
-    Logger::getInstance().error(LogCategory::DATABASE, "syncCatalogPostgresToPostgres",
-                  "CONNECTION ERROR in syncCatalogPostgresToPostgres: " +
-                      std::string(e.what()));
+    Logger::getInstance().error(
+        LogCategory::DATABASE, "syncCatalogPostgresToPostgres",
+        "CONNECTION ERROR in syncCatalogPostgresToPostgres: " +
+            std::string(e.what()));
   } catch (const std::exception &e) {
-    Logger::getInstance().error(LogCategory::DATABASE, "syncCatalogPostgresToPostgres",
-                  "ERROR in syncCatalogPostgresToPostgres: " +
-                      std::string(e.what()));
+    Logger::getInstance().error(
+        LogCategory::DATABASE, "syncCatalogPostgresToPostgres",
+        "ERROR in syncCatalogPostgresToPostgres: " + std::string(e.what()));
   }
 }
 
@@ -1057,8 +1089,9 @@ PostgresConnectionInfo CatalogManager::parsePostgresConnectionString(
 std::unique_ptr<pqxx::connection> CatalogManager::establishPostgresConnection(
     const PostgresConnectionInfo &connInfo) {
   if (connInfo.host.empty() || connInfo.dbname.empty()) {
-    Logger::getInstance().error(LogCategory::DATABASE, "establishPostgresConnection",
-                  "Missing required connection parameters (host, dbname)");
+    Logger::getInstance().error(
+        LogCategory::DATABASE, "establishPostgresConnection",
+        "Missing required connection parameters (host, dbname)");
     return nullptr;
   }
 
@@ -1080,8 +1113,9 @@ std::unique_ptr<pqxx::connection> CatalogManager::establishPostgresConnection(
 
     return std::make_unique<pqxx::connection>(connectionString);
   } catch (const std::exception &e) {
-    Logger::getInstance().error(LogCategory::DATABASE, "establishPostgresConnection",
-                  "Failed to connect to PostgreSQL: " + std::string(e.what()));
+    Logger::getInstance().error(
+        LogCategory::DATABASE, "establishPostgresConnection",
+        "Failed to connect to PostgreSQL: " + std::string(e.what()));
     return nullptr;
   }
 }
@@ -1109,7 +1143,8 @@ CatalogManager::discoverPostgresTables(pqxx::connection &conn) {
     }
   } catch (const std::exception &e) {
     Logger::getInstance().error(LogCategory::DATABASE, "discoverPostgresTables",
-                  "Failed to discover tables: " + std::string(e.what()));
+                                "Failed to discover tables: " +
+                                    std::string(e.what()));
   }
 
   return results;
@@ -1133,13 +1168,15 @@ CatalogManager::analyzePostgresTableMetadata(pqxx::connection &conn,
   metadata.hasPK = !metadata.pkColumns.empty();
 
   Logger::getInstance().info(LogCategory::DATABASE,
-               "Detecting PK for table: " + schemaName + "." + tableName);
-  Logger::getInstance().info(LogCategory::DATABASE,
-               "PK Detection Results for " + schemaName + "." + tableName +
-                   ": hasPK=" + (metadata.hasPK ? "true" : "false") +
-                   ", pkStrategy=" + metadata.pkStrategy + ", pkColumns=" +
-                   columnsToJSON(metadata.pkColumns) + ", candidateColumns=" +
-                   columnsToJSON(metadata.candidateColumns));
+                             "Detecting PK for table: " + schemaName + "." +
+                                 tableName);
+  Logger::getInstance().info(
+      LogCategory::DATABASE,
+      "PK Detection Results for " + schemaName + "." + tableName +
+          ": hasPK=" + (metadata.hasPK ? "true" : "false") +
+          ", pkStrategy=" + metadata.pkStrategy +
+          ", pkColumns=" + columnsToJSON(metadata.pkColumns) +
+          ", candidateColumns=" + columnsToJSON(metadata.candidateColumns));
 
   return metadata;
 }
@@ -1191,7 +1228,8 @@ std::string CatalogManager::escapeSQL(const std::string &input) {
   }
 
   Logger::getInstance().debug(LogCategory::DATABASE, "escapeSQL",
-                "Escaped SQL string: " + input + " -> " + escaped);
+                              "Escaped SQL string: " + input + " -> " +
+                                  escaped);
   return escaped;
 }
 
@@ -1210,8 +1248,8 @@ CatalogManager::columnsToJSON(const std::vector<std::string> &columns) {
   json += "]";
 
   Logger::getInstance().debug(LogCategory::DATABASE, "columnsToJSON",
-                "Converted " + std::to_string(columns.size()) +
-                    " columns to JSON");
+                              "Converted " + std::to_string(columns.size()) +
+                                  " columns to JSON");
   return json;
 }
 
@@ -1221,27 +1259,30 @@ std::string CatalogManager::determinePKStrategy(
     const std::string &timeColumn) {
   if (!pkColumns.empty()) {
     Logger::getInstance().debug(LogCategory::DATABASE, "determinePKStrategy",
-                  "Using PK strategy - " + std::to_string(pkColumns.size()) +
-                      " PK columns");
+                                "Using PK strategy - " +
+                                    std::to_string(pkColumns.size()) +
+                                    " PK columns");
     return "PK";
   }
 
   if (!timeColumn.empty()) {
     Logger::getInstance().debug(LogCategory::DATABASE, "determinePKStrategy",
-                  "Using TEMPORAL_PK strategy - time column: " + timeColumn);
+                                "Using TEMPORAL_PK strategy - time column: " +
+                                    timeColumn);
     return "TEMPORAL_PK";
   }
 
   if (!candidateColumns.empty()) {
     Logger::getInstance().debug(LogCategory::DATABASE, "determinePKStrategy",
-                  "Using OFFSET strategy - " +
-                      std::to_string(candidateColumns.size()) +
-                      " candidate columns");
+                                "Using OFFSET strategy - " +
+                                    std::to_string(candidateColumns.size()) +
+                                    " candidate columns");
     return "OFFSET";
   }
 
-  Logger::getInstance().warning(LogCategory::DATABASE, "determinePKStrategy",
-                  "No suitable strategy found, defaulting to OFFSET");
+  Logger::getInstance().warning(
+      LogCategory::DATABASE, "determinePKStrategy",
+      "No suitable strategy found, defaulting to OFFSET");
   return "OFFSET";
 }
 
@@ -1327,12 +1368,13 @@ CatalogManager::detectPrimaryKeyColumns(DBEngine engine, void *connection,
     }
 
     Logger::getInstance().info(LogCategory::DATABASE, "detectPrimaryKeyColumns",
-                 "Found " + std::to_string(pkColumns.size()) +
-                     " PK columns for " + schema + "." + table);
+                               "Found " + std::to_string(pkColumns.size()) +
+                                   " PK columns for " + schema + "." + table);
 
   } catch (const std::exception &e) {
-    Logger::getInstance().error(LogCategory::DATABASE, "detectPrimaryKeyColumns",
-                  "Error detecting PK columns: " + std::string(e.what()));
+    Logger::getInstance().error(
+        LogCategory::DATABASE, "detectPrimaryKeyColumns",
+        "Error detecting PK columns: " + std::string(e.what()));
   }
 
   return pkColumns;
@@ -1400,14 +1442,15 @@ CatalogManager::detectCandidateColumns(DBEngine engine, void *connection,
       }
     }
 
-    Logger::getInstance().info(LogCategory::DATABASE, "detectCandidateColumns",
-                 "Found " + std::to_string(candidateColumns.size()) +
-                     " candidate columns for " + schema + "." + table);
+    Logger::getInstance().info(
+        LogCategory::DATABASE, "detectCandidateColumns",
+        "Found " + std::to_string(candidateColumns.size()) +
+            " candidate columns for " + schema + "." + table);
 
   } catch (const std::exception &e) {
     Logger::getInstance().error(LogCategory::DATABASE, "detectCandidateColumns",
-                  "Error detecting candidate columns: " +
-                      std::string(e.what()));
+                                "Error detecting candidate columns: " +
+                                    std::string(e.what()));
   }
 
   return candidateColumns;
@@ -1478,16 +1521,18 @@ std::string CatalogManager::detectTimeColumn(DBEngine engine, void *connection,
 
     if (!timeColumn.empty()) {
       Logger::getInstance().info(LogCategory::DATABASE, "detectTimeColumn",
-                   "Found time column: " + timeColumn + " for " + schema + "." +
-                       table);
+                                 "Found time column: " + timeColumn + " for " +
+                                     schema + "." + table);
     } else {
       Logger::getInstance().debug(LogCategory::DATABASE, "detectTimeColumn",
-                    "No time column found for " + schema + "." + table);
+                                  "No time column found for " + schema + "." +
+                                      table);
     }
 
   } catch (const std::exception &e) {
     Logger::getInstance().error(LogCategory::DATABASE, "detectTimeColumn",
-                  "Error detecting time column: " + std::string(e.what()));
+                                "Error detecting time column: " +
+                                    std::string(e.what()));
   }
 
   return timeColumn;
@@ -1514,7 +1559,8 @@ std::pair<int, int> CatalogManager::getColumnCounts(
     }
   } catch (const std::exception &e) {
     Logger::getInstance().error(LogCategory::DATABASE, "getColumnCounts",
-                  "Error getting column counts: " + std::string(e.what()));
+                                "Error getting column counts: " +
+                                    std::string(e.what()));
   }
 
   return {0, 0};
@@ -1551,12 +1597,13 @@ CatalogManager::executeQuery(DBEngine engine, void *connection,
     }
 
     Logger::getInstance().debug(LogCategory::DATABASE, "executeQuery",
-                  "Executed query, returned " + std::to_string(results.size()) +
-                      " rows");
+                                "Executed query, returned " +
+                                    std::to_string(results.size()) + " rows");
 
   } catch (const std::exception &e) {
     Logger::getInstance().error(LogCategory::DATABASE, "executeQuery",
-                  "Error executing query: " + std::string(e.what()));
+                                "Error executing query: " +
+                                    std::string(e.what()));
   }
 
   return results;
@@ -1626,7 +1673,8 @@ void CatalogManager::cleanCatalogTables(DBEngine engine,
 
   } catch (const std::exception &e) {
     Logger::getInstance().error(LogCategory::DATABASE, "cleanCatalogTables",
-                  "Error cleaning catalog tables: " + std::string(e.what()));
+                                "Error cleaning catalog tables: " +
+                                    std::string(e.what()));
   }
 }
 
@@ -1641,8 +1689,9 @@ CatalogManager::resolveClusterName(const std::string &connectionString,
     std::string hostname =
         extractHostnameFromConnection(connectionString, engine);
     if (hostname.empty()) {
-      Logger::getInstance().warning(LogCategory::DATABASE, "resolveClusterName",
-                      "Could not extract hostname from connection string");
+      Logger::getInstance().warning(
+          LogCategory::DATABASE, "resolveClusterName",
+          "Could not extract hostname from connection string");
       return "unknown";
     }
 
@@ -1652,13 +1701,14 @@ CatalogManager::resolveClusterName(const std::string &connectionString,
     }
 
     Logger::getInstance().info(LogCategory::DATABASE, "resolveClusterName",
-                 "Resolved cluster name: " + connectionString + " -> " +
-                     clusterName);
+                               "Resolved cluster name: " + connectionString +
+                                   " -> " + clusterName);
     return clusterName;
 
   } catch (const std::exception &e) {
     Logger::getInstance().error(LogCategory::DATABASE, "resolveClusterName",
-                  "Error resolving cluster name: " + std::string(e.what()));
+                                "Error resolving cluster name: " +
+                                    std::string(e.what()));
     return "unknown";
   }
 }
@@ -1702,14 +1752,15 @@ std::string CatalogManager::extractHostnameFromConnection(
     }
     }
 
-    Logger::getInstance().debug(LogCategory::DATABASE, "extractHostnameFromConnection",
-                  "Extracted hostname: " + hostname + " from " +
-                      connectionString);
+    Logger::getInstance().debug(
+        LogCategory::DATABASE, "extractHostnameFromConnection",
+        "Extracted hostname: " + hostname + " from " + connectionString);
     return hostname;
 
   } catch (const std::exception &e) {
-    Logger::getInstance().error(LogCategory::DATABASE, "extractHostnameFromConnection",
-                  "Error extracting hostname: " + std::string(e.what()));
+    Logger::getInstance().error(
+        LogCategory::DATABASE, "extractHostnameFromConnection",
+        "Error extracting hostname: " + std::string(e.what()));
     return "";
   }
 }
@@ -1731,13 +1782,15 @@ CatalogManager::getClusterNameFromHostname(const std::string &hostname) {
     std::transform(clusterName.begin(), clusterName.end(), clusterName.begin(),
                    ::tolower);
 
-    Logger::getInstance().debug(LogCategory::DATABASE, "getClusterNameFromHostname",
-                  "Converted hostname: " + hostname + " -> " + clusterName);
+    Logger::getInstance().debug(
+        LogCategory::DATABASE, "getClusterNameFromHostname",
+        "Converted hostname: " + hostname + " -> " + clusterName);
     return clusterName;
 
   } catch (const std::exception &e) {
-    Logger::getInstance().error(LogCategory::DATABASE, "getClusterNameFromHostname",
-                  "Error getting cluster name: " + std::string(e.what()));
+    Logger::getInstance().error(
+        LogCategory::DATABASE, "getClusterNameFromHostname",
+        "Error getting cluster name: " + std::string(e.what()));
     return hostname;
   }
 }
@@ -1753,15 +1806,16 @@ CatalogManager::executeQueryMariaDB(MYSQL *conn, const std::string &query) {
   try {
     if (mysql_query(conn, query.c_str()) != 0) {
       Logger::getInstance().error(LogCategory::DATABASE, "executeQueryMariaDB",
-                    "Query failed: " + std::string(mysql_error(conn)));
+                                  "Query failed: " +
+                                      std::string(mysql_error(conn)));
       return results;
     }
 
     MYSQL_RES *result = mysql_store_result(conn);
     if (!result) {
       Logger::getInstance().error(LogCategory::DATABASE, "executeQueryMariaDB",
-                    "Failed to store result: " +
-                        std::string(mysql_error(conn)));
+                                  "Failed to store result: " +
+                                      std::string(mysql_error(conn)));
       return results;
     }
 
@@ -1777,12 +1831,13 @@ CatalogManager::executeQueryMariaDB(MYSQL *conn, const std::string &query) {
 
     mysql_free_result(result);
     Logger::getInstance().debug(LogCategory::DATABASE, "executeQueryMariaDB",
-                  "Executed query, returned " + std::to_string(results.size()) +
-                      " rows");
+                                "Executed query, returned " +
+                                    std::to_string(results.size()) + " rows");
 
   } catch (const std::exception &e) {
     Logger::getInstance().error(LogCategory::DATABASE, "executeQueryMariaDB",
-                  "Error executing MariaDB query: " + std::string(e.what()));
+                                "Error executing MariaDB query: " +
+                                    std::string(e.what()));
   }
 
   return results;
@@ -1796,13 +1851,13 @@ CatalogManager::executeQueryMSSQL(SQLHDBC conn, const std::string &query) {
     SQLHSTMT stmt;
     if (SQLAllocHandle(SQL_HANDLE_STMT, conn, &stmt) != SQL_SUCCESS) {
       Logger::getInstance().error(LogCategory::DATABASE, "executeQueryMSSQL",
-                    "Failed to allocate statement handle");
+                                  "Failed to allocate statement handle");
       return results;
     }
 
     if (SQLExecDirect(stmt, (SQLCHAR *)query.c_str(), SQL_NTS) != SQL_SUCCESS) {
       Logger::getInstance().error(LogCategory::DATABASE, "executeQueryMSSQL",
-                    "Query execution failed");
+                                  "Query execution failed");
       SQLFreeHandle(SQL_HANDLE_STMT, stmt);
       return results;
     }
@@ -1828,12 +1883,13 @@ CatalogManager::executeQueryMSSQL(SQLHDBC conn, const std::string &query) {
 
     SQLFreeHandle(SQL_HANDLE_STMT, stmt);
     Logger::getInstance().debug(LogCategory::DATABASE, "executeQueryMSSQL",
-                  "Executed query, returned " + std::to_string(results.size()) +
-                      " rows");
+                                "Executed query, returned " +
+                                    std::to_string(results.size()) + " rows");
 
   } catch (const std::exception &e) {
     Logger::getInstance().error(LogCategory::DATABASE, "executeQueryMSSQL",
-                  "Error executing MSSQL query: " + std::string(e.what()));
+                                "Error executing MSSQL query: " +
+                                    std::string(e.what()));
   }
 
   return results;
@@ -1861,15 +1917,17 @@ CatalogManager::getColumnCountsMariaDB(const std::string &connectionString,
 
     if (!results.empty() && !results[0].empty()) {
       int count = std::stoi(results[0][0]);
-      Logger::getInstance().debug(LogCategory::DATABASE, "getColumnCountsMariaDB",
-                    "Found " + std::to_string(count) + " columns for " +
-                        schema + "." + table);
+      Logger::getInstance().debug(LogCategory::DATABASE,
+                                  "getColumnCountsMariaDB",
+                                  "Found " + std::to_string(count) +
+                                      " columns for " + schema + "." + table);
       return {count, count};
     }
 
   } catch (const std::exception &e) {
     Logger::getInstance().error(LogCategory::DATABASE, "getColumnCountsMariaDB",
-                  "Error getting column counts: " + std::string(e.what()));
+                                "Error getting column counts: " +
+                                    std::string(e.what()));
   }
 
   return {0, 0};
@@ -1899,14 +1957,15 @@ CatalogManager::getColumnCountsMSSQL(const std::string &connectionString,
     if (!results.empty() && !results[0].empty()) {
       int count = std::stoi(results[0][0]);
       Logger::getInstance().debug(LogCategory::DATABASE, "getColumnCountsMSSQL",
-                    "Found " + std::to_string(count) + " columns for " +
-                        schema + "." + table);
+                                  "Found " + std::to_string(count) +
+                                      " columns for " + schema + "." + table);
       return {count, count};
     }
 
   } catch (const std::exception &e) {
     Logger::getInstance().error(LogCategory::DATABASE, "getColumnCountsMSSQL",
-                  "Error getting column counts: " + std::string(e.what()));
+                                "Error getting column counts: " +
+                                    std::string(e.what()));
   }
 
   return {0, 0};
@@ -1936,15 +1995,17 @@ CatalogManager::getColumnCountsPostgres(const std::string &connectionString,
 
     if (!result.empty()) {
       int count = result[0][0].as<int>();
-      Logger::getInstance().debug(LogCategory::DATABASE, "getColumnCountsPostgres",
-                    "Found " + std::to_string(count) + " columns for " +
-                        schema + "." + table);
+      Logger::getInstance().debug(LogCategory::DATABASE,
+                                  "getColumnCountsPostgres",
+                                  "Found " + std::to_string(count) +
+                                      " columns for " + schema + "." + table);
       return {count, count};
     }
 
   } catch (const std::exception &e) {
-    Logger::getInstance().error(LogCategory::DATABASE, "getColumnCountsPostgres",
-                  "Error getting column counts: " + std::string(e.what()));
+    Logger::getInstance().error(
+        LogCategory::DATABASE, "getColumnCountsPostgres",
+        "Error getting column counts: " + std::string(e.what()));
   }
 
   return {0, 0};
@@ -2040,8 +2101,9 @@ void CatalogManager::cleanInconsistentPaginationFields() {
     cleanCatalogTables(DBEngine::MARIADB, pgConn,
                        CleanupType::INCONSISTENT_PAGINATION);
   } catch (const std::exception &e) {
-    Logger::getInstance().error(LogCategory::DATABASE, "cleanInconsistentPaginationFields",
-                  "Error cleaning inconsistent pagination fields: " +
-                      std::string(e.what()));
+    Logger::getInstance().error(
+        LogCategory::DATABASE, "cleanInconsistentPaginationFields",
+        "Error cleaning inconsistent pagination fields: " +
+            std::string(e.what()));
   }
 }

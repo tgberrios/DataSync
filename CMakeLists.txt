@@ -53,6 +53,11 @@ add_executable(DataSync
     src/TransferOrchestrator.cpp
     src/MonitoringService.cpp
     src/MaintenanceService.cpp
+    src/MariaDBToPostgres.cpp
+    src/MariaDBConnectionManager.cpp
+    src/MariaDBQueryExecutor.cpp
+    src/MariaDBDataValidator.cpp
+    src/MariaDBDataTransfer.cpp
 )
 
 # Configurar para que el ejecutable se genere en el directorio raíz
