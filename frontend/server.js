@@ -112,9 +112,18 @@ app.get("/api/catalog", async (req, res) => {
     const total = parseInt(countResult.rows[0].count);
 
     paramCount++;
-    const dataQuery = `SELECT * FROM metadata.catalog ${whereClause} ORDER BY schema_name, table_name LIMIT $${paramCount} OFFSET $${
-      paramCount + 1
-    }`;
+    const dataQuery = `SELECT * FROM metadata.catalog ${whereClause} ORDER BY 
+      CASE 
+        WHEN status = 'LISTENING_CHANGES' THEN 1
+        WHEN status = 'ERROR' THEN 2
+        WHEN status = 'NO_DATA' THEN 3
+        WHEN status = 'SKIP' THEN 4
+        ELSE 5
+      END,
+      cluster_name, 
+      schema_name, 
+      table_name 
+      LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
     queryParams.push(limit, offset);
 
     const result = await pool.query(dataQuery, queryParams);
@@ -819,11 +828,14 @@ app.get("/api/governance/data", async (req, res) => {
         ? "WHERE " + whereConditions.join(" AND ")
         : "";
 
-    // Query principal
+    // Query principal - obtener db_engine de catalog o asumir PostgreSQL
     const result = await pool.query(
       `
-      SELECT *
-      FROM metadata.data_governance_catalog
+      SELECT 
+        dgc.*,
+        COALESCE(c.db_engine, 'PostgreSQL') as db_engine
+      FROM metadata.data_governance_catalog dgc
+      LEFT JOIN metadata.catalog c ON dgc.schema_name = c.schema_name AND dgc.table_name = c.table_name
       ${whereClause}
       ORDER BY last_analyzed DESC NULLS LAST
       LIMIT $${paramCount} OFFSET $${paramCount + 1}
@@ -975,8 +987,9 @@ app.get("/api/logs", async (req, res) => {
       endDate = "",
       logType = "main", // "main" or "errors"
     } = req.query;
-    
-    const logFileName = logType === "errors" ? "DataSync_Errors.log" : "DataSync.log";
+
+    const logFileName =
+      logType === "errors" ? "DataSync_Errors.log" : "DataSync.log";
     const logFilePath = path.join(process.cwd(), "..", logFileName);
 
     // Verificar si el archivo existe
@@ -1112,7 +1125,8 @@ app.get("/api/logs", async (req, res) => {
 app.get("/api/logs/info", async (req, res) => {
   try {
     const { logType = "main" } = req.query;
-    const logFileName = logType === "errors" ? "DataSync_Errors.log" : "DataSync.log";
+    const logFileName =
+      logType === "errors" ? "DataSync_Errors.log" : "DataSync.log";
     const logFilePath = path.join(process.cwd(), "..", logFileName);
 
     if (!fs.existsSync(logFilePath)) {
@@ -1255,7 +1269,7 @@ app.delete("/api/logs", async (req, res) => {
   try {
     const { logType = "both" } = req.query; // "main", "errors", or "both"
     const logDir = path.join(process.cwd(), "..");
-    
+
     let totalClearedSize = 0;
     let clearedFiles = [];
 
@@ -1283,7 +1297,10 @@ app.delete("/api/logs", async (req, res) => {
           clearedFiles.push(rotatedFile);
           fs.unlinkSync(rotatedFilePath);
         } catch (err) {
-          console.warn(`Warning: Could not delete ${rotatedFile}:`, err.message);
+          console.warn(
+            `Warning: Could not delete ${rotatedFile}:`,
+            err.message
+          );
         }
       }
     }
@@ -1312,7 +1329,10 @@ app.delete("/api/logs", async (req, res) => {
           clearedFiles.push(rotatedFile);
           fs.unlinkSync(rotatedFilePath);
         } catch (err) {
-          console.warn(`Warning: Could not delete ${rotatedFile}:`, err.message);
+          console.warn(
+            `Warning: Could not delete ${rotatedFile}:`,
+            err.message
+          );
         }
       }
     }

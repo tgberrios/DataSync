@@ -426,7 +426,7 @@ const Governance = () => {
                 <GovernanceItem key={item.id}>
                   <GovernanceSummary onClick={() => toggleItem(item.id)}>
                     <div>{item.schema_name}.{item.table_name}</div>
-                    <div>{item.inferred_source_engine}</div>
+                    <div>{item.db_engine}</div>
                     <div>
                       <Badge type={item.data_category}>
                         {item.data_category}
@@ -472,7 +472,7 @@ const Governance = () => {
                       </DetailCard>
                       <DetailCard>
                         <DetailLabel>Database Engine</DetailLabel>
-                        <DetailValue>{item.inferred_source_engine}</DetailValue>
+                        <DetailValue>{item.db_engine}</DetailValue>
                       </DetailCard>
                       <DetailCard>
                         <DetailLabel>Data Category</DetailLabel>

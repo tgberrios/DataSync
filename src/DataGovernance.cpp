@@ -540,7 +540,8 @@ void DataGovernance::inferSourceEngine(TableMetadata &metadata) {
 
     std::string query =
         "SELECT db_engine FROM metadata.catalog WHERE schema_name = '" +
-        escapeSQL(metadata.schema_name) + "' LIMIT 1;";
+        escapeSQL(metadata.schema_name) + "' AND table_name = '" +
+        escapeSQL(metadata.table_name) + "' LIMIT 1;";
 
     auto result = txn.exec(query);
     txn.commit();

@@ -589,7 +589,6 @@ const Catalog = () => {
             <Th>Active</Th>
             <Th>Last Sync</Th>
             <Th>Sync Column</Th>
-            <Th>Offset</Th>
             <Th>Cluster</Th>
             <Th>Actions</Th>
           </tr>
@@ -611,7 +610,6 @@ const Catalog = () => {
               </Td>
               <Td>{format(new Date(entry.last_sync_time), 'yyyy-MM-dd HH:mm:ss')}</Td>
               <Td>{entry.last_sync_column}</Td>
-              <Td>{entry.last_offset}</Td>
               <Td>{entry.cluster_name}</Td>
               <Td>
                 <ActionButton onClick={() => setSelectedEntry(entry)}>
