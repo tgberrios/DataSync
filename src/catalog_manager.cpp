@@ -570,7 +570,8 @@ void CatalogManager::updateOrInsertTableMetadata(
                "FROM metadata.catalog "
                "WHERE schema_name='" +
                escapeSQL(metadata.schemaName) + "' AND table_name='" +
-               escapeSQL(metadata.tableName) + "' AND db_engine='MariaDB'");
+               escapeSQL(metadata.tableName) + "' AND connection_string='" +
+               escapeSQL(connectionString) + "'");
 
   if (!existingCheck.empty()) {
     // Update existing table
@@ -637,7 +638,8 @@ void CatalogManager::updateOrInsertTableMetadata(
     if (needsUpdate) {
       updateQuery += " WHERE schema_name='" + escapeSQL(metadata.schemaName) +
                      "' AND table_name='" + escapeSQL(metadata.tableName) +
-                     "' AND db_engine='MariaDB'";
+                     "' AND connection_string='" + escapeSQL(connectionString) +
+                     "'";
       txn.exec(updateQuery);
     }
   } else {
@@ -651,7 +653,7 @@ void CatalogManager::updateOrInsertTableMetadata(
         escapeSQL(metadata.schemaName) + "', '" +
         escapeSQL(metadata.tableName) + "', '', 'MariaDB', '" +
         escapeSQL(connectionString) + "', NOW(), '" +
-        escapeSQL(metadata.timeColumn) + "', 'PENDING', '0', false, '" +
+        escapeSQL(metadata.timeColumn) + "', 'FULL_LOAD', '0', true, '" +
         escapeSQL(columnsToJSON(metadata.pkColumns)) + "', '" +
         escapeSQL(metadata.pkStrategy) + "', " +
         std::string(metadata.hasPK ? "true" : "false") + ", '" +
@@ -904,11 +906,17 @@ CatalogManager::establishMSSQLConnection(const std::string &connectionString) {
 
 std::vector<std::vector<std::string>>
 CatalogManager::discoverMSSQLTables(SQLHDBC conn) {
-  std::string query = "SELECT TABLE_SCHEMA, TABLE_NAME "
-                      "FROM INFORMATION_SCHEMA.TABLES "
-                      "WHERE TABLE_TYPE = 'BASE TABLE' "
-                      "AND TABLE_SCHEMA NOT IN ('INFORMATION_SCHEMA', 'SYS') "
-                      "ORDER BY TABLE_SCHEMA, TABLE_NAME";
+  std::string query = "SELECT s.name AS TABLE_SCHEMA, t.name AS TABLE_NAME "
+                      "FROM sys.tables t "
+                      "INNER JOIN sys.schemas s ON t.schema_id = s.schema_id "
+                      "WHERE t.is_ms_shipped = 0 "
+                      "AND s.name NOT IN ('INFORMATION_SCHEMA', 'sys', "
+                      "'guest', 'SSISDB', "
+                      "'dbo_history', 'cdc', 'backup') "
+                      "AND t.temporal_type = 0 " // Exclude temporal tables
+                      "AND t.object_id NOT IN (SELECT object_id FROM "
+                      "sys.external_tables) " // Exclude external tables
+                      "ORDER BY s.name, t.name";
 
   return executeQueryMSSQL(conn, query);
 }
@@ -922,11 +930,27 @@ CatalogTableMetadata CatalogManager::analyzeMSSQLTableMetadata(
   metadata.timeColumn = detectTimeColumnMSSQL(conn, schemaName, tableName);
   metadata.pkColumns =
       detectPrimaryKeyColumnsMSSQL(conn, schemaName, tableName);
+  Logger::getInstance().info(
+      LogCategory::DATABASE,
+      "Found " + std::to_string(metadata.pkColumns.size()) +
+          " PK columns for " + schemaName + "." + tableName);
+
   metadata.candidateColumns =
       detectCandidateColumnsMSSQL(conn, schemaName, tableName);
-  metadata.pkStrategy =
-      determinePKStrategy(metadata.pkColumns, metadata.candidateColumns);
+  Logger::getInstance().info(
+      LogCategory::DATABASE,
+      "Found " + std::to_string(metadata.candidateColumns.size()) +
+          " candidate columns for " + schemaName + "." + tableName);
+
+  metadata.pkStrategy = determinePKStrategy(
+      metadata.pkColumns, metadata.candidateColumns, metadata.timeColumn);
   metadata.hasPK = !metadata.pkColumns.empty();
+
+  Logger::getInstance().info(
+      LogCategory::DATABASE,
+      "Table " + schemaName + "." + tableName +
+          " has PK: " + (metadata.hasPK ? "true" : "false") +
+          ", strategy: " + metadata.pkStrategy);
 
   Logger::getInstance().info(LogCategory::DATABASE,
                              "Detecting PK for table: " + schemaName + "." +
@@ -954,6 +978,10 @@ CatalogManager::processMSSQLConnection(pqxx::connection &pgConn,
 
   auto tables = discoverMSSQLTables(conn);
 
+  Logger::getInstance().info(LogCategory::DATABASE,
+                             "Found " + std::to_string(tables.size()) +
+                                 " MSSQL tables to process");
+
   results.totalTables = tables.size();
   results.processedConnections = 1;
 
@@ -964,11 +992,62 @@ CatalogManager::processMSSQLConnection(pqxx::connection &pgConn,
     std::string schemaName = row[0];
     std::string tableName = row[1];
 
+    // Analizar metadata de la tabla
     auto metadata = analyzeMSSQLTableMetadata(conn, schemaName, tableName);
     metadata.tableSize = getTableSize(pgConn, schemaName, tableName);
 
-    updateOrInsertTableMetadata(pgConn, connectionString, metadata);
-    results.updatedTables++;
+    // Verificar si la tabla ya existe en el catálogo
+    pqxx::work txn(pgConn);
+    auto existingTable = txn.exec("SELECT status FROM metadata.catalog "
+                                  "WHERE schema_name = '" +
+                                  escapeSQL(schemaName) +
+                                  "' "
+                                  "AND table_name = '" +
+                                  escapeSQL(tableName) +
+                                  "' "
+                                  "AND db_engine = 'MSSQL' "
+                                  "AND connection_string = '" +
+                                  escapeSQL(connectionString) + "'");
+    txn.commit();
+
+    if (existingTable.empty()) {
+      // Nueva tabla, agregarla al catálogo
+
+      // Insertar con estado inicial FULL_LOAD
+      pqxx::work w(pgConn);
+      std::string insertQuery =
+          "INSERT INTO metadata.catalog ("
+          "schema_name, table_name, cluster_name, db_engine, "
+          "connection_string, "
+          "active, status, last_sync_time, last_sync_column, last_offset, "
+          "last_processed_pk, pk_strategy, pk_columns, candidate_columns, "
+          "has_pk, "
+          "table_size) VALUES ('" +
+          escapeSQL(metadata.schemaName) + "', '" +
+          escapeSQL(metadata.tableName) + "', '" +
+          escapeSQL(resolveClusterName(connectionString, DBEngine::MSSQL)) +
+          "', 'MSSQL', '" + escapeSQL(connectionString) +
+          "', false, 'FULL_LOAD', NOW(), '" + escapeSQL(metadata.timeColumn) +
+          "', '0', '', '" + escapeSQL(metadata.pkStrategy) + "', '" +
+          escapeSQL(columnsToJSON(metadata.pkColumns)) + "', '" +
+          escapeSQL(columnsToJSON(metadata.candidateColumns)) + "', " +
+          (metadata.hasPK ? "true" : "false") + ", " +
+          std::to_string(metadata.tableSize) + ")";
+
+      Logger::getInstance().info(
+          LogCategory::DATABASE,
+          "Inserting new table " + metadata.schemaName + "." +
+              metadata.tableName + " with PK strategy: " + metadata.pkStrategy);
+
+      w.exec(insertQuery);
+      w.commit();
+      results.newTables++;
+    } else {
+      // Tabla existente, actualizar metadata
+      metadata.tableSize = getTableSize(pgConn, schemaName, tableName);
+      updateOrInsertTableMetadata(pgConn, connectionString, metadata);
+      results.updatedTables++;
+    }
   }
 
   SQLDisconnect(conn);
@@ -1295,6 +1374,32 @@ CatalogManager::detectPrimaryKeyColumns(DBEngine engine, void *connection,
     std::string query;
 
     switch (engine) {
+    case DBEngine::MSSQL: {
+      query = "SELECT c.name AS COLUMN_NAME "
+              "FROM sys.indexes i "
+              "INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id "
+              "AND i.index_id = ic.index_id "
+              "INNER JOIN sys.columns c ON ic.object_id = c.object_id AND "
+              "ic.column_id = c.column_id "
+              "INNER JOIN sys.tables t ON i.object_id = t.object_id "
+              "INNER JOIN sys.schemas s ON t.schema_id = s.schema_id "
+              "WHERE i.is_primary_key = 1 "
+              "AND s.name = '" +
+              escapeSQL(schema) +
+              "' "
+              "AND t.name = '" +
+              escapeSQL(table) +
+              "' "
+              "ORDER BY ic.key_ordinal";
+
+      auto results = executeQuery(engine, connection, query);
+      for (const auto &row : results) {
+        if (!row.empty()) {
+          pkColumns.push_back(row[0]);
+        }
+      }
+      return pkColumns;
+    }
     case DBEngine::MARIADB: {
       query = "SELECT COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE "
               "WHERE TABLE_SCHEMA = '" +
@@ -1305,29 +1410,6 @@ CatalogManager::detectPrimaryKeyColumns(DBEngine engine, void *connection,
               "' "
               "AND CONSTRAINT_NAME = 'PRIMARY' "
               "ORDER BY ORDINAL_POSITION";
-
-      auto results = executeQuery(engine, connection, query);
-      for (const auto &row : results) {
-        if (!row.empty()) {
-          pkColumns.push_back(row[0]);
-        }
-      }
-      break;
-    }
-
-    case DBEngine::MSSQL: {
-      query =
-          "SELECT c.COLUMN_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc "
-          "JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE c ON tc.CONSTRAINT_NAME = "
-          "c.CONSTRAINT_NAME "
-          "WHERE tc.TABLE_SCHEMA = '" +
-          escapeSQL(schema) +
-          "' "
-          "AND tc.TABLE_NAME = '" +
-          escapeSQL(table) +
-          "' "
-          "AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY' "
-          "ORDER BY c.ORDINAL_POSITION";
 
       auto results = executeQuery(engine, connection, query);
       for (const auto &row : results) {
@@ -1385,6 +1467,31 @@ CatalogManager::detectCandidateColumns(DBEngine engine, void *connection,
     std::string query;
 
     switch (engine) {
+    case DBEngine::MSSQL: {
+      query = "SELECT c.name AS COLUMN_NAME "
+              "FROM sys.columns c "
+              "INNER JOIN sys.tables t ON c.object_id = t.object_id "
+              "INNER JOIN sys.schemas s ON t.schema_id = s.schema_id "
+              "INNER JOIN sys.types tp ON c.user_type_id = tp.user_type_id "
+              "WHERE s.name = '" +
+              escapeSQL(schema) +
+              "' "
+              "AND t.name = '" +
+              escapeSQL(table) +
+              "' "
+              "AND (tp.name IN ('datetime', 'datetime2', 'smalldatetime', "
+              "'date', 'time', 'timestamp') "
+              "OR c.is_identity = 1) "
+              "ORDER BY c.column_id";
+
+      auto results = executeQuery(engine, connection, query);
+      for (const auto &row : results) {
+        if (!row.empty()) {
+          candidateColumns.push_back(row[0]);
+        }
+      }
+      return candidateColumns;
+    }
     case DBEngine::MARIADB: {
       query = "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
               "WHERE TABLE_SCHEMA = '" +
@@ -1394,20 +1501,6 @@ CatalogManager::detectCandidateColumns(DBEngine engine, void *connection,
               escapeSQL(table) +
               "' "
               "AND COLUMN_KEY != 'PRI' "
-              "AND (DATA_TYPE IN ('int', 'bigint', 'varchar', 'char') "
-              "OR COLUMN_NAME LIKE '%id%' OR COLUMN_NAME LIKE '%key%') "
-              "ORDER BY COLUMN_NAME";
-      break;
-    }
-
-    case DBEngine::MSSQL: {
-      query = "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
-              "WHERE TABLE_SCHEMA = '" +
-              escapeSQL(schema) +
-              "' "
-              "AND TABLE_NAME = '" +
-              escapeSQL(table) +
-              "' "
               "AND (DATA_TYPE IN ('int', 'bigint', 'varchar', 'char') "
               "OR COLUMN_NAME LIKE '%id%' OR COLUMN_NAME LIKE '%key%') "
               "ORDER BY COLUMN_NAME";
@@ -1460,6 +1553,61 @@ std::string CatalogManager::detectTimeColumn(DBEngine engine, void *connection,
     std::string query;
 
     switch (engine) {
+    case DBEngine::MSSQL: {
+      // Primero intentar encontrar una columna timestamp o datetime
+      query = "SELECT TOP 1 c.name AS COLUMN_NAME "
+              "FROM sys.columns c "
+              "INNER JOIN sys.tables t ON c.object_id = t.object_id "
+              "INNER JOIN sys.schemas s ON t.schema_id = s.schema_id "
+              "INNER JOIN sys.types tp ON c.user_type_id = tp.user_type_id "
+              "WHERE s.name = '" +
+              escapeSQL(schema) +
+              "' "
+              "AND t.name = '" +
+              escapeSQL(table) +
+              "' "
+              "AND tp.name IN ('timestamp', 'datetime', 'datetime2', "
+              "'smalldatetime') "
+              "ORDER BY CASE tp.name "
+              "WHEN 'timestamp' THEN 1 "
+              "WHEN 'datetime2' THEN 2 "
+              "WHEN 'datetime' THEN 3 "
+              "WHEN 'smalldatetime' THEN 4 "
+              "ELSE 5 END, "
+              "c.column_id";
+
+      auto results = executeQuery(engine, connection, query);
+      if (!results.empty() && !results[0].empty()) {
+        std::string colName = results[0][0];
+        std::transform(colName.begin(), colName.end(), colName.begin(),
+                       ::tolower);
+        return colName;
+      }
+
+      // Si no hay columnas de tiempo, intentar encontrar una columna identity
+      query = "SELECT TOP 1 c.name AS COLUMN_NAME "
+              "FROM sys.columns c "
+              "INNER JOIN sys.tables t ON c.object_id = t.object_id "
+              "INNER JOIN sys.schemas s ON t.schema_id = s.schema_id "
+              "WHERE s.name = '" +
+              escapeSQL(schema) +
+              "' "
+              "AND t.name = '" +
+              escapeSQL(table) +
+              "' "
+              "AND c.is_identity = 1 "
+              "ORDER BY c.column_id";
+
+      results = executeQuery(engine, connection, query);
+      if (!results.empty() && !results[0].empty()) {
+        std::string colName = results[0][0];
+        std::transform(colName.begin(), colName.end(), colName.begin(),
+                       ::tolower);
+        return colName;
+      }
+
+      return "";
+    }
     case DBEngine::MARIADB: {
       query =
           "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
@@ -1473,22 +1621,6 @@ std::string CatalogManager::detectTimeColumn(DBEngine engine, void *connection,
           "OR COLUMN_NAME LIKE '%time%' OR COLUMN_NAME LIKE '%date%' "
           "OR COLUMN_NAME LIKE '%created%' OR COLUMN_NAME LIKE '%updated%') "
           "ORDER BY COLUMN_NAME LIMIT 1";
-      break;
-    }
-
-    case DBEngine::MSSQL: {
-      query =
-          "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
-          "WHERE TABLE_SCHEMA = '" +
-          escapeSQL(schema) +
-          "' "
-          "AND TABLE_NAME = '" +
-          escapeSQL(table) +
-          "' "
-          "AND (DATA_TYPE IN ('datetime', 'datetime2', 'timestamp', 'date') "
-          "OR COLUMN_NAME LIKE '%time%' OR COLUMN_NAME LIKE '%date%' "
-          "OR COLUMN_NAME LIKE '%created%' OR COLUMN_NAME LIKE '%updated%') "
-          "ORDER BY COLUMN_NAME";
       break;
     }
 

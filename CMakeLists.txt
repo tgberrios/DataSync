@@ -58,6 +58,12 @@ add_executable(DataSync
     src/MariaDBQueryExecutor.cpp
     src/MariaDBDataValidator.cpp
     src/MariaDBDataTransfer.cpp
+    src/MSSQLToPostgres.cpp
+    src/MSSQLConnectionManager.cpp
+    src/MSSQLQueryExecutor.cpp
+    src/MSSQLDataValidator.cpp
+    src/MSSQLDataTransfer.cpp
+    src/MSSQLTableSetup.cpp
 )
 
 # Configurar para que el ejecutable se genere en el directorio raíz
