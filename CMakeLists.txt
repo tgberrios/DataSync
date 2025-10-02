@@ -47,6 +47,12 @@ add_executable(DataSync
     src/MetricsReporter.cpp
     src/DataQuality.cpp
     src/catalog_manager.cpp
+    src/StreamingData.cpp
+    src/ThreadManager.cpp
+    src/ConfigManager.cpp
+    src/TransferOrchestrator.cpp
+    src/MonitoringService.cpp
+    src/MaintenanceService.cpp
 )
 
 # Configurar para que el ejecutable se genere en el directorio raíz
