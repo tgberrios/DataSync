@@ -931,21 +931,6 @@ public:
                      table_name + "\" CASCADE;");
             txn.commit();
           }
-        } else if (table.status == "RESET") {
-          Logger::getInstance().info(LogCategory::TRANSFER,
-                                     "Processing RESET table: " + schema_name +
-                                         "." + table_name);
-          pqxx::work txn(pgConn);
-          txn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
-                   table_name + "\" CASCADE;");
-          txn.exec("UPDATE metadata.catalog SET last_offset='0' WHERE "
-                   "schema_name='" +
-                   escapeSQL(schema_name) + "' AND table_name='" +
-                   escapeSQL(table_name) + "';");
-          txn.commit();
-
-          updateStatus(pgConn, schema_name, table_name, "FULL_LOAD", 0);
-          continue;
         }
 
         size_t totalProcessed = 0;
@@ -1067,11 +1052,6 @@ public:
               selectQuery += "[" + pkColumns[i] + "]";
             }
             selectQuery += " OFFSET 0 ROWS FETCH NEXT " +
-                           std::to_string(CHUNK_SIZE) + " ROWS ONLY;";
-          } else if (pkStrategy == "TEMPORAL_PK" && !candidateColumns.empty()) {
-            // Map TEMPORAL_PK to OFFSET behavior
-            selectQuery += " ORDER BY (SELECT NULL) OFFSET " +
-                           std::to_string(currentOffset) + " ROWS FETCH NEXT " +
                            std::to_string(CHUNK_SIZE) + " ROWS ONLY;";
           } else {
             // FALLBACK: Usar OFFSET pagination para tablas sin PK

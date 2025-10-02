@@ -427,24 +427,6 @@ private:
       const std::string &tableName, const std::string &sourceConnStr,
       const std::string &lastOffset, const std::string &status,
       const std::string &lastSyncColumn, const std::string &lastSyncTime) {
-    if (status == "RESET") {
-      Logger::getInstance().info(
-          LogCategory::TRANSFER, "processTableWithDeltas",
-          "Processing RESET table: " + schemaName + "." + tableName);
-      {
-        pqxx::work txn(pgConn);
-        std::string lowerSchemaName = toLowerCase(schemaName);
-        txn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" + tableName +
-                 "\" CASCADE;");
-        txn.exec(
-            "UPDATE metadata.catalog SET last_offset='0' WHERE schema_name='" +
-            escapeSQL(schemaName) + "' AND table_name='" +
-            escapeSQL(tableName) + "';");
-        txn.commit();
-      }
-      updateStatus(pgConn, schemaName, tableName, "FULL_LOAD", 0);
-      return;
-    }
 
     if (status == "FULL_LOAD") {
       Logger::getInstance().info(
@@ -694,25 +676,6 @@ private:
                     const std::string &tableName,
                     const std::string &sourceConnStr,
                     const std::string &lastOffset, const std::string &status) {
-
-    if (status == "RESET") {
-      Logger::getInstance().info(LogCategory::TRANSFER, "processTable",
-                                 "Processing RESET table: " + schemaName + "." +
-                                     tableName);
-      {
-        pqxx::work txn(pgConn);
-        std::string lowerSchemaName = toLowerCase(schemaName);
-        txn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" + tableName +
-                 "\" CASCADE;");
-        txn.exec(
-            "UPDATE metadata.catalog SET last_offset='0' WHERE schema_name='" +
-            escapeSQL(schemaName) + "' AND table_name='" +
-            escapeSQL(tableName) + "';");
-        txn.commit();
-      }
-      updateStatus(pgConn, schemaName, tableName, "FULL_LOAD", 0);
-      return;
-    }
 
     if (status == "FULL_LOAD") {
       Logger::getInstance().info(LogCategory::TRANSFER, "processTable",
@@ -1009,11 +972,6 @@ private:
             selectQuery += "\"" + pkColumns[i] + "\"";
           }
           selectQuery += " LIMIT " + std::to_string(CHUNK_SIZE) + ";";
-        } else if (pkStrategy == "TEMPORAL_PK" && !candidateColumns.empty()) {
-          // Map TEMPORAL_PK to OFFSET behavior
-          selectQuery += " ORDER BY (SELECT NULL) LIMIT " +
-                         std::to_string(CHUNK_SIZE) + " OFFSET " +
-                         std::to_string(totalProcessed) + ";";
         } else {
           // FALLBACK: Usar OFFSET pagination para tablas sin PK
           selectQuery += " ORDER BY (SELECT NULL) LIMIT " +
@@ -1249,8 +1207,7 @@ private:
           "UPDATE metadata.catalog SET status='" + status + "'";
 
       // Actualizar last_offset para todos los status que requieren tracking
-      if (status == "FULL_LOAD" || status == "RESET" ||
-          status == "LISTENING_CHANGES") {
+      if (status == "FULL_LOAD" || status == "LISTENING_CHANGES") {
         updateQuery += ", last_offset='" + std::to_string(count) + "'";
       }
 

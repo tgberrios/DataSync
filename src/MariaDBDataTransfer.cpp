@@ -15,23 +15,6 @@ void MariaDBDataTransfer::transferData(MYSQL *mariadbConn,
 
   if (table.status == "FULL_LOAD") {
     processFullLoad(mariadbConn, pgConn, table);
-  } else if (table.status == "RESET") {
-    // Reset table and mark for full load
-    std::string lowerSchema = table.schema_name;
-    std::transform(lowerSchema.begin(), lowerSchema.end(), lowerSchema.begin(),
-                   ::tolower);
-
-    pqxx::work txn(pgConn);
-    txn.exec("TRUNCATE TABLE \"" + lowerSchema + "\".\"" + table.table_name +
-             "\" CASCADE;");
-    txn.exec("UPDATE metadata.catalog SET last_offset='0' WHERE schema_name='" +
-             escapeSQL(table.schema_name) + "' AND table_name='" +
-             escapeSQL(table.table_name) + "';");
-    txn.commit();
-
-    updateTableStatus(pgConn, table.schema_name, table.table_name, "FULL_LOAD",
-                      0);
-    processFullLoad(mariadbConn, pgConn, table);
   } else if (table.status == "LISTENING_CHANGES") {
     processIncrementalUpdates(mariadbConn, pgConn, table);
     processDeletes(mariadbConn, pgConn, table);
