@@ -514,12 +514,14 @@ export interface LogsResponse {
   totalLines: number;
   filePath: string;
   lastModified: string;
+  logType: string;
   filters?: {
     level: string;
     category: string;
     search: string;
     startDate: string;
     endDate: string;
+    logType: string;
   };
 }
 
@@ -530,6 +532,7 @@ export interface LogInfo {
   totalLines?: number;
   lastModified?: string;
   created?: string;
+  logType?: string;
   message?: string;
 }
 
@@ -560,6 +563,7 @@ export const logsApi = {
       search?: string;
       startDate?: string;
       endDate?: string;
+      logType?: string;
     } = {}
   ) => {
     try {
@@ -578,9 +582,11 @@ export const logsApi = {
     }
   },
 
-  getLogInfo: async () => {
+  getLogInfo: async (logType: string = "main") => {
     try {
-      const response = await api.get<LogInfo>("/logs/info");
+      const response = await api.get<LogInfo>("/logs/info", { 
+        params: { logType } 
+      });
       return response.data;
     } catch (error) {
       console.error("Error fetching log info:", error);
@@ -595,9 +601,11 @@ export const logsApi = {
     }
   },
 
-  clearLogs: async () => {
+  clearLogs: async (logType: string = "both") => {
     try {
-      const response = await api.delete("/logs");
+      const response = await api.delete("/logs", { 
+        params: { logType } 
+      });
       return response.data;
     } catch (error) {
       console.error("Error clearing logs:", error);

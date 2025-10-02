@@ -37,9 +37,13 @@ enum class LogCategory {
 class Logger {
 private:
   static std::ofstream logFile;
+  static std::ofstream errorFile;
   static std::mutex logMutex;
+  static std::mutex errorMutex;
   static std::string logFileName;
+  static std::string errorFileName;
   static size_t messageCount;
+  static size_t errorCount;
   static const size_t MAX_MESSAGES_BEFORE_FLUSH = 100;
   static const size_t MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
   static const int MAX_BACKUP_FILES = 5;
@@ -141,7 +145,6 @@ private:
       logFile.close();
     }
 
-    // Rotar archivos existentes
     for (int i = MAX_BACKUP_FILES - 1; i > 0; --i) {
       std::string oldFile = logFileName + "." + std::to_string(i);
       std::string newFile = logFileName + "." + std::to_string(i + 1);
@@ -155,13 +158,36 @@ private:
       }
     }
 
-    // Mover archivo actual a .1
     if (std::filesystem::exists(logFileName)) {
       std::filesystem::rename(logFileName, logFileName + ".1");
     }
 
-    // Abrir nuevo archivo
     logFile.open(logFileName, std::ios::app);
+  }
+
+  static void rotateErrorFile() {
+    if (errorFile.is_open()) {
+      errorFile.close();
+    }
+
+    for (int i = MAX_BACKUP_FILES - 1; i > 0; --i) {
+      std::string oldFile = errorFileName + "." + std::to_string(i);
+      std::string newFile = errorFileName + "." + std::to_string(i + 1);
+
+      if (std::filesystem::exists(oldFile)) {
+        if (i == MAX_BACKUP_FILES - 1) {
+          std::filesystem::remove(oldFile);
+        } else {
+          std::filesystem::rename(oldFile, newFile);
+        }
+      }
+    }
+
+    if (std::filesystem::exists(errorFileName)) {
+      std::filesystem::rename(errorFileName, errorFileName + ".1");
+    }
+
+    errorFile.open(errorFileName, std::ios::app);
   }
 
   static void checkFileSize() {
@@ -173,21 +199,27 @@ private:
     }
   }
 
+  static void checkErrorFileSize() {
+    if (std::filesystem::exists(errorFileName)) {
+      auto fileSize = std::filesystem::file_size(errorFileName);
+      if (fileSize >= MAX_FILE_SIZE) {
+        rotateErrorFile();
+      }
+    }
+  }
+
   static void writeLog(LogLevel level, LogCategory category,
                        const std::string &function,
                        const std::string &message) {
     std::lock_guard<std::mutex> lock(logMutex);
 
-    // Check if this log level should be written
     if (level < currentLogLevel) {
       return;
     }
 
-    // Try to reopen file if it's not open
     if (!logFile.is_open()) {
       logFile.open(logFileName, std::ios::app);
       if (!logFile.is_open()) {
-        // If we can't open the log file, write to stderr as fallback
         std::cerr << "[LOGGER ERROR] Cannot open log file: " << logFileName
                   << std::endl;
         std::cerr << "[FALLBACK LOG] " << getLevelString(level) << ": "
@@ -209,7 +241,6 @@ private:
     }
     logFile << " " << message << std::endl;
 
-    // Check if write was successful
     if (!logFile.good()) {
       std::cerr << "[LOGGER ERROR] Failed to write to log file" << std::endl;
       logFile.close();
@@ -220,6 +251,50 @@ private:
     if (messageCount >= MAX_MESSAGES_BEFORE_FLUSH) {
       logFile.flush();
       messageCount = 0;
+    }
+
+    if (level == LogLevel::ERROR || level == LogLevel::CRITICAL) {
+      writeErrorLog(level, category, function, message, timestamp);
+    }
+  }
+
+  static void writeErrorLog(LogLevel level, LogCategory category,
+                           const std::string &function,
+                           const std::string &message,
+                           const std::string &timestamp) {
+    std::lock_guard<std::mutex> lock(errorMutex);
+
+    if (!errorFile.is_open()) {
+      errorFile.open(errorFileName, std::ios::app);
+      if (!errorFile.is_open()) {
+        std::cerr << "[LOGGER ERROR] Cannot open error file: " << errorFileName
+                  << std::endl;
+        return;
+      }
+    }
+
+    checkErrorFileSize();
+
+    std::string levelStr = getLevelString(level);
+    std::string categoryStr = getCategoryString(category);
+
+    errorFile << "[" << timestamp << "] [" << levelStr << "] [" << categoryStr
+              << "]";
+    if (!function.empty()) {
+      errorFile << " [" << function << "]";
+    }
+    errorFile << " " << message << std::endl;
+
+    if (!errorFile.good()) {
+      std::cerr << "[LOGGER ERROR] Failed to write to error file" << std::endl;
+      errorFile.close();
+      return;
+    }
+
+    errorCount++;
+    if (errorCount >= MAX_MESSAGES_BEFORE_FLUSH) {
+      errorFile.flush();
+      errorCount = 0;
     }
   }
 
@@ -241,12 +316,22 @@ public:
   static void initialize(const std::string &fileName = "DataSync.log");
 
   static void shutdown() {
-    std::lock_guard<std::mutex> lock(logMutex);
-    if (logFile.is_open()) {
-      logFile.flush();
-      logFile.close();
+    {
+      std::lock_guard<std::mutex> lock(logMutex);
+      if (logFile.is_open()) {
+        logFile.flush();
+        logFile.close();
+      }
+      messageCount = 0;
     }
-    messageCount = 0;
+    {
+      std::lock_guard<std::mutex> lock(errorMutex);
+      if (errorFile.is_open()) {
+        errorFile.flush();
+        errorFile.close();
+      }
+      errorCount = 0;
+    }
   }
 
   // Convenience methods with categories

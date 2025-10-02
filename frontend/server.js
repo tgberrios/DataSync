@@ -973,8 +973,11 @@ app.get("/api/logs", async (req, res) => {
       search = "",
       startDate = "",
       endDate = "",
+      logType = "main", // "main" or "errors"
     } = req.query;
-    const logFilePath = path.join(process.cwd(), "..", "DataSync.log");
+    
+    const logFileName = logType === "errors" ? "DataSync_Errors.log" : "DataSync.log";
+    const logFilePath = path.join(process.cwd(), "..", logFileName);
 
     // Verificar si el archivo existe
     if (!fs.existsSync(logFilePath)) {
@@ -1086,12 +1089,14 @@ app.get("/api/logs", async (req, res) => {
       totalLines: filteredLines.length,
       filePath: logFilePath,
       lastModified: fs.statSync(logFilePath).mtime,
+      logType: logType,
       filters: {
         level,
         category,
         search,
         startDate,
         endDate,
+        logType,
       },
     });
   } catch (err) {
@@ -1106,7 +1111,9 @@ app.get("/api/logs", async (req, res) => {
 // Endpoint para obtener información del archivo de logs
 app.get("/api/logs/info", async (req, res) => {
   try {
-    const logFilePath = path.join(process.cwd(), "..", "DataSync.log");
+    const { logType = "main" } = req.query;
+    const logFileName = logType === "errors" ? "DataSync_Errors.log" : "DataSync.log";
+    const logFilePath = path.join(process.cwd(), "..", logFileName);
 
     if (!fs.existsSync(logFilePath)) {
       return res.json({
@@ -1128,6 +1135,7 @@ app.get("/api/logs/info", async (req, res) => {
       totalLines: totalLines,
       lastModified: stats.mtime,
       created: stats.birthtime,
+      logType: logType,
     });
   } catch (err) {
     console.error("Error getting log info:", err);
@@ -1245,35 +1253,67 @@ app.get("/api/logs/stats", async (req, res) => {
 // Endpoint para limpiar logs
 app.delete("/api/logs", async (req, res) => {
   try {
+    const { logType = "both" } = req.query; // "main", "errors", or "both"
     const logDir = path.join(process.cwd(), "..");
-    const logFilePath = path.join(logDir, "DataSync.log");
-
+    
     let totalClearedSize = 0;
     let clearedFiles = [];
 
-    // Clear the main log file
-    if (fs.existsSync(logFilePath)) {
-      const stats = fs.statSync(logFilePath);
-      totalClearedSize += stats.size;
-      clearedFiles.push("DataSync.log");
-      fs.writeFileSync(logFilePath, "");
+    // Clear main log file
+    if (logType === "main" || logType === "both") {
+      const mainLogPath = path.join(logDir, "DataSync.log");
+      if (fs.existsSync(mainLogPath)) {
+        const stats = fs.statSync(mainLogPath);
+        totalClearedSize += stats.size;
+        clearedFiles.push("DataSync.log");
+        fs.writeFileSync(mainLogPath, "");
+      }
+
+      // Find and delete rotated main log files
+      const files = fs.readdirSync(logDir);
+      const rotatedMainLogFiles = files.filter((file) =>
+        file.match(/^DataSync\.log\.\d+$/)
+      );
+
+      for (const rotatedFile of rotatedMainLogFiles) {
+        const rotatedFilePath = path.join(logDir, rotatedFile);
+        try {
+          const stats = fs.statSync(rotatedFilePath);
+          totalClearedSize += stats.size;
+          clearedFiles.push(rotatedFile);
+          fs.unlinkSync(rotatedFilePath);
+        } catch (err) {
+          console.warn(`Warning: Could not delete ${rotatedFile}:`, err.message);
+        }
+      }
     }
 
-    // Find and delete rotated log files (DataSync.log.1, DataSync.log.2, etc.)
-    const files = fs.readdirSync(logDir);
-    const rotatedLogFiles = files.filter((file) =>
-      file.match(/^DataSync\.log\.\d+$/)
-    );
-
-    for (const rotatedFile of rotatedLogFiles) {
-      const rotatedFilePath = path.join(logDir, rotatedFile);
-      try {
-        const stats = fs.statSync(rotatedFilePath);
+    // Clear error log file
+    if (logType === "errors" || logType === "both") {
+      const errorLogPath = path.join(logDir, "DataSync_Errors.log");
+      if (fs.existsSync(errorLogPath)) {
+        const stats = fs.statSync(errorLogPath);
         totalClearedSize += stats.size;
-        clearedFiles.push(rotatedFile);
-        fs.unlinkSync(rotatedFilePath);
-      } catch (err) {
-        console.warn(`Warning: Could not delete ${rotatedFile}:`, err.message);
+        clearedFiles.push("DataSync_Errors.log");
+        fs.writeFileSync(errorLogPath, "");
+      }
+
+      // Find and delete rotated error log files
+      const files = fs.readdirSync(logDir);
+      const rotatedErrorLogFiles = files.filter((file) =>
+        file.match(/^DataSync_Errors\.log\.\d+$/)
+      );
+
+      for (const rotatedFile of rotatedErrorLogFiles) {
+        const rotatedFilePath = path.join(logDir, rotatedFile);
+        try {
+          const stats = fs.statSync(rotatedFilePath);
+          totalClearedSize += stats.size;
+          clearedFiles.push(rotatedFile);
+          fs.unlinkSync(rotatedFilePath);
+        } catch (err) {
+          console.warn(`Warning: Could not delete ${rotatedFile}:`, err.message);
+        }
       }
     }
 

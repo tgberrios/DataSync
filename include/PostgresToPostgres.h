@@ -1984,8 +1984,10 @@ private:
 
           if (i > 0)
             whereClause += " AND ";
+          std::string lowerPkColumn = pkColumns[i];
+          std::transform(lowerPkColumn.begin(), lowerPkColumn.end(), lowerPkColumn.begin(), ::tolower);
           whereClause +=
-              "\"" + pkColumns[i] + "\" = " +
+              "\"" + lowerPkColumn + "\" = " +
               (record[pkIndex].is_null()
                    ? "NULL"
                    : "'" + escapeSQL(record[pkIndex].as<std::string>()) + "'");
@@ -2282,11 +2284,21 @@ private:
         std::vector<std::string> setClauses;
 
         for (size_t i = 0; i < columnNames.size(); ++i) {
-          std::string setClause = "\"" + columnNames[i] + "\" = ";
+          std::string columnName = columnNames[i];
+          std::transform(columnName.begin(), columnName.end(), columnName.begin(), ::tolower);
+          std::string setClause = "\"" + columnName + "\" = ";
           if (newRecord[i].is_null()) {
             setClause += "NULL";
           } else {
-            setClause += "'" + escapeSQL(newRecord[i].as<std::string>()) + "'";
+            // Usar cleanValueForPostgres para manejar fechas inválidas y otros valores problemáticos
+            // TODO: Necesitamos obtener el tipo real de la columna, por ahora usar TEXT como fallback
+            std::string rawValue = newRecord[i].as<std::string>();
+            std::string cleanedValue = cleanValueForPostgres(rawValue, "TEXT");
+            if (cleanedValue == "NULL") {
+              setClause += "NULL";
+            } else {
+              setClause += "'" + escapeSQL(cleanedValue) + "'";
+            }
           }
           setClauses.push_back(setClause);
         }
@@ -2374,6 +2386,9 @@ private:
                  upperType.find("DOUBLE") != std::string::npos ||
                  upperType.find("NUMERIC") != std::string::npos) {
         return "0.0"; // Valor por defecto para números decimales
+      } else if (upperType == "TEXT") {
+        // Fallback para TEXT: devolver NULL para que PostgreSQL use el valor por defecto de la columna
+        return "NULL";
       } else if (upperType.find("VARCHAR") != std::string::npos ||
                  upperType.find("TEXT") != std::string::npos ||
                  upperType.find("CHAR") != std::string::npos) {

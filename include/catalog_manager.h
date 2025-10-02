@@ -1111,8 +1111,10 @@ private:
 
       for (const auto &row : results) {
         if (!row.empty() && !row[0].empty()) {
-          Logger::info(LogCategory::DATABASE, "Found PK column: " + row[0]);
-          pkColumns.push_back(row[0]);
+          std::string columnName = row[0];
+          std::transform(columnName.begin(), columnName.end(), columnName.begin(), ::tolower);
+          Logger::info(LogCategory::DATABASE, "Found PK column: " + columnName);
+          pkColumns.push_back(columnName);
         }
       }
     } catch (const std::exception &e) {
@@ -1171,6 +1173,7 @@ private:
             // Prioridad: auto_increment > PRIMARY > UNIQUE > INDEX > otros
             if (extra == "auto_increment" || columnKey == "PRI" ||
                 columnKey == "UNI" || columnKey == "MUL") {
+              std::transform(columnName.begin(), columnName.end(), columnName.begin(), ::tolower);
               candidateColumns.push_back(columnName);
             }
           }
@@ -1240,7 +1243,9 @@ private:
       auto results = executeQueryMSSQL(conn, query);
       for (const auto &row : results) {
         if (!row.empty() && !row[0].empty()) {
-          pkColumns.push_back(row[0]);
+          std::string columnName = row[0];
+          std::transform(columnName.begin(), columnName.end(), columnName.begin(), ::tolower);
+          pkColumns.push_back(columnName);
         }
       }
     } catch (const std::exception &e) {
@@ -1309,6 +1314,7 @@ private:
             // Prioridad: auto_increment > PRIMARY > UNIQUE > INDEX > otros
             if (extra == "auto_increment" || columnKey == "PRI" ||
                 columnKey == "UNI" || columnKey == "MUL") {
+              std::transform(columnName.begin(), columnName.end(), columnName.begin(), ::tolower);
               candidateColumns.push_back(columnName);
             }
           }
@@ -1348,7 +1354,9 @@ private:
 
       for (const auto &row : results) {
         if (!row[0].is_null()) {
-          pkColumns.push_back(row[0].as<std::string>());
+          std::string columnName = row[0].as<std::string>();
+          std::transform(columnName.begin(), columnName.end(), columnName.begin(), ::tolower);
+          pkColumns.push_back(columnName);
         }
       }
     } catch (const pqxx::sql_error &e) {
@@ -1463,6 +1471,7 @@ private:
             // Prioridad: auto_increment > PRIMARY > UNIQUE > INDEX > otros
             if (extra == "auto_increment" || columnKey == "PRI" ||
                 columnKey == "UNI" || columnKey == "MUL") {
+              std::transform(columnName.begin(), columnName.end(), columnName.begin(), ::tolower);
               candidateColumns.push_back(columnName);
             }
           }

@@ -4,9 +4,13 @@
 
 // Definición de variables estáticas
 std::ofstream Logger::logFile;
+std::ofstream Logger::errorFile;
 std::mutex Logger::logMutex;
+std::mutex Logger::errorMutex;
 std::string Logger::logFileName = "DataSync.log";
+std::string Logger::errorFileName = "DataSync_Errors.log";
 size_t Logger::messageCount = 0;
+size_t Logger::errorCount = 0;
 
 // Debug configuration variables
 LogLevel Logger::currentLogLevel = LogLevel::INFO;
@@ -152,19 +156,18 @@ LogLevel Logger::getCurrentLogLevel() {
 
 void Logger::refreshConfig() { loadDebugConfig(); }
 
-// Update the initialize function to load debug config
 void Logger::initialize(const std::string &fileName) {
   std::lock_guard<std::mutex> lock(logMutex);
 
-  // Use proper filesystem path handling for cross-platform compatibility
   std::filesystem::path executablePath = std::filesystem::current_path();
   std::filesystem::path logPath = executablePath / fileName;
   logFileName = logPath.string();
 
-  // Validate file path and permissions
+  std::filesystem::path errorPath = executablePath / (std::filesystem::path(fileName).stem().string() + "_Errors.log");
+  errorFileName = errorPath.string();
+
   std::filesystem::path parentDir = logPath.parent_path();
 
-  // Ensure parent directory exists
   if (!parentDir.empty() && !std::filesystem::exists(parentDir)) {
     try {
       std::filesystem::create_directories(parentDir);
@@ -175,7 +178,6 @@ void Logger::initialize(const std::string &fileName) {
     }
   }
 
-  // Check if we can write to the directory
   if (!parentDir.empty() && !std::filesystem::exists(parentDir)) {
     std::cerr << "Logger::initialize: Log directory does not exist and could "
                  "not be created: "
@@ -183,7 +185,6 @@ void Logger::initialize(const std::string &fileName) {
     return;
   }
 
-  // Try to open the log file
   logFile.open(logFileName, std::ios::app);
   if (!logFile.is_open()) {
     std::cerr << "Logger::initialize: Failed to open log file: " << logFileName
@@ -193,7 +194,6 @@ void Logger::initialize(const std::string &fileName) {
     return;
   }
 
-  // Removed logger initialization log to reduce noise
   if (!logFile.good()) {
     std::cerr << "Logger::initialize: Failed to write to log file: "
               << logFileName << std::endl;
@@ -201,8 +201,21 @@ void Logger::initialize(const std::string &fileName) {
     return;
   }
 
-  messageCount = 0;
+  {
+    std::lock_guard<std::mutex> errorLock(errorMutex);
+    errorFile.open(errorFileName, std::ios::app);
+    if (!errorFile.is_open()) {
+      std::cerr << "Logger::initialize: Failed to open error file: " << errorFileName
+                << std::endl;
+    } else if (!errorFile.good()) {
+      std::cerr << "Logger::initialize: Failed to write to error file: "
+                << errorFileName << std::endl;
+      errorFile.close();
+    }
+  }
 
-  // Load debug configuration from database
+  messageCount = 0;
+  errorCount = 0;
+
   loadDebugConfig();
 }

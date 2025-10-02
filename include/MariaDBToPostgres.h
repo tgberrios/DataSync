@@ -690,7 +690,10 @@ public:
                                        }),
                         pkValue.end());
 
-          whereClause += "\"" + pkColumns[i] + "\" = " +
+          std::string lowerPkColumn = pkColumns[i];
+          std::transform(lowerPkColumn.begin(), lowerPkColumn.end(),
+                         lowerPkColumn.begin(), ::tolower);
+          whereClause += "\"" + lowerPkColumn + "\" = " +
                          (pkValue.empty() || pkValue == "NULL"
                               ? "NULL"
                               : "'" + escapeSQL(pkValue) + "'");
@@ -757,6 +760,8 @@ public:
 
       for (size_t i = 0; i < columnNames.size(); ++i) {
         std::string columnName = columnNames[i][0];
+        std::transform(columnName.begin(), columnName.end(), columnName.begin(),
+                       ::tolower);
         std::string newValue = newRecord[i];
 
         // Obtener valor actual de PostgreSQL
@@ -785,7 +790,17 @@ public:
           if (cleanNewValue.empty() || cleanNewValue == "NULL") {
             valueToSet = "NULL";
           } else {
-            valueToSet = "'" + escapeSQL(cleanNewValue) + "'";
+            // Usar cleanValueForPostgres para manejar fechas inválidas y otros
+            // valores problemáticos
+            // TODO: Necesitamos obtener el tipo real de la columna, por ahora
+            // usar TEXT como fallback
+            std::string cleanedValue =
+                cleanValueForPostgres(cleanNewValue, "TEXT");
+            if (cleanedValue == "NULL") {
+              valueToSet = "NULL";
+            } else {
+              valueToSet = "'" + escapeSQL(cleanedValue) + "'";
+            }
           }
 
           updateFields.push_back("\"" + columnName + "\" = " + valueToSet);
@@ -2398,10 +2413,11 @@ private:
     std::transform(upperType.begin(), upperType.end(), upperType.begin(),
                    ::toupper);
 
-    // Detectar valores NULL de MariaDB - SIMPLIFICADO
+    // Detectar valores NULL de MariaDB - MEJORADO
     bool isNull =
         (cleanValue.empty() || cleanValue == "NULL" || cleanValue == "null" ||
          cleanValue == "\\N" || cleanValue == "\\0" || cleanValue == "0" ||
+         cleanValue == "0.0" || cleanValue == "0.00" || cleanValue == "0.000" ||
          cleanValue.find("0000-") != std::string::npos ||
          cleanValue.find("1900-01-01") != std::string::npos ||
          cleanValue.find("1970-01-01") != std::string::npos);
@@ -2472,7 +2488,22 @@ private:
     if (upperType.find("TIMESTAMP") != std::string::npos ||
         upperType.find("DATETIME") != std::string::npos ||
         upperType.find("DATE") != std::string::npos) {
-      if (cleanValue.length() < 10 ||
+      // Detectar valores numéricos como inválidos para fechas
+      bool isNumeric = true;
+      bool hasDecimal = false;
+      for (char c : cleanValue) {
+        if (!std::isdigit(c) && c != '.' && c != '-') {
+          isNumeric = false;
+          break;
+        }
+        if (c == '.') {
+          hasDecimal = true;
+        }
+      }
+
+      // Si es puramente numérico (incluyendo decimales) o no tiene formato de
+      // fecha válido
+      if (isNumeric || cleanValue.length() < 10 ||
           cleanValue.find("-") == std::string::npos ||
           cleanValue.find("0000") != std::string::npos) {
         isNull = true;
@@ -2490,6 +2521,10 @@ private:
                  upperType.find("DOUBLE") != std::string::npos ||
                  upperType.find("NUMERIC") != std::string::npos) {
         return "0.0"; // Valor por defecto para números decimales
+      } else if (upperType == "TEXT") {
+        // Fallback para TEXT: devolver NULL para que PostgreSQL use el valor
+        // por defecto de la columna
+        return "NULL";
       } else if (upperType.find("VARCHAR") != std::string::npos ||
                  upperType.find("TEXT") != std::string::npos ||
                  upperType.find("CHAR") != std::string::npos) {

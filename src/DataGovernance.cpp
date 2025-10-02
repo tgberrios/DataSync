@@ -238,9 +238,10 @@ void DataGovernance::analyzeTableStructure(pqxx::connection &conn,
       metadata.total_rows = rowResult[0][0].as<long long>();
     }
 
-    std::string sizeQuery = "SELECT pg_total_relation_size('" +
-                            escapeSQL(schema_name) + ".\"" +
-                            escapeSQL(table_name) + "\"') as size_bytes;";
+    std::string sizeQuery =
+        "SELECT COALESCE(pg_total_relation_size(to_regclass('" +
+        escapeSQL(schema_name) + ".\"" + escapeSQL(table_name) +
+        "\"')), 0) as size_bytes;";
     auto sizeResult = txn.exec(sizeQuery);
     if (!sizeResult.empty()) {
       try {

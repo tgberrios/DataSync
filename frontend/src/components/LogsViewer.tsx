@@ -333,7 +333,44 @@ const PageInfo = styled.span`
   font-size: 0.9em;
 `;
 
+const TabContainer = styled.div`
+  display: flex;
+  margin-bottom: 20px;
+  border-bottom: 2px solid #333;
+`;
+
+const Tab = styled.button<{ $active: boolean }>`
+  padding: 12px 24px;
+  border: none;
+  background-color: ${props => props.$active ? '#333' : 'transparent'};
+  color: ${props => props.$active ? 'white' : '#666'};
+  cursor: pointer;
+  font-family: monospace;
+  font-size: 1em;
+  font-weight: bold;
+  border-bottom: 3px solid ${props => props.$active ? '#ff6b6b' : 'transparent'};
+  transition: all 0.2s ease;
+
+  &:hover {
+    background-color: ${props => props.$active ? '#555' : '#f5f5f5'};
+    color: ${props => props.$active ? 'white' : '#333'};
+  }
+
+  &:first-child {
+    border-top-left-radius: 4px;
+  }
+
+  &:last-child {
+    border-top-right-radius: 4px;
+  }
+`;
+
+const TabContent = styled.div`
+  flex: 1;
+`;
+
 const LogsViewer = () => {
+  const [activeTab, setActiveTab] = useState<'main' | 'errors'>('main');
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [logInfo, setLogInfo] = useState<LogInfo | null>(null);
   const [loading, setLoading] = useState(true);
@@ -365,29 +402,41 @@ const LogsViewer = () => {
       setIsRefreshing(true);
       setError(null);
       
+      // For main logs, exclude ERROR and CRITICAL levels
+      const effectiveLevel = activeTab === 'main' && level === 'ALL' ? 'INFO' : level;
+      
       // Fetch logs with specified number of lines
       const [logsData, infoData] = await Promise.all([
         logsApi.getLogs({ 
           lines, 
-          level, 
+          level: effectiveLevel, 
           category,
           search,
           startDate,
-          endDate
+          endDate,
+          logType: activeTab
         }),
-        logsApi.getLogInfo()
+        logsApi.getLogInfo(activeTab)
       ]);
       
-      setAllLogs(logsData.logs);
+      // Additional filtering for main logs to exclude ERROR and CRITICAL
+      let filteredLogs = logsData.logs;
+      if (activeTab === 'main') {
+        filteredLogs = logsData.logs.filter(log => 
+          log.level !== 'ERROR' && log.level !== 'CRITICAL'
+        );
+      }
+      
+      setAllLogs(filteredLogs);
       setLogInfo(infoData);
       
       // Calculate pagination - Page 1 shows most recent logs
       const logsPerPage = 50;
-      const totalPages = Math.ceil(logsData.logs.length / logsPerPage);
+      const totalPages = Math.ceil(filteredLogs.length / logsPerPage);
       setTotalPages(totalPages);
       
       // Reverse logs so most recent appear first, then paginate
-      const reversedLogs = [...logsData.logs].reverse();
+      const reversedLogs = [...filteredLogs].reverse();
       const startIndex = (currentPage - 1) * logsPerPage;
       const endIndex = startIndex + logsPerPage;
       setLogs(reversedLogs.slice(startIndex, endIndex));
@@ -425,7 +474,7 @@ const LogsViewer = () => {
       setIsClearing(true);
       setError(null);
       
-      await logsApi.clearLogs();
+      await logsApi.clearLogs(activeTab);
       
       setShowClearDialog(false);
       setCurrentPage(1);
@@ -459,7 +508,8 @@ const LogsViewer = () => {
         category,
         search,
         startDate,
-        endDate
+        endDate,
+        logType: activeTab
       });
       
       // Format logs for copying
@@ -472,7 +522,8 @@ const LogsViewer = () => {
       }).join('\n');
       
       // Add header information
-      const header = `DataSync Logs - ${new Date().toLocaleString()}\n` +
+      const logTypeLabel = activeTab === 'errors' ? 'Error Logs' : 'Main Logs';
+      const header = `DataSync ${logTypeLabel} - ${new Date().toLocaleString()}\n` +
                     `Total Entries: ${allLogsData.logs.length}\n` +
                     `Level Filter: ${level}\n` +
                     `Category Filter: ${category}\n` +
@@ -498,7 +549,17 @@ const LogsViewer = () => {
 
   useEffect(() => {
     fetchLogs();
-  }, [lines, level, category, search, startDate, endDate]);
+  }, [lines, level, category, search, startDate, endDate, activeTab]);
+
+  // Reset page when switching tabs and adjust level filter
+  useEffect(() => {
+    setCurrentPage(1);
+    
+    // If switching to main tab and current level is ERROR or CRITICAL, reset to ALL
+    if (activeTab === 'main' && (level === 'ERROR' || level === 'CRITICAL')) {
+      setLevel('ALL');
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     // Clear any existing countdown interval
@@ -538,7 +599,7 @@ const LogsViewer = () => {
     } else {
       setRefreshCountdown(5);
     }
-  }, [autoRefresh, lines, level, category, search, startDate, endDate]);
+  }, [autoRefresh, lines, level, category, search, startDate, endDate, activeTab]);
 
   // Update logs when allLogs or currentPage changes
   useEffect(() => {
@@ -616,8 +677,24 @@ const LogsViewer = () => {
     <LogsContainer>
       <Header>DataSync Logs Viewer</Header>
       
-      <Section>
-        <SectionTitle>⚙ LOG CONTROLS</SectionTitle>
+      <TabContainer>
+        <Tab 
+          $active={activeTab === 'main'} 
+          onClick={() => setActiveTab('main')}
+        >
+          [*] Main Logs
+        </Tab>
+        <Tab 
+          $active={activeTab === 'errors'} 
+          onClick={() => setActiveTab('errors')}
+        >
+          [!] Error Logs
+        </Tab>
+      </TabContainer>
+      
+      <TabContent>
+        <Section>
+        <SectionTitle>[&gt;] LOG CONTROLS</SectionTitle>
         <Controls>
           <ControlGroup>
             <Label>Lines to show:</Label>
@@ -637,8 +714,12 @@ const LogsViewer = () => {
               <option value="DEBUG">DEBUG</option>
               <option value="INFO">INFO</option>
               <option value="WARNING">WARNING</option>
-              <option value="ERROR">ERROR</option>
-              <option value="CRITICAL">CRITICAL</option>
+              {activeTab === 'errors' && (
+                <>
+                  <option value="ERROR">ERROR</option>
+                  <option value="CRITICAL">CRITICAL</option>
+                </>
+              )}
             </Select>
           </ControlGroup>
           
@@ -768,13 +849,13 @@ const LogsViewer = () => {
             fontFamily: 'monospace',
             fontSize: '0.9em'
           }}>
-            ✅ Logs copied to clipboard successfully!
+            [+] Logs copied to clipboard successfully!
           </div>
         )}
       </Section>
 
       <Section>
-        <SectionTitle>■ LOG ENTRIES</SectionTitle>
+        <SectionTitle>[#] LOG ENTRIES</SectionTitle>
         <LogsArea>
           {logs.map((log, index) => (
             <LogLine key={log.id || index} level={log.level} category={log.category || 'SYSTEM'}>
@@ -854,7 +935,7 @@ const LogsViewer = () => {
       </Section>
 
       <Section>
-        <SectionTitle>■ LOG FILE STATUS</SectionTitle>
+        <SectionTitle>[#] LOG FILE STATUS</SectionTitle>
         <StatusBar>
           <StatusItem>
             Showing {logs.length} of {logInfo.totalLines} log entries (Page {currentPage} - Most Recent First)
@@ -897,14 +978,24 @@ const LogsViewer = () => {
             fontFamily: 'monospace'
           }}>
             <h3 style={{ marginBottom: '20px', color: '#ff6b6b' }}>
-              ⚠️ CLEAR LOGS CONFIRMATION
+              [!] CLEAR LOGS CONFIRMATION
             </h3>
             <p style={{ marginBottom: '25px', lineHeight: '1.5' }}>
               This action will permanently delete:
               <br />
-              • All entries from DataSync.log file
-              <br />
-              • All rotated log files (DataSync.log.1, .2, .3, etc.)
+              {activeTab === 'errors' ? (
+                <>
+                  • All entries from DataSync_Errors.log file
+                  <br />
+                  • All rotated error log files (DataSync_Errors.log.1, .2, .3, etc.)
+                </>
+              ) : (
+                <>
+                  • All entries from DataSync.log file
+                  <br />
+                  • All rotated log files (DataSync.log.1, .2, .3, etc.)
+                </>
+              )}
               <br />
               <strong>This operation cannot be undone!</strong>
             </p>
@@ -927,6 +1018,7 @@ const LogsViewer = () => {
           </div>
         </div>
       )}
+      </TabContent>
     </LogsContainer>
   );
 };

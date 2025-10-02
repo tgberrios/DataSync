@@ -1594,7 +1594,9 @@ public:
 
           if (i > 0)
             whereClause += " AND ";
-          whereClause += "\"" + pkColumns[i] + "\" = " +
+          std::string lowerPkColumn = pkColumns[i];
+          std::transform(lowerPkColumn.begin(), lowerPkColumn.end(), lowerPkColumn.begin(), ::tolower);
+          whereClause += "\"" + lowerPkColumn + "\" = " +
                          (record[pkIndex].empty()
                               ? "NULL"
                               : "'" + escapeSQL(record[pkIndex]) + "'");
@@ -1671,9 +1673,20 @@ public:
 
         // Comparar valores (normalizar para comparación)
         if (currentValue != newValue) {
-          updateFields.push_back(
-              "\"" + columnName + "\" = " +
-              (newValue.empty() ? "NULL" : "'" + escapeSQL(newValue) + "'"));
+          std::string valueToSet;
+          if (newValue.empty()) {
+            valueToSet = "NULL";
+          } else {
+            // Usar cleanValueForPostgres para manejar fechas inválidas y otros valores problemáticos
+            // TODO: Necesitamos obtener el tipo real de la columna, por ahora usar TEXT como fallback
+            std::string cleanedValue = cleanValueForPostgres(newValue, "TEXT");
+            if (cleanedValue == "NULL") {
+              valueToSet = "NULL";
+            } else {
+              valueToSet = "'" + escapeSQL(cleanedValue) + "'";
+            }
+          }
+          updateFields.push_back("\"" + columnName + "\" = " + valueToSet);
           hasChanges = true;
         }
       }
@@ -2416,6 +2429,9 @@ private:
                  upperType.find("DOUBLE") != std::string::npos ||
                  upperType.find("NUMERIC") != std::string::npos) {
         return "0.0"; // Valor por defecto para números decimales
+      } else if (upperType == "TEXT") {
+        // Fallback para TEXT: devolver NULL para que PostgreSQL use el valor por defecto de la columna
+        return "NULL";
       } else if (upperType.find("VARCHAR") != std::string::npos ||
                  upperType.find("TEXT") != std::string::npos ||
                  upperType.find("CHAR") != std::string::npos) {
