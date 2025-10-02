@@ -16,9 +16,9 @@ void MetricsCollector::collectAllMetrics() {
     saveMetricsToDatabase();
     generateMetricsReport();
 
-    Logger::info(LogCategory::METRICS, "Metrics collection completed");
+    Logger::getInstance().info(LogCategory::METRICS, "Metrics collection completed");
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::METRICS,
+    Logger::getInstance().error(LogCategory::METRICS,
                   "Error in metrics collection: " + std::string(e.what()));
   }
 }
@@ -32,7 +32,7 @@ void MetricsCollector::createMetricsTable() {
     conn.set_session_var("lock_timeout", "10000");      // 10 seconds
 
     if (!conn.is_open()) {
-      Logger::error(LogCategory::METRICS, "Failed to connect to database");
+      Logger::getInstance().error(LogCategory::METRICS, "Failed to connect to database");
       return;
     }
 
@@ -73,10 +73,10 @@ void MetricsCollector::createMetricsTable() {
     txn.exec(createIndexesSQL);
     txn.commit();
 
-    Logger::info(LogCategory::METRICS,
+    Logger::getInstance().info(LogCategory::METRICS,
                  "Transfer metrics table created successfully");
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::METRICS,
+    Logger::getInstance().error(LogCategory::METRICS,
                   "Error creating metrics table: " + std::string(e.what()));
   }
 }
@@ -115,7 +115,7 @@ void MetricsCollector::collectTransferMetrics() {
 
       // Validate and extract data with proper error handling
       if (row[0].is_null() || row[1].is_null() || row[2].is_null()) {
-        Logger::warning(LogCategory::METRICS,
+        Logger::getInstance().warning(LogCategory::METRICS,
                         "Skipping row with null schema/table/engine");
         continue;
       }
@@ -127,7 +127,7 @@ void MetricsCollector::collectTransferMetrics() {
       // Validate non-empty strings
       if (metric.schema_name.empty() || metric.table_name.empty() ||
           metric.db_engine.empty()) {
-        Logger::warning(LogCategory::METRICS,
+        Logger::getInstance().warning(LogCategory::METRICS,
                         "Skipping row with empty schema/table/engine");
         continue;
       }
@@ -138,14 +138,14 @@ void MetricsCollector::collectTransferMetrics() {
 
       // Validate numeric values
       if (currentRecords < 0) {
-        Logger::warning(LogCategory::METRICS,
+        Logger::getInstance().warning(LogCategory::METRICS,
                         "Invalid negative record count for " +
                             metric.schema_name + "." + metric.table_name);
         currentRecords = 0;
       }
 
       if (tableSizeBytes < 0) {
-        Logger::warning(LogCategory::METRICS,
+        Logger::getInstance().warning(LogCategory::METRICS,
                         "Invalid negative table size for " +
                             metric.schema_name + "." + metric.table_name);
         tableSizeBytes = 0;
@@ -203,11 +203,11 @@ void MetricsCollector::collectTransferMetrics() {
       metrics.push_back(metric);
     }
 
-    Logger::info(LogCategory::METRICS, "Collected transfer metrics for " +
+    Logger::getInstance().info(LogCategory::METRICS, "Collected transfer metrics for " +
                                            std::to_string(metrics.size()) +
                                            " tables");
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::METRICS, "Error collecting transfer metrics: " +
+    Logger::getInstance().error(LogCategory::METRICS, "Error collecting transfer metrics: " +
                                             std::string(e.what()));
   }
 }
@@ -256,9 +256,9 @@ void MetricsCollector::collectPerformanceMetrics() {
       }
     }
 
-    Logger::info(LogCategory::METRICS, "Collected performance metrics");
+    Logger::getInstance().info(LogCategory::METRICS, "Collected performance metrics");
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::METRICS,
+    Logger::getInstance().error(LogCategory::METRICS,
                   "Error collecting performance metrics: " +
                       std::string(e.what()));
   }
@@ -317,9 +317,9 @@ void MetricsCollector::collectMetadataMetrics() {
       }
     }
 
-    Logger::info(LogCategory::METRICS, "Collected metadata metrics");
+    Logger::getInstance().info(LogCategory::METRICS, "Collected metadata metrics");
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::METRICS, "Error collecting metadata metrics: " +
+    Logger::getInstance().error(LogCategory::METRICS, "Error collecting metadata metrics: " +
                                             std::string(e.what()));
   }
 }
@@ -355,9 +355,9 @@ void MetricsCollector::collectTimestampMetrics() {
       }
     }
 
-    Logger::info(LogCategory::METRICS, "Collected timestamp metrics");
+    Logger::getInstance().info(LogCategory::METRICS, "Collected timestamp metrics");
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::METRICS, "Error collecting timestamp metrics: " +
+    Logger::getInstance().error(LogCategory::METRICS, "Error collecting timestamp metrics: " +
                                             std::string(e.what()));
   }
 }
@@ -400,11 +400,11 @@ void MetricsCollector::saveMetricsToDatabase() {
     }
 
     txn.commit();
-    Logger::info(LogCategory::METRICS, "Saved " +
+    Logger::getInstance().info(LogCategory::METRICS, "Saved " +
                                            std::to_string(metrics.size()) +
                                            " metrics to database");
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::METRICS,
+    Logger::getInstance().error(LogCategory::METRICS,
                   "Error saving metrics to database: " + std::string(e.what()));
   }
 }
@@ -451,17 +451,17 @@ void MetricsCollector::generateMetricsReport() {
       double totalMB = totalBytes / (1024.0 * 1024.0);
 
       // Log simplified metrics summary
-      Logger::info(LogCategory::METRICS,
+      Logger::getInstance().info(LogCategory::METRICS,
                    "Metrics Summary: " + std::to_string(successfulTransfers) +
                        "/" + std::to_string(totalTables) +
                        " tables synced successfully, " +
                        std::to_string(totalRecords) + " records, " +
                        std::to_string(totalMB) + "MB transferred");
     } else {
-      Logger::warning(LogCategory::METRICS, "No metrics data found for report");
+      Logger::getInstance().warning(LogCategory::METRICS, "No metrics data found for report");
     }
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::METRICS,
+    Logger::getInstance().error(LogCategory::METRICS,
                   "Error generating metrics report: " + std::string(e.what()));
   }
 }
@@ -512,7 +512,7 @@ MetricsCollector::getEstimatedStartTime(const std::string &completedAt) {
 
     return result.str();
   } catch (const std::exception &e) {
-    Logger::warning(LogCategory::METRICS,
+    Logger::getInstance().warning(LogCategory::METRICS,
                     "Error estimating start time: " + std::string(e.what()));
     return getCurrentTimestamp();
   }
@@ -544,7 +544,7 @@ MetricsCollector::calculateBytesTransferred(const std::string &schema_name,
       return result[0][0].as<long long>();
     }
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::METRICS,
+    Logger::getInstance().error(LogCategory::METRICS,
                   "Error calculating bytes transferred: " +
                       std::string(e.what()));
   }

@@ -6,7 +6,7 @@
 
 void DataGovernance::initialize() {
   createGovernanceTable();
-  Logger::info(LogCategory::GOVERNANCE, "Data Governance system initialized");
+  Logger::getInstance().info(LogCategory::GOVERNANCE, "Data Governance system initialized");
 }
 
 void DataGovernance::createGovernanceTable() {
@@ -75,7 +75,7 @@ void DataGovernance::createGovernanceTable() {
     txn.commit();
 
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::GOVERNANCE, "createGovernanceTable",
+    Logger::getInstance().error(LogCategory::GOVERNANCE, "createGovernanceTable",
                   "Error creating governance table: " + std::string(e.what()));
   }
 }
@@ -83,23 +83,23 @@ void DataGovernance::createGovernanceTable() {
 void DataGovernance::runDiscovery() {
   try {
     std::vector<TableMetadata> tables = discoverTables();
-    Logger::info(LogCategory::GOVERNANCE,
+    Logger::getInstance().info(LogCategory::GOVERNANCE,
                  "Discovered " + std::to_string(tables.size()) + " tables");
 
     for (const auto &table : tables) {
       try {
         storeMetadata(table);
       } catch (const std::exception &e) {
-        Logger::error(LogCategory::GOVERNANCE,
+        Logger::getInstance().error(LogCategory::GOVERNANCE,
                       "Error processing table " + table.schema_name + "." +
                           table.table_name + ": " + std::string(e.what()));
       }
     }
 
-    Logger::info(LogCategory::GOVERNANCE,
+    Logger::getInstance().info(LogCategory::GOVERNANCE,
                  "Data governance discovery completed");
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::GOVERNANCE,
+    Logger::getInstance().error(LogCategory::GOVERNANCE,
                   "Error in discovery process: " + std::string(e.what()));
   }
 }
@@ -130,11 +130,11 @@ std::vector<TableMetadata> DataGovernance::discoverTables() {
       tables.push_back(metadata);
     }
 
-    Logger::info(LogCategory::GOVERNANCE, "Discovered " +
+    Logger::getInstance().info(LogCategory::GOVERNANCE, "Discovered " +
                                               std::to_string(tables.size()) +
                                               " tables from DataLake");
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::GOVERNANCE,
+    Logger::getInstance().error(LogCategory::GOVERNANCE,
                   "Error discovering tables: " + std::string(e.what()));
   }
 
@@ -196,7 +196,7 @@ DataGovernance::extractTableMetadata(const std::string &schema_name,
     metadata.last_analyzed = getCurrentTimestamp();
 
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::GOVERNANCE, "Error extracting metadata for " +
+    Logger::getInstance().error(LogCategory::GOVERNANCE, "Error extracting metadata for " +
                                                schema_name + "." + table_name +
                                                ": " + std::string(e.what()));
   }
@@ -281,7 +281,7 @@ void DataGovernance::analyzeTableStructure(pqxx::connection &conn,
 
     txn.commit();
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::GOVERNANCE,
+    Logger::getInstance().error(LogCategory::GOVERNANCE,
                   "Error analyzing table structure: " + std::string(e.what()));
   }
 }
@@ -339,7 +339,7 @@ void DataGovernance::analyzeDataQuality(pqxx::connection &conn,
             }
           } catch (const std::exception &e) {
             // Skip columns that can't be analyzed (e.g., complex types)
-            Logger::warning(LogCategory::GOVERNANCE, "analyzeDataQuality",
+            Logger::getInstance().warning(LogCategory::GOVERNANCE, "analyzeDataQuality",
                             "Could not analyze NULLs in column " + columnName +
                                 ": " + e.what());
           }
@@ -380,19 +380,19 @@ void DataGovernance::analyzeDataQuality(pqxx::connection &conn,
         }
       }
     } catch (const pqxx::sql_error &e) {
-      Logger::warning(LogCategory::GOVERNANCE, "analyzeDataQuality",
+      Logger::getInstance().warning(LogCategory::GOVERNANCE, "analyzeDataQuality",
                       "SQL error calculating duplicates: " +
                           std::string(e.what()));
       metadata.duplicate_percentage = 0.0;
     } catch (const std::exception &e) {
-      Logger::error(LogCategory::GOVERNANCE, "analyzeDataQuality",
+      Logger::getInstance().error(LogCategory::GOVERNANCE, "analyzeDataQuality",
                     "Error calculating duplicates: " + std::string(e.what()));
       metadata.duplicate_percentage = 0.0;
     }
 
     txn.commit();
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::GOVERNANCE,
+    Logger::getInstance().error(LogCategory::GOVERNANCE,
                   "Error analyzing data quality: " + std::string(e.what()));
   }
 }
@@ -455,7 +455,7 @@ void DataGovernance::analyzeUsageStatistics(pqxx::connection &conn,
 
     txn.commit();
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::GOVERNANCE,
+    Logger::getInstance().error(LogCategory::GOVERNANCE,
                   "Error analyzing usage statistics: " + std::string(e.what()));
   }
 }
@@ -502,7 +502,7 @@ void DataGovernance::analyzeHealthStatus(pqxx::connection &conn,
 
     txn.commit();
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::GOVERNANCE,
+    Logger::getInstance().error(LogCategory::GOVERNANCE,
                   "Error analyzing health status: " + std::string(e.what()));
   }
 }
@@ -595,7 +595,7 @@ void DataGovernance::storeMetadata(const TableMetadata &metadata) {
 
     txn.commit();
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::GOVERNANCE,
+    Logger::getInstance().error(LogCategory::GOVERNANCE,
                   "Error storing metadata: " + std::string(e.what()));
   }
 }
@@ -680,7 +680,7 @@ void DataGovernance::updateExistingMetadata(const TableMetadata &metadata) {
     txn.commit();
 
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::GOVERNANCE,
+    Logger::getInstance().error(LogCategory::GOVERNANCE,
                   "Error updating metadata: " + std::string(e.what()));
   }
 }
@@ -716,7 +716,7 @@ void DataGovernance::generateReport() {
       double totalSize = row[6].is_null() ? 0.0 : row[6].as<double>();
     }
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::GOVERNANCE,
+    Logger::getInstance().error(LogCategory::GOVERNANCE,
                   "Error generating report: " + std::string(e.what()));
   }
 }

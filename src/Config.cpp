@@ -16,7 +16,7 @@ void DatabaseConfig::loadFromConfig(const std::string &configPath) {
   try {
     std::ifstream configFile(configPath);
     if (!configFile.is_open()) {
-      Logger::warning(LogCategory::SYSTEM, "loadFromConfig",
+      Logger::getInstance().warning(LogCategory::SYSTEM, "loadFromConfig",
                       "Could not open config file: " + configPath +
                           " - using default values");
       return;
@@ -42,15 +42,15 @@ void DatabaseConfig::loadFromConfig(const std::string &configPath) {
       if (db.contains("password"))
         POSTGRES_PASSWORD = db["password"];
 
-      Logger::info(LogCategory::SYSTEM, "loadFromConfig",
+      Logger::getInstance().info(LogCategory::SYSTEM, "loadFromConfig",
                    "Database configuration loaded from: " + configPath);
     } else {
-      Logger::warning(LogCategory::SYSTEM, "loadFromConfig",
+      Logger::getInstance().warning(LogCategory::SYSTEM, "loadFromConfig",
                       "Database configuration not found in: " + configPath);
     }
 
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::SYSTEM, "loadFromConfig",
+    Logger::getInstance().error(LogCategory::SYSTEM, "loadFromConfig",
                   "Error loading config from " + configPath + ": " + e.what());
   }
 }
@@ -59,7 +59,7 @@ void SyncConfig::loadFromConfig(const std::string &configPath) {
   // Sync configuration is loaded from metadata.config table in database
   // This function is kept for compatibility but does nothing
   // The actual sync config loading happens in StreamingData.cpp
-  Logger::info(
+  Logger::getInstance().info(
       LogCategory::SYSTEM, "loadFromConfig",
       "Sync configuration will be loaded from database metadata.config table");
 }
@@ -71,7 +71,7 @@ void DatabaseConfig::loadFromDatabase() {
     pqxx::connection conn(connectionString);
     
     if (!conn.is_open()) {
-      Logger::warning(LogCategory::SYSTEM, "loadFromDatabase",
+      Logger::getInstance().warning(LogCategory::SYSTEM, "loadFromDatabase",
                       "Cannot connect to database - using default values");
       return;
     }
@@ -97,11 +97,11 @@ void DatabaseConfig::loadFromDatabase() {
       }
     }
 
-    Logger::info(LogCategory::SYSTEM, "loadFromDatabase",
+    Logger::getInstance().info(LogCategory::SYSTEM, "loadFromDatabase",
                  "Database configuration loaded from database");
 
   } catch (const std::exception &e) {
-    Logger::warning(LogCategory::SYSTEM, "loadFromDatabase",
+    Logger::getInstance().warning(LogCategory::SYSTEM, "loadFromDatabase",
                     "Error loading config from database: " + std::string(e.what()) + 
                     " - using default values");
   }
@@ -114,7 +114,7 @@ void SyncConfig::loadFromDatabase() {
     pqxx::connection conn(connectionString);
     
     if (!conn.is_open()) {
-      Logger::warning(LogCategory::SYSTEM, "loadFromDatabase",
+      Logger::getInstance().warning(LogCategory::SYSTEM, "loadFromDatabase",
                       "Cannot connect to database - using default values");
       return;
     }
@@ -131,24 +131,24 @@ void SyncConfig::loadFromDatabase() {
         try {
           CHUNK_SIZE = std::stoul(value);
         } catch (const std::exception &e) {
-          Logger::warning(LogCategory::SYSTEM, "loadFromDatabase",
+          Logger::getInstance().warning(LogCategory::SYSTEM, "loadFromDatabase",
                           "Invalid chunk_size value: " + value + " - using default");
         }
       } else if (key == "sync_interval_seconds") {
         try {
           SYNC_INTERVAL_SECONDS = std::stoul(value);
         } catch (const std::exception &e) {
-          Logger::warning(LogCategory::SYSTEM, "loadFromDatabase",
+          Logger::getInstance().warning(LogCategory::SYSTEM, "loadFromDatabase",
                           "Invalid sync_interval_seconds value: " + value + " - using default");
         }
       }
     }
 
-    Logger::info(LogCategory::SYSTEM, "loadFromDatabase",
+    Logger::getInstance().info(LogCategory::SYSTEM, "loadFromDatabase",
                  "Sync configuration loaded from database");
 
   } catch (const std::exception &e) {
-    Logger::warning(LogCategory::SYSTEM, "loadFromDatabase",
+    Logger::getInstance().warning(LogCategory::SYSTEM, "loadFromDatabase",
                     "Error loading sync config from database: " + std::string(e.what()) + 
                     " - using default values");
   }

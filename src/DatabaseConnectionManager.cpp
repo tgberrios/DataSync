@@ -275,6 +275,6 @@ std::string DatabaseConnectionManager::trim(const std::string &str) {
 }
 
 void DatabaseConnectionManager::logConnectionError(const std::string &dbType, const std::string &error) {
-  Logger::error(LogCategory::DDL_EXPORT, "DatabaseConnectionManager", 
+  Logger::getInstance().error(LogCategory::DDL_EXPORT, "DatabaseConnectionManager", 
                 dbType + " connection error: " + error);
 }

@@ -7,13 +7,13 @@ MSSQLDDLExporter::MSSQLDDLExporter(DatabaseConnectionManager &connManager, DDLFi
 
 void MSSQLDDLExporter::exportDDL(const SchemaInfo &schema) {
   try {
-    Logger::info(LogCategory::DDL_EXPORT, "MSSQLDDLExporter", "Exporting MSSQL DDL for schema: " + schema.schema_name);
+    Logger::getInstance().info(LogCategory::DDL_EXPORT, "MSSQLDDLExporter", "Exporting MSSQL DDL for schema: " + schema.schema_name);
     
     // TODO: Implement MSSQL DDL export
     // This is a placeholder implementation
     
-    Logger::info(LogCategory::DDL_EXPORT, "MSSQLDDLExporter", "MSSQL DDL export completed for schema: " + schema.schema_name);
+    Logger::getInstance().info(LogCategory::DDL_EXPORT, "MSSQLDDLExporter", "MSSQL DDL export completed for schema: " + schema.schema_name);
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::DDL_EXPORT, "MSSQLDDLExporter", "Error exporting MSSQL DDL: " + std::string(e.what()));
+    Logger::getInstance().error(LogCategory::DDL_EXPORT, "MSSQLDDLExporter", "Error exporting MSSQL DDL: " + std::string(e.what()));
   }
 }

@@ -14,12 +14,12 @@ void DDLExporter::exportAllDDL() {
     getSchemasFromCatalog(schemas);
 
     if (schemas.empty()) {
-      Logger::warning(LogCategory::DDL_EXPORT, "DDLExporter",
+      Logger::getInstance().warning(LogCategory::DDL_EXPORT, "DDLExporter",
                       "No schemas found in catalog for DDL export");
       return;
     }
 
-    Logger::info(LogCategory::DDL_EXPORT, "DDLExporter",
+    Logger::getInstance().info(LogCategory::DDL_EXPORT, "DDLExporter",
                  "Starting DDL export for " + std::to_string(schemas.size()) +
                      " schemas");
 
@@ -28,23 +28,23 @@ void DDLExporter::exportAllDDL() {
       try {
         exportSchemaDDL(schema);
       } catch (const std::exception &e) {
-        Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+        Logger::getInstance().error(LogCategory::DDL_EXPORT, "DDLExporter",
                       "Failed to export DDL for schema " + schema.schema_name +
                           ": " + std::string(e.what()));
       }
     }
 
-    Logger::info(LogCategory::DDL_EXPORT, "DDLExporter",
+    Logger::getInstance().info(LogCategory::DDL_EXPORT, "DDLExporter",
                  "DDL export completed successfully");
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+    Logger::getInstance().error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error during DDL export: " + std::string(e.what()));
   }
 }
 
 void DDLExporter::exportSchemaDDL(const SchemaInfo &schema) {
   try {
-    Logger::info(LogCategory::DDL_EXPORT, "DDLExporter",
+    Logger::getInstance().info(LogCategory::DDL_EXPORT, "DDLExporter",
                  "Exporting DDL for schema: " + schema.schema_name +
                      " (Engine: " + schema.db_engine + ")");
 
@@ -59,12 +59,12 @@ void DDLExporter::exportSchemaDDL(const SchemaInfo &schema) {
       MSSQLDDLExporter exporter(connectionManager, fileManager);
       exporter.exportDDL(schema);
     } else {
-      Logger::warning(LogCategory::DDL_EXPORT, "DDLExporter",
+      Logger::getInstance().warning(LogCategory::DDL_EXPORT, "DDLExporter",
                       "Unsupported database engine: " + schema.db_engine +
                           " for schema: " + schema.schema_name);
     }
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+    Logger::getInstance().error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error exporting DDL for schema " + schema.schema_name +
                       ": " + std::string(e.what()));
   }
@@ -76,7 +76,7 @@ void DDLExporter::getSchemasFromCatalog(std::vector<SchemaInfo> &schemas) {
     // Connect to PostgreSQL catalog
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
     if (!conn.is_open()) {
-      Logger::error(LogCategory::DDL_EXPORT, "getSchemasFromCatalog",
+      Logger::getInstance().error(LogCategory::DDL_EXPORT, "getSchemasFromCatalog",
                     "Failed to connect to PostgreSQL catalog");
       return;
     }
@@ -104,12 +104,12 @@ void DDLExporter::getSchemasFromCatalog(std::vector<SchemaInfo> &schemas) {
     }
 
     txn.commit();
-    Logger::info(LogCategory::DDL_EXPORT, "getSchemasFromCatalog",
+    Logger::getInstance().info(LogCategory::DDL_EXPORT, "getSchemasFromCatalog",
                  "Retrieved " + std::to_string(schemas.size()) +
                      " schemas from catalog");
 
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::DDL_EXPORT, "getSchemasFromCatalog",
+    Logger::getInstance().error(LogCategory::DDL_EXPORT, "getSchemasFromCatalog",
                   "Error retrieving schemas from catalog: " +
                       std::string(e.what()));
   }

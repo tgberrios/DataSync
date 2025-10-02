@@ -27,6 +27,9 @@ add_executable(DataSync
     src/main.cpp 
     src/Config.cpp 
     src/logger.cpp 
+    src/LogFormatter.cpp
+    src/LogFileManager.cpp
+    src/LogConfigManager.cpp
     src/DataGovernance.cpp 
     src/DataClassifier.cpp 
     src/DataQualityCalculator.cpp 

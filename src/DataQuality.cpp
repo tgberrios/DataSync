@@ -38,14 +38,14 @@ bool DataQuality::validateTable(pqxx::connection &conn,
                                 const std::string &engine) {
   // Validate input parameters
   if (schema.empty() || table.empty() || engine.empty()) {
-    Logger::error(LogCategory::QUALITY, "validateTable",
+    Logger::getInstance().error(LogCategory::QUALITY, "validateTable",
                   "Schema, table, and engine cannot be empty");
     return false;
   }
 
   // Validate connection
   if (!conn.is_open()) {
-    Logger::error(LogCategory::QUALITY, "validateTable",
+    Logger::getInstance().error(LogCategory::QUALITY, "validateTable",
                   "Database connection is not open");
     return false;
   }
@@ -55,7 +55,7 @@ bool DataQuality::validateTable(pqxx::connection &conn,
       schema.find(";") != std::string::npos ||
       table.find("'") != std::string::npos ||
       table.find(";") != std::string::npos) {
-    Logger::error(LogCategory::QUALITY, "validateTable",
+    Logger::getInstance().error(LogCategory::QUALITY, "validateTable",
                   "Schema and table names contain invalid characters");
     return false;
   }
@@ -81,7 +81,7 @@ bool DataQuality::validateTable(pqxx::connection &conn,
     metrics.validation_status = determineValidationStatus(metrics);
     return saveMetrics(conn, metrics);
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::QUALITY, "Error validating table " + schema +
+    Logger::getInstance().error(LogCategory::QUALITY, "Error validating table " + schema +
                                             "." + table + ": " + e.what());
     return false;
   }
@@ -111,18 +111,18 @@ DataQuality::collectMetrics(pqxx::connection &conn, const std::string &schema,
     calculateQualityScore(metrics);
 
   } catch (const pqxx::sql_error &e) {
-    Logger::error(LogCategory::QUALITY, "collectMetrics",
+    Logger::getInstance().error(LogCategory::QUALITY, "collectMetrics",
                   "SQL error collecting metrics: " + std::string(e.what()) +
                       " [SQL State: " + e.sqlstate() + "]");
     metrics.error_details = "SQL Error: " + std::string(e.what());
     metrics.validation_status = "FAILED";
   } catch (const std::invalid_argument &e) {
-    Logger::error(LogCategory::QUALITY, "collectMetrics",
+    Logger::getInstance().error(LogCategory::QUALITY, "collectMetrics",
                   "Invalid argument error: " + std::string(e.what()));
     metrics.error_details = "Invalid Argument: " + std::string(e.what());
     metrics.validation_status = "FAILED";
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::QUALITY, "collectMetrics",
+    Logger::getInstance().error(LogCategory::QUALITY, "collectMetrics",
                   "General error collecting metrics: " + std::string(e.what()));
     metrics.error_details = "General Error: " + std::string(e.what());
     metrics.validation_status = "FAILED";
@@ -191,7 +191,7 @@ bool DataQuality::checkDataTypes(pqxx::connection &conn,
         }
       } catch (const pqxx::sql_error &e) {
         // Handle specific SQL errors (e.g., unsupported types)
-        Logger::warning(LogCategory::QUALITY, "checkDataTypes",
+        Logger::getInstance().warning(LogCategory::QUALITY, "checkDataTypes",
                         "Could not check type for column " + column + ": " +
                             e.what());
         type_mismatches[column] = {{"expected_type", type},
@@ -203,12 +203,12 @@ bool DataQuality::checkDataTypes(pqxx::connection &conn,
     txn.commit();
     return true;
   } catch (const pqxx::sql_error &e) {
-    Logger::error(LogCategory::QUALITY, "checkDataTypes",
+    Logger::getInstance().error(LogCategory::QUALITY, "checkDataTypes",
                   "SQL error checking data types: " + std::string(e.what()) +
                       " [SQL State: " + e.sqlstate() + "]");
     return false;
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::QUALITY, "checkDataTypes",
+    Logger::getInstance().error(LogCategory::QUALITY, "checkDataTypes",
                   "Error checking data types: " + std::string(e.what()));
     return false;
   }
@@ -263,7 +263,7 @@ bool DataQuality::checkNullCounts(pqxx::connection &conn,
         size_t columnNulls = nullResult[0][0].as<size_t>();
         metrics.null_count += columnNulls;
       } catch (const std::exception &e) {
-        Logger::warning(LogCategory::QUALITY, "checkNullCounts",
+        Logger::getInstance().warning(LogCategory::QUALITY, "checkNullCounts",
                         "Could not count NULLs in column " + columnName + ": " +
                             e.what());
       }
@@ -272,7 +272,7 @@ bool DataQuality::checkNullCounts(pqxx::connection &conn,
     txn.commit();
     return true;
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::QUALITY,
+    Logger::getInstance().error(LogCategory::QUALITY,
                   "Error checking null counts: " + std::string(e.what()));
     return false;
   }
@@ -329,7 +329,7 @@ bool DataQuality::checkDuplicates(pqxx::connection &conn,
     txn.commit();
     return true;
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::QUALITY,
+    Logger::getInstance().error(LogCategory::QUALITY,
                   "Error checking duplicates: " + std::string(e.what()));
     return false;
   }
@@ -392,7 +392,7 @@ bool DataQuality::checkConstraints(pqxx::connection &conn,
               {"violations", constraintViolations}};
         }
       } catch (const std::exception &e) {
-        Logger::warning(LogCategory::QUALITY, "checkConstraints",
+        Logger::getInstance().warning(LogCategory::QUALITY, "checkConstraints",
                         "Could not check constraint " + constraintName + ": " +
                             e.what());
         constraint_issues[constraintName] = {{"error", e.what()}};
@@ -403,7 +403,7 @@ bool DataQuality::checkConstraints(pqxx::connection &conn,
     txn.commit();
     return true;
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::QUALITY,
+    Logger::getInstance().error(LogCategory::QUALITY,
                   "Error checking constraints: " + std::string(e.what()));
     return false;
   }
@@ -480,7 +480,7 @@ bool DataQuality::saveMetrics(pqxx::connection &conn,
     txn.commit();
     return true;
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::QUALITY,
+    Logger::getInstance().error(LogCategory::QUALITY,
                   "Error saving metrics: " + std::string(e.what()));
     return false;
   }
@@ -546,7 +546,7 @@ DataQuality::getLatestMetrics(pqxx::connection &conn,
 
     txn.commit();
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::QUALITY,
+    Logger::getInstance().error(LogCategory::QUALITY,
                   "Error getting latest metrics: " + std::string(e.what()));
   }
 

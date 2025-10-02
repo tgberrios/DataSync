@@ -17,11 +17,11 @@ std::string DDLExporterInterface::escapeSQL(const std::string &value) {
 }
 
 void DDLExporterInterface::logError(const std::string &operation, const std::string &error) {
-  Logger::error(LogCategory::DDL_EXPORT, "DDLExporterInterface", 
+  Logger::getInstance().error(LogCategory::DDL_EXPORT, "DDLExporterInterface", 
                 operation + " error: " + error);
 }
 
 void DDLExporterInterface::logInfo(const std::string &operation, const std::string &message) {
-  Logger::info(LogCategory::DDL_EXPORT, "DDLExporterInterface", 
+  Logger::getInstance().info(LogCategory::DDL_EXPORT, "DDLExporterInterface", 
                operation + ": " + message);
 }

@@ -15,7 +15,7 @@ void DDLExporter::exportAllDDL() {
     fileManager.createFolderStructure();
     getSchemasFromCatalog();
 
-    Logger::info(LogCategory::DDL_EXPORT, "DDLExporter", 
+    Logger::getInstance().info(LogCategory::DDL_EXPORT, "DDLExporter", 
                  "DDL export started - Found " + std::to_string(schemas.size()) + " schemas to export");
 
     size_t successCount = 0;
@@ -24,7 +24,7 @@ void DDLExporter::exportAllDDL() {
     for (size_t i = 0; i < schemas.size(); ++i) {
       const auto &schema = schemas[i];
       try {
-        Logger::info(LogCategory::DDL_EXPORT, "DDLExporter",
+        Logger::getInstance().info(LogCategory::DDL_EXPORT, "DDLExporter",
                      "Exporting schema " + std::to_string(i + 1) + "/" +
                          std::to_string(schemas.size()) + ": " +
                          schema.schema_name);
@@ -32,11 +32,11 @@ void DDLExporter::exportAllDDL() {
         exportSchemaDDL(schema);
         successCount++;
 
-        Logger::info(LogCategory::DDL_EXPORT, "DDLExporter",
+        Logger::getInstance().info(LogCategory::DDL_EXPORT, "DDLExporter",
                      "Successfully exported schema: " + schema.schema_name);
       } catch (const std::exception &e) {
         errorCount++;
-        Logger::error(LogCategory::DDL_EXPORT, "DDLExporter", 
+        Logger::getInstance().error(LogCategory::DDL_EXPORT, "DDLExporter", 
                       "Error exporting schema " + schema.schema_name + ": " + std::string(e.what()));
       }
     }
@@ -44,7 +44,7 @@ void DDLExporter::exportAllDDL() {
     auto endTime = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::seconds>(endTime - startTime);
 
-    Logger::info(LogCategory::DDL_EXPORT, "DDLExporter",
+    Logger::getInstance().info(LogCategory::DDL_EXPORT, "DDLExporter",
                  "DDL export process completed in " + std::to_string(duration.count()) +
                  " seconds - Success: " + std::to_string(successCount) +
                  ", Errors: " + std::to_string(errorCount));
@@ -52,7 +52,7 @@ void DDLExporter::exportAllDDL() {
     auto endTime = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::seconds>(endTime - startTime);
 
-    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+    Logger::getInstance().error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error in DDL export process after " + std::to_string(duration.count()) +
                   " seconds: " + std::string(e.what()));
   }
@@ -83,10 +83,10 @@ void DDLExporter::getSchemasFromCatalog() {
       schemas.push_back(schema);
     }
 
-    Logger::info(LogCategory::DDL_EXPORT, "DDLExporter", 
+    Logger::getInstance().info(LogCategory::DDL_EXPORT, "DDLExporter", 
                  "Retrieved " + std::to_string(schemas.size()) + " schemas from catalog");
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+    Logger::getInstance().error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error getting schemas from catalog: " + std::string(e.what()));
   }
 }
@@ -102,11 +102,11 @@ void DDLExporter::exportSchemaDDL(const SchemaInfo &schema) {
     if (exporter) {
       exporter->exportDDL(schema);
     } else {
-      Logger::warning(LogCategory::DDL_EXPORT, "DDLExporter",
+      Logger::getInstance().warning(LogCategory::DDL_EXPORT, "DDLExporter",
                       "Unknown database engine: " + schema.db_engine);
     }
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::DDL_EXPORT, "DDLExporter",
+    Logger::getInstance().error(LogCategory::DDL_EXPORT, "DDLExporter",
                   "Error exporting schema DDL: " + std::string(e.what()));
   }
 }

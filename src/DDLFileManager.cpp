@@ -10,10 +10,10 @@ DDLFileManager::DDLFileManager(const std::string &basePath) : exportPath(basePat
 void DDLFileManager::createFolderStructure() {
   try {
     std::filesystem::create_directories(exportPath);
-    Logger::info(LogCategory::DDL_EXPORT, "DDLFileManager", 
+    Logger::getInstance().info(LogCategory::DDL_EXPORT, "DDLFileManager", 
                  "Created base export directory: " + exportPath);
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::DDL_EXPORT, "DDLFileManager", 
+    Logger::getInstance().error(LogCategory::DDL_EXPORT, "DDLFileManager", 
                   "Error creating folder structure: " + std::string(e.what()));
   }
 }
@@ -23,7 +23,7 @@ void DDLFileManager::createClusterFolder(const std::string &cluster) {
     std::string clusterPath = exportPath + "/" + sanitizeFileName(cluster);
     std::filesystem::create_directories(clusterPath);
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::DDL_EXPORT, "DDLFileManager", 
+    Logger::getInstance().error(LogCategory::DDL_EXPORT, "DDLFileManager", 
                   "Error creating cluster folder: " + std::string(e.what()));
   }
 }
@@ -33,7 +33,7 @@ void DDLFileManager::createEngineFolder(const std::string &cluster, const std::s
     std::string enginePath = exportPath + "/" + sanitizeFileName(cluster) + "/" + sanitizeFileName(engine);
     std::filesystem::create_directories(enginePath);
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::DDL_EXPORT, "DDLFileManager", 
+    Logger::getInstance().error(LogCategory::DDL_EXPORT, "DDLFileManager", 
                   "Error creating engine folder: " + std::string(e.what()));
   }
 }
@@ -44,7 +44,7 @@ void DDLFileManager::createDatabaseFolder(const std::string &cluster, const std:
                         sanitizeFileName(engine) + "/" + sanitizeFileName(database);
     std::filesystem::create_directories(dbPath);
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::DDL_EXPORT, "DDLFileManager", 
+    Logger::getInstance().error(LogCategory::DDL_EXPORT, "DDLFileManager", 
                   "Error creating database folder: " + std::string(e.what()));
   }
 }
@@ -60,7 +60,7 @@ void DDLFileManager::createSchemaFolder(const std::string &cluster, const std::s
     std::filesystem::create_directories(schemaPath + "/constraints");
     std::filesystem::create_directories(schemaPath + "/functions");
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::DDL_EXPORT, "DDLFileManager", 
+    Logger::getInstance().error(LogCategory::DDL_EXPORT, "DDLFileManager", 
                   "Error creating schema folder: " + std::string(e.what()));
   }
 }
@@ -89,17 +89,17 @@ void DDLFileManager::saveTableDDL(const std::string &cluster, const std::string 
       if (file.good()) {
         file.close();
       } else {
-        Logger::error(LogCategory::DDL_EXPORT, "DDLFileManager", 
+        Logger::getInstance().error(LogCategory::DDL_EXPORT, "DDLFileManager", 
                       "Error writing to file: " + filePath);
         file.close();
         std::filesystem::remove(filePath);
       }
     } else {
-      Logger::error(LogCategory::DDL_EXPORT, "DDLFileManager", 
+      Logger::getInstance().error(LogCategory::DDL_EXPORT, "DDLFileManager", 
                     "Failed to open file for writing: " + filePath);
     }
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::DDL_EXPORT, "DDLFileManager", 
+    Logger::getInstance().error(LogCategory::DDL_EXPORT, "DDLFileManager", 
                   "Error saving table DDL: " + std::string(e.what()));
   }
 }
@@ -118,7 +118,7 @@ void DDLFileManager::saveIndexDDL(const std::string &cluster, const std::string 
       file.close();
     }
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::DDL_EXPORT, "DDLFileManager", 
+    Logger::getInstance().error(LogCategory::DDL_EXPORT, "DDLFileManager", 
                   "Error saving index DDL: " + std::string(e.what()));
   }
 }
@@ -137,7 +137,7 @@ void DDLFileManager::saveConstraintDDL(const std::string &cluster, const std::st
       file.close();
     }
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::DDL_EXPORT, "DDLFileManager", 
+    Logger::getInstance().error(LogCategory::DDL_EXPORT, "DDLFileManager", 
                   "Error saving constraint DDL: " + std::string(e.what()));
   }
 }
@@ -161,7 +161,7 @@ void DDLFileManager::saveFunctionDDL(const std::string &cluster, const std::stri
       file.close();
     }
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::DDL_EXPORT, "DDLFileManager", 
+    Logger::getInstance().error(LogCategory::DDL_EXPORT, "DDLFileManager", 
                   "Error saving function DDL: " + std::string(e.what()));
   }
 }
@@ -192,7 +192,7 @@ std::string DDLFileManager::getFilePath(const std::string &type, const std::stri
 
 bool DDLFileManager::validatePath(const std::string &path) {
   if (path.length() > 260) {
-    Logger::error(LogCategory::DDL_EXPORT, "DDLFileManager", 
+    Logger::getInstance().error(LogCategory::DDL_EXPORT, "DDLFileManager", 
                   "File path too long: " + path);
     return false;
   }
@@ -205,7 +205,7 @@ void DDLFileManager::ensureDirectoryExists(const std::string &path) {
     try {
       std::filesystem::create_directories(parentPath);
     } catch (const std::filesystem::filesystem_error &e) {
-      Logger::error(LogCategory::DDL_EXPORT, "DDLFileManager", 
+      Logger::getInstance().error(LogCategory::DDL_EXPORT, "DDLFileManager", 
                     "Failed to create directory: " + parentPath.string() + " - " + e.what());
     }
   }
