@@ -1010,16 +1010,10 @@ private:
           }
           selectQuery += " LIMIT " + std::to_string(CHUNK_SIZE) + ";";
         } else if (pkStrategy == "TEMPORAL_PK" && !candidateColumns.empty()) {
-          // CURSOR-BASED PAGINATION: Usar columnas candidatas para paginación
-          // eficiente
-          if (!lastProcessedPK.empty()) {
-            selectQuery += " WHERE \"" + candidateColumns[0] + "\" > '" +
-                           escapeSQL(lastProcessedPK) + "'";
-          }
-
-          // Ordenar por la primera columna candidata
-          selectQuery += " ORDER BY \"" + candidateColumns[0] + "\"";
-          selectQuery += " LIMIT " + std::to_string(CHUNK_SIZE) + ";";
+          // Map TEMPORAL_PK to OFFSET behavior
+          selectQuery += " ORDER BY (SELECT NULL) LIMIT " +
+                         std::to_string(CHUNK_SIZE) + " OFFSET " +
+                         std::to_string(totalProcessed) + ";";
         } else {
           // FALLBACK: Usar OFFSET pagination para tablas sin PK
           selectQuery += " ORDER BY (SELECT NULL) LIMIT " +
@@ -1122,13 +1116,11 @@ private:
           }
 
           // OPTIMIZED: Update last_processed_pk for cursor-based pagination
-          if (((pkStrategy == "PK" && !pkColumns.empty()) ||
-               (pkStrategy == "TEMPORAL_PK" && !candidateColumns.empty())) &&
+          if ((pkStrategy == "PK" && !pkColumns.empty()) &&
               !resultsVector.empty()) {
             try {
               // Obtener el último PK del chunk procesado
-              std::vector<std::string> columnsToUse =
-                  (pkStrategy == "PK") ? pkColumns : candidateColumns;
+              std::vector<std::string> columnsToUse = pkColumns;
               std::string lastPK = getLastPKFromResults(
                   resultsVector, columnsToUse, columnNames);
               if (!lastPK.empty()) {
@@ -1143,9 +1135,8 @@ private:
         }
 
         // Actualizar last_offset en la base de datos solo para tablas sin PK
-        // (OFFSET pagination) Para tablas con PK o TEMPORAL_PK se usa
-        // last_processed_pk en lugar de last_offset
-        if (pkStrategy != "PK" && pkStrategy != "TEMPORAL_PK") {
+        // (OFFSET pagination)
+        if (pkStrategy != "PK") {
           try {
             pqxx::work updateTxn(pgConn);
             updateTxn.exec("UPDATE metadata.catalog SET last_offset='" +

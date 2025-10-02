@@ -1069,16 +1069,9 @@ public:
             selectQuery += " OFFSET 0 ROWS FETCH NEXT " +
                            std::to_string(CHUNK_SIZE) + " ROWS ONLY;";
           } else if (pkStrategy == "TEMPORAL_PK" && !candidateColumns.empty()) {
-            // CURSOR-BASED PAGINATION: Usar columnas candidatas para paginación
-            // eficiente
-            if (!lastProcessedPK.empty()) {
-              selectQuery += " WHERE [" + candidateColumns[0] + "] > '" +
-                             escapeSQL(lastProcessedPK) + "'";
-            }
-
-            // Ordenar por la primera columna candidata
-            selectQuery += " ORDER BY [" + candidateColumns[0] + "]";
-            selectQuery += " OFFSET 0 ROWS FETCH NEXT " +
+            // Map TEMPORAL_PK to OFFSET behavior
+            selectQuery += " ORDER BY (SELECT NULL) OFFSET " +
+                           std::to_string(currentOffset) + " ROWS FETCH NEXT " +
                            std::to_string(CHUNK_SIZE) + " ROWS ONLY;";
           } else {
             // FALLBACK: Usar OFFSET pagination para tablas sin PK
@@ -1192,18 +1185,16 @@ public:
           // tables
           targetCount += rowsInserted;
 
-          // Solo incrementar currentOffset para tablas sin PK (OFFSET
-          // pagination) Para tablas con PK o TEMPORAL_PK se usa cursor-based
-          // pagination con last_processed_pk
-          if (pkStrategy != "PK" && pkStrategy != "TEMPORAL_PK") {
+          // Solo incrementar currentOffset para tablas sin PK (OFFSET)
+          if (pkStrategy != "PK") {
             currentOffset += rowsInserted;
           }
 
           // If COPY failed but we have data, advance the offset by 1
           if (rowsInserted == 0 && !results.empty()) {
             targetCount += 1; // Advance by 1 to skip the problematic record
-            // Solo avanzar currentOffset para tablas sin PK ni TEMPORAL_PK
-            if (pkStrategy != "PK" && pkStrategy != "TEMPORAL_PK") {
+            // Solo avanzar currentOffset para tablas sin PK
+            if (pkStrategy != "PK") {
               currentOffset +=
                   1; // Advance OFFSET by 1 to skip the problematic record
             }
@@ -1215,13 +1206,10 @@ public:
           }
 
           // OPTIMIZED: Update last_processed_pk for cursor-based pagination
-          if (((pkStrategy == "PK" && !pkColumns.empty()) ||
-               (pkStrategy == "TEMPORAL_PK" && !candidateColumns.empty())) &&
-              !results.empty()) {
+          if ((pkStrategy == "PK" && !pkColumns.empty()) && !results.empty()) {
             try {
               // Obtener el último PK del chunk procesado
-              std::vector<std::string> columnsToUse =
-                  (pkStrategy == "PK") ? pkColumns : candidateColumns;
+              std::vector<std::string> columnsToUse = pkColumns;
               std::string lastPK =
                   getLastPKFromResults(results, columnsToUse, columnNames);
               if (!lastPK.empty()) {
@@ -1234,10 +1222,8 @@ public:
             }
           }
 
-          // Update last_offset in database solo para tablas sin PK (OFFSET
-          // pagination) Para tablas con PK o TEMPORAL_PK se usa
-          // last_processed_pk en lugar de last_offset
-          if (pkStrategy != "PK" && pkStrategy != "TEMPORAL_PK") {
+          // Update last_offset in database solo para tablas sin PK (OFFSET)
+          if (pkStrategy != "PK") {
             try {
               pqxx::work updateTxn(pgConn);
               updateTxn.exec("UPDATE metadata.catalog SET last_offset='" +

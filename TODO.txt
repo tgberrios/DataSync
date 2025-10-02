@@ -14,6 +14,4 @@ UPDATE metadata.catalog SET
     has_pk = FALSE,
     candidate_columns = NULL;
 
-
-    que me confirme cuantas estrategias estamos usando!
-    eliminar la de temporal PK
+    ELIMINAR STATUS RESET

@@ -1265,12 +1265,7 @@ std::string CatalogManager::determinePKStrategy(
     return "PK";
   }
 
-  if (!timeColumn.empty()) {
-    Logger::getInstance().debug(LogCategory::DATABASE, "determinePKStrategy",
-                                "Using TEMPORAL_PK strategy - time column: " +
-                                    timeColumn);
-    return "TEMPORAL_PK";
-  }
+  // Ignore timeColumn for strategy selection to restrict to PK and OFFSET
 
   if (!candidateColumns.empty()) {
     Logger::getInstance().debug(LogCategory::DATABASE, "determinePKStrategy",
