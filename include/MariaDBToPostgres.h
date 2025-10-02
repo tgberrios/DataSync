@@ -2419,6 +2419,7 @@ private:
          cleanValue == "\\N" || cleanValue == "\\0" || cleanValue == "0" ||
          cleanValue == "0.0" || cleanValue == "0.00" || cleanValue == "0.000" ||
          cleanValue.find("0000-") != std::string::npos ||
+         cleanValue.find("0000-00-00") != std::string::npos ||
          cleanValue.find("1900-01-01") != std::string::npos ||
          cleanValue.find("1970-01-01") != std::string::npos);
 
@@ -2448,6 +2449,10 @@ private:
                     std::to_string(maxLen) +
                     " characters: " + cleanValue.substr(0, 20) + "...");
             cleanValue = cleanValue.substr(0, maxLen);
+            // Si el valor truncado está vacío, marcarlo como NULL
+            if (cleanValue.empty()) {
+              isNull = true;
+            }
           }
         } catch (const std::exception &e) {
           // Si no se puede parsear la longitud, continuar sin truncar
@@ -2505,7 +2510,8 @@ private:
       // fecha válido
       if (isNumeric || cleanValue.length() < 10 ||
           cleanValue.find("-") == std::string::npos ||
-          cleanValue.find("0000") != std::string::npos) {
+          cleanValue.find("0000") != std::string::npos ||
+          cleanValue.find("0000-00-00") != std::string::npos) {
         isNull = true;
       }
     }

@@ -2,24 +2,6 @@ pending de review TEMPORAL PK EN MSSQL
 docker para POSTGRES Y TESTEAR TODO AL MAXIMO
 
 
-2025-09-29 19:43:40.886[ERROR][SYSTEM][TRANSFER]Error comparing/updating record: ERROR: date/time field value out of range: "0000-00-00 00:00:00"
-2025-09-29 19:43:37.059[ERROR][SYSTEM][TRANSFER]CRITICAL ERROR: Bulk upsert failed for chunk 61 in table square_service_jetu_cr.free_entries: ERROR: value too long for type character varying(2)
-2025-09-29 19:43:37.059[ERROR][SYSTEM][TRANSFER]Error in bulk upsert: ERROR: value too long for type character varying(2)
-2025-09-29 19:43:37.030[ERROR][SYSTEM][TRANSFER]CRITICAL ERROR: Bulk upsert failed for chunk 60 in table square_service_jetu_cr.free_entries: ERROR: value too long for type character varying(2)
-2025-09-29 19:43:37.030[ERROR][SYSTEM][TRANSFER]Error in bulk upsert: ERROR: value too long for type character varying(2)
-2025-09-29 19:43:37.012[ERROR][SYSTEM][TRANSFER]CRITICAL ERROR: Bulk upsert failed for chunk 59 in table square_service_jetu_cr.free_entries: ERROR: value too long for type character varying(2)
-2025-09-29 19:43:37.012[ERROR][SYSTEM][TRANSFER]Error in bulk upsert: ERROR: value too long for type character varying(2)
-2025-09-29 19:43:36.886[ERROR][SYSTEM][TRANSFER]CRITICAL ERROR: Bulk upsert failed for chunk 55 in table square_service_jetu_cr.free_entries: ERROR: value too long for type character varying(2)
-2025-09-29 19:43:36.886[ERROR][SYSTEM][TRANSFER]Error in bulk upsert: ERROR: value too long for type character varying(2)
-2025-09-29 19:43:36.405[ERROR][SYSTEM][TRANSFER]CRITICAL ERROR: Bulk upsert failed for chunk 40 in table square_service_jetu_cr.free_entries: ERROR: value too long for type character varying(2)
-2025-09-29 19:43:36.405[ERROR][SYSTEM][TRANSFER]Error in bulk upsert: ERROR: value too long for type character varying(2)
-2025-09-29 19:43:35.323[ERROR][SYSTEM][TRANSFER]CRITICAL ERROR: Bulk upsert failed for chunk 5 in table square_service_jetu_cr.free_entries: ERROR: value too long for type character varying(2)
-2025-09-29 19:43:35.323[ERROR][SYSTEM][TRANSFER]Error in bulk upsert: ERROR: value too long for type character varying(2)
-
-
-
-
-
 UPDATE metadata.catalog
 set status = 'FULL_LOAD', last_offset = 0, last_processed_pk = 0
 WHERE active = true
