@@ -16,7 +16,4 @@ UPDATE metadata.catalog SET
 
 
     que me confirme cuantas estrategias estamos usando!
-
-    ya podemos hacer que catalog y transfer se ejecuten al mismo tiempo no tienen porque tener mutex
-
     eliminar la de temporal PK

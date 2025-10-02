@@ -164,14 +164,6 @@ void StreamingData::catalogSyncThread() {
 
     while (threadManager->isRunning()) {
       try {
-        // Wait for transfer to complete before starting catalog sync
-        while (transferRunning.load() && threadManager->isRunning()) {
-          Logger::getInstance().info(
-              LogCategory::MONITORING,
-              "Catalog sync waiting for transfer to complete...");
-          std::this_thread::sleep_for(std::chrono::seconds(1));
-        }
-
         if (!threadManager->isRunning())
           break;
 
@@ -227,14 +219,6 @@ void StreamingData::transferThread() {
 
     while (threadManager->isRunning()) {
       try {
-        // Wait for catalog sync to complete before starting transfer
-        while (catalogSyncRunning.load() && threadManager->isRunning()) {
-          Logger::getInstance().info(
-              LogCategory::MONITORING,
-              "Transfer waiting for catalog sync to complete...");
-          std::this_thread::sleep_for(std::chrono::seconds(1));
-        }
-
         if (!threadManager->isRunning())
           break;
 
