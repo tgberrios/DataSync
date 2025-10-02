@@ -312,6 +312,9 @@ void MariaDBDataTransfer::updateTableStatus(pqxx::connection &pgConn,
     }
 
     updateQuery += ", last_sync_time=NOW()";
+    if (status == "NO_DATA") {
+      updateQuery += ", active=false";
+    }
     updateQuery += " WHERE schema_name='" + escapeSQL(schema_name) +
                    "' AND table_name='" + escapeSQL(table_name) + "'";
 
