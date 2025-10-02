@@ -1,57 +1,50 @@
 #ifndef METRICSCOLLECTOR_H
 #define METRICSCOLLECTOR_H
 
-#include "Config.h"
+#include "MetricsCalculator.h"
+#include "MetricsDatabaseManager.h"
+#include "MetricsReporter.h"
+#include "TransferMetricsData.h"
 #include "logger.h"
-#include <pqxx/pqxx>
-#include <string>
-#include <vector>
-
-struct TransferMetrics {
-  std::string schema_name;
-  std::string table_name;
-  std::string db_engine;
-
-  // Métricas Reales de la Base de Datos
-  long long records_transferred = 0;
-  long long bytes_transferred = 0;
-  double memory_used_mb = 0.0;
-  int io_operations_per_second = 0;
-
-  // Metadatos
-  std::string transfer_type;
-  std::string status;
-  std::string error_message;
-
-  // Timestamps
-  std::string started_at;
-  std::string completed_at;
-};
+#include <memory>
 
 class MetricsCollector {
 public:
-  MetricsCollector() = default;
+  MetricsCollector();
   ~MetricsCollector() = default;
 
+  // Main collection method
   void collectAllMetrics();
-  void createMetricsTable();
 
-private:
+  // Individual collection methods
   void collectTransferMetrics();
   void collectPerformanceMetrics();
   void collectMetadataMetrics();
   void collectTimestampMetrics();
-  void saveMetricsToDatabase();
-  void generateMetricsReport();
 
-  std::string escapeSQL(const std::string &value);
-  std::string getCurrentTimestamp();
-  std::string getEstimatedStartTime(const std::string &completedAt);
-  double calculateTransferRate(long long records, int duration_ms);
-  long long calculateBytesTransferred(const std::string &schema_name,
-                                      const std::string &table_name);
+  // Reporting methods
+  void generateSummaryReport();
+  void generateDetailedReport();
+  void generateStatusReport();
+  void generateEngineReport();
 
-  std::vector<TransferMetrics> metrics;
+  // Export methods
+  void exportToCSV(const std::string &filename);
+  void exportToJSON(const std::string &filename);
+
+  // Maintenance methods
+  void clearOldMetrics(int daysToKeep = 30);
+
+private:
+  // Core components
+  std::unique_ptr<TransferMetricsData> metricsData;
+  std::unique_ptr<MetricsDatabaseManager> dbManager;
+  std::unique_ptr<MetricsCalculator> calculator;
+  std::unique_ptr<MetricsReporter> reporter;
+
+  // Helper methods
+  void initializeComponents();
+  void validateData();
 };
 
 #endif // METRICSCOLLECTOR_H

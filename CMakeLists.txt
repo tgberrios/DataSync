@@ -41,6 +41,10 @@ add_executable(DataSync
     src/PostgreSQLDDLExporter.cpp
     src/MSSQLDDLExporter.cpp
     src/MetricsCollector.cpp 
+    src/TransferMetricsData.cpp
+    src/MetricsDatabaseManager.cpp
+    src/MetricsCalculator.cpp
+    src/MetricsReporter.cpp
     src/DataQuality.cpp
     src/catalog_manager.cpp
 )
