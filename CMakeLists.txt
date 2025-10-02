@@ -28,6 +28,8 @@ add_executable(DataSync
     src/Config.cpp 
     src/logger.cpp 
     src/DataGovernance.cpp 
+    src/DataClassifier.cpp
+    src/DataQualityCalculator.cpp
     src/DDLExporter.cpp 
     src/MetricsCollector.cpp 
     src/DataQuality.cpp
