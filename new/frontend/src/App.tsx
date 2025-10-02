@@ -1,0 +1,33 @@
+import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import Layout from './components/Layout'
+import Dashboard from './components/Dashboard'
+import Catalog from './components/Catalog'
+import Monitor from './components/Monitor'
+import LiveChanges from './components/LiveChanges'
+import Quality from './components/Quality'
+import Governance from './components/Governance'
+import Security from './components/Security'
+import LogsViewer from './components/LogsViewer'
+import Config from './components/Config'
+
+function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<Layout />}>
+          <Route index element={<Dashboard />} />
+          <Route path="catalog" element={<Catalog />} />
+          <Route path="monitor" element={<Monitor />} />
+          <Route path="live-changes" element={<LiveChanges />} />
+          <Route path="quality" element={<Quality />} />
+          <Route path="governance" element={<Governance />} />
+          <Route path="security" element={<Security />} />
+          <Route path="logs" element={<LogsViewer />} />
+          <Route path="config" element={<Config />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
+  )
+}
+
+export default App
