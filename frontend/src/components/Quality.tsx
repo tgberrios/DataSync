@@ -39,7 +39,39 @@ const QualityItem = styled.div`
   }
 `;
 
-const QualitySummary = styled.div`
+  const QualityHeader = styled.div`
+  display: grid;
+  grid-template-columns: 150px 150px 100px 100px 100px 1fr;
+  align-items: center;
+  padding: 10px 15px;
+  background: #f8f9fa;
+  border-bottom: 2px solid #dee2e6;
+  font-weight: bold;
+  font-size: 0.9em;
+  
+  & > div {
+    text-align: left;
+    padding: 0 8px;
+  }
+  
+  & > div:nth-child(3) {
+    text-align: right;
+  }
+  
+  & > div:nth-child(4) {
+    text-align: center;
+  }
+  
+  & > div:nth-child(5) {
+    text-align: center;
+  }
+  
+  & > div:last-child {
+    text-align: right;
+  }
+`;
+
+  const QualitySummary = styled.div`
   display: grid;
   grid-template-columns: 150px 150px 100px 100px 100px 1fr;
   align-items: center;
@@ -47,6 +79,27 @@ const QualitySummary = styled.div`
   cursor: pointer;
   gap: 10px;
   font-size: 0.9em;
+  
+  & > div {
+    text-align: left;
+    padding: 0 8px;
+  }
+  
+  & > div:nth-child(3) {
+    text-align: right;
+  }
+  
+  & > div:nth-child(4) {
+    text-align: center;
+  }
+  
+  & > div:nth-child(5) {
+    text-align: center;
+  }
+  
+  & > div:last-child {
+    text-align: right;
+  }
 `;
 
 const QualityDetails = styled.div<{ $isOpen: boolean }>`
@@ -63,6 +116,21 @@ const MetricsGrid = styled.div`
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   padding: 15px;
   gap: 15px;
+  
+  & > div {
+    position: relative;
+  }
+  
+  & > div::before {
+    content: attr(data-label);
+    position: absolute;
+    top: -8px;
+    left: 12px;
+    background: white;
+    padding: 0 4px;
+    font-size: 0.75em;
+    color: #666;
+  }
 `;
 
 const MetricCard = styled.div`
@@ -285,7 +353,16 @@ const Quality = () => {
                 No quality metrics found
               </div>
             ) : (
-              qualityData.map((item) => (
+              <>
+                <QualityHeader>
+                  <div>Schema</div>
+                  <div>Table</div>
+                  <div>Total Rows</div>
+                  <div>Status</div>
+                  <div>Quality</div>
+                  <div>Last Check</div>
+                </QualityHeader>
+                {qualityData.map((item) => (
                 <QualityItem key={item.id}>
                   <QualitySummary onClick={() => toggleItem(item.id)}>
                     <div>{item.schema_name}</div>
@@ -304,33 +381,33 @@ const Quality = () => {
 
                   <QualityDetails $isOpen={openItemId === item.id}>
                     <MetricsGrid>
-                      <MetricCard>
-                        <MetricLabel>Null Values</MetricLabel>
-                        <MetricValue>{formatNumber(item.null_count)}</MetricValue>
+                      <MetricCard data-label="Missing Values">
+                        <MetricValue>{formatNumber(item.null_count)} rows</MetricValue>
+                        <MetricLabel>Rows with NULL values</MetricLabel>
                       </MetricCard>
-                      <MetricCard>
-                        <MetricLabel>Duplicates</MetricLabel>
-                        <MetricValue>{formatNumber(item.duplicate_count)}</MetricValue>
+                      <MetricCard data-label="Duplicate Records">
+                        <MetricValue>{formatNumber(item.duplicate_count)} rows</MetricValue>
+                        <MetricLabel>Duplicate entries found</MetricLabel>
                       </MetricCard>
-                      <MetricCard>
-                        <MetricLabel>Invalid Types</MetricLabel>
-                        <MetricValue>{formatNumber(item.invalid_type_count)}</MetricValue>
+                      <MetricCard data-label="Type Mismatches">
+                        <MetricValue>{formatNumber(item.invalid_type_count)} fields</MetricValue>
+                        <MetricLabel>Fields with incorrect data types</MetricLabel>
                       </MetricCard>
-                      <MetricCard>
-                        <MetricLabel>Out of Range</MetricLabel>
-                        <MetricValue>{formatNumber(item.out_of_range_count)}</MetricValue>
+                      <MetricCard data-label="Range Violations">
+                        <MetricValue>{formatNumber(item.out_of_range_count)} values</MetricValue>
+                        <MetricLabel>Values outside valid range</MetricLabel>
                       </MetricCard>
-                      <MetricCard>
-                        <MetricLabel>Referential Integrity</MetricLabel>
-                        <MetricValue>{formatNumber(item.referential_integrity_errors)}</MetricValue>
+                      <MetricCard data-label="Referential Issues">
+                        <MetricValue>{formatNumber(item.referential_integrity_errors)} errors</MetricValue>
+                        <MetricLabel>Foreign key violations</MetricLabel>
                       </MetricCard>
-                      <MetricCard>
-                        <MetricLabel>Constraint Violations</MetricLabel>
-                        <MetricValue>{formatNumber(item.constraint_violation_count)}</MetricValue>
+                      <MetricCard data-label="Constraint Issues">
+                        <MetricValue>{formatNumber(item.constraint_violation_count)} violations</MetricValue>
+                        <MetricLabel>Failed constraint checks</MetricLabel>
                       </MetricCard>
-                      <MetricCard>
-                        <MetricLabel>Check Duration</MetricLabel>
+                      <MetricCard data-label="Analysis Time">
                         <MetricValue>{(item.check_duration_ms / 1000).toFixed(2)}s</MetricValue>
+                        <MetricLabel>Time taken to check quality</MetricLabel>
                       </MetricCard>
                     </MetricsGrid>
 
@@ -338,7 +415,9 @@ const Quality = () => {
                       <>
                         <MetricLabel style={{ margin: '0 15px' }}>Type Mismatch Details:</MetricLabel>
                         <ErrorDetails>
-                          {JSON.stringify(item.type_mismatch_details, null, 2)}
+                          {Object.entries(item.type_mismatch_details).map(([column, details]) => (
+                            `Column: ${column}\n${JSON.stringify(details, null, 2)}\n\n`
+                          ))}
                         </ErrorDetails>
                       </>
                     )}
@@ -347,7 +426,9 @@ const Quality = () => {
                       <>
                         <MetricLabel style={{ margin: '0 15px' }}>Integrity Check Details:</MetricLabel>
                         <ErrorDetails>
-                          {JSON.stringify(item.integrity_check_details, null, 2)}
+                          {Object.entries(item.integrity_check_details).map(([column, details]) => (
+                            `Column: ${column}\n${JSON.stringify(details, null, 2)}\n\n`
+                          ))}
                         </ErrorDetails>
                       </>
                     )}
@@ -360,7 +441,8 @@ const Quality = () => {
                     )}
                   </QualityDetails>
                 </QualityItem>
-              ))
+              ))}
+              </>
             )}
           </QualityList>
 

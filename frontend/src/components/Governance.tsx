@@ -43,12 +43,17 @@ const Table = styled.table`
   background: white;
 `;
 
-const Th = styled.th`
+  const Th = styled.th<{ sortable?: boolean }>`
   padding: 12px;
   text-align: left;
   border-bottom: 2px solid #333;
   background: #f5f5f5;
   white-space: nowrap;
+  cursor: ${props => props.sortable ? 'pointer' : 'default'};
+  
+  &:hover {
+    background: ${props => props.sortable ? '#e0e0e0' : '#f5f5f5'};
+  }
 `;
 
 const Td = styled.td`
@@ -201,7 +206,7 @@ const GovernanceItem = styled.div`
   }
 `;
 
-const GovernanceSummary = styled.div`
+  const GovernanceSummary = styled.div`
   display: grid;
   grid-template-columns: 200px 100px 120px 120px 100px 100px 80px 80px 80px 100px 150px;
   align-items: center;
@@ -209,6 +214,14 @@ const GovernanceSummary = styled.div`
   cursor: pointer;
   gap: 10px;
   font-size: 0.9em;
+  overflow-x: auto;
+  min-width: 100%;
+  
+  & > div {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 `;
 
 const GovernanceDetails = styled.div<{ $isOpen: boolean }>`
@@ -284,9 +297,21 @@ const Governance = () => {
     domain: '',
     sensitivity: ''
   });
+  
+  const [sort, setSort] = useState({
+    field: 'health_status',
+    direction: 'desc'
+  });
 
   const toggleItem = (id: number) => {
     setOpenItemId(openItemId === id ? null : id);
+  };
+
+  const handleSort = (field: string) => {
+    setSort(prev => ({
+      field,
+      direction: prev.field === field && prev.direction === 'asc' ? 'desc' : 'asc'
+    }));
   };
 
   useEffect(() => {
@@ -297,7 +322,9 @@ const Governance = () => {
         const response = await governanceApi.getGovernanceData({
           page,
           limit: 10,
-          ...filter
+          ...filter,
+          sort_field: sort.field,
+          sort_direction: sort.direction
         });
         setData(response.data);
         setPagination(response.pagination);
@@ -311,7 +338,7 @@ const Governance = () => {
     fetchData();
     const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
-  }, [page, filter]);
+  }, [page, filter, sort]);
 
   return (
     <GovernanceContainer>
@@ -424,39 +451,60 @@ const Governance = () => {
             ) : (
               data.map((item) => (
                 <GovernanceItem key={item.id}>
-                  <GovernanceSummary onClick={() => toggleItem(item.id)}>
-                    <div>{item.schema_name}.{item.table_name}</div>
-                    <div>{item.inferred_source_engine}</div>
-                    <div>
+                  <GovernanceSummary>
+                    <div onClick={() => handleSort('table_name')} style={{ cursor: 'pointer' }}>
+                      {item.schema_name}.{item.table_name}
+                      {sort.field === 'table_name' && (sort.direction === 'asc' ? ' ↑' : ' ↓')}
+                    </div>
+                    <div onClick={() => handleSort('inferred_source_engine')} style={{ cursor: 'pointer' }}>
+                      {item.inferred_source_engine}
+                      {sort.field === 'inferred_source_engine' && (sort.direction === 'asc' ? ' ↑' : ' ↓')}
+                    </div>
+                    <div onClick={() => handleSort('data_category')} style={{ cursor: 'pointer' }}>
                       <Badge type={item.data_category}>
                         {item.data_category}
                       </Badge>
+                      {sort.field === 'data_category' && (sort.direction === 'asc' ? ' ↑' : ' ↓')}
                     </div>
-                    <div>{item.business_domain}</div>
-                    <div>
+                    <div onClick={() => handleSort('business_domain')} style={{ cursor: 'pointer' }}>
+                      {item.business_domain}
+                      {sort.field === 'business_domain' && (sort.direction === 'asc' ? ' ↑' : ' ↓')}
+                    </div>
+                    <div onClick={() => handleSort('health_status')} style={{ cursor: 'pointer' }}>
                       <Badge type={item.health_status}>
                         {item.health_status}
                       </Badge>
+                      {sort.field === 'health_status' && (sort.direction === 'asc' ? ' ↑' : ' ↓')}
                     </div>
-                    <div>
+                    <div onClick={() => handleSort('sensitivity_level')} style={{ cursor: 'pointer' }}>
                       <Badge type={`${item.sensitivity_level}_SENSITIVITY`}>
                         {item.sensitivity_level}
                       </Badge>
+                      {sort.field === 'sensitivity_level' && (sort.direction === 'asc' ? ' ↑' : ' ↓')}
                     </div>
-                    <div>
+                    <div onClick={() => handleSort('data_quality_score')} style={{ cursor: 'pointer' }}>
                       <QualityScore score={item.data_quality_score}>
                         {item.data_quality_score}%
                       </QualityScore>
+                      {sort.field === 'data_quality_score' && (sort.direction === 'asc' ? ' ↑' : ' ↓')}
                     </div>
-                    <div>{formatSize(item.table_size_mb)}</div>
-                    <div>{formatNumber(item.total_rows)}</div>
-                    <div>
+                    <div onClick={() => handleSort('table_size_mb')} style={{ cursor: 'pointer' }}>
+                      {formatSize(item.table_size_mb)}
+                      {sort.field === 'table_size_mb' && (sort.direction === 'asc' ? ' ↑' : ' ↓')}
+                    </div>
+                    <div onClick={() => handleSort('total_rows')} style={{ cursor: 'pointer' }}>
+                      {formatNumber(item.total_rows)}
+                      {sort.field === 'total_rows' && (sort.direction === 'asc' ? ' ↑' : ' ↓')}
+                    </div>
+                    <div onClick={() => handleSort('access_frequency')} style={{ cursor: 'pointer' }}>
                       <Badge type={item.access_frequency}>
                         {item.access_frequency}
                       </Badge>
+                      {sort.field === 'access_frequency' && (sort.direction === 'asc' ? ' ↑' : ' ↓')}
                     </div>
-                    <div style={{ textAlign: 'right', color: '#666', fontSize: '0.85em' }}>
+                    <div onClick={() => handleSort('last_analyzed')} style={{ textAlign: 'right', color: '#666', fontSize: '0.85em', cursor: 'pointer' }}>
                       {formatDate(item.last_analyzed)}
+                      {sort.field === 'last_analyzed' && (sort.direction === 'asc' ? ' ↑' : ' ↓')}
                     </div>
                   </GovernanceSummary>
 

@@ -227,13 +227,6 @@ const Dashboard = () => {
               <SectionTitle style={{ fontSize: '1em', marginBottom: '10px' }}>■ DATA PROGRESS METRICS</SectionTitle>
               <Grid>
                 <Value>
-                  <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>Estimated Total Data</div>
-                  <div style={{ fontSize: '1.2em', color: '#333' }}>
-                    {formatNumberWithCommas(stats.syncStatus.totalData || 0)}
-                  </div>
-                  <div style={{ fontSize: '0.8em', color: '#666' }}>Total estimated rows</div>
-                </Value>
-                <Value>
                   <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>Progress Percentage</div>
                   <div style={{ fontSize: '1.2em', color: '#333' }}>
                     {stats.syncStatus.fullLoadActive > 0 
