@@ -129,7 +129,7 @@ const ProcessingItem = styled.div`
 
 const ProcessingSummary = styled.div`
   display: grid;
-  grid-template-columns: 120px 120px 150px 1fr 140px 140px 140px 140px;
+  grid-template-columns: max-content 120px 150px 1fr 140px 140px 140px 140px;
   align-items: center;
   padding: 12px 15px;
   cursor: pointer;
@@ -257,6 +257,7 @@ const LiveChanges = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [engineFilter, setEngineFilter] = useState('ALL');
+  const [strategyFilter, setStrategyFilter] = useState('ALL');
   const [currentPage, setCurrentPage] = useState(1);
   const [pagination, setPagination] = useState<any>({});
 
@@ -265,7 +266,7 @@ const LiveChanges = () => {
       try {
         setError(null);
         const [processingsResponse, statsData] = await Promise.all([
-          monitorApi.getProcessingLogs(currentPage, 20),
+          monitorApi.getProcessingLogs(currentPage, 20, strategyFilter !== 'ALL' ? strategyFilter : undefined),
           monitorApi.getProcessingStats()
         ]);
         setProcessings(processingsResponse.data);
@@ -284,7 +285,7 @@ const LiveChanges = () => {
       const interval = setInterval(fetchData, 5000); // Refresh every 5 seconds
       return () => clearInterval(interval);
     }
-  }, [isPaused, currentPage]);
+  }, [isPaused, currentPage, strategyFilter]);
 
   const toggleProcessing = (id: number) => {
     setOpenProcessingId(openProcessingId === id ? null : id);
@@ -314,15 +315,7 @@ const LiveChanges = () => {
   };
 
   const formatTimestamp = (timestamp: string) => {
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffMins = Math.floor(diffMs / 60000);
-    
-    if (diffMins < 1) return 'Just now';
-    if (diffMins < 60) return `${diffMins}m ago`;
-    if (diffMins < 1440) return `${Math.floor(diffMins / 60)}h ago`;
-    return date.toLocaleString();
+    return new Date(timestamp).toISOString();
   };
 
   // Filter and search logic
@@ -334,8 +327,9 @@ const LiveChanges = () => {
     
     const matchesStatus = statusFilter === 'ALL' || processing.status === statusFilter;
     const matchesEngine = engineFilter === 'ALL' || processing.db_engine === engineFilter;
+    const matchesStrategy = strategyFilter === 'ALL' || processing.pk_strategy === strategyFilter;
     
-    return matchesSearch && matchesStatus && matchesEngine;
+    return matchesSearch && matchesStatus && matchesEngine && matchesStrategy;
   });
 
   return (
@@ -367,6 +361,14 @@ const LiveChanges = () => {
             <option value="MSSQL">MSSQL</option>
             <option value="MariaDB">MariaDB</option>
             <option value="PostgreSQL">PostgreSQL</option>
+          </FilterSelect>
+          <FilterSelect
+            value={strategyFilter}
+            onChange={(e) => setStrategyFilter(e.target.value)}
+          >
+            <option value="ALL">All Strategies</option>
+            <option value="PK">PK</option>
+            <option value="OFFSET">OFFSET</option>
           </FilterSelect>
           <RefreshToggle 
             onClick={toggleRefresh}
@@ -423,7 +425,7 @@ const LiveChanges = () => {
               filteredProcessings.map((processing) => (
                 <ProcessingItem key={processing.id}>
                   <ProcessingSummary onClick={() => toggleProcessing(processing.id)}>
-                    <RegularCell>
+                    <RegularCell style={{ overflow: 'visible', textOverflow: 'unset', whiteSpace: 'nowrap' }}>
                       {formatTimestamp(processing.processed_at)}
                     </RegularCell>
                     <RegularCell>{processing.schema_name}</RegularCell>
@@ -431,22 +433,33 @@ const LiveChanges = () => {
                     <RegularCell>
                       {processing.db_engine} - {processing.status}
                     </RegularCell>
-                    <DataCell>
-                      <div style={{ fontSize: '0.8em', color: '#666', marginBottom: '2px' }}>Old Offset</div>
-                      {processing.old_offset || 0}
-                    </DataCell>
-                    <DataCell>
-                      <div style={{ fontSize: '0.8em', color: '#666', marginBottom: '2px' }}>New Offset</div>
-                      {processing.new_offset || 0}
-                    </DataCell>
-                    <DataCell>
-                      <div style={{ fontSize: '0.8em', color: '#666', marginBottom: '2px' }}>Old PK</div>
-                      {processing.old_pk || 'N/A'}
-                    </DataCell>
-                    <DataCell>
-                      <div style={{ fontSize: '0.8em', color: '#666', marginBottom: '2px' }}>New PK</div>
-                      {processing.new_pk || 'N/A'}
-                    </DataCell>
+                    {processing.pk_strategy === 'PK' ? (
+                      <>
+                        <DataCell>
+                          <div style={{ fontSize: '0.8em', color: '#666', marginBottom: '2px' }}>Old PK</div>
+                          {processing.old_pk || '0'}
+                        </DataCell>
+                        <DataCell>
+                          <div style={{ fontSize: '0.8em', color: '#666', marginBottom: '2px' }}>New PK</div>
+                          {processing.new_pk || '0'}
+                        </DataCell>
+                        <DataCell style={{ visibility: 'hidden' }} />
+                        <DataCell style={{ visibility: 'hidden' }} />
+                      </>
+                    ) : (
+                      <>
+                        <DataCell>
+                          <div style={{ fontSize: '0.8em', color: '#666', marginBottom: '2px' }}>Old Offset</div>
+                          {processing.old_offset || '0'}
+                        </DataCell>
+                        <DataCell>
+                          <div style={{ fontSize: '0.8em', color: '#666', marginBottom: '2px' }}>New Offset</div>
+                          {processing.new_offset || '1000'}
+                        </DataCell>
+                        <DataCell style={{ visibility: 'hidden' }} />
+                        <DataCell style={{ visibility: 'hidden' }} />
+                      </>
+                    )}
                   </ProcessingSummary>
                   
                   <ProcessingDetails $isOpen={openProcessingId === processing.id}>
@@ -463,17 +476,23 @@ const LiveChanges = () => {
                       <DetailLabel>Status:</DetailLabel>
                       <DetailValue>{processing.status}</DetailValue>
                       
-                      <DetailLabel>Old Offset:</DetailLabel>
-                      <DetailValue>{processing.old_offset || 0}</DetailValue>
-                      
-                      <DetailLabel>New Offset:</DetailLabel>
-                      <DetailValue>{processing.new_offset || 0}</DetailValue>
-                      
-                      <DetailLabel>Old PK:</DetailLabel>
-                      <DetailValue>{processing.old_pk || 'N/A'}</DetailValue>
-                      
-                      <DetailLabel>New PK:</DetailLabel>
-                      <DetailValue>{processing.new_pk || 'N/A'}</DetailValue>
+                      {processing.pk_strategy === 'PK' ? (
+                        <>
+                          <DetailLabel>Old PK:</DetailLabel>
+                          <DetailValue>{processing.old_pk || '0'}</DetailValue>
+                          
+                          <DetailLabel>New PK:</DetailLabel>
+                          <DetailValue>{processing.new_pk || '0'}</DetailValue>
+                        </>
+                      ) : (
+                        <>
+                          <DetailLabel>Old Offset:</DetailLabel>
+                          <DetailValue>{processing.old_offset || '0'}</DetailValue>
+                          
+                          <DetailLabel>New Offset:</DetailLabel>
+                          <DetailValue>{processing.new_offset || '1000'}</DetailValue>
+                        </>
+                      )}
                       
                       <DetailLabel>Processed At:</DetailLabel>
                       <DetailValue>{new Date(processing.processed_at).toLocaleString()}</DetailValue>

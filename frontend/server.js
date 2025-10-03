@@ -101,6 +101,11 @@ app.get("/api/catalog", async (req, res) => {
       );
       queryParams.push(`%${search}%`);
     }
+    if (req.query.strategy && req.query.strategy !== "") {
+      paramCount++;
+      whereConditions.push(`pk_strategy = $${paramCount}`);
+      queryParams.push(req.query.strategy);
+    }
 
     const whereClause =
       whereConditions.length > 0
@@ -112,9 +117,20 @@ app.get("/api/catalog", async (req, res) => {
     const total = parseInt(countResult.rows[0].count);
 
     paramCount++;
-    const dataQuery = `SELECT * FROM metadata.catalog ${whereClause} ORDER BY schema_name, table_name LIMIT $${paramCount} OFFSET $${
-      paramCount + 1
-    }`;
+    const dataQuery = `SELECT * FROM metadata.catalog ${whereClause}
+      ORDER BY 
+        CASE status
+          WHEN 'LISTENING_CHANGES' THEN 1
+          WHEN 'FULL_LOAD' THEN 2
+          WHEN 'ERROR' THEN 3
+          WHEN 'NO_DATA' THEN 4
+          WHEN 'SKIP' THEN 5
+          ELSE 6
+        END,
+        active DESC,
+        schema_name,
+        table_name
+      LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
     queryParams.push(limit, offset);
 
     const result = await pool.query(dataQuery, queryParams);
@@ -825,7 +841,12 @@ app.get("/api/governance/data", async (req, res) => {
       SELECT *
       FROM metadata.data_governance_catalog
       ${whereClause}
-      ORDER BY last_analyzed DESC NULLS LAST
+      ORDER BY CASE health_status
+        WHEN 'HEALTHY' THEN 1
+        WHEN 'WARNING' THEN 2
+        WHEN 'CRITICAL' THEN 3
+        ELSE 4
+      END
       LIMIT $${paramCount} OFFSET $${paramCount + 1}
     `,
       params
@@ -1317,28 +1338,33 @@ app.get("/api/dashboard/currently-processing", async (req, res) => {
 
     const processingTable = result.rows[0];
 
-    // Hacer COUNT de la tabla que se está procesando
+    // Hacer COUNT de la tabla que se está procesando (resolver nombres reales insensibles a mayúsculas)
     let countResult;
     try {
-      if (processingTable.db_engine === "MariaDB") {
-        // Para MariaDB, usar backticks para case-sensitive names
-        countResult = await pool.query(`
-          SELECT COUNT(*) as total_records
-          FROM \`${processingTable.schema_name}\`.\`${processingTable.table_name}\`
-        `);
-      } else if (processingTable.db_engine === "MSSQL") {
-        // Para MSSQL, usar brackets para case-sensitive names
-        countResult = await pool.query(`
-          SELECT COUNT(*) as total_records
-          FROM [${processingTable.schema_name}].[${processingTable.table_name}]
-        `);
-      } else {
-        // Para PostgreSQL, usar comillas dobles para case-sensitive names
-        countResult = await pool.query(`
-          SELECT COUNT(*) as total_records
-          FROM "${processingTable.schema_name}"."${processingTable.table_name}"
-        `);
+      const providedSchema = String(processingTable.schema_name);
+      const providedTable = String(processingTable.table_name);
+
+      const resolved = await pool.query(
+        `
+        SELECT n.nspname AS schema_name, c.relname AS table_name
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE lower(n.nspname) = lower($1)
+          AND lower(c.relname) = lower($2)
+          AND c.relkind = 'r'
+        LIMIT 1
+        `,
+        [providedSchema, providedTable]
+      );
+
+      if (resolved.rows.length === 0) {
+        throw new Error(`relation not found`);
       }
+
+      const schema = String(resolved.rows[0].schema_name).replace(/"/g, '""');
+      const table = String(resolved.rows[0].table_name).replace(/"/g, '""');
+      const countSql = `SELECT COUNT(*) as total_records FROM "${schema}"."${table}"`;
+      countResult = await pool.query(countSql);
     } catch (countError) {
       console.warn(
         `Could not get count for ${processingTable.schema_name}.${processingTable.table_name}:`,
@@ -1469,35 +1495,66 @@ app.get("/api/monitor/processing-logs", async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const offset = (page - 1) * limit;
+    const strategy = req.query.strategy || "";
+
+    const whereConditions = [];
+    const params = [];
+    let paramCount = 1;
+
+    if (strategy) {
+      whereConditions.push(`c.pk_strategy = $${paramCount}`);
+      params.push(strategy);
+      paramCount++;
+    }
+
+    const whereClause =
+      whereConditions.length > 0
+        ? `WHERE ${whereConditions.join(" AND ")}`
+        : "";
 
     // Get total count
-    const countResult = await pool.query(`
+    const countResult = await pool.query(
+      `
       SELECT COUNT(*) as total
-      FROM metadata.processing_log
-    `);
+      FROM metadata.processing_log pl
+      JOIN metadata.catalog c
+        ON c.schema_name = pl.schema_name
+       AND c.table_name  = pl.table_name
+       AND c.db_engine   = pl.db_engine
+      ${whereClause}
+    `,
+      params
+    );
 
     const total = parseInt(countResult.rows[0].total);
     const totalPages = Math.ceil(total / limit);
 
     // Get paginated data
+    params.push(limit, offset);
     const result = await pool.query(
       `
       SELECT 
-        id,
-        schema_name,
-        table_name,
-        db_engine,
-        old_offset,
-        new_offset,
-        old_pk,
-        new_pk,
-        status,
-        processed_at
-      FROM metadata.processing_log
-      ORDER BY processed_at ASC
-      LIMIT $1 OFFSET $2
+        pl.id,
+        pl.schema_name,
+        pl.table_name,
+        pl.db_engine,
+        c.pk_strategy,
+        pl.old_offset,
+        pl.new_offset,
+        pl.old_pk,
+        pl.new_pk,
+        pl.status,
+        pl.processed_at
+      FROM metadata.processing_log pl
+      JOIN metadata.catalog c
+        ON c.schema_name = pl.schema_name
+       AND c.table_name  = pl.table_name
+       AND c.db_engine   = pl.db_engine
+      ${whereClause}
+      ORDER BY pl.processed_at DESC
+      LIMIT $${paramCount} OFFSET $${paramCount + 1}
     `,
-      [limit, offset]
+      params
     );
 
     res.json({

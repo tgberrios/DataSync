@@ -20,6 +20,7 @@ export interface CatalogEntry {
   last_offset: number;
   cluster_name: string;
   updated_at: string;
+  pk_strategy?: string;
 }
 
 export interface BatchConfig {
@@ -319,10 +320,19 @@ export const monitorApi = {
     }
   },
 
-  getProcessingLogs: async (page: number = 1, limit: number = 20) => {
+  getProcessingLogs: async (
+    page: number = 1,
+    limit: number = 20,
+    strategy?: string
+  ) => {
     try {
+      const params = new URLSearchParams({
+        page: String(page),
+        limit: String(limit),
+      });
+      if (strategy) params.set("strategy", strategy);
       const response = await api.get(
-        `/monitor/processing-logs?page=${page}&limit=${limit}`
+        `/monitor/processing-logs?${params.toString()}`
       );
       return response.data;
     } catch (error) {
@@ -383,6 +393,8 @@ export const catalogApi = {
       status?: string;
       active?: string;
       search?: string;
+      sort_field?: string;
+      sort_direction?: string;
     } = {}
   ) => {
     try {

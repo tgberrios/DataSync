@@ -37,11 +37,17 @@ const Select = styled.select`
   font-family: monospace;
 `;
 
+const TableContainer = styled.div`
+  width: 100%;
+  overflow-x: auto;
+  margin-top: 20px;
+`;
+
 const Table = styled.table`
   width: 100%;
   border-collapse: collapse;
-  margin-top: 20px;
   background: white;
+  min-width: 1200px;
 `;
 
 const Th = styled.th`
@@ -54,6 +60,10 @@ const Th = styled.th`
 const Td = styled.td`
   padding: 12px;
   border-bottom: 1px solid #ddd;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
 `;
 
 const StatusBadge = styled.span<{ $status: string }>`
@@ -102,20 +112,6 @@ const ActionButton = styled.button`
   }
 `;
 
-const SkipButton = styled.button`
-  padding: 4px 8px;
-  border: 1px solid #ff9800;
-  border-radius: 4px;
-  background: #fff3e0;
-  color: #ef6c00;
-  cursor: pointer;
-  font-family: monospace;
-  margin-right: 5px;
-  
-  &:hover {
-    background: #ffecb3;
-  }
-`;
 
 // Loading state indicator
 const LoadingOverlay = styled.div`
@@ -276,7 +272,13 @@ const Catalog = () => {
   const [filter, setFilter] = useState({
     engine: '',
     status: '',
-    active: ''
+    active: '',
+    strategy: ''
+  });
+  
+  const [sort, setSort] = useState({
+    field: 'active',
+    direction: 'desc'
   });
 
   const [search, setSearch] = useState('');
@@ -319,7 +321,9 @@ const Catalog = () => {
           page,
           limit: 10,
           ...filter,
-          search
+          search,
+          sort_field: sort.field,
+          sort_direction: sort.direction
         });
         setData(response.data);
         setPagination(response.pagination);
@@ -529,8 +533,6 @@ const Catalog = () => {
           onChange={(e) => setFilter({...filter, engine: e.target.value})}
         >
           <option value="">All Engines</option>
-          <option value="PostgreSQL">PostgreSQL</option>
-          <option value="MongoDB">MongoDB</option>
           <option value="MSSQL">MSSQL</option>
           <option value="MariaDB">MariaDB</option>
         </Select>
@@ -555,8 +557,17 @@ const Catalog = () => {
           <option value="false">Inactive</option>
         </Select>
 
+        <Select
+          value={filter.strategy}
+          onChange={(e) => setFilter({...filter, strategy: e.target.value})}
+        >
+          <option value="">All Strategies</option>
+          <option value="PK">Primary Key</option>
+          <option value="OFFSET">Offset</option>
+        </Select>
+
         <ResetButton onClick={() => {
-          setFilter({ engine: '', status: '', active: '' });
+          setFilter({ engine: '', status: '', active: '', strategy: '' });
           setSearch('');
           setSearchInput('');
           setPage(1);
@@ -580,21 +591,21 @@ const Catalog = () => {
         Showing {data.length} of {pagination.total} entries (Page {pagination.currentPage} of {pagination.totalPages})
       </PaginationInfo>
 
-      <Table>
-        <thead>
-          <tr>
-            <Th>Schema.Table</Th>
-            <Th>Engine</Th>
-            <Th>Status</Th>
-            <Th>Active</Th>
-            <Th>Last Sync</Th>
-            <Th>Sync Column</Th>
-            <Th>Offset</Th>
-            <Th>Cluster</Th>
-            <Th>Actions</Th>
-          </tr>
-        </thead>
-        <tbody>
+      <TableContainer>
+        <Table>
+          <thead>
+            <tr>
+              <Th>Schema.Table</Th>
+              <Th>Engine</Th>
+              <Th>Status</Th>
+              <Th>Active</Th>
+              <Th>PK Strategy</Th>
+              <Th>Sync Column</Th>
+              <Th>Cluster</Th>
+              <Th>Actions</Th>
+            </tr>
+          </thead>
+          <tbody>
           {data.map((entry, index) => (
             <tr key={index}>
               <Td>{entry.schema_name}.{entry.table_name}</Td>
@@ -609,22 +620,29 @@ const Catalog = () => {
                   {entry.active ? 'Active' : 'Inactive'}
                 </ActiveBadge>
               </Td>
-              <Td>{format(new Date(entry.last_sync_time), 'yyyy-MM-dd HH:mm:ss')}</Td>
+              <Td>{entry.pk_strategy || 'OFFSET'}</Td>
               <Td>{entry.last_sync_column}</Td>
-              <Td>{entry.last_offset}</Td>
               <Td>{entry.cluster_name}</Td>
               <Td>
                 <ActionButton onClick={() => setSelectedEntry(entry)}>
-                  ✎ Edit
+                  Edit
                 </ActionButton>
-                <SkipButton onClick={() => handleSkipTable(entry)}>
-                  ⏭ Skip
-                </SkipButton>
+                <ActionButton 
+                  onClick={() => handleSkipTable(entry)}
+                  style={{ 
+                    backgroundColor: '#fff3e0', 
+                    color: '#ef6c00', 
+                    borderColor: '#ff9800' 
+                  }}
+                >
+                  Skip
+                </ActionButton>
               </Td>
             </tr>
           ))}
         </tbody>
       </Table>
+      </TableContainer>
 
       <Pagination>
         <PageButton
