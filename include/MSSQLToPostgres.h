@@ -1152,7 +1152,7 @@ public:
           targetCount += rowsInserted;
 
           // Solo incrementar currentOffset para tablas sin PK (OFFSET
-          // pagination) Para tablas con PK se usa cursor-based pagination con
+          // pagination). Para tablas con PK se usa cursor-based pagination con
           // last_processed_pk
           if (pkStrategy != "PK") {
             currentOffset += rowsInserted;
@@ -1907,29 +1907,6 @@ private:
     } catch (const std::exception &e) {
       Logger::error(LogCategory::TRANSFER,
                     "Error getting PK columns: " + std::string(e.what()));
-    }
-    return {};
-  }
-
-  std::vector<std::string>
-  getCandidateColumnsFromCatalog(pqxx::connection &pgConn,
-                                 const std::string &schema_name,
-                                 const std::string &table_name) {
-    try {
-      pqxx::work txn(pgConn);
-      auto result = txn.exec(
-          "SELECT candidate_columns FROM metadata.catalog WHERE schema_name='" +
-          escapeSQL(schema_name) + "' AND table_name='" +
-          escapeSQL(table_name) + "';");
-      txn.commit();
-
-      if (!result.empty() && !result[0][0].is_null()) {
-        std::string candidateColumnsJson = result[0][0].as<std::string>();
-        return parseJSONArray(candidateColumnsJson);
-      }
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::TRANSFER, "Error getting candidate columns: " +
-                                               std::string(e.what()));
     }
     return {};
   }
