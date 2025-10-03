@@ -4,3 +4,9 @@ metodo para limpiar esa tabla triggers y una nueva pagina para ver como se mueve
 
 
 fix en catalog
+ OBSERVACIONES IMPORTANTES:
+Credenciales hardcoded: Las credenciales están en el código fuente (no es una buena práctica de seguridad)
+SyncConfig deshabilitado: La configuración de sincronización se carga desde la BD, no desde archivos
+Solo PostgreSQL: Solo maneja configuración de PostgreSQL, no de MariaDB o MSSQL
+Valores estáticos: Usa variables estáticas globales (puede causar problemas en aplicaciones multi-threaded)
+Es un sistema de configuración básico pero funcional que permite flexibilidad en la configuración de conexiones a base de datos.
