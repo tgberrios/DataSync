@@ -54,12 +54,14 @@ private:
   static std::string getCurrentTimestamp() {
     auto now = std::chrono::system_clock::now();
     auto time_t = std::chrono::system_clock::to_time_t(now);
+    struct tm tm_buf;
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                   now.time_since_epoch()) %
               1000;
 
     std::stringstream ss;
-    ss << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S");
+    localtime_r(&time_t, &tm_buf);
+    ss << std::put_time(&tm_buf, "%Y-%m-%d %H:%M:%S");
     ss << "." << std::setfill('0') << std::setw(3) << ms.count();
     return ss.str();
   }
@@ -216,10 +218,15 @@ private:
       return;
     }
 
-    messageCount++;
-    if (messageCount >= MAX_MESSAGES_BEFORE_FLUSH) {
+    if (level >= LogLevel::ERROR) {
       logFile.flush();
       messageCount = 0;
+    } else {
+      messageCount++;
+      if (messageCount >= MAX_MESSAGES_BEFORE_FLUSH) {
+        logFile.flush();
+        messageCount = 0;
+      }
     }
   }
 

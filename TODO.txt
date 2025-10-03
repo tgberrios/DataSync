@@ -1,0 +1,8 @@
+
+- include/MariaDBToPostgres.h:1395-1411, 2478-2502 — coerción agresiva a NULL/DEFAULT — restringir coerción a valores realmente inválidos — importante
+- include/MariaDBToPostgres.h & include/MSSQLToPostgres.h (transfer) — SELECT * (riesgo desalineación) — seleccionar columnas explícitas en orden de columnNames — importante
+- include/MariaDBToPostgres.h & include/MSSQLToPostgres.h (transfer) — avanzar offset tras fallo de upsert — no avanzar salvo registro identificado como inválido — importante
+
+
+
+revisar que no estes diviendo el batch config

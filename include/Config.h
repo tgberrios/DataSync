@@ -1,6 +1,7 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+#include <atomic>
 #include <string>
 
 struct DatabaseConfig {
@@ -18,8 +19,8 @@ struct DatabaseConfig {
 };
 
 struct SyncConfig {
-  static size_t CHUNK_SIZE;
-  static size_t SYNC_INTERVAL_SECONDS;
+  static std::atomic<size_t> CHUNK_SIZE;
+  static std::atomic<size_t> SYNC_INTERVAL_SECONDS;
   static constexpr size_t DEFAULT_CHUNK_SIZE = 25000;
   static constexpr size_t DEFAULT_SYNC_INTERVAL = 30;
 

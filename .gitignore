@@ -12,6 +12,9 @@ DDL_EXPORT/
 DataSync
 
 # IDE files
+.cursor
+.qodo
+.vscode
 .vscode/
 .idea/
 *.swp
