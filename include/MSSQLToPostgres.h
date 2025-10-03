@@ -1,40 +1,28 @@
 #ifndef MSSQLTOPOSTGRES_H
 #define MSSQLTOPOSTGRES_H
 
-#include "ConnectionManager.h"
-#include "SyncReporter.h"
+#include "Config.h"
+#include "catalog_manager.h"
+#include "logger.h"
+
 #include <algorithm>
 #include <atomic>
+#include <cctype>
+#include <chrono>
 #include <iostream>
+#include <mutex>
 #include <pqxx/pqxx>
-#include <signal.h>
+#include <set>
+#include <sql.h>
+#include <sqlext.h>
+#include <sstream>
 #include <string>
-#include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
-namespace MSSQLSync {
-std::atomic<bool> shutdownRequested(false);
-std::atomic<bool> forceExit(false);
-
-void signalHandler(int signum) {
-  if (shutdownRequested.load()) {
-    forceExit = true;
-    std::cout << "\nForce exit requested. Terminating immediately..."
-              << std::endl;
-    exit(1);
-  }
-
-  shutdownRequested = true;
-  std::cout << "\n\nGraceful shutdown requested. Finishing current chunk..."
-            << std::endl;
-  std::cout << "Signal " << signum << " received. Exiting gracefully..."
-            << std::endl;
-  std::cout << "Press Ctrl+C again to force exit..." << std::endl;
-}
-} // namespace MSSQLSync
-
 class MSSQLToPostgres {
+private:
 public:
   MSSQLToPostgres() = default;
   ~MSSQLToPostgres() = default;
@@ -52,153 +40,169 @@ public:
     std::string last_sync_column;
     std::string status;
     std::string last_offset;
+    std::string last_processed_pk;
+    std::string pk_strategy;
+    std::string pk_columns;
+    bool has_pk;
   };
 
-  void syncCatalogMSSQLToPostgres() {
-    ConnectionManager cm;
+  SQLHDBC getMSSQLConnection(const std::string &connectionString) {
+    // Validate connection string
+    if (connectionString.empty()) {
+      Logger::error(LogCategory::TRANSFER, "getMSSQLConnection",
+                    "Empty connection string provided");
+      return nullptr;
+    }
 
-    auto pgConn =
-        cm.connectPostgres("host=localhost dbname=DataLake "
-                           "user=Datalake_User password=keepprofessional");
+    // Parse connection string to validate required parameters
+    std::string server, database, uid, pwd, port;
+    std::istringstream ss(connectionString);
+    std::string token;
+    while (std::getline(ss, token, ';')) {
+      auto pos = token.find('=');
+      if (pos == std::string::npos)
+        continue;
+      std::string key = token.substr(0, pos);
+      std::string value = token.substr(pos + 1);
+      key.erase(0, key.find_first_not_of(" \t\r\n"));
+      key.erase(key.find_last_not_of(" \t\r\n") + 1);
+      value.erase(0, value.find_first_not_of(" \t\r\n"));
+      value.erase(value.find_last_not_of(" \t\r\n") + 1);
+      if (key == "SERVER")
+        server = value;
+      else if (key == "DATABASE")
+        database = value;
+      else if (key == "UID")
+        uid = value;
+      else if (key == "PWD")
+        pwd = value;
+      else if (key == "PORT")
+        port = value;
+    }
 
-    static const std::vector<std::string> dateCandidates = {
-        "updated_at",     "created_at",  "fecha_actualizacion",
-        "fecha_creacion", "modified_at", "changed_at"};
+    // Validate required parameters
+    if (server.empty() || database.empty() || uid.empty()) {
+      Logger::error(
+          LogCategory::TRANSFER, "getMSSQLConnection",
+          "Missing required connection parameters (SERVER, DATABASE, or UID)");
+      return nullptr;
+    }
 
-    std::vector<std::string> mssqlConnStrings;
-    auto results = cm.executeQueryPostgres(
-        *pgConn, "SELECT connection_string FROM metadata.catalog "
-                 "WHERE db_engine='MSSQL' AND active=true;");
-    for (const auto &row : results) {
-      if (row.size() >= 1) {
-        try {
-          mssqlConnStrings.push_back(row[0].as<std::string>());
-        } catch (const std::exception &e) {
-          std::cerr << "Error processing connection string row: " << e.what()
-                    << std::endl;
-          continue;
-        } catch (...) {
-          std::cerr
-              << "Unknown error processing connection string row, skipping"
-              << std::endl;
-          continue;
+    // Validate port number if provided
+    if (!port.empty()) {
+      try {
+        int portNum = std::stoi(port);
+        if (portNum <= 0 || portNum > 65535) {
+          Logger::warning(LogCategory::TRANSFER, "getMSSQLConnection",
+                          "Invalid port number " + port +
+                              ", using default 1433");
         }
+      } catch (const std::exception &e) {
+        Logger::warning(LogCategory::TRANSFER, "getMSSQLConnection",
+                        "Could not parse port " + port + ": " +
+                            std::string(e.what()) + ", using default 1433");
       }
     }
 
-    for (const auto &connStr : mssqlConnStrings) {
-      auto conn = cm.connectMSSQL(connStr);
-      if (!conn) {
-        continue;
+    // Crear nueva conexión para cada consulta para evitar "Connection is busy"
+    SQLHENV tempEnv = nullptr;
+    SQLHDBC tempConn = nullptr;
+    SQLRETURN ret;
+
+    // Crear nueva conexión
+    ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &tempEnv);
+    if (!SQL_SUCCEEDED(ret)) {
+      Logger::error(LogCategory::TRANSFER,
+                    "Failed to allocate ODBC environment handle");
+      return nullptr;
+    }
+
+    ret = SQLSetEnvAttr(tempEnv, SQL_ATTR_ODBC_VERSION,
+                        (SQLPOINTER)SQL_OV_ODBC3, 0);
+    if (!SQL_SUCCEEDED(ret)) {
+      SQLFreeHandle(SQL_HANDLE_ENV, tempEnv);
+      Logger::error(LogCategory::TRANSFER, "Failed to set ODBC version");
+      return nullptr;
+    }
+
+    ret = SQLAllocHandle(SQL_HANDLE_DBC, tempEnv, &tempConn);
+    if (!SQL_SUCCEEDED(ret)) {
+      SQLFreeHandle(SQL_HANDLE_ENV, tempEnv);
+      Logger::error(LogCategory::TRANSFER,
+                    "Failed to allocate ODBC connection handle");
+      return nullptr;
+    }
+
+    // Set connection timeouts
+    SQLSetConnectAttr(tempConn, SQL_ATTR_CONNECTION_TIMEOUT, (SQLPOINTER)30, 0);
+    SQLSetConnectAttr(tempConn, SQL_ATTR_LOGIN_TIMEOUT, (SQLPOINTER)30, 0);
+
+    SQLCHAR outConnStr[1024];
+    SQLSMALLINT outConnStrLen;
+    ret = SQLDriverConnect(
+        tempConn, nullptr, (SQLCHAR *)connectionString.c_str(), SQL_NTS,
+        outConnStr, sizeof(outConnStr), &outConnStrLen, SQL_DRIVER_NOPROMPT);
+    if (!SQL_SUCCEEDED(ret)) {
+      SQLCHAR sqlState[6], msg[SQL_MAX_MESSAGE_LENGTH];
+      SQLINTEGER nativeError;
+      SQLSMALLINT msgLen;
+      SQLGetDiagRec(SQL_HANDLE_DBC, tempConn, 1, sqlState, &nativeError, msg,
+                    sizeof(msg), &msgLen);
+      SQLFreeHandle(SQL_HANDLE_DBC, tempConn);
+      SQLFreeHandle(SQL_HANDLE_ENV, tempEnv);
+      Logger::error(LogCategory::TRANSFER,
+                    "Failed to connect to MSSQL: " + std::string((char *)msg) +
+                        " (server: " + server + ", database: " + database +
+                        ", uid: " + uid + ")");
+      return nullptr;
+    }
+
+    // Test connection with a simple query
+    SQLHSTMT testStmt;
+    ret = SQLAllocHandle(SQL_HANDLE_STMT, tempConn, &testStmt);
+    if (ret == SQL_SUCCESS) {
+      ret = SQLExecDirect(testStmt, (SQLCHAR *)"SELECT 1", SQL_NTS);
+      if (ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) {
+        SQLFreeHandle(SQL_HANDLE_STMT, testStmt);
+      } else {
+        SQLFreeHandle(SQL_HANDLE_STMT, testStmt);
+        SQLFreeHandle(SQL_HANDLE_DBC, tempConn);
+        SQLFreeHandle(SQL_HANDLE_ENV, tempEnv);
+        Logger::error(LogCategory::TRANSFER, "getMSSQLConnection",
+                      "Connection test failed");
+        return nullptr;
       }
+    }
 
-      auto tables = cm.executeQueryMSSQL(
-          conn.get(),
-          "SELECT TABLE_SCHEMA, TABLE_NAME "
-          "FROM INFORMATION_SCHEMA.TABLES "
-          "WHERE TABLE_TYPE = 'BASE TABLE' AND "
-          "TABLE_SCHEMA NOT IN ('sys', 'INFORMATION_SCHEMA', 'guest');");
+    return tempConn;
+  }
 
-      for (const auto &row : tables) {
-        if (row.size() < 2)
-          continue;
-
-        try {
-          const std::string &schema_name = row[0];
-          const std::string &table_name = row[1];
-
-          auto columns = cm.executeQueryMSSQL(
-              conn.get(), "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
-                          "WHERE TABLE_SCHEMA='" +
-                              schema_name + "' AND TABLE_NAME='" + table_name +
-                              "';");
-
-          std::string lastSyncColumn;
-          std::vector<std::string> foundTimestampColumns;
-
-          for (const auto &col : columns) {
-            if (col.size() < 1)
-              continue;
-            std::string colName = col[0];
-
-            if (colName == "updated_at") {
-              lastSyncColumn = colName;
-              break;
-            }
-
-            if (colName == "created_at") {
-              foundTimestampColumns.push_back(colName);
-            }
-
-            if (colName == "fecha_actualizacion") {
-              foundTimestampColumns.push_back(colName);
-            }
-
-            if (colName == "fecha_creacion") {
-              foundTimestampColumns.push_back(colName);
-            }
-
-            if (colName == "modified_at") {
-              foundTimestampColumns.push_back(colName);
-            }
-
-            if (colName == "changed_at") {
-              foundTimestampColumns.push_back(colName);
-            }
-
-            if (colName.length() > 3 &&
-                colName.substr(colName.length() - 3) == "_at") {
-              foundTimestampColumns.push_back(colName);
-            }
-          }
-
-          if (lastSyncColumn.empty() && !foundTimestampColumns.empty()) {
-            lastSyncColumn = foundTimestampColumns[0];
-          }
-
-          try {
-            pqxx::work txn(*pgConn);
-            std::string query =
-                "INSERT INTO metadata.catalog "
-                "(schema_name, table_name, db_engine, connection_string, "
-                "active, "
-                "last_offset, status, last_sync_column) "
-                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8) "
-                "ON CONFLICT (schema_name, table_name) DO NOTHING;";
-
-            txn.exec_params(query, schema_name, table_name, "MSSQL", connStr,
-                            "YES", 0, "full_load", lastSyncColumn);
-            txn.commit();
-
-          } catch (const std::exception &e) {
-          }
-        } catch (const std::exception &e) {
-          continue;
-        } catch (...) {
-          continue;
-        }
-      }
+  void closeMSSQLConnection(SQLHDBC conn) {
+    if (conn) {
+      SQLDisconnect(conn);
+      SQLFreeHandle(SQL_HANDLE_DBC, conn);
     }
   }
 
   std::vector<TableInfo> getActiveTables(pqxx::connection &pgConn) {
-    ConnectionManager cm;
     std::vector<TableInfo> data;
 
-    auto results = cm.executeQueryPostgres(
-        pgConn, "SELECT schema_name, table_name, cluster_name, db_engine, "
-                "connection_string, last_sync_time, last_sync_column, "
-                "status, last_offset "
-                "FROM metadata.catalog "
-                "WHERE active=true AND db_engine='MSSQL' "
-                "ORDER BY schema_name, table_name;");
+    try {
+      pqxx::work txn(pgConn);
+      auto results = txn.exec(
+          "SELECT schema_name, table_name, cluster_name, db_engine, "
+          "connection_string, last_sync_time, last_sync_column, "
+          "status, last_offset, last_processed_pk, pk_strategy, "
+          "pk_columns, has_pk, table_size "
+          "FROM metadata.catalog "
+          "WHERE active=true AND db_engine='MSSQL' AND status != 'NO_DATA' "
+          "ORDER BY table_size ASC, schema_name, table_name;");
+      txn.commit();
 
-    for (const auto &row : results) {
-      if (row.size() < 9) {
-        continue;
-      }
+      for (const auto &row : results) {
+        if (row.size() < 14)
+          continue;
 
-      try {
         TableInfo t;
         t.schema_name = row[0].is_null() ? "" : row[0].as<std::string>();
         t.table_name = row[1].is_null() ? "" : row[1].as<std::string>();
@@ -208,1249 +212,2327 @@ public:
         t.last_sync_time = row[5].is_null() ? "" : row[5].as<std::string>();
         t.last_sync_column = row[6].is_null() ? "" : row[6].as<std::string>();
         t.status = row[7].is_null() ? "" : row[7].as<std::string>();
-        t.last_offset = row[8].is_null() ? "0" : row[8].as<std::string>();
-
+        t.last_offset = row[8].is_null() ? "" : row[8].as<std::string>();
+        t.last_processed_pk = row[9].is_null() ? "" : row[9].as<std::string>();
+        t.pk_strategy = row[10].is_null() ? "" : row[10].as<std::string>();
+        t.pk_columns = row[11].is_null() ? "" : row[11].as<std::string>();
+        t.has_pk = row[12].is_null() ? false : row[12].as<bool>();
         data.push_back(t);
-      } catch (const std::exception &e) {
-        continue;
-      } catch (...) {
-        continue;
       }
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(
+          LogCategory::TRANSFER, "getActiveTables",
+          "SQL ERROR getting active tables: " + std::string(e.what()) +
+              " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::TRANSFER, "getActiveTables",
+                    "CONNECTION ERROR getting active tables: " +
+                        std::string(e.what()));
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER, "getActiveTables",
+                    "ERROR getting active tables: " + std::string(e.what()));
     }
+
     return data;
-  }
-
-  std::string mapCollationToPostgres(const std::string &mssqlCollation,
-                                     const std::string &charSet) {
-    if (!mssqlCollation.empty() && collationMap.count(mssqlCollation)) {
-      return collationMap[mssqlCollation];
-    }
-
-    if (mssqlCollation.empty()) {
-      if (charSet == "utf8" || charSet == "utf8mb4") {
-        return "en_US";
-      } else if (charSet == "latin1") {
-        return "en_US";
-      } else {
-        return "C";
-      }
-    }
-
-    if (mssqlCollation.find("Latin1_General_CI_AS") != std::string::npos) {
-      return "en_US";
-    } else if (mssqlCollation.find("SQL_Latin1_General_CP1_CI_AS") !=
-               std::string::npos) {
-      return "en_US";
-    } else if (mssqlCollation.find("Latin1_General_BIN") != std::string::npos) {
-      return "C";
-    } else if (mssqlCollation.find("SQL_Latin1_General_CP1_CI_AI") !=
-               std::string::npos) {
-      return "en_US";
-    }
-
-    return "en_US";
-  }
-
-  std::string getNullValueForType(const std::string &dataType) {
-    if (dataType == "DATE" || dataType == "TIMESTAMP" || dataType == "TIME") {
-      return "";
-    } else if (dataType == "INTEGER" || dataType == "BIGINT" ||
-               dataType == "SMALLINT" || dataType == "REAL" ||
-               dataType == "DOUBLE PRECISION" || dataType == "NUMERIC") {
-      return "";
-    } else if (dataType == "BOOLEAN") {
-      return "";
-    } else {
-      return "";
-    }
-  }
-
-  std::string sanitizeColumnName(const std::string &name) {
-    std::string sanitized = name;
-    std::transform(sanitized.begin(), sanitized.end(), sanitized.begin(),
-                   ::tolower);
-
-    if (sanitized == "pin")
-      return "pin_column";
-    if (sanitized == "profile")
-      return "profile_column";
-    if (sanitized == "brandfrom")
-      return "brand_from";
-    if (sanitized == "brandto")
-      return "brand_to";
-    if (sanitized == "type")
-      return "type_column";
-    if (sanitized == "order")
-      return "order_column";
-    if (sanitized == "group")
-      return "group_column";
-    if (sanitized == "key")
-      return "key_column";
-    if (sanitized == "user")
-      return "user_column";
-    if (sanitized == "comment")
-      return "comment_column";
-    if (sanitized == "status")
-      return "status_column";
-    if (sanitized == "date")
-      return "date_column";
-    if (sanitized == "time")
-      return "time_column";
-    if (sanitized == "name")
-      return "name_column";
-    if (sanitized == "value")
-      return "value_column";
-    if (sanitized == "id")
-      return "id_column";
-    if (sanitized == "from")
-      return "from_column";
-    if (sanitized == "to")
-      return "to_column";
-
-    return sanitized;
   }
 
   void syncIndexesAndConstraints(const std::string &schema_name,
                                  const std::string &table_name,
-                                 std::shared_ptr<MSSQLConnection> mssqlConn,
                                  pqxx::connection &pgConn,
-                                 const std::string &lowerSchemaName) {
-    ConnectionManager cm;
+                                 const std::string &lowerSchemaName,
+                                 const std::string &connection_string) {
+    // Validate input parameters
+    if (schema_name.empty() || table_name.empty() || lowerSchemaName.empty() ||
+        connection_string.empty()) {
+      Logger::error(LogCategory::TRANSFER, "syncIndexesAndConstraints",
+                    "Invalid parameters: schema_name, table_name, "
+                    "lowerSchemaName, or connection_string is empty");
+      return;
+    }
 
-    std::string indexQuery =
-        "SELECT i.name AS INDEX_NAME, i.type_desc AS INDEX_TYPE, "
-        "i.is_unique AS NON_UNIQUE, ic.column_id AS SEQ_IN_INDEX, "
-        "c.name AS COLUMN_NAME "
-        "FROM sys.indexes i "
-        "INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id AND "
-        "i.index_id = ic.index_id "
-        "INNER JOIN sys.columns c ON ic.object_id = c.object_id AND "
-        "ic.column_id = c.column_id "
-        "WHERE i.object_id = OBJECT_ID('" +
-        schema_name + "." + table_name +
-        "') "
-        "AND i.is_hypothetical = 0 "
-        "ORDER BY i.name, ic.key_ordinal;";
+    SQLHDBC dbc = getMSSQLConnection(connection_string);
+    if (!dbc) {
+      Logger::error(LogCategory::TRANSFER, "syncIndexesAndConstraints",
+                    "Failed to get MSSQL connection");
+      return;
+    }
 
-    auto indexes = cm.executeQueryMSSQL(mssqlConn.get(), indexQuery);
+    std::string query = "SELECT i.name AS index_name, "
+                        "CASE WHEN i.is_unique = 1 THEN 'UNIQUE' ELSE "
+                        "'NON_UNIQUE' END AS uniqueness, "
+                        "c.name AS column_name "
+                        "FROM sys.indexes i "
+                        "INNER JOIN sys.index_columns ic ON i.object_id = "
+                        "ic.object_id AND i.index_id = ic.index_id "
+                        "INNER JOIN sys.columns c ON ic.object_id = "
+                        "c.object_id AND ic.column_id = c.column_id "
+                        "INNER JOIN sys.tables t ON i.object_id = t.object_id "
+                        "INNER JOIN sys.schemas s ON t.schema_id = s.schema_id "
+                        "WHERE s.name = '" +
+                        schema_name + "' AND t.name = '" + table_name +
+                        "' "
+                        "AND i.name IS NOT NULL AND i.is_primary_key = 0 "
+                        "ORDER BY i.name, ic.key_ordinal;";
 
-    std::unordered_map<std::string, std::vector<std::string>> indexColumns;
-    std::vector<std::string> primaryKeys;
-    std::vector<std::string> uniqueIndexes;
-    std::vector<std::string> regularIndexes;
+    std::vector<std::vector<std::string>> results =
+        executeQueryMSSQL(dbc, query);
 
-    for (const auto &row : indexes) {
-      if (row.size() < 5)
+    for (const auto &row : results) {
+      if (row.size() < 3)
         continue;
 
       std::string indexName = row[0];
-      std::string indexType = row[1];
-      std::string nonUnique = row[2];
-      std::string columnName = sanitizeColumnName(row[4]);
-      std::string seqInIndex = row[3];
+      std::string uniqueness = row[1];
+      std::string columnName = row[2];
+      std::transform(columnName.begin(), columnName.end(), columnName.begin(),
+                     ::tolower);
 
-      if (indexName == "PK_" + table_name ||
-          indexType == "CLUSTERED" && nonUnique == "0") {
-        primaryKeys.push_back(columnName);
-      } else if (nonUnique == "0") {
-        uniqueIndexes.push_back(indexName);
-        indexColumns[indexName].push_back(columnName);
-      } else {
-        regularIndexes.push_back(indexName);
-        indexColumns[indexName].push_back(columnName);
-      }
-    }
-
-    for (const auto &uniqueIndex : uniqueIndexes) {
-      std::string createUniqueQuery =
-          "CREATE UNIQUE INDEX IF NOT EXISTS \"" + uniqueIndex + "\" ON \"" +
-          lowerSchemaName + "\".\"" + table_name + "\" (";
-
-      for (size_t i = 0; i < indexColumns[uniqueIndex].size(); ++i) {
-        if (i > 0)
-          createUniqueQuery += ", ";
-        createUniqueQuery += "\"" + indexColumns[uniqueIndex][i] + "\"";
-      }
-      createUniqueQuery += ");";
+      std::string createQuery = "CREATE ";
+      if (uniqueness == "UNIQUE")
+        createQuery += "UNIQUE ";
+      createQuery += "INDEX IF NOT EXISTS \"" + indexName + "\" ON \"" +
+                     lowerSchemaName + "\".\"" + table_name + "\" (\"" +
+                     columnName + "\");";
 
       try {
-        cm.executeQueryPostgres(pgConn, createUniqueQuery);
-        std::cout << "  ✓ Unique index '" + uniqueIndex + "' created"
-                  << std::endl;
+        pqxx::work txn(pgConn);
+        txn.exec(createQuery);
+        txn.commit();
+      } catch (const pqxx::sql_error &e) {
+        Logger::error(LogCategory::TRANSFER, "syncIndexesAndConstraints",
+                      "SQL ERROR creating index '" + indexName +
+                          "': " + std::string(e.what()) +
+                          " [SQL State: " + e.sqlstate() + "]");
+      } catch (const pqxx::broken_connection &e) {
+        Logger::error(LogCategory::TRANSFER, "syncIndexesAndConstraints",
+                      "CONNECTION ERROR creating index '" + indexName +
+                          "': " + std::string(e.what()));
       } catch (const std::exception &e) {
-        std::cerr << "  ✗ Error creating unique index '" + uniqueIndex + "': "
-                  << e.what() << std::endl;
-      }
-    }
-
-    for (const auto &regularIndex : regularIndexes) {
-      std::string createIndexQuery =
-          "CREATE INDEX IF NOT EXISTS \"" + regularIndex + "\" ON \"" +
-          lowerSchemaName + "\".\"" + table_name + "\" (";
-
-      for (size_t i = 0; i < indexColumns[regularIndex].size(); ++i) {
-        if (i > 0)
-          createIndexQuery += ", ";
-        createIndexQuery += "\"" + indexColumns[regularIndex][i] + "\"";
-      }
-      createIndexQuery += ");";
-
-      try {
-        cm.executeQueryPostgres(pgConn, createIndexQuery);
-        std::cout << "  ✓ Index '" + regularIndex + "' created" << std::endl;
-      } catch (const std::exception &e) {
-        std::cerr << "  ✗ Error creating index '" + regularIndex + "': "
-                  << e.what() << std::endl;
+        Logger::error(LogCategory::TRANSFER, "syncIndexesAndConstraints",
+                      "ERROR creating index '" + indexName +
+                          "': " + std::string(e.what()));
       }
     }
   }
 
   void setupTableTargetMSSQLToPostgres() {
-    ConnectionManager cm;
+    Logger::info(LogCategory::TRANSFER, "Starting MSSQL table target setup");
 
-    auto pgConn =
-        cm.connectPostgres("host=localhost dbname=DataLake "
-                           "user=Datalake_User password=keepprofessional");
-    if (!pgConn) {
-      return;
-    }
+    try {
+      pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
 
-    auto tables = getActiveTables(*pgConn);
-
-    for (const auto &table : tables) {
-      std::string schema_name = table.schema_name;
-      std::string table_name = table.table_name;
-
-      std::shared_ptr<MSSQLConnection> mssqlConn = nullptr;
-      if (table.db_engine == "MSSQL") {
-        mssqlConn = cm.connectMSSQL(table.connection_string);
-        if (!mssqlConn) {
-          continue;
-        }
-      } else {
-        continue;
+      if (!pgConn.is_open()) {
+        Logger::error(LogCategory::TRANSFER,
+                      "CRITICAL ERROR: Cannot establish PostgreSQL connection "
+                      "for MSSQL table setup");
+        return;
       }
 
-      std::string obtainColumnsQuery =
-          "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, "
-          "COLUMNPROPERTY(object_id('" +
-          schema_name + "." + table_name +
-          "'), COLUMN_NAME, 'IsIdentity') AS IS_IDENTITY, "
-          "COLLATION_NAME, CHARACTER_SET_NAME "
-          "FROM INFORMATION_SCHEMA.COLUMNS "
-          "WHERE TABLE_SCHEMA = '" +
-          schema_name + "' AND TABLE_NAME = '" + table_name + "';";
+      Logger::info(LogCategory::TRANSFER,
+                   "PostgreSQL connection established for MSSQL table setup");
 
-      auto columns = cm.executeQueryMSSQL(mssqlConn.get(), obtainColumnsQuery);
+      auto tables = getActiveTables(pgConn);
 
-      std::string lowerSchemaName = schema_name;
-      std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
-                     lowerSchemaName.begin(), ::tolower);
+      if (tables.empty()) {
+        Logger::info(LogCategory::TRANSFER,
+                     "No active MSSQL tables found to setup");
+        return;
+      }
 
-      cm.executeQueryPostgres(*pgConn, "CREATE SCHEMA IF NOT EXISTS \"" +
-                                           lowerSchemaName + "\";");
+      // Sort tables by priority: FULL_LOAD, RESET, LISTENING_CHANGES
+      std::sort(tables.begin(), tables.end(),
+                [](const TableInfo &a, const TableInfo &b) {
+                  if (a.status == "FULL_LOAD" && b.status != "FULL_LOAD")
+                    return true;
+                  if (a.status != "FULL_LOAD" && b.status == "FULL_LOAD")
+                    return false;
+                  if (a.status == "RESET" && b.status != "RESET")
+                    return true;
+                  if (a.status != "RESET" && b.status == "RESET")
+                    return false;
+                  if (a.status == "LISTENING_CHANGES" &&
+                      b.status != "LISTENING_CHANGES")
+                    return true;
+                  if (a.status != "LISTENING_CHANGES" &&
+                      b.status == "LISTENING_CHANGES")
+                    return false;
+                  return false; // Keep original order for same priority
+                });
 
-      std::string createTableQuery = "CREATE TABLE IF NOT EXISTS \"" +
-                                     lowerSchemaName + "\".\"" + table_name +
-                                     "\" (";
-      bool hasColumns = false;
-      std::vector<std::string> primaryKeyColumns;
+      Logger::info(LogCategory::TRANSFER,
+                   "Processing " + std::to_string(tables.size()) +
+                       " MSSQL tables in priority order");
+      // Removed individual table status logs to reduce noise
 
-      for (const auto &col : columns) {
-        if (col.size() < 6) {
+      for (const auto &table : tables) {
+        if (table.db_engine != "MSSQL") {
+          Logger::warning(LogCategory::TRANSFER,
+                          "Skipping non-MSSQL table: " + table.db_engine +
+                              " - " + table.schema_name + "." +
+                              table.table_name);
           continue;
         }
-        hasColumns = true;
-        std::string colName = sanitizeColumnName(col[0]);
-        std::string dataType = col[1];
-        std::string nullable = (col[2] == "YES") ? "" : " NOT NULL";
-        std::string isIdentity = col[3];
-        std::string collation = col[4];
-        std::string charSet = col[5];
 
-        std::string pgDataType;
-        if (isIdentity == "1") {
-          if (dataType == "int" || dataType == "smallint")
-            pgDataType = "SERIAL";
-          else if (dataType == "bigint")
-            pgDataType = "BIGSERIAL";
-          else
-            pgDataType = "SERIAL";
-        } else {
-          if (dataType == "datetime" || dataType == "datetime2" ||
-              dataType == "smalldatetime") {
-            pgDataType = "TIMESTAMP";
-          } else if (dataType == "date") {
-            pgDataType = "DATE";
-          } else if (dataType == "time") {
-            pgDataType = "TIME";
-          } else {
-            pgDataType =
-                dataTypeMap.count(dataType) ? dataTypeMap[dataType] : "TEXT";
+        SQLHDBC dbc = getMSSQLConnection(table.connection_string);
+        if (!dbc) {
+          Logger::error(
+              LogCategory::TRANSFER,
+              "CRITICAL ERROR: Failed to get MSSQL connection for table " +
+                  table.schema_name + "." + table.table_name +
+                  " - skipping table setup");
+          continue;
+        }
+
+        // Usar USE [database] para cambiar el contexto de base de datos
+        std::string databaseName = extractDatabaseName(table.connection_string);
+
+        // Primero cambiar a la base de datos correcta
+        std::string useQuery = "USE [" + databaseName + "];";
+        auto useResult = executeQueryMSSQL(dbc, useQuery);
+
+        // Luego ejecutar la query sin prefijo de base de datos
+        std::string query =
+            "SELECT c.name AS COLUMN_NAME, tp.name AS DATA_TYPE, "
+            "CASE WHEN c.is_nullable = 1 THEN 'YES' ELSE 'NO' END as "
+            "IS_NULLABLE, "
+            "CASE WHEN pk.column_id IS NOT NULL THEN 'YES' ELSE 'NO' END as "
+            "IS_PRIMARY_KEY, "
+            "c.max_length AS CHARACTER_MAXIMUM_LENGTH, "
+            "c.precision AS NUMERIC_PRECISION, "
+            "c.scale AS NUMERIC_SCALE, "
+            "NULL AS COLUMN_DEFAULT "
+            "FROM sys.columns c "
+            "INNER JOIN sys.tables t ON c.object_id = t.object_id "
+            "INNER JOIN sys.schemas s ON t.schema_id = s.schema_id "
+            "INNER JOIN sys.types tp ON c.user_type_id = tp.user_type_id "
+            "LEFT JOIN ( "
+            "  SELECT ic.column_id, ic.object_id "
+            "  FROM sys.indexes i "
+            "  INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id "
+            "AND i.index_id = ic.index_id "
+            "  WHERE i.is_primary_key = 1 "
+            ") pk ON c.column_id = pk.column_id AND t.object_id = pk.object_id "
+            "WHERE s.name = '" +
+            table.schema_name + "' AND t.name = '" + table.table_name +
+            "' "
+            "ORDER BY c.column_id;";
+
+        std::vector<std::vector<std::string>> columns =
+            executeQueryMSSQL(dbc, query);
+
+        if (columns.empty()) {
+          Logger::error(LogCategory::TRANSFER,
+                        "No columns found for table " + table.schema_name +
+                            "." + table.table_name + " - skipping");
+          continue;
+        }
+
+        std::string lowerSchema = table.schema_name;
+        std::transform(lowerSchema.begin(), lowerSchema.end(),
+                       lowerSchema.begin(), ::tolower);
+
+        {
+          pqxx::work txn(pgConn);
+          txn.exec("CREATE SCHEMA IF NOT EXISTS \"" + lowerSchema + "\";");
+          txn.commit();
+        }
+
+        std::string createQuery = "CREATE TABLE IF NOT EXISTS \"" +
+                                  lowerSchema + "\".\"" + table.table_name +
+                                  "\" (";
+        std::vector<std::string> primaryKeys;
+
+        for (const std::vector<std::string> &col : columns) {
+          if (col.size() < 8)
+            continue;
+
+          std::string colName = col[0];
+          std::transform(colName.begin(), colName.end(), colName.begin(),
+                         ::tolower);
+          std::string dataType = col[1];
+          std::string nullable =
+              ""; // Siempre permitir NULL en todas las columnas
+          std::string isPrimaryKey = col[3];
+          std::string maxLength = col[4];
+          std::string numericPrecision = col[5];
+          std::string numericScale = col[6];
+          std::string columnDefault = col[7];
+
+          std::string pgType = "TEXT";
+          if (dataType == "decimal" || dataType == "numeric") {
+            // Para decimal/numeric, usar la precisión y escala de MSSQL
+            if (!numericPrecision.empty() && numericPrecision != "NULL" &&
+                !numericScale.empty() && numericScale != "NULL") {
+              pgType = "NUMERIC(" + numericPrecision + "," + numericScale + ")";
+            } else {
+              pgType = "NUMERIC(18,4)";
+            }
+          } else if (dataType == "varchar" || dataType == "nvarchar") {
+            pgType =
+                (!maxLength.empty() && maxLength != "NULL" && maxLength != "-1")
+                    ? "VARCHAR(" + maxLength + ")"
+                    : "VARCHAR";
+          } else if (dataType == "char" || dataType == "nchar") {
+            pgType = (!maxLength.empty() && maxLength != "NULL")
+                         ? "CHAR(" + maxLength + ")"
+                         : "CHAR(1)";
+          } else if (dataTypeMap.count(dataType)) {
+            pgType = dataTypeMap[dataType];
           }
+
+          createQuery += "\"" + colName + "\" " + pgType + nullable;
+          if (isPrimaryKey == "YES")
+            primaryKeys.push_back(colName);
+          createQuery += ", ";
         }
 
-        createTableQuery += "\"" + colName + "\" " + pgDataType + nullable;
+        if (!primaryKeys.empty()) {
+          createQuery += "PRIMARY KEY (";
+          for (size_t i = 0; i < primaryKeys.size(); ++i) {
+            createQuery += "\"" + primaryKeys[i] + "\"";
+            if (i < primaryKeys.size() - 1)
+              createQuery += ", ";
+          }
+          createQuery += ")";
+        } else {
+          createQuery.erase(createQuery.size() - 2, 2);
+        }
+        createQuery += ");";
 
-        if (pgDataType == "VARCHAR" || pgDataType == "TEXT" ||
-            pgDataType == "CHAR") {
-          std::string pgCollation = mapCollationToPostgres(collation, charSet);
-          createTableQuery += " COLLATE \"" + pgCollation + "\"";
+        {
+          pqxx::work txn(pgConn);
+          txn.exec(createQuery);
+          txn.commit();
         }
 
-        createTableQuery += ", ";
+        // No actualizar la columna de tiempo aquí - ya fue detectada
+        // correctamente en catalog_manager.h
+
+        // Cerrar conexión para evitar "Connection is busy"
+        closeMSSQLConnection(dbc);
       }
-
-      if (hasColumns) {
-        createTableQuery.erase(createTableQuery.size() - 2, 2);
-        createTableQuery += ");";
-
-        try {
-          cm.executeQueryPostgres(*pgConn, createTableQuery);
-        } catch (const std::exception &e) {
-          // Error silencioso
-        }
-      }
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER,
+                    "Error in setupTableTargetMSSQLToPostgres: " +
+                        std::string(e.what()));
     }
   }
 
-  bool verifyColumnsExist(pqxx::connection &pgConn, const std::string &schema,
-                          const std::string &table,
-                          const std::vector<std::string> &columnNames) {
+  void transferDataMSSQLToPostgres() {
+    Logger::info(LogCategory::TRANSFER,
+                 "Starting MSSQL to PostgreSQL data transfer");
+
     try {
-      std::string query = "SELECT column_name FROM information_schema.columns "
-                          "WHERE table_schema = '" +
-                          schema +
-                          "' "
-                          "AND table_name = '" +
-                          table +
-                          "' "
-                          "ORDER BY ordinal_position;";
+      pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
+
+      if (!pgConn.is_open()) {
+        Logger::error(LogCategory::TRANSFER,
+                      "CRITICAL ERROR: Cannot establish PostgreSQL connection "
+                      "for MSSQL data transfer");
+        return;
+      }
+
+      Logger::info(LogCategory::TRANSFER,
+                   "PostgreSQL connection established for MSSQL data transfer");
+
+      auto tables = getActiveTables(pgConn);
+
+      if (tables.empty()) {
+        Logger::info(LogCategory::TRANSFER,
+                     "No active MSSQL tables found for data transfer");
+        return;
+      }
+
+      // Sort tables by priority: FULL_LOAD, RESET, LISTENING_CHANGES
+      std::sort(tables.begin(), tables.end(),
+                [](const TableInfo &a, const TableInfo &b) {
+                  if (a.status == "FULL_LOAD" && b.status != "FULL_LOAD")
+                    return true;
+                  if (a.status != "FULL_LOAD" && b.status == "FULL_LOAD")
+                    return false;
+                  if (a.status == "RESET" && b.status != "RESET")
+                    return true;
+                  if (a.status != "RESET" && b.status == "RESET")
+                    return false;
+                  if (a.status == "LISTENING_CHANGES" &&
+                      b.status != "LISTENING_CHANGES")
+                    return true;
+                  if (a.status != "LISTENING_CHANGES" &&
+                      b.status == "LISTENING_CHANGES")
+                    return false;
+                  return false; // Keep original order for same priority
+                });
+
+      Logger::info(LogCategory::TRANSFER,
+                   "Processing " + std::to_string(tables.size()) +
+                       " MSSQL tables in priority order");
+      // Removed individual table status logs to reduce noise
+
+      for (auto &table : tables) {
+        if (table.db_engine != "MSSQL") {
+          Logger::warning(
+              LogCategory::TRANSFER,
+              "Skipping non-MSSQL table in transfer: " + table.db_engine +
+                  " - " + table.schema_name + "." + table.table_name);
+          continue;
+        }
+
+        SQLHDBC dbc = getMSSQLConnection(table.connection_string);
+        if (!dbc) {
+          Logger::error(
+              LogCategory::TRANSFER,
+              "CRITICAL ERROR: Failed to get MSSQL connection for table " +
+                  table.schema_name + "." + table.table_name +
+                  " - marking as ERROR and skipping");
+          updateStatus(pgConn, table.schema_name, table.table_name, "ERROR");
+          continue;
+        }
+
+        std::string schema_name = table.schema_name;
+        std::string table_name = table.table_name;
+        std::string lowerSchemaName = schema_name;
+        std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
+                       lowerSchemaName.begin(), ::tolower);
+
+        // Usar USE [database] para cambiar el contexto de base de datos
+        std::string databaseName = extractDatabaseName(table.connection_string);
+        std::string useQuery = "USE [" + databaseName + "];";
+        auto useResult = executeQueryMSSQL(dbc, useQuery);
+
+        auto countRes =
+            executeQueryMSSQL(dbc, "SELECT COUNT(*) FROM [" + schema_name +
+                                       "].[" + table_name + "];");
+        size_t sourceCount = 0;
+        if (!countRes.empty() && !countRes[0][0].empty()) {
+          try {
+            sourceCount = std::stoul(countRes[0][0]);
+            Logger::info(LogCategory::TRANSFER,
+                         "MSSQL source table " + schema_name + "." +
+                             table_name + " has " +
+                             std::to_string(sourceCount) + " records");
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::TRANSFER,
+                          "ERROR parsing source count for MSSQL table " +
+                              schema_name + "." + table_name + ": " +
+                              std::string(e.what()));
+            sourceCount = 0;
+          }
+        } else {
+          Logger::error(LogCategory::TRANSFER,
+                        "ERROR: Could not get source count for MSSQL table " +
+                            schema_name + "." + table_name +
+                            " - count query returned no results");
+        }
+
+        // Obtener conteo de registros en la tabla destino
+
+        std::string targetCountQuery = "SELECT COUNT(*) FROM \"" +
+                                       lowerSchemaName + "\".\"" + table_name +
+                                       "\";";
+        size_t targetCount = 0;
+        try {
+          pqxx::work txn(pgConn);
+          auto targetResult = txn.exec(targetCountQuery);
+          if (!targetResult.empty()) {
+            targetCount = targetResult[0][0].as<size_t>();
+            Logger::info(LogCategory::TRANSFER,
+                         "MSSQL target table " + lowerSchemaName + "." +
+                             table_name + " has " +
+                             std::to_string(targetCount) + " records");
+          } else {
+            Logger::error(LogCategory::TRANSFER,
+                          "ERROR: MSSQL target count query returned no results "
+                          "for table " +
+                              lowerSchemaName + "." + table_name);
+          }
+          txn.commit();
+        } catch (const std::exception &e) {
+          Logger::error(LogCategory::TRANSFER,
+                        "ERROR getting MSSQL target count for table " +
+                            lowerSchemaName + "." + table_name + ": " +
+                            std::string(e.what()));
+        }
+
+        // Lógica simple basada en counts reales
+        if (sourceCount == 0) {
+          if (targetCount == 0) {
+            updateStatus(pgConn, schema_name, table_name, "NO_DATA", 0);
+          } else {
+            Logger::warning(
+                LogCategory::TRANSFER,
+                "Source has no data but target has " +
+                    std::to_string(targetCount) + " records for table " +
+                    schema_name + "." + table_name +
+                    ". This might indicate source table is empty or filtered.");
+            updateStatus(pgConn, schema_name, table_name, "NO_DATA",
+                         targetCount);
+          }
+          continue;
+        }
+
+        // Si sourceCount = targetCount, verificar si hay cambios incrementales
+        if (sourceCount == targetCount) {
+          // Procesar UPDATEs si hay columna de tiempo y last_sync_time
+          if (!table.last_sync_column.empty() &&
+              !table.last_sync_time.empty()) {
+            Logger::info(LogCategory::TRANSFER,
+                         "Processing updates for " + schema_name + "." +
+                             table_name +
+                             " using time column: " + table.last_sync_column +
+                             " since: " + table.last_sync_time);
+            processUpdatesByPrimaryKey(schema_name, table_name, dbc, pgConn,
+                                       table.last_sync_column,
+                                       table.last_sync_time);
+          }
+
+          // Verificar si hay datos nuevos usando last_offset
+          size_t lastOffset = 0;
+          try {
+            pqxx::work txn(pgConn);
+            auto offsetRes = txn.exec(
+                "SELECT last_offset FROM metadata.catalog WHERE schema_name='" +
+                escapeSQL(schema_name) + "' AND table_name='" +
+                escapeSQL(table_name) + "';");
+            txn.commit();
+
+            if (!offsetRes.empty() && !offsetRes[0][0].is_null()) {
+              lastOffset = std::stoul(offsetRes[0][0].as<std::string>());
+            }
+          } catch (...) {
+            lastOffset = 0;
+          }
+
+          // Simplificado: Siempre usar LISTENING_CHANGES para sincronización
+          // incremental
+          updateStatus(pgConn, schema_name, table_name, "LISTENING_CHANGES",
+                       sourceCount);
+
+          // Actualizar last_processed_pk para tablas sincronizadas
+          std::string pkStrategy =
+              getPKStrategyFromCatalog(pgConn, schema_name, table_name);
+          std::vector<std::string> pkColumns =
+              getPKColumnsFromCatalog(pgConn, schema_name, table_name);
+
+          if (pkStrategy == "PK" && !pkColumns.empty()) {
+            try {
+              // Obtener el último PK de la tabla para marcar como procesada
+              std::string maxPKQuery = "SELECT ";
+              for (size_t i = 0; i < pkColumns.size(); ++i) {
+                if (i > 0)
+                  maxPKQuery += ", ";
+                maxPKQuery += "[" + pkColumns[i] + "]";
+              }
+              maxPKQuery +=
+                  " FROM [" + schema_name + "].[" + table_name + "] ORDER BY ";
+              for (size_t i = 0; i < pkColumns.size(); ++i) {
+                if (i > 0)
+                  maxPKQuery += ", ";
+                maxPKQuery += "[" + pkColumns[i] + "]";
+              }
+              maxPKQuery += " DESC OFFSET 0 ROWS FETCH NEXT 1 ROWS ONLY;";
+
+              std::vector<std::vector<std::string>> maxPKResults =
+                  executeQueryMSSQL(dbc, maxPKQuery);
+
+              if (!maxPKResults.empty() && !maxPKResults[0].empty()) {
+                std::string lastPK;
+                for (size_t i = 0; i < maxPKResults[0].size(); ++i) {
+                  if (i > 0)
+                    lastPK += "|";
+                  lastPK += maxPKResults[0][i];
+                }
+
+                updateLastProcessedPK(pgConn, schema_name, table_name, lastPK);
+                Logger::info(LogCategory::TRANSFER,
+                             "Updated last_processed_pk to " + lastPK +
+                                 " for synchronized table " + schema_name +
+                                 "." + table_name);
+              }
+            } catch (const std::exception &e) {
+              Logger::error(LogCategory::TRANSFER,
+                            "ERROR: Failed to update last_processed_pk for "
+                            "synchronized table " +
+                                schema_name + "." + table_name + ": " +
+                                std::string(e.what()));
+            }
+          }
+
+          // IMPORTANTE: NO continuar con el procesamiento de datos si los
+          // counts coinciden Solo procesar DELETEs si es necesario y luego
+          // cerrar la conexión
+          // Removed synchronized table log to reduce noise
+
+          // Cerrar conexión MSSQL antes de continuar
+          if (dbc) {
+            closeMSSQLConnection(dbc);
+            dbc = nullptr;
+          }
+          continue;
+        }
+
+        // Si sourceCount < targetCount, hay registros eliminados en el origen
+        // Procesar DELETEs por Primary Key
+        if (sourceCount < targetCount) {
+          Logger::info(LogCategory::TRANSFER,
+                       "Detected " + std::to_string(targetCount - sourceCount) +
+                           " deleted records in " + schema_name + "." +
+                           table_name + " - processing deletes");
+          processDeletesByPrimaryKey(schema_name, table_name, dbc, pgConn);
+
+          // Después de procesar DELETEs, verificar el nuevo conteo
+          std::string lowerSchemaName = schema_name;
+          std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
+                         lowerSchemaName.begin(), ::tolower);
+          pqxx::work countTxn(pgConn);
+          auto newTargetCount =
+              countTxn.exec("SELECT COUNT(*) FROM \"" + lowerSchemaName +
+                            "\".\"" + table_name + "\";");
+          countTxn.commit();
+          targetCount = newTargetCount[0][0].as<int>();
+          Logger::info(LogCategory::TRANSFER,
+                       "After deletes: source=" + std::to_string(sourceCount) +
+                           ", target=" + std::to_string(targetCount));
+        }
+
+        // Luego ejecutar la query sin prefijo de base de datos
+        std::vector<std::vector<std::string>> columns = executeQueryMSSQL(
+            dbc,
+            "SELECT c.name AS COLUMN_NAME, tp.name AS DATA_TYPE, "
+            "CASE WHEN c.is_nullable = 1 THEN 'YES' ELSE 'NO' END as "
+            "IS_NULLABLE, "
+            "CASE WHEN pk.column_id IS NOT NULL THEN 'YES' ELSE 'NO' END as "
+            "IS_PRIMARY_KEY, "
+            "c.max_length AS CHARACTER_MAXIMUM_LENGTH, "
+            "c.precision AS NUMERIC_PRECISION, "
+            "c.scale AS NUMERIC_SCALE "
+            "FROM sys.columns c "
+            "INNER JOIN sys.tables t ON c.object_id = t.object_id "
+            "INNER JOIN sys.schemas s ON t.schema_id = s.schema_id "
+            "INNER JOIN sys.types tp ON c.user_type_id = tp.user_type_id "
+            "LEFT JOIN ( "
+            "  SELECT ic.column_id, ic.object_id "
+            "  FROM sys.indexes i "
+            "  INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id "
+            "AND i.index_id = ic.index_id "
+            "  WHERE i.is_primary_key = 1 "
+            ") pk ON c.column_id = pk.column_id AND t.object_id = pk.object_id "
+            "WHERE s.name = '" +
+                schema_name + "' AND t.name = '" + table_name +
+                "' "
+                "ORDER BY c.column_id;");
+
+        if (columns.empty()) {
+          Logger::error(LogCategory::TRANSFER,
+                        "No columns found for table " + schema_name + "." +
+                            table_name +
+                            ". This indicates the table structure could not be "
+                            "retrieved from MSSQL.");
+          updateStatus(pgConn, schema_name, table_name, "ERROR");
+          continue;
+        }
+
+        std::vector<std::string> columnNames;
+        std::vector<std::string> columnTypes;
+        std::vector<bool> columnNullable;
+
+        for (const std::vector<std::string> &col : columns) {
+          if (col.size() < 7)
+            continue;
+
+          std::string colName = col[0];
+          std::transform(colName.begin(), colName.end(), colName.begin(),
+                         ::tolower);
+          columnNames.push_back(colName);
+
+          std::string dataType = col[1];
+          std::string maxLength = col[4];
+          std::string numericPrecision = col[5];
+          std::string numericScale = col[6];
+
+          std::string pgType = "TEXT";
+          if (dataType == "varchar" || dataType == "nvarchar") {
+            pgType =
+                (!maxLength.empty() && maxLength != "NULL" && maxLength != "-1")
+                    ? "VARCHAR(" + maxLength + ")"
+                    : "VARCHAR";
+          } else if (dataType == "decimal" || dataType == "numeric") {
+            // Para decimal/numeric, usar la precisión y escala de MSSQL
+            if (!numericPrecision.empty() && numericPrecision != "NULL" &&
+                !numericScale.empty() && numericScale != "NULL") {
+              pgType = "NUMERIC(" + numericPrecision + "," + numericScale + ")";
+            } else {
+              pgType = "NUMERIC(18,4)";
+            }
+          } else if (dataTypeMap.count(dataType)) {
+            pgType = dataTypeMap[dataType];
+          }
+
+          columnTypes.push_back(pgType);
+          columnNullable.push_back(col[2] == "YES");
+        }
+
+        if (columnNames.empty()) {
+          Logger::error(
+              LogCategory::TRANSFER,
+              "No valid column names found for table " + schema_name + "." +
+                  table_name +
+                  ". This indicates a problem with column metadata parsing.");
+          updateStatus(pgConn, schema_name, table_name, "ERROR");
+          continue;
+        }
+
+        if (table.status == "FULL_LOAD") {
+          pqxx::work txn(pgConn);
+          auto offsetCheck = txn.exec(
+              "SELECT last_offset FROM metadata.catalog WHERE schema_name='" +
+              escapeSQL(schema_name) + "' AND table_name='" +
+              escapeSQL(table_name) + "';");
+          txn.commit();
+
+          bool shouldTruncate = true;
+          if (!offsetCheck.empty() && !offsetCheck[0][0].is_null()) {
+            std::string currentOffset = offsetCheck[0][0].as<std::string>();
+            if (currentOffset != "0" && !currentOffset.empty()) {
+              shouldTruncate = false;
+            }
+          }
+
+          if (shouldTruncate) {
+            Logger::info(LogCategory::TRANSFER,
+                         "Truncating table: " + lowerSchemaName + "." +
+                             table_name);
+            pqxx::work txn(pgConn);
+            txn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
+                     table_name + "\" CASCADE;");
+            txn.commit();
+          }
+        } else if (table.status == "RESET") {
+          Logger::info(LogCategory::TRANSFER,
+                       "Processing RESET table: " + schema_name + "." +
+                           table_name);
+          pqxx::work txn(pgConn);
+          txn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
+                   table_name + "\" CASCADE;");
+          txn.exec("UPDATE metadata.catalog SET last_offset='0' WHERE "
+                   "schema_name='" +
+                   escapeSQL(schema_name) + "' AND table_name='" +
+                   escapeSQL(table_name) + "';");
+          txn.commit();
+
+          updateStatus(pgConn, schema_name, table_name, "FULL_LOAD", 0);
+          continue;
+        }
+
+        size_t totalProcessed = 0;
+
+        std::string offsetQuery =
+            "SELECT last_offset FROM metadata.catalog WHERE schema_name='" +
+            escapeSQL(schema_name) + "' AND table_name='" +
+            escapeSQL(table_name) + "';";
+        pqxx::work txn(pgConn);
+        auto currentOffsetRes = txn.exec(offsetQuery);
+        txn.commit();
+
+        if (!currentOffsetRes.empty() && !currentOffsetRes[0][0].is_null()) {
+          try {
+            totalProcessed =
+                std::stoul(currentOffsetRes[0][0].as<std::string>());
+          } catch (...) {
+            totalProcessed = 0;
+          }
+        }
+
+        // OPTIMIZED: Usar cursor-based pagination con primary key
+        std::string pkStrategy =
+            getPKStrategyFromCatalog(pgConn, schema_name, table_name);
+        std::vector<std::string> pkColumns =
+            getPKColumnsFromCatalog(pgConn, schema_name, table_name);
+        std::string lastProcessedPK =
+            getLastProcessedPKFromCatalog(pgConn, schema_name, table_name);
+
+        // Transferir datos faltantes usando CURSOR-BASED PAGINATION
+        bool hasMoreData = true;
+        size_t currentOffset = 0; // Usar variable separada para OFFSET
+        size_t chunkNumber = 0;
+
+        // CRITICAL: Add timeout to prevent infinite loops
+        auto startTime = std::chrono::steady_clock::now();
+        const auto MAX_PROCESSING_TIME =
+            std::chrono::hours(2); // 2 hours max per table
+
+        while (hasMoreData) {
+          chunkNumber++;
+          const size_t CHUNK_SIZE = SyncConfig::getChunkSize();
+
+          // CRITICAL: Check timeout to prevent infinite loops
+          auto currentTime = std::chrono::steady_clock::now();
+          auto elapsedTime = currentTime - startTime;
+          if (elapsedTime > MAX_PROCESSING_TIME) {
+            Logger::error(
+                LogCategory::TRANSFER,
+                "CRITICAL: Maximum processing time reached (" +
+                    std::to_string(
+                        std::chrono::duration_cast<std::chrono::minutes>(
+                            elapsedTime)
+                            .count()) +
+                    " minutes) for table " + schema_name + "." + table_name +
+                    " - breaking to prevent infinite loop");
+            hasMoreData = false;
+            break;
+          }
+
+          // CRITICAL: Add maximum chunk limit to prevent infinite loops
+          if (chunkNumber > 10000) {
+            Logger::error(LogCategory::TRANSFER,
+                          "CRITICAL: Maximum chunk limit reached (" +
+                              std::to_string(chunkNumber) + ") for table " +
+                              schema_name + "." + table_name +
+                              " - breaking to prevent infinite loop");
+            hasMoreData = false;
+            break;
+          }
+
+          // Asegurar que estamos en la base de datos correcta
+          executeQueryMSSQL(dbc, "USE [" + databaseName + "];");
+
+          std::string selectQuery =
+              "SELECT * FROM [" + schema_name + "].[" + table_name + "]";
+
+          if (pkStrategy == "PK" && !pkColumns.empty()) {
+            // CURSOR-BASED PAGINATION: Usar PK para paginación eficiente
+            if (!lastProcessedPK.empty()) {
+              selectQuery += " WHERE ";
+              std::vector<std::string> lastPKValues =
+                  parseLastPK(lastProcessedPK);
+
+              if (pkColumns.size() == 1) {
+                // Single PK: simple comparison
+                selectQuery += "[" + pkColumns[0] + "] > '" +
+                               escapeSQL(lastPKValues[0]) + "'";
+              } else {
+                // Composite PK: lexicographic ordering
+                selectQuery += "(";
+                for (size_t i = 0; i < pkColumns.size(); ++i) {
+                  if (i > 0)
+                    selectQuery += " OR ";
+                  selectQuery += "(";
+                  for (size_t j = 0; j <= i; ++j) {
+                    if (j > 0)
+                      selectQuery += " AND ";
+                    if (j == i) {
+                      selectQuery += "[" + pkColumns[j] + "] > '" +
+                                     escapeSQL(lastPKValues[j]) + "'";
+                    } else {
+                      selectQuery += "[" + pkColumns[j] + "] = '" +
+                                     escapeSQL(lastPKValues[j]) + "'";
+                    }
+                  }
+                  selectQuery += ")";
+                }
+                selectQuery += ")";
+              }
+            }
+
+            selectQuery += " ORDER BY ";
+            for (size_t i = 0; i < pkColumns.size(); ++i) {
+              if (i > 0)
+                selectQuery += ", ";
+              selectQuery += "[" + pkColumns[i] + "]";
+            }
+            selectQuery += " OFFSET 0 ROWS FETCH NEXT " +
+                           std::to_string(CHUNK_SIZE) + " ROWS ONLY;";
+          } else {
+            // FALLBACK: Usar OFFSET pagination para tablas sin PK
+            selectQuery += " ORDER BY (SELECT NULL) OFFSET " +
+                           std::to_string(currentOffset) + " ROWS FETCH NEXT " +
+                           std::to_string(CHUNK_SIZE) + " ROWS ONLY;";
+          }
+
+          std::vector<std::vector<std::string>> results =
+              executeQueryMSSQL(dbc, selectQuery);
+
+          if (results.empty()) {
+            hasMoreData = false;
+            break;
+          }
+
+          size_t rowsInserted = 0;
+
+          try {
+            std::string columnsStr;
+            for (size_t i = 0; i < columnNames.size(); ++i) {
+              columnsStr += "\"" + columnNames[i] + "\"";
+              if (i < columnNames.size() - 1)
+                columnsStr += ",";
+            }
+
+            std::stringstream csvData;
+            for (const std::vector<std::string> &row : results) {
+              if (row.size() != columnNames.size()) {
+                continue;
+              }
+
+              for (size_t i = 0; i < row.size(); ++i) {
+                if (i > 0)
+                  csvData << "|";
+
+                std::string value = row[i];
+                if (value == "NULL" || value.empty()) {
+                  csvData << "\\N";
+                } else {
+                  // Con pipe como delimitador, solo necesitamos escapar pipes
+                  // en los datos
+                  std::string escapedValue = value;
+                  size_t pos = 0;
+                  while ((pos = escapedValue.find("|", pos)) !=
+                         std::string::npos) {
+                    escapedValue.replace(pos, 1, "\\|");
+                    pos += 2;
+                  }
+                  csvData << escapedValue;
+                }
+              }
+              csvData << "\n";
+              rowsInserted++;
+            }
+
+            if (rowsInserted > 0) {
+              try {
+                performBulkUpsert(pgConn, results, columnNames, columnTypes,
+                                  lowerSchemaName, table_name, schema_name);
+                Logger::info(LogCategory::TRANSFER,
+                             "Successfully processed " +
+                                 std::to_string(rowsInserted) + " rows for " +
+                                 schema_name + "." + table_name);
+              } catch (const std::exception &e) {
+                std::string errorMsg = e.what();
+                Logger::error(LogCategory::TRANSFER,
+                              "Bulk upsert failed: " + errorMsg);
+
+                // CRITICAL: Check for transaction abort errors that cause
+                // infinite loops
+                if (errorMsg.find("current transaction is aborted") !=
+                        std::string::npos ||
+                    errorMsg.find("previously aborted") != std::string::npos ||
+                    errorMsg.find("aborted transaction") != std::string::npos) {
+                  Logger::error(LogCategory::TRANSFER,
+                                "CRITICAL: Transaction abort detected - "
+                                "breaking loop to prevent infinite hang");
+                  hasMoreData = false;
+                  break;
+                }
+
+                rowsInserted = 0;
+              }
+            }
+
+          } catch (const std::exception &e) {
+            std::string errorMsg = e.what();
+            Logger::error(LogCategory::TRANSFER,
+                          "Error processing data: " + errorMsg);
+
+            // CRITICAL: Check for critical errors that require breaking the
+            // loop
+            if (errorMsg.find("current transaction is aborted") !=
+                    std::string::npos ||
+                errorMsg.find("previously aborted") != std::string::npos ||
+                errorMsg.find("aborted transaction") != std::string::npos ||
+                errorMsg.find("connection") != std::string::npos ||
+                errorMsg.find("timeout") != std::string::npos) {
+              Logger::error(LogCategory::TRANSFER,
+                            "CRITICAL: Critical error detected - breaking loop "
+                            "to prevent infinite hang");
+              hasMoreData = false;
+              break;
+            }
+          }
+
+          // Always update targetCount, but only update currentOffset for non-PK
+          // tables
+          targetCount += rowsInserted;
+
+          // Solo incrementar currentOffset para tablas sin PK (OFFSET
+          // pagination). Para tablas con PK se usa cursor-based pagination con
+          // last_processed_pk
+          if (pkStrategy != "PK") {
+            currentOffset += rowsInserted;
+          }
+
+          // If COPY failed but we have data, advance the offset by 1
+          if (rowsInserted == 0 && !results.empty()) {
+            targetCount += 1; // Advance by 1 to skip the problematic record
+            // Solo avanzar currentOffset para tablas sin PK
+            if (pkStrategy != "PK") {
+              currentOffset +=
+                  1; // Advance OFFSET by 1 to skip the problematic record
+            }
+            Logger::info(LogCategory::TRANSFER,
+                         "COPY failed, advancing offset by 1 to skip "
+                         "problematic record for " +
+                             schema_name + "." + table_name);
+          }
+
+          // OPTIMIZED: Update last_processed_pk for cursor-based pagination
+          if ((pkStrategy == "PK" && !pkColumns.empty()) && !results.empty()) {
+            try {
+              // Obtener el último PK del chunk procesado
+              std::string lastPK =
+                  getLastPKFromResults(results, pkColumns, columnNames);
+              if (!lastPK.empty()) {
+                updateLastProcessedPK(pgConn, schema_name, table_name, lastPK);
+              }
+            } catch (const std::exception &e) {
+              Logger::error(LogCategory::TRANSFER, "updateLastProcessedPK",
+                            "Error updating last processed PK: " +
+                                std::string(e.what()));
+            }
+          }
+
+          // Update last_offset in database solo para tablas sin PK (OFFSET
+          // pagination) Para tablas con PK o TEMPORAL_PK se usa
+          // last_processed_pk en lugar de last_offset
+          if (pkStrategy != "PK") {
+            try {
+              pqxx::work updateTxn(pgConn);
+              updateTxn.exec("UPDATE metadata.catalog SET last_offset='" +
+                             std::to_string(currentOffset) +
+                             "' WHERE schema_name='" + escapeSQL(schema_name) +
+                             "' AND table_name='" + escapeSQL(table_name) +
+                             "';");
+              updateTxn.commit();
+            } catch (const std::exception &e) {
+              Logger::warning(LogCategory::TRANSFER,
+                              "Failed to update last_offset: " +
+                                  std::string(e.what()));
+            }
+          }
+
+          if (targetCount >= sourceCount) {
+            hasMoreData = false;
+          }
+        }
+
+        if (targetCount > 0) {
+          // Simplificado: Siempre usar LISTENING_CHANGES para sincronización
+          // incremental
+          Logger::info(LogCategory::TRANSFER,
+                       "Table " + schema_name + "." + table_name +
+                           " synchronized - LISTENING_CHANGES");
+          updateStatus(pgConn, schema_name, table_name, "LISTENING_CHANGES",
+                       targetCount);
+
+          // OPTIMIZED: Update last_processed_pk for completed transfer
+          if (pkStrategy == "PK" && !pkColumns.empty()) {
+            try {
+              // Obtener el último PK de la tabla para marcar como procesada
+              std::string maxPKQuery = "SELECT ";
+              for (size_t i = 0; i < pkColumns.size(); ++i) {
+                if (i > 0)
+                  maxPKQuery += ", ";
+                maxPKQuery += "[" + pkColumns[i] + "]";
+              }
+              maxPKQuery +=
+                  " FROM [" + schema_name + "].[" + table_name + "] ORDER BY ";
+              for (size_t i = 0; i < pkColumns.size(); ++i) {
+                if (i > 0)
+                  maxPKQuery += ", ";
+                maxPKQuery += "[" + pkColumns[i] + "]";
+              }
+              maxPKQuery += " DESC OFFSET 0 ROWS FETCH NEXT 1 ROWS ONLY;";
+
+              std::vector<std::vector<std::string>> maxPKResults =
+                  executeQueryMSSQL(dbc, maxPKQuery);
+
+              if (!maxPKResults.empty() && !maxPKResults[0].empty()) {
+                std::string lastPK;
+                for (size_t i = 0; i < maxPKResults[0].size(); ++i) {
+                  if (i > 0)
+                    lastPK += "|";
+                  lastPK += maxPKResults[0][i];
+                }
+
+                updateLastProcessedPK(pgConn, schema_name, table_name, lastPK);
+                Logger::info(LogCategory::TRANSFER,
+                             "Updated last_processed_pk to " + lastPK +
+                                 " for completed table " + schema_name + "." +
+                                 table_name);
+              }
+            } catch (const std::exception &e) {
+              Logger::error(LogCategory::TRANSFER,
+                            "ERROR: Failed to update last_processed_pk for "
+                            "completed table " +
+                                schema_name + "." + table_name + ": " +
+                                std::string(e.what()));
+            }
+          }
+        }
+
+        // Cerrar conexión MSSQL con verificación
+        if (dbc) {
+          closeMSSQLConnection(dbc);
+          dbc = nullptr;
+        }
+      }
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER,
+                    "Error in transferDataMSSQLToPostgres: " +
+                        std::string(e.what()));
+    }
+  }
+
+  std::string getLastSyncTimeOptimized(pqxx::connection &pgConn,
+                                       const std::string &schema_name,
+                                       const std::string &table_name,
+                                       const std::string &lastSyncColumn) {
+    try {
+      if (lastSyncColumn.empty()) {
+        return "";
+      }
+
+      // Usar una consulta optimizada con índice en la columna de tiempo
+      std::string query = "SELECT MAX(\"" + lastSyncColumn + "\") FROM \"" +
+                          schema_name + "\".\"" + table_name + "\";";
 
       pqxx::work txn(pgConn);
       auto result = txn.exec(query);
       txn.commit();
 
-      if (result.empty()) {
-        return false;
+      if (!result.empty() && !result[0][0].is_null()) {
+        return result[0][0].as<std::string>();
       }
-
-      if (result.size() != columnNames.size()) {
-        return false;
-      }
-
-      for (size_t i = 0; i < result.size() && i < columnNames.size(); ++i) {
-        std::string pgColumnName = result[i][0].as<std::string>();
-        if (pgColumnName != columnNames[i]) {
-          return false;
-        }
-      }
-
-      return true;
     } catch (const std::exception &e) {
-      return false;
+      Logger::error(LogCategory::TRANSFER,
+                    "Error getting last sync time: " + std::string(e.what()));
     }
+    return "";
   }
 
-  std::vector<std::string>
-  getPrimaryKeyColumns(const std::string &schema_name,
-                       const std::string &table_name,
-                       std::shared_ptr<MSSQLConnection> mssqlConn) {
-    ConnectionManager cm;
-    std::vector<std::string> primaryKeyColumns;
-
-    std::string obtainColumnsQuery =
-        "SELECT c.name AS COLUMN_NAME "
-        "FROM sys.indexes i "
-        "INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id AND "
-        "i.index_id = ic.index_id "
-        "INNER JOIN sys.columns c ON ic.object_id = c.object_id AND "
-        "ic.column_id = c.column_id "
-        "WHERE i.object_id = OBJECT_ID('" +
-        schema_name + "." + table_name +
-        "') "
-        "AND i.is_primary_key = 1 "
-        "ORDER BY ic.key_ordinal;";
-
-    auto columns = cm.executeQueryMSSQL(mssqlConn.get(), obtainColumnsQuery);
-
-    for (const auto &col : columns) {
-      if (col.size() < 1)
-        continue;
-
-      std::string colName = sanitizeColumnName(col[0]);
-      primaryKeyColumns.push_back(colName);
-    }
-
-    return primaryKeyColumns;
-  }
-
-  void updateStatus(pqxx::connection &pgConn, const std::string &schema,
-                    const std::string &table, const std::string &status,
-                    size_t lastOffset = 0) {
+  void updateStatus(pqxx::connection &pgConn, const std::string &schema_name,
+                    const std::string &table_name, const std::string &status,
+                    size_t offset = 0) {
     try {
       pqxx::work txn(pgConn);
-      txn.exec_params("UPDATE metadata.catalog SET status=$1, last_offset=$2 "
-                      "WHERE schema_name=$3 AND table_name=$4;",
-                      status, lastOffset, schema, table);
-      txn.commit();
-    } catch (const std::exception &e) {
-      std::cerr << "Error updating status: " << e.what() << std::endl;
-    }
-  }
 
-  void detectAndFixCorruptedSyncs(pqxx::connection &pgConn) {
-    auto tables = getActiveTables(pgConn);
-    int corruptedCount = 0;
+      auto columnQuery =
+          txn.exec("SELECT last_sync_column FROM metadata.catalog "
+                   "WHERE schema_name='" +
+                   escapeSQL(schema_name) + "' AND table_name='" +
+                   escapeSQL(table_name) + "';");
 
-    for (const auto &table : tables) {
-      if (table.last_offset.empty() || table.last_offset == "0") {
-        continue;
+      std::string lastSyncColumn = "";
+      if (!columnQuery.empty() && !columnQuery[0][0].is_null()) {
+        lastSyncColumn = columnQuery[0][0].as<std::string>();
       }
 
-      try {
-        size_t lastOffset = std::stoul(table.last_offset);
+      std::string updateQuery =
+          "UPDATE metadata.catalog SET status='" + status + "'";
 
-        if (lastOffset > 1000000) {
-          updateStatus(pgConn, table.schema_name, table.table_name, "full_load",
-                       0);
-          corruptedCount++;
-        }
-      } catch (...) {
-        updateStatus(pgConn, table.schema_name, table.table_name,
-                     "corrupted_fixed", 0);
-        corruptedCount++;
-      }
-    }
-  }
-
-  void detectAndFixEmptyTargetTables(pqxx::connection &pgConn) {
-    auto tables = getActiveTables(pgConn);
-    int resetCount = 0;
-    ConnectionManager cm;
-
-    for (const auto &table : tables) {
-      if (table.last_offset.empty() || table.last_offset == "0") {
-        continue;
+      // Actualizar last_offset para todos los status que requieren tracking
+      if (status == "FULL_LOAD" || status == "RESET" ||
+          status == "LISTENING_CHANGES") {
+        updateQuery += ", last_offset='" + std::to_string(offset) + "'";
       }
 
-      try {
-        size_t lastOffset = std::stoul(table.last_offset);
+      if (!lastSyncColumn.empty()) {
 
-        if (lastOffset > 0) {
-          std::string lowerSchemaName = table.schema_name;
-          std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
-                         lowerSchemaName.begin(), ::tolower);
-          std::string countQuery = "SELECT COUNT(*) FROM \"" + lowerSchemaName +
-                                   "\".\"" + table.table_name + "\";";
-          auto countResult = cm.executeQueryPostgres(pgConn, countQuery);
+        auto tableCheck =
+            txn.exec("SELECT COUNT(*) FROM information_schema.tables "
+                     "WHERE table_schema='" +
+                     schema_name +
+                     "' "
+                     "AND table_name='" +
+                     table_name + "';");
 
-          if (!countResult.empty() && !countResult[0][0].is_null() &&
-              std::stoul(countResult[0][0].as<std::string>()) == 0) {
+        if (!tableCheck.empty() && tableCheck[0][0].as<int>() > 0) {
+          // Verificar el tipo de columna antes de hacer el cast
+          auto columnTypeCheck =
+              txn.exec("SELECT data_type FROM information_schema.columns "
+                       "WHERE table_schema='" +
+                       schema_name + "' AND table_name='" + table_name +
+                       "' AND column_name='" + lastSyncColumn + "';");
 
-            std::shared_ptr<MSSQLConnection> mssqlConn = nullptr;
-            mssqlConn = cm.connectMSSQL(table.connection_string);
-
-            if (mssqlConn) {
-              std::string sourceCountQuery = "SELECT COUNT(*) FROM [" +
-                                             table.schema_name + "].[" +
-                                             table.table_name + "];";
-              auto sourceCountResult =
-                  cm.executeQueryMSSQL(mssqlConn.get(), sourceCountQuery);
-
-              if (!sourceCountResult.empty() &&
-                  !sourceCountResult[0][0].empty() &&
-                  std::stoul(sourceCountResult[0][0]) == 0) {
-                updateStatus(pgConn, table.schema_name, table.table_name,
-                             "PERFECT MATCH", 0);
-              } else {
-                updateStatus(pgConn, table.schema_name, table.table_name,
-                             "reset_empty", 0);
-              }
-              resetCount++;
+          if (!columnTypeCheck.empty()) {
+            std::string columnType = columnTypeCheck[0][0].as<std::string>();
+            if (columnType == "time without time zone") {
+              // Para columnas TIME, usar NOW() en lugar de MAX()
+              updateQuery += ", last_sync_time=NOW()";
             } else {
-              updateStatus(pgConn, table.schema_name, table.table_name,
-                           "reset_empty", 0);
-              resetCount++;
+              // Para columnas TIMESTAMP/DATE, usar MAX con cast apropiado
+              updateQuery += ", last_sync_time=(SELECT MAX(\"" +
+                             lastSyncColumn + "\")::timestamp FROM \"" +
+                             schema_name + "\".\"" + table_name + "\")";
             }
+          } else {
+            updateQuery += ", last_sync_time=NOW()";
           }
+        } else {
+          updateQuery += ", last_sync_time=NOW()";
         }
-      } catch (const std::exception &e) {
-        std::cerr << "Error checking table " << table.schema_name << "."
-                  << table.table_name << ": " << e.what() << std::endl;
+      } else {
+        updateQuery += ", last_sync_time=NOW()";
       }
-    }
 
-    if (resetCount > 0) {
-      std::cout << "Auto-Recovered " << resetCount << " empty target tables :)"
-                << std::endl;
+      updateQuery += " WHERE schema_name='" + escapeSQL(schema_name) +
+                     "' AND table_name='" + escapeSQL(table_name) + "';";
+
+      txn.exec(updateQuery);
+      txn.commit();
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(LogCategory::TRANSFER,
+                    "SQL ERROR updating status: " + std::string(e.what()) +
+                        " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::TRANSFER,
+                    "CONNECTION ERROR updating status: " +
+                        std::string(e.what()));
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER,
+                    "ERROR updating status: " + std::string(e.what()));
     }
   }
 
-  void transferDataMSSQLToPostgres() {
-    signal(SIGINT, MSSQLSync::signalHandler);
-    signal(SIGTERM, MSSQLSync::signalHandler);
-
-    ConnectionManager cm;
-    auto pgConn =
-        cm.connectPostgres("host=localhost dbname=DataLake "
-                           "user=Datalake_User password=keepprofessional");
-
-    detectAndFixCorruptedSyncs(*pgConn);
-    detectAndFixEmptyTargetTables(*pgConn);
-
-    auto tables = getActiveTables(*pgConn);
-    size_t totalTables = tables.size();
-    size_t processedTables = 0;
-    size_t skippedTables = 0;
-    size_t syncedTables = 0;
-
-    for (auto &table : tables) {
-      if (table.status == "full_load") {
-        table.last_offset = "0";
-      }
-
-      if (MSSQLSync::shutdownRequested || MSSQLSync::forceExit) {
-        std::cout << "\nGraceful shutdown: exiting table processing loop"
-                  << std::endl;
-        break;
-      }
-
-      std::string schema_name = table.schema_name;
-      std::string table_name = table.table_name;
+  void processDeletesByPrimaryKey(const std::string &schema_name,
+                                  const std::string &table_name,
+                                  SQLHDBC mssqlConn, pqxx::connection &pgConn) {
+    try {
       std::string lowerSchemaName = schema_name;
       std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
                      lowerSchemaName.begin(), ::tolower);
 
-      std::shared_ptr<MSSQLConnection> mssqlConn = nullptr;
-      if (table.db_engine == "MSSQL") {
-        mssqlConn = cm.connectMSSQL(table.connection_string);
-        if (!mssqlConn) {
-          updateStatus(*pgConn, schema_name, table_name, "error");
-          continue;
+      // 1. Obtener columnas de primary key
+      std::vector<std::string> pkColumns =
+          getPrimaryKeyColumns(mssqlConn, schema_name, table_name);
+
+      if (pkColumns.empty()) {
+        return;
+      }
+
+      // 2. Obtener todas las PKs de PostgreSQL en batches
+      const size_t BATCH_SIZE = SyncConfig::getChunkSize();
+      size_t offset = 0;
+      size_t totalDeleted = 0;
+
+      while (true) {
+        // Construir query para obtener PKs de PostgreSQL
+        std::string pkSelectQuery = "SELECT ";
+        for (size_t i = 0; i < pkColumns.size(); ++i) {
+          if (i > 0)
+            pkSelectQuery += ", ";
+          pkSelectQuery += "\"" + pkColumns[i] + "\"";
         }
-      } else {
-        updateStatus(*pgConn, schema_name, table_name, "error");
-        continue;
-      }
+        pkSelectQuery +=
+            " FROM \"" + lowerSchemaName + "\".\"" + table_name + "\"";
+        pkSelectQuery += " LIMIT " + std::to_string(BATCH_SIZE) + " OFFSET " +
+                         std::to_string(offset) + ";";
 
-      auto countRes = cm.executeQueryMSSQL(
-          mssqlConn.get(),
-          "SELECT COUNT(*) FROM [" + schema_name + "].[" + table_name + "];");
-      size_t sourceCount = 0;
-      if (!countRes.empty() && !countRes[0][0].empty()) {
-        sourceCount = std::stoul(countRes[0][0]);
-      }
-
-      auto columns = cm.executeQueryMSSQL(
-          mssqlConn.get(), "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, "
-                           "COLUMNPROPERTY(object_id('" +
-                               schema_name + "." + table_name +
-                               "'), COLUMN_NAME, 'IsIdentity') AS IS_IDENTITY, "
-                               "COLLATION_NAME, CHARACTER_SET_NAME "
-                               "FROM INFORMATION_SCHEMA.COLUMNS "
-                               "WHERE TABLE_SCHEMA = '" +
-                               schema_name + "' AND TABLE_NAME = '" +
-                               table_name + "';");
-
-      if (columns.empty()) {
-        updateStatus(*pgConn, schema_name, table_name, "error");
-        continue;
-      }
-
-      std::vector<std::string> columnNames;
-      std::vector<std::string> columnTypes;
-      std::vector<bool> columnNullable;
-      for (const auto &col : columns) {
-        if (col.size() < 5) {
-          continue;
-        }
-        columnNames.push_back(sanitizeColumnName(col[0]));
-        std::string dataType = col[1];
-        std::string pgDataType =
-            dataTypeMap.count(dataType) ? dataTypeMap[dataType] : "TEXT";
-        columnTypes.push_back(pgDataType);
-        columnNullable.push_back(col[2] == "YES");
-      }
-
-      if (columnNames.empty()) {
-        updateStatus(*pgConn, schema_name, table_name, "error");
-        continue;
-      }
-
-      bool tableExists =
-          verifyColumnsExist(*pgConn, lowerSchemaName, table_name, columnNames);
-
-      if (!tableExists || table.status == "full_load") {
-        // std::cout << "Table " << schema_name << "." << table_name << " ";
-        if (table.status == "full_load") {
-          // std::cout << "is full_load, recreating to avoid duplicates... :)"
-          //<< std::endl;
-        } else {
-          // std::cout << "does not exist in PostgreSQL. Recreating... :("
-          //<< std::endl;
-        }
-
-        cm.executeQueryPostgres(*pgConn, "DROP TABLE IF EXISTS \"" +
-                                             lowerSchemaName + "\".\"" +
-                                             table_name + "\";");
-
-        cm.executeQueryPostgres(*pgConn, "CREATE SCHEMA IF NOT EXISTS \"" +
-                                             lowerSchemaName + "\";");
-
-        auto freshColumns = cm.executeQueryMSSQL(
-            mssqlConn.get(),
-            "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, "
-            "COLUMNPROPERTY(object_id('" +
-                schema_name + "." + table_name +
-                "'), COLUMN_NAME, 'IsIdentity') AS IS_IDENTITY, "
-                "COLLATION_NAME, CHARACTER_SET_NAME "
-                "FROM INFORMATION_SCHEMA.COLUMNS "
-                "WHERE TABLE_SCHEMA = '" +
-                schema_name + "' AND TABLE_NAME = '" + table_name + "';");
-
-        std::string createTableQuery =
-            "CREATE TABLE \"" + lowerSchemaName + "\".\"" + table_name + "\" (";
-        bool hasColumns = false;
-        std::vector<std::string> primaryKeyColumns;
-        std::vector<std::string> newColumnNames;
-
-        for (const auto &col : freshColumns) {
-          if (col.size() < 6)
-            continue;
-          hasColumns = true;
-          std::string colName = sanitizeColumnName(col[0]);
-          newColumnNames.push_back(colName);
-          std::string dataType = col[1];
-          std::string nullable = (col[2] == "YES") ? "" : " NOT NULL";
-          std::string isIdentity = col[3];
-          std::string collation = col[4];
-          std::string charSet = col[5];
-
-          std::string pgDataType;
-          if (isIdentity == "1") {
-            if (dataType == "int" || dataType == "smallint")
-              pgDataType = "SERIAL";
-            else if (dataType == "bigint")
-              pgDataType = "BIGSERIAL";
-            else
-              pgDataType = "SERIAL";
-          } else {
-            if (dataType == "datetime" || dataType == "datetime2" ||
-                dataType == "smalldatetime") {
-              pgDataType = "TIMESTAMP";
-            } else if (dataType == "date") {
-              pgDataType = "DATE";
-            } else if (dataType == "time") {
-              pgDataType = "TIME";
-            } else {
-              pgDataType =
-                  dataTypeMap.count(dataType) ? dataTypeMap[dataType] : "TEXT";
-            }
-          }
-
-          createTableQuery += "\"" + colName + "\" " + pgDataType + nullable;
-
-          if (pgDataType == "VARCHAR" || pgDataType == "TEXT" ||
-              pgDataType == "CHAR") {
-            std::string pgCollation =
-                mapCollationToPostgres(collation, charSet);
-            createTableQuery += " COLLATE \"" + pgCollation + "\"";
-          }
-          createTableQuery += ", ";
-        }
-
-        if (hasColumns) {
-          createTableQuery.erase(createTableQuery.size() - 2, 2);
-          createTableQuery += ");";
-          cm.executeQueryPostgres(*pgConn, createTableQuery);
-          columnNames = newColumnNames;
-          // std::cout << "Table " << lowerSchemaName << "." << table_name
-          //<< " recreated successfully. :)" << std::endl;
-
-          // std::cout << "  Syncing indexes and constraints..." << std::endl;
-          syncIndexesAndConstraints(schema_name, table_name, mssqlConn, *pgConn,
-                                    lowerSchemaName);
-        }
-      }
-
-      const size_t CHUNK_SIZE = 25000;
-      size_t totalProcessed = 0;
-      std::string lastProcessedTimestamp;
-
-      std::string offsetQuery =
-          "SELECT last_offset FROM metadata.catalog WHERE schema_name='" +
-          cm.escapeSQL(schema_name) + "' AND table_name='" +
-          cm.escapeSQL(table_name) + "';";
-      auto currentOffsetRes = cm.executeQueryPostgres(*pgConn, offsetQuery);
-      if (!currentOffsetRes.empty() && !currentOffsetRes[0][0].is_null() &&
-          currentOffsetRes[0][0].as<std::string>() != "0") {
+        // Ejecutar query en PostgreSQL
+        std::vector<std::vector<std::string>> pgPKs;
         try {
-          totalProcessed = std::stoul(currentOffsetRes[0][0].as<std::string>());
-        } catch (...) {
-          totalProcessed = 0;
-        }
-      }
-
-      size_t chunkCount = 0;
-      bool hasMoreData = true;
-
-      if (table.status == "full_load") {
-        totalProcessed = 0;
-      } else {
-        std::string checkQuery =
-            "SELECT COUNT(*) FROM [" + schema_name + "].[" + table_name + "]";
-        if (!table.last_sync_time.empty() && !table.last_sync_column.empty()) {
-          checkQuery += " WHERE [" + table.last_sync_column + "] > '" +
-                        table.last_sync_time + "'";
-        }
-        checkQuery += ";";
-
-        auto checkResult = cm.executeQueryMSSQL(mssqlConn.get(), checkQuery);
-        if (checkResult.empty() || checkResult[0][0].empty() ||
-            std::stoul(checkResult[0][0]) == 0) {
-          if (!table.last_sync_column.empty()) {
-            bool tableExistsInPG = verifyColumnsExist(*pgConn, lowerSchemaName,
-                                                      table_name, columnNames);
-            if (tableExistsInPG) {
-              updateStatus(*pgConn, schema_name, table_name,
-                           "LISTENING_CHANGES", sourceCount);
-            } else {
-              std::cerr << "Table " << lowerSchemaName << "." << table_name
-                        << " does not exist in PostgreSQL, marking as error"
-                        << std::endl;
-              updateStatus(*pgConn, schema_name, table_name, "error",
-                           sourceCount);
-            }
-          } else {
-            if (!table.last_offset.empty() &&
-                std::stoul(table.last_offset) == sourceCount) {
-              updateStatus(*pgConn, schema_name, table_name, "PERFECT MATCH",
-                           sourceCount);
-            }
-          }
-          continue;
-        }
-      }
-
-      while (hasMoreData) {
-        if (MSSQLSync::shutdownRequested || MSSQLSync::forceExit) {
-          std::cout << "\nGraceful shutdown: completing current chunk and "
-                       "checkpointing..."
-                    << std::endl;
-          break;
-        }
-
-        std::string selectQuery =
-            "SELECT * FROM [" + schema_name + "].[" + table_name + "]";
-
-        if (table.status == "full_load") {
-          selectQuery += " ORDER BY " +
-                         (table.last_sync_column.empty()
-                              ? "1"
-                              : "[" + table.last_sync_column + "] ASC") +
-                         " OFFSET " + std::to_string(totalProcessed) +
-                         " ROWS " + "FETCH NEXT " + std::to_string(CHUNK_SIZE) +
-                         " ROWS ONLY;";
-        } else if (!table.last_sync_column.empty()) {
-          if (!table.last_sync_time.empty()) {
-            selectQuery += " WHERE [" + table.last_sync_column + "] > '" +
-                           table.last_sync_time + "'";
-          }
-          if (!lastProcessedTimestamp.empty()) {
-            selectQuery += (table.last_sync_time.empty() ? " WHERE " : " AND ");
-            selectQuery += "[" + table.last_sync_column + "] > '" +
-                           lastProcessedTimestamp + "'";
-          }
-          selectQuery += " ORDER BY [" + table.last_sync_column +
-                         "] ASC OFFSET 0 ROWS FETCH NEXT " +
-                         std::to_string(CHUNK_SIZE) + " ROWS ONLY;";
-        } else {
-          selectQuery += " ORDER BY 1 OFFSET " +
-                         std::to_string(totalProcessed) + " ROWS " +
-                         "FETCH NEXT " + std::to_string(CHUNK_SIZE) +
-                         " ROWS ONLY;";
-        }
-
-        auto results = cm.executeQueryMSSQL(mssqlConn.get(), selectQuery);
-
-        if (results.empty()) {
-          hasMoreData = false;
-          break;
-        }
-
-        try {
-          auto primaryKeyColumns =
-              getPrimaryKeyColumns(schema_name, table_name, mssqlConn);
-
-          pqxx::work txn(*pgConn);
-          bool transactionSuccess = true;
-
-          std::string columnsStr;
-          for (size_t i = 0; i < columnNames.size(); ++i) {
-            columnsStr += "\"" + columnNames[i] + "\"";
-            if (i < columnNames.size() - 1)
-              columnsStr += ",";
-          }
-
-          std::string placeholders;
-          for (size_t i = 0; i < columnNames.size(); ++i) {
-            placeholders += "$" + std::to_string(i + 1);
-            if (i < columnNames.size() - 1)
-              placeholders += ",";
-          }
-
-          std::string insertQuery = "INSERT INTO \"" + lowerSchemaName +
-                                    "\".\"" + table_name + "\" (" + columnsStr +
-                                    ") VALUES (" + placeholders + ");";
-
-          size_t rowIndex = 0;
+          pqxx::work txn(pgConn);
+          auto results = txn.exec(pkSelectQuery);
+          txn.commit();
 
           for (const auto &row : results) {
-            if (row.size() != columnNames.size()) {
-              continue;
+            std::vector<std::string> pkValues;
+            for (size_t i = 0; i < pkColumns.size() && i < row.size(); ++i) {
+              pkValues.push_back(row[i].is_null() ? "NULL"
+                                                  : row[i].as<std::string>());
             }
-
-            try {
-              std::vector<std::string> processedValues;
-
-              for (size_t i = 0; i < row.size() && i < columnTypes.size();
-                   ++i) {
-                if (i >= row.size()) {
-                  break;
-                }
-
-                std::string value = row[i];
-                std::string columnType =
-                    (i < columnTypes.size()) ? columnTypes[i] : "TEXT";
-
-                std::string trimmedValue = value;
-                trimmedValue.erase(0,
-                                   trimmedValue.find_first_not_of(" \t\n\r"));
-                trimmedValue.erase(trimmedValue.find_last_not_of(" \t\n\r") +
-                                   1);
-
-                if (value == "NULL" || value.empty() || trimmedValue.empty()) {
-                  if (columnType == "DATE" || columnType == "TIMESTAMP" ||
-                      columnType == "TIME") {
-                    processedValues.push_back("1970-01-01");
-                  } else if (columnType == "BOOLEAN") {
-                    processedValues.push_back("false");
-                  } else if (columnType == "BIT") {
-                    processedValues.push_back("B'0'");
-                  } else if (columnType == "INTEGER" ||
-                             columnType == "BIGINT" ||
-                             columnType == "SMALLINT" || columnType == "REAL" ||
-                             columnType == "DOUBLE PRECISION" ||
-                             columnType == "NUMERIC") {
-                    processedValues.push_back("0");
-                  } else if (!columnNullable[i]) {
-                    processedValues.push_back("N/A");
-                  } else {
-                    processedValues.push_back("NULL");
-                  }
-
-                } else {
-                  std::string sanitizedValue = value;
-
-                  std::string::iterator end_pos = std::remove_if(
-                      sanitizedValue.begin(), sanitizedValue.end(),
-                      [](unsigned char c) {
-                        return c < 32 && c != 9 && c != 10 && c != 13;
-                      });
-                  sanitizedValue.erase(end_pos, sanitizedValue.end());
-
-                  std::replace_if(
-                      sanitizedValue.begin(), sanitizedValue.end(),
-                      [](unsigned char c) { return c >= 128; }, ' ');
-
-                  size_t pos = 0;
-                  while ((pos = sanitizedValue.find("\\", pos)) !=
-                         std::string::npos) {
-                    sanitizedValue.replace(pos, 1, "\\\\");
-                    pos += 2;
-                  }
-
-                  std::string trimmedSanitized = sanitizedValue;
-                  trimmedSanitized.erase(
-                      0, trimmedSanitized.find_first_not_of(" \t\n\r"));
-                  trimmedSanitized.erase(
-                      trimmedSanitized.find_last_not_of(" \t\n\r") + 1);
-
-                  if (columnType == "BOOLEAN") {
-                    std::string lowerValue = sanitizedValue;
-                    std::transform(lowerValue.begin(), lowerValue.end(),
-                                   lowerValue.begin(), ::tolower);
-                    if (lowerValue == "1" || lowerValue == "true" ||
-                        lowerValue == "yes" || lowerValue == "on" ||
-                        lowerValue == "t" || lowerValue == "y") {
-                      sanitizedValue = "true";
-                    } else if (lowerValue == "0" || lowerValue == "false" ||
-                               lowerValue == "no" || lowerValue == "off" ||
-                               lowerValue == "f" || lowerValue == "n") {
-                      sanitizedValue = "false";
-                    } else {
-                      try {
-                        int numValue = std::stoi(sanitizedValue);
-                        sanitizedValue = (numValue != 0) ? "true" : "false";
-                      } catch (...) {
-                        sanitizedValue = "false";
-                      }
-                    }
-                  } else if (columnType == "BIT") {
-                    std::string lowerValue = sanitizedValue;
-                    std::transform(lowerValue.begin(), lowerValue.end(),
-                                   lowerValue.begin(), ::tolower);
-                    if (lowerValue == "1" || lowerValue == "true" ||
-                        lowerValue == "yes" || lowerValue == "on" ||
-                        lowerValue == "t" || lowerValue == "y") {
-                      sanitizedValue = "B'1'";
-                    } else if (lowerValue == "0" || lowerValue == "false" ||
-                               lowerValue == "no" || lowerValue == "off" ||
-                               lowerValue == "f" || lowerValue == "n") {
-                      sanitizedValue = "B'0'";
-                    } else {
-                      try {
-                        int numValue = std::stoi(sanitizedValue);
-                        sanitizedValue = (numValue != 0) ? "B'1'" : "B'0'";
-                      } catch (...) {
-                        sanitizedValue = "B'0'";
-                      }
-                    }
-                  } else if (columnType == "DATE" ||
-                             columnType == "TIMESTAMP" ||
-                             columnType == "TIME") {
-                    if (sanitizedValue == "0000-00-00" ||
-                        sanitizedValue == "0000-00-00 00:00:00" ||
-                        sanitizedValue.empty() || sanitizedValue == "" ||
-                        sanitizedValue == "NULL" || trimmedSanitized.empty()) {
-                      sanitizedValue = "1970-01-01";
-                    }
-
-                    if (sanitizedValue.empty()) {
-                      sanitizedValue = "1970-01-01";
-                    }
-
-                    if (sanitizedValue.length() >= 10) {
-                      std::string datePart = sanitizedValue.substr(0, 10);
-                      if (datePart.length() == 10 && datePart[8] == '0' &&
-                          datePart[9] == '0') {
-                        sanitizedValue.replace(8, 2, "01");
-                      }
-                    }
-                  }
-
-                  processedValues.push_back(sanitizedValue);
-                }
-              }
-
-              if (processedValues.size() == columnNames.size()) {
-                std::vector<std::string> paramValues;
-                for (size_t i = 0; i < processedValues.size(); ++i) {
-                  if (processedValues[i] == "NULL") {
-                    paramValues.push_back("");
-                  } else if (processedValues[i].empty() &&
-                             (columnTypes[i] == "DATE" ||
-                              columnTypes[i] == "TIMESTAMP" ||
-                              columnTypes[i] == "TIME")) {
-                    paramValues.push_back("NULL");
-                  } else if (processedValues[i] == "1970-01-01" &&
-                             (columnTypes[i] == "DATE" ||
-                              columnTypes[i] == "TIMESTAMP" ||
-                              columnTypes[i] == "TIME")) {
-                    paramValues.push_back("1970-01-01");
-                  } else if (processedValues[i] == "true" ||
-                             processedValues[i] == "false") {
-                    paramValues.push_back(processedValues[i]);
-                  } else if (processedValues[i].rfind("B'", 0) == 0) {
-                    paramValues.push_back(processedValues[i]);
-                  } else if (processedValues[i] == "0" &&
-                             (columnTypes[i] == "INTEGER" ||
-                              columnTypes[i] == "BIGINT" ||
-                              columnTypes[i] == "SMALLINT" ||
-                              columnTypes[i] == "REAL" ||
-                              columnTypes[i] == "DOUBLE PRECISION" ||
-                              columnTypes[i] == "NUMERIC")) {
-                    paramValues.push_back("0");
-                  } else {
-                    paramValues.push_back(processedValues[i]);
-                  }
-                }
-
-                std::string upsertQueryWithValues =
-                    "INSERT INTO \"" + lowerSchemaName + "\".\"" + table_name +
-                    "\" (" + columnsStr + ") VALUES (";
-
-                for (size_t i = 0; i < paramValues.size(); ++i) {
-                  if (i > 0)
-                    upsertQueryWithValues += ", ";
-
-                  if (paramValues[i] == "NULL") {
-                    upsertQueryWithValues += "NULL";
-                  } else if (paramValues[i] == "true" ||
-                             paramValues[i] == "false") {
-                    upsertQueryWithValues += paramValues[i];
-                  } else if (paramValues[i].rfind("B'", 0) == 0) {
-                    upsertQueryWithValues += paramValues[i];
-                  } else if (paramValues[i] == "0" &&
-                             (columnTypes[i] == "INTEGER" ||
-                              columnTypes[i] == "BIGINT" ||
-                              columnTypes[i] == "SMALLINT" ||
-                              columnTypes[i] == "REAL" ||
-                              columnTypes[i] == "DOUBLE PRECISION" ||
-                              columnTypes[i] == "NUMERIC")) {
-                    upsertQueryWithValues += "0";
-                  } else {
-                    std::string escapedValue = paramValues[i];
-                    size_t pos = 0;
-                    while ((pos = escapedValue.find("'", pos)) !=
-                           std::string::npos) {
-                      escapedValue.replace(pos, 1, "''");
-                      pos += 2;
-                    }
-                    upsertQueryWithValues += "'" + escapedValue + "'";
-                  }
-                }
-                if (!primaryKeyColumns.empty()) {
-                  std::string conflictColumns = "";
-                  for (const auto &pkCol : primaryKeyColumns) {
-                    if (!conflictColumns.empty())
-                      conflictColumns += ", ";
-                    conflictColumns += "\"" + pkCol + "\"";
-                  }
-
-                  upsertQueryWithValues +=
-                      ") ON CONFLICT (" + conflictColumns + ") DO UPDATE SET ";
-                } else {
-                  upsertQueryWithValues += ")";
-                }
-
-                if (!primaryKeyColumns.empty()) {
-                  for (size_t i = 0; i < columnNames.size(); ++i) {
-                    bool isPrimaryKey = false;
-                    for (const auto &pkCol : primaryKeyColumns) {
-                      if (columnNames[i] == pkCol) {
-                        isPrimaryKey = true;
-                        break;
-                      }
-                    }
-
-                    if (!isPrimaryKey) {
-                      upsertQueryWithValues += "\"" + columnNames[i] +
-                                               "\" = EXCLUDED.\"" +
-                                               columnNames[i] + "\"";
-                      bool hasMoreNonPK = false;
-                      for (size_t j = i + 1; j < columnNames.size(); ++j) {
-                        bool isNextPK = false;
-                        for (const auto &pkCol : primaryKeyColumns) {
-                          if (columnNames[j] == pkCol) {
-                            isNextPK = true;
-                            break;
-                          }
-                        }
-                        if (!isNextPK) {
-                          hasMoreNonPK = true;
-                          break;
-                        }
-                      }
-                      if (hasMoreNonPK) {
-                        upsertQueryWithValues += ", ";
-                      }
-                    }
-                  }
-                }
-                upsertQueryWithValues += ";";
-
-                txn.exec(upsertQueryWithValues);
-              } else {
-                continue;
-              }
-
-              rowIndex++;
-            } catch (const std::exception &e) {
-              std::cerr << "Error during data insertion: " << e.what()
-                        << std::endl;
-              transactionSuccess = false;
-              break;
-            } catch (...) {
-              std::cerr << "Unknown error during data insertion" << std::endl;
-              transactionSuccess = false;
-              break;
-            }
+            pgPKs.push_back(pkValues);
           }
-
-          if (transactionSuccess) {
-            std::string newLastSync = table.last_sync_time;
-            if (!table.last_sync_column.empty()) {
-              auto maxDateResults = cm.executeQueryMSSQL(
-                  mssqlConn.get(), "SELECT MAX([" + table.last_sync_column +
-                                       "]) FROM [" + schema_name + "].[" +
-                                       table_name + "];");
-              if (!maxDateResults.empty() && !maxDateResults[0][0].empty()) {
-                newLastSync = maxDateResults[0][0];
-              }
-            }
-
-            if (!table.last_sync_column.empty() && !newLastSync.empty()) {
-              txn.exec_params("UPDATE metadata.catalog SET last_sync_time=$1, "
-                              "last_offset=$2, "
-                              "status='LISTENING_CHANGES' "
-                              "WHERE schema_name=$3 AND table_name=$4;",
-                              newLastSync, totalProcessed, schema_name,
-                              table_name);
-            } else {
-              txn.exec_params("UPDATE metadata.catalog SET last_offset=$1, "
-                              "status='PERFECT MATCH' "
-                              "WHERE schema_name=$2 AND table_name=$3;",
-                              totalProcessed, schema_name, table_name);
-            }
-
-            txn.commit();
-          } else {
-            txn.abort();
-            std::cerr << "Transaction aborted for table " << lowerSchemaName
-                      << "." << table_name << std::endl;
-            updateStatus(*pgConn, schema_name, table_name, "error");
-          }
-
         } catch (const std::exception &e) {
-          std::cerr << "Error during transaction processing: " << e.what()
-                    << std::endl;
-          updateStatus(*pgConn, schema_name, table_name, "error");
+          Logger::error(LogCategory::TRANSFER,
+                        "Error getting PKs from PostgreSQL: " +
+                            std::string(e.what()));
+          break;
         }
 
-        if (table.status == "full_load") {
-          totalProcessed = sourceCount;
-        } else {
-          totalProcessed += results.size();
+        if (pgPKs.empty()) {
+          break; // No more data
         }
 
-        if (!results.empty() && !table.last_sync_column.empty()) {
-          for (const auto &row : results) {
-            size_t timestampColIndex = 0;
-            for (size_t i = 0; i < columnNames.size(); ++i) {
-              if (columnNames[i] == table.last_sync_column) {
-                timestampColIndex = i;
-                break;
-              }
-            }
-            if (timestampColIndex < row.size()) {
-              lastProcessedTimestamp = row[timestampColIndex];
-            }
-          }
+        // 3. Verificar cuáles PKs no existen en MSSQL
+        std::vector<std::vector<std::string>> deletedPKs =
+            findDeletedPrimaryKeys(mssqlConn, schema_name, table_name, pgPKs,
+                                   pkColumns);
+
+        // 4. Eliminar registros en PostgreSQL
+        if (!deletedPKs.empty()) {
+          size_t deletedCount = deleteRecordsByPrimaryKey(
+              pgConn, lowerSchemaName, table_name, deletedPKs, pkColumns);
+          totalDeleted += deletedCount;
+
+          Logger::info(LogCategory::TRANSFER,
+                       "Deleted " + std::to_string(deletedCount) +
+                           " records from batch in " + schema_name + "." +
+                           table_name);
         }
 
-        if (results.size() < CHUNK_SIZE) {
-          hasMoreData = false;
-        }
+        offset += BATCH_SIZE;
 
-        if (table.last_sync_column.empty() && totalProcessed >= sourceCount) {
-          hasMoreData = false;
+        // Si obtuvimos menos registros que el batch size, hemos terminado
+        if (pgPKs.size() < BATCH_SIZE) {
+          break;
         }
-
-        if (!table.last_sync_column.empty() &&
-            !lastProcessedTimestamp.empty() && !table.last_sync_time.empty()) {
-          if (lastProcessedTimestamp <= table.last_sync_time) {
-            hasMoreData = false;
-          }
-        }
-
-        if (table.last_sync_column.empty() && totalProcessed >= sourceCount) {
-          hasMoreData = false;
-        }
-
-        results.clear();
       }
 
-      if (MSSQLSync::shutdownRequested && totalProcessed > 0) {
-        std::cout << "\nGraceful shutdown: final checkpoint at "
-                  << totalProcessed << " rows" << std::endl;
-        updateStatus(*pgConn, schema_name, table_name, "in_progress",
-                     totalProcessed);
+      if (totalDeleted > 0) {
+        Logger::info(LogCategory::TRANSFER,
+                     "Total deleted records: " + std::to_string(totalDeleted) +
+                         " from " + schema_name + "." + table_name);
+      }
+
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER, "Error processing deletes for " +
+                                               schema_name + "." + table_name +
+                                               ": " + std::string(e.what()));
+    }
+  }
+
+  void processUpdatesByPrimaryKey(const std::string &schema_name,
+                                  const std::string &table_name,
+                                  SQLHDBC mssqlConn, pqxx::connection &pgConn,
+                                  const std::string &timeColumn,
+                                  const std::string &lastSyncTime) {
+    try {
+      if (timeColumn.empty() || lastSyncTime.empty()) {
+        return;
+      }
+
+      std::string lowerSchemaName = schema_name;
+      std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
+                     lowerSchemaName.begin(), ::tolower);
+
+      // 1. Obtener columnas de primary key
+      std::vector<std::string> pkColumns =
+          getPrimaryKeyColumns(mssqlConn, schema_name, table_name);
+
+      if (pkColumns.empty()) {
+        return;
+      }
+
+      Logger::info(LogCategory::TRANSFER,
+                   "Processing updates for " + schema_name + "." + table_name +
+                       " using time column: " + timeColumn +
+                       " since: " + lastSyncTime);
+
+      // 2. Obtener registros modificados desde MSSQL
+      std::string selectQuery = "SELECT * FROM [" + schema_name + "].[" +
+                                table_name + "] WHERE [" + timeColumn +
+                                "] > '" + escapeSQL(lastSyncTime) +
+                                "' ORDER BY [" + timeColumn + "]";
+
+      auto modifiedRecords = executeQueryMSSQL(mssqlConn, selectQuery);
+
+      if (modifiedRecords.empty()) {
+        return;
+      }
+
+      // 3. Obtener nombres de columnas de MSSQL
+      std::string columnQuery =
+          "SELECT c.name AS COLUMN_NAME "
+          "FROM sys.columns c "
+          "INNER JOIN sys.tables t ON c.object_id = t.object_id "
+          "INNER JOIN sys.schemas s ON t.schema_id = s.schema_id "
+          "WHERE s.name = '" +
+          escapeSQL(schema_name) + "' AND t.name = '" + escapeSQL(table_name) +
+          "' ORDER BY c.column_id";
+
+      auto columnNames = executeQueryMSSQL(mssqlConn, columnQuery);
+      if (columnNames.empty() || columnNames[0].empty()) {
+        Logger::error(LogCategory::TRANSFER, "Could not get column names for " +
+                                                 schema_name + "." +
+                                                 table_name);
+        return;
+      }
+
+      // 4. Procesar cada registro modificado
+      size_t totalUpdated = 0;
+      for (const auto &record : modifiedRecords) {
+        if (record.size() != columnNames.size()) {
+          Logger::warning(LogCategory::TRANSFER,
+                          "Record size mismatch for " + schema_name + "." +
+                              table_name + " - skipping record");
+          continue;
+        }
+
+        // Construir WHERE clause para primary key
+        std::string whereClause = "";
+        for (size_t i = 0; i < pkColumns.size(); ++i) {
+          // Encontrar el índice de la columna PK en el record
+          size_t pkIndex = 0;
+          for (size_t j = 0; j < columnNames.size(); ++j) {
+            std::string colName = columnNames[j][0];
+            std::transform(colName.begin(), colName.end(), colName.begin(),
+                           ::tolower);
+            if (colName == pkColumns[i]) {
+              pkIndex = j;
+              break;
+            }
+          }
+
+          if (i > 0)
+            whereClause += " AND ";
+          whereClause += "\"" + pkColumns[i] + "\" = " +
+                         (record[pkIndex].empty()
+                              ? "NULL"
+                              : "'" + escapeSQL(record[pkIndex]) + "'");
+        }
+
+        // Verificar si el registro existe en PostgreSQL
+        std::string checkQuery = "SELECT COUNT(*) FROM \"" + lowerSchemaName +
+                                 "\".\"" + table_name + "\" WHERE " +
+                                 whereClause;
+
+        pqxx::work txn(pgConn);
+        auto result = txn.exec(checkQuery);
+        txn.commit();
+
+        if (result[0][0].as<int>() > 0) {
+          // El registro existe, verificar si necesita actualización
+          bool needsUpdate =
+              compareAndUpdateRecord(pgConn, lowerSchemaName, table_name,
+                                     record, columnNames, whereClause);
+
+          if (needsUpdate) {
+            totalUpdated++;
+          }
+        }
+      }
+
+      if (totalUpdated > 0) {
+        Logger::info(LogCategory::TRANSFER,
+                     "Updated " + std::to_string(totalUpdated) +
+                         " records in " + schema_name + "." + table_name);
+      } else {
+      }
+
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER, "Error processing updates for " +
+                                               schema_name + "." + table_name +
+                                               ": " + std::string(e.what()));
+    }
+  }
+
+  bool compareAndUpdateRecord(
+      pqxx::connection &pgConn, const std::string &schemaName,
+      const std::string &tableName, const std::vector<std::string> &newRecord,
+      const std::vector<std::vector<std::string>> &columnNames,
+      const std::string &whereClause) {
+    try {
+      // Obtener el registro actual de PostgreSQL
+      std::string selectQuery = "SELECT * FROM \"" + schemaName + "\".\"" +
+                                tableName + "\" WHERE " + whereClause;
+
+      pqxx::work txn(pgConn);
+      auto result = txn.exec(selectQuery);
+      txn.commit();
+
+      if (result.empty()) {
+        return false; // No existe el registro
+      }
+
+      const auto &currentRow = result[0];
+
+      // Comparar cada columna (excepto primary keys)
+      std::vector<std::string> updateFields;
+      bool hasChanges = false;
+
+      for (size_t i = 0; i < columnNames.size(); ++i) {
+        std::string columnName = columnNames[i][0];
+        std::transform(columnName.begin(), columnName.end(), columnName.begin(),
+                       ::tolower);
+        std::string newValue = newRecord[i];
+
+        // Obtener valor actual de PostgreSQL
+        std::string currentValue =
+            currentRow[i].is_null() ? "" : currentRow[i].as<std::string>();
+
+        // Comparar valores (normalizar para comparación)
+        if (currentValue != newValue) {
+          updateFields.push_back(
+              "\"" + columnName + "\" = " +
+              (newValue.empty() ? "NULL" : "'" + escapeSQL(newValue) + "'"));
+          hasChanges = true;
+        }
+      }
+
+      if (hasChanges) {
+        // Ejecutar UPDATE
+        std::string updateQuery =
+            "UPDATE \"" + schemaName + "\".\"" + tableName + "\" SET ";
+        for (size_t i = 0; i < updateFields.size(); ++i) {
+          if (i > 0)
+            updateQuery += ", ";
+          updateQuery += updateFields[i];
+        }
+        updateQuery += " WHERE " + whereClause;
+
+        pqxx::work updateTxn(pgConn);
+        updateTxn.exec(updateQuery);
+        updateTxn.commit();
+
+        return true;
+      }
+
+      return false; // No había cambios
+
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER, "Error comparing/updating record: " +
+                                               std::string(e.what()));
+      return false;
+    }
+  }
+
+private:
+  std::vector<std::string> getPrimaryKeyColumns(SQLHDBC mssqlConn,
+                                                const std::string &schema_name,
+                                                const std::string &table_name) {
+    std::vector<std::string> pkColumns;
+
+    // Validate input parameters
+    if (!mssqlConn) {
+      Logger::error(LogCategory::TRANSFER, "getPrimaryKeyColumns",
+                    "MSSQL connection is null");
+      return pkColumns;
+    }
+
+    if (schema_name.empty() || table_name.empty()) {
+      Logger::error(LogCategory::TRANSFER, "getPrimaryKeyColumns",
+                    "Schema name or table name is empty");
+      return pkColumns;
+    }
+
+    std::string query =
+        "SELECT c.name AS COLUMN_NAME "
+        "FROM sys.columns c "
+        "INNER JOIN sys.tables t ON c.object_id = t.object_id "
+        "INNER JOIN sys.schemas s ON t.schema_id = s.schema_id "
+        "INNER JOIN sys.index_columns ic ON c.object_id = ic.object_id AND "
+        "c.column_id = ic.column_id "
+        "INNER JOIN sys.indexes i ON ic.object_id = i.object_id AND "
+        "ic.index_id = i.index_id "
+        "WHERE s.name = '" +
+        escapeSQL(schema_name) + "' AND t.name = '" + escapeSQL(table_name) +
+        "' "
+        "AND i.is_primary_key = 1 "
+        "ORDER BY ic.key_ordinal;";
+
+    std::vector<std::vector<std::string>> results =
+        executeQueryMSSQL(mssqlConn, query);
+
+    for (const auto &row : results) {
+      if (!row.empty()) {
+        std::string colName = row[0];
+        std::transform(colName.begin(), colName.end(), colName.begin(),
+                       ::tolower);
+        pkColumns.push_back(colName);
+      }
+    }
+
+    return pkColumns;
+  }
+
+  std::vector<std::vector<std::string>>
+  findDeletedPrimaryKeys(SQLHDBC mssqlConn, const std::string &schema_name,
+                         const std::string &table_name,
+                         const std::vector<std::vector<std::string>> &pgPKs,
+                         const std::vector<std::string> &pkColumns) {
+
+    std::vector<std::vector<std::string>> deletedPKs;
+
+    if (pgPKs.empty() || pkColumns.empty()) {
+      return deletedPKs;
+    }
+
+    // Procesar en batches para evitar consultas muy largas
+    const size_t CHECK_BATCH_SIZE = SyncConfig::getChunkSize();
+
+    for (size_t batchStart = 0; batchStart < pgPKs.size();
+         batchStart += CHECK_BATCH_SIZE) {
+      size_t batchEnd = std::min(batchStart + CHECK_BATCH_SIZE, pgPKs.size());
+
+      // Construir query para verificar existencia en MSSQL
+      std::string checkQuery = "SELECT ";
+      for (size_t i = 0; i < pkColumns.size(); ++i) {
+        if (i > 0)
+          checkQuery += ", ";
+        checkQuery += "[" + pkColumns[i] + "]";
+      }
+      checkQuery += " FROM [" + schema_name + "].[" + table_name + "] WHERE (";
+
+      for (size_t i = batchStart; i < batchEnd; ++i) {
+        if (i > batchStart)
+          checkQuery += " OR ";
+        checkQuery += "(";
+        for (size_t j = 0; j < pkColumns.size(); ++j) {
+          if (j > 0)
+            checkQuery += " AND ";
+          std::string value = pgPKs[i][j];
+          if (value == "NULL") {
+            checkQuery += "[" + pkColumns[j] + "] IS NULL";
+          } else {
+            checkQuery += "[" + pkColumns[j] + "] = '" + escapeSQL(value) + "'";
+          }
+        }
+        checkQuery += ")";
+      }
+      checkQuery += ");";
+
+      // Ejecutar query en MSSQL
+      auto existingResults = executeQueryMSSQL(mssqlConn, checkQuery);
+
+      // Crear set de PKs que SÍ existen en MSSQL
+      std::set<std::vector<std::string>> existingPKs;
+      for (const auto &row : existingResults) {
+        std::vector<std::string> pkValues;
+        for (size_t i = 0; i < pkColumns.size() && i < row.size(); ++i) {
+          pkValues.push_back(row[i]);
+        }
+        existingPKs.insert(pkValues);
+      }
+
+      // Encontrar PKs que NO existen en MSSQL (deleted)
+      for (size_t i = batchStart; i < batchEnd; ++i) {
+        if (existingPKs.find(pgPKs[i]) == existingPKs.end()) {
+          deletedPKs.push_back(pgPKs[i]);
+        }
+      }
+    }
+
+    return deletedPKs;
+  }
+
+  size_t deleteRecordsByPrimaryKey(
+      pqxx::connection &pgConn, const std::string &lowerSchemaName,
+      const std::string &table_name,
+      const std::vector<std::vector<std::string>> &deletedPKs,
+      const std::vector<std::string> &pkColumns) {
+
+    if (deletedPKs.empty() || pkColumns.empty()) {
+      return 0;
+    }
+
+    size_t deletedCount = 0;
+
+    try {
+      pqxx::work txn(pgConn);
+
+      // Construir query DELETE
+      std::string deleteQuery = "DELETE FROM \"" + lowerSchemaName + "\".\"" +
+                                table_name + "\" WHERE (";
+
+      for (size_t i = 0; i < deletedPKs.size(); ++i) {
+        if (i > 0)
+          deleteQuery += " OR ";
+        deleteQuery += "(";
+        for (size_t j = 0; j < pkColumns.size(); ++j) {
+          if (j > 0)
+            deleteQuery += " AND ";
+          std::string value = deletedPKs[i][j];
+          if (value == "NULL") {
+            deleteQuery += "\"" + pkColumns[j] + "\" IS NULL";
+          } else {
+            deleteQuery +=
+                "\"" + pkColumns[j] + "\" = '" + escapeSQL(value) + "'";
+          }
+        }
+        deleteQuery += ")";
+      }
+      deleteQuery += ");";
+
+      // Ejecutar DELETE
+      auto result = txn.exec(deleteQuery);
+      deletedCount = result.affected_rows();
+
+      txn.commit();
+
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER,
+                    "Error deleting records: " + std::string(e.what()));
+    }
+
+    return deletedCount;
+  }
+
+  std::string escapeSQL(const std::string &value) {
+    std::string escaped = value;
+    size_t pos = 0;
+    while ((pos = escaped.find("'", pos)) != std::string::npos) {
+      escaped.replace(pos, 1, "''");
+      pos += 2;
+    }
+    return escaped;
+  }
+
+  // CURSOR-BASED PAGINATION HELPER FUNCTIONS
+  std::string getPKStrategyFromCatalog(pqxx::connection &pgConn,
+                                       const std::string &schema_name,
+                                       const std::string &table_name) {
+    try {
+      pqxx::work txn(pgConn);
+      auto result = txn.exec(
+          "SELECT pk_strategy FROM metadata.catalog WHERE schema_name='" +
+          escapeSQL(schema_name) + "' AND table_name='" +
+          escapeSQL(table_name) + "';");
+      txn.commit();
+
+      if (!result.empty() && !result[0][0].is_null()) {
+        return result[0][0].as<std::string>();
+      }
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER,
+                    "Error getting PK strategy: " + std::string(e.what()));
+    }
+    return "OFFSET";
+  }
+
+  std::vector<std::string>
+  getPKColumnsFromCatalog(pqxx::connection &pgConn,
+                          const std::string &schema_name,
+                          const std::string &table_name) {
+    try {
+      pqxx::work txn(pgConn);
+      auto result = txn.exec(
+          "SELECT pk_columns FROM metadata.catalog WHERE schema_name='" +
+          escapeSQL(schema_name) + "' AND table_name='" +
+          escapeSQL(table_name) + "';");
+      txn.commit();
+
+      if (!result.empty() && !result[0][0].is_null()) {
+        std::string pkColumnsJson = result[0][0].as<std::string>();
+        return parseJSONArray(pkColumnsJson);
+      }
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER,
+                    "Error getting PK columns: " + std::string(e.what()));
+    }
+    return {};
+  }
+
+  std::string getLastProcessedPKFromCatalog(pqxx::connection &pgConn,
+                                            const std::string &schema_name,
+                                            const std::string &table_name) {
+    try {
+      pqxx::work txn(pgConn);
+      auto result = txn.exec(
+          "SELECT last_processed_pk FROM metadata.catalog WHERE schema_name='" +
+          escapeSQL(schema_name) + "' AND table_name='" +
+          escapeSQL(table_name) + "';");
+      txn.commit();
+
+      if (!result.empty() && !result[0][0].is_null()) {
+        return result[0][0].as<std::string>();
+      }
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER, "Error getting last processed PK: " +
+                                               std::string(e.what()));
+    }
+    return "";
+  }
+
+  std::vector<std::string> parseJSONArray(const std::string &jsonArray) {
+    std::vector<std::string> result;
+    if (jsonArray.empty() || jsonArray == "[]")
+      return result;
+
+    std::string content = jsonArray;
+    if (content.front() == '[')
+      content = content.substr(1);
+    if (content.back() == ']')
+      content = content.substr(0, content.length() - 1);
+
+    std::istringstream ss(content);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+      item = item.substr(item.find_first_not_of(" \t\""));
+      item = item.substr(0, item.find_last_not_of(" \t\"") + 1);
+      if (!item.empty()) {
+        result.push_back(item);
+      }
+    }
+    return result;
+  }
+
+  void updateLastProcessedPK(pqxx::connection &pgConn,
+                             const std::string &schema_name,
+                             const std::string &table_name,
+                             const std::string &lastPK) {
+    try {
+      pqxx::work txn(pgConn);
+      txn.exec("UPDATE metadata.catalog SET last_processed_pk='" +
+               escapeSQL(lastPK) + "' WHERE schema_name='" +
+               escapeSQL(schema_name) + "' AND table_name='" +
+               escapeSQL(table_name) + "';");
+      txn.commit();
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER,
+                    "Error updating last processed PK: " +
+                        std::string(e.what()));
+    }
+  }
+
+  std::string
+  getLastPKFromResults(const std::vector<std::vector<std::string>> &results,
+                       const std::vector<std::string> &pkColumns,
+                       const std::vector<std::string> &columnNames) {
+    if (results.empty())
+      return "";
+
+    const auto &lastRow = results.back();
+    std::string lastPK;
+
+    for (size_t i = 0; i < pkColumns.size(); ++i) {
+      if (i > 0)
+        lastPK += "|";
+
+      // Find the index of this PK column in the results
+      size_t pkIndex = 0;
+      for (size_t j = 0; j < columnNames.size(); ++j) {
+        if (columnNames[j] == pkColumns[i]) {
+          pkIndex = j;
+          break;
+        }
+      }
+
+      if (pkIndex < lastRow.size()) {
+        lastPK += lastRow[pkIndex];
+      }
+    }
+
+    return lastPK;
+  }
+
+  std::vector<std::string> parseLastPK(const std::string &lastPK) {
+    std::vector<std::string> result;
+    if (lastPK.empty())
+      return result;
+
+    std::istringstream ss(lastPK);
+    std::string item;
+    while (std::getline(ss, item, '|')) {
+      if (!item.empty()) {
+        result.push_back(item);
+      }
+    }
+    return result;
+  }
+
+  void performBulkUpsert(pqxx::connection &pgConn,
+                         const std::vector<std::vector<std::string>> &results,
+                         const std::vector<std::string> &columnNames,
+                         const std::vector<std::string> &columnTypes,
+                         const std::string &lowerSchemaName,
+                         const std::string &tableName,
+                         const std::string &sourceSchemaName) {
+    try {
+      // Obtener columnas de primary key para el UPSERT
+      std::vector<std::string> pkColumns =
+          getPrimaryKeyColumnsFromPostgres(pgConn, lowerSchemaName, tableName);
+
+      if (pkColumns.empty()) {
+        // Si no hay PK, usar INSERT simple
+        performBulkInsert(pgConn, results, columnNames, columnTypes,
+                          lowerSchemaName, tableName);
+        return;
+      }
+
+      // Construir query UPSERT
+      std::string upsertQuery =
+          buildUpsertQuery(columnNames, pkColumns, lowerSchemaName, tableName);
+      std::string conflictClause =
+          buildUpsertConflictClause(columnNames, pkColumns);
+
+      pqxx::work txn(pgConn);
+      txn.exec("SET statement_timeout = '600s'");
+
+      // Procesar en batches para evitar queries muy largas
+      const size_t BATCH_SIZE = SyncConfig::getChunkSize();
+      size_t totalProcessed = 0;
+
+      for (size_t batchStart = 0; batchStart < results.size();
+           batchStart += BATCH_SIZE) {
+        size_t batchEnd = std::min(batchStart + BATCH_SIZE, results.size());
+
+        std::string batchQuery = upsertQuery;
+        std::vector<std::string> values;
+
+        for (size_t i = batchStart; i < batchEnd; ++i) {
+          const auto &row = results[i];
+          if (row.size() != columnNames.size())
+            continue;
+
+          std::string rowValues = "(";
+          for (size_t j = 0; j < row.size(); ++j) {
+            if (j > 0)
+              rowValues += ", ";
+
+            if (row[j] == "NULL" || row[j].empty()) {
+              rowValues += "NULL";
+            } else {
+              std::string cleanValue =
+                  cleanValueForPostgres(row[j], columnTypes[j]);
+              rowValues += "'" + escapeSQL(cleanValue) + "'";
+            }
+          }
+          rowValues += ")";
+          values.push_back(rowValues);
+        }
+
+        if (!values.empty()) {
+          batchQuery += values[0];
+          for (size_t i = 1; i < values.size(); ++i) {
+            batchQuery += ", " + values[i];
+          }
+          batchQuery += conflictClause;
+
+          try {
+            txn.exec(batchQuery);
+            totalProcessed += values.size();
+          } catch (const std::exception &e) {
+            std::string errorMsg = e.what();
+
+            // Detectar transacción abortada
+            if (errorMsg.find("current transaction is aborted") !=
+                    std::string::npos ||
+                errorMsg.find("previously aborted") != std::string::npos) {
+              Logger::warning(LogCategory::TRANSFER, "performBulkUpsert",
+                              "Transaction aborted detected, processing batch "
+                              "individually");
+
+              // Procesar registros individualmente con nuevas transacciones
+              for (size_t i = batchStart; i < batchEnd; ++i) {
+                try {
+                  const auto &row = results[i];
+                  if (row.size() != columnNames.size())
+                    continue;
+
+                  std::string singleRowValues = "(";
+                  for (size_t j = 0; j < row.size(); ++j) {
+                    if (j > 0)
+                      singleRowValues += ", ";
+
+                    if (row[j] == "NULL" || row[j].empty()) {
+                      singleRowValues += "NULL";
+                    } else {
+                      std::string cleanValue =
+                          cleanValueForPostgres(row[j], columnTypes[j]);
+                      singleRowValues += "'" + escapeSQL(cleanValue) + "'";
+                    }
+                  }
+                  singleRowValues += ")";
+
+                  // Crear nueva transacción para cada registro
+                  pqxx::work singleTxn(pgConn);
+                  singleTxn.exec("SET statement_timeout = '600s'");
+                  std::string singleQuery =
+                      upsertQuery + singleRowValues + conflictClause;
+                  singleTxn.exec(singleQuery);
+                  singleTxn.commit();
+                  totalProcessed++;
+
+                } catch (const std::exception &singleError) {
+                  Logger::error(
+                      LogCategory::TRANSFER, "performBulkUpsert",
+                      "Skipping problematic record: " +
+                          std::string(singleError.what()).substr(0, 100));
+                }
+              }
+            } else {
+              // Re-lanzar otros errores
+              throw;
+            }
+          }
+        }
+      }
+
+      // Solo hacer commit si la transacción no fue abortada
+      try {
+        txn.commit();
+      } catch (const std::exception &commitError) {
+        if (std::string(commitError.what()).find("previously aborted") !=
+                std::string::npos ||
+            std::string(commitError.what()).find("aborted transaction") !=
+                std::string::npos) {
+          Logger::warning(LogCategory::TRANSFER, "performBulkUpsert",
+                          "Skipping commit for aborted transaction");
+        } else {
+          throw;
+        }
+      }
+
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER,
+                    "Error in bulk upsert: " + std::string(e.what()));
+      throw;
+    }
+  }
+
+  void performBulkInsert(pqxx::connection &pgConn,
+                         const std::vector<std::vector<std::string>> &results,
+                         const std::vector<std::string> &columnNames,
+                         const std::vector<std::string> &columnTypes,
+                         const std::string &lowerSchemaName,
+                         const std::string &tableName) {
+    try {
+      std::string insertQuery =
+          "INSERT INTO \"" + lowerSchemaName + "\".\"" + tableName + "\" (";
+
+      // Construir lista de columnas
+      for (size_t i = 0; i < columnNames.size(); ++i) {
+        if (i > 0)
+          insertQuery += ", ";
+        insertQuery += "\"" + columnNames[i] + "\"";
+      }
+      insertQuery += ") VALUES ";
+
+      pqxx::work txn(pgConn);
+      txn.exec("SET statement_timeout = '600s'");
+
+      // Procesar en batches
+      const size_t BATCH_SIZE = SyncConfig::getChunkSize();
+      size_t totalProcessed = 0;
+
+      for (size_t batchStart = 0; batchStart < results.size();
+           batchStart += BATCH_SIZE) {
+        size_t batchEnd = std::min(batchStart + BATCH_SIZE, results.size());
+
+        std::string batchQuery = insertQuery;
+        std::vector<std::string> values;
+
+        for (size_t i = batchStart; i < batchEnd; ++i) {
+          const auto &row = results[i];
+          if (row.size() != columnNames.size())
+            continue;
+
+          std::string rowValues = "(";
+          for (size_t j = 0; j < row.size(); ++j) {
+            if (j > 0)
+              rowValues += ", ";
+
+            if (row[j] == "NULL" || row[j].empty()) {
+              rowValues += "NULL";
+            } else {
+              std::string cleanValue =
+                  cleanValueForPostgres(row[j], columnTypes[j]);
+              rowValues += "'" + escapeSQL(cleanValue) + "'";
+            }
+          }
+          rowValues += ")";
+          values.push_back(rowValues);
+        }
+
+        if (!values.empty()) {
+          batchQuery += values[0];
+          for (size_t i = 1; i < values.size(); ++i) {
+            batchQuery += ", " + values[i];
+          }
+          batchQuery += ";";
+
+          txn.exec(batchQuery);
+          totalProcessed += values.size();
+        }
+      }
+
+      txn.commit();
+
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER,
+                    "Error in bulk insert: " + std::string(e.what()));
+      throw;
+    }
+  }
+
+  std::vector<std::string>
+  getPrimaryKeyColumnsFromPostgres(pqxx::connection &pgConn,
+                                   const std::string &schemaName,
+                                   const std::string &tableName) {
+    std::vector<std::string> pkColumns;
+
+    try {
+      pqxx::work txn(pgConn);
+      std::string query = "SELECT kcu.column_name "
+                          "FROM information_schema.table_constraints tc "
+                          "JOIN information_schema.key_column_usage kcu "
+                          "ON tc.constraint_name = kcu.constraint_name "
+                          "AND tc.table_schema = kcu.table_schema "
+                          "WHERE tc.constraint_type = 'PRIMARY KEY' "
+                          "AND tc.table_schema = '" +
+                          schemaName +
+                          "' "
+                          "AND tc.table_name = '" +
+                          tableName +
+                          "' "
+                          "ORDER BY kcu.ordinal_position;";
+
+      auto results = txn.exec(query);
+      txn.commit();
+
+      for (const auto &row : results) {
+        if (!row[0].is_null()) {
+          std::string colName = row[0].as<std::string>();
+          std::transform(colName.begin(), colName.end(), colName.begin(),
+                         ::tolower);
+          pkColumns.push_back(colName);
+        }
+      }
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER,
+                    "Error getting PK columns: " + std::string(e.what()));
+    }
+
+    return pkColumns;
+  }
+
+  std::string buildUpsertQuery(const std::vector<std::string> &columnNames,
+                               const std::vector<std::string> &pkColumns,
+                               const std::string &schemaName,
+                               const std::string &tableName) {
+    std::string query =
+        "INSERT INTO \"" + schemaName + "\".\"" + tableName + "\" (";
+
+    // Lista de columnas
+    for (size_t i = 0; i < columnNames.size(); ++i) {
+      if (i > 0)
+        query += ", ";
+      query += "\"" + columnNames[i] + "\"";
+    }
+    query += ") VALUES ";
+
+    return query;
+  }
+
+  std::string
+  buildUpsertConflictClause(const std::vector<std::string> &columnNames,
+                            const std::vector<std::string> &pkColumns) {
+    std::string conflictClause = " ON CONFLICT (";
+
+    for (size_t i = 0; i < pkColumns.size(); ++i) {
+      if (i > 0)
+        conflictClause += ", ";
+      conflictClause += "\"" + pkColumns[i] + "\"";
+    }
+    conflictClause += ") DO UPDATE SET ";
+
+    // Construir SET clause para UPDATE
+    for (size_t i = 0; i < columnNames.size(); ++i) {
+      if (i > 0)
+        conflictClause += ", ";
+      conflictClause +=
+          "\"" + columnNames[i] + "\" = EXCLUDED.\"" + columnNames[i] + "\"";
+    }
+
+    return conflictClause;
+  }
+
+  std::string cleanValueForPostgres(const std::string &value,
+                                    const std::string &columnType) {
+    std::string cleanValue = value;
+    std::string upperType = columnType;
+    std::transform(upperType.begin(), upperType.end(), upperType.begin(),
+                   ::toupper);
+
+    // Detectar valores NULL de MSSQL - SIMPLIFICADO
+    bool isNull =
+        (cleanValue.empty() || cleanValue == "NULL" || cleanValue == "null" ||
+         cleanValue == "\\N" || cleanValue == "\\0" || cleanValue == "0" ||
+         cleanValue.find("0000-") != std::string::npos ||
+         cleanValue.find("1900-01-01") != std::string::npos ||
+         cleanValue.find("1970-01-01") != std::string::npos);
+
+    // Limpiar caracteres de control y caracteres problemáticos
+    for (char &c : cleanValue) {
+      if (static_cast<unsigned char>(c) > 127 || c < 32) {
+        isNull = true;
         break;
       }
+    }
 
-      if (totalProcessed > 0) {
-        std::cout << std::endl;
+    // Para fechas, cualquier valor que no sea una fecha válida = NULL
+    if (upperType.find("TIMESTAMP") != std::string::npos ||
+        upperType.find("DATETIME") != std::string::npos ||
+        upperType.find("DATE") != std::string::npos) {
+      if (cleanValue.length() < 10 ||
+          cleanValue.find("-") == std::string::npos ||
+          cleanValue.find("0000") != std::string::npos) {
+        isNull = true;
       }
+    }
 
-      if (totalProcessed > 0) {
-        if (!table.last_sync_column.empty()) {
-          bool tableExistsInPG = verifyColumnsExist(*pgConn, lowerSchemaName,
-                                                    table_name, columnNames);
+    // Si es NULL, generar valor por defecto en lugar de NULL
+    if (isNull) {
+      if (upperType.find("INTEGER") != std::string::npos ||
+          upperType.find("BIGINT") != std::string::npos ||
+          upperType.find("SMALLINT") != std::string::npos) {
+        return "0"; // Valor por defecto para enteros
+      } else if (upperType.find("REAL") != std::string::npos ||
+                 upperType.find("FLOAT") != std::string::npos ||
+                 upperType.find("DOUBLE") != std::string::npos ||
+                 upperType.find("NUMERIC") != std::string::npos) {
+        return "0.0"; // Valor por defecto para números decimales
+      } else if (upperType.find("VARCHAR") != std::string::npos ||
+                 upperType.find("TEXT") != std::string::npos ||
+                 upperType.find("CHAR") != std::string::npos) {
+        return "DEFAULT"; // Valor por defecto para texto
+      } else if (upperType.find("TIMESTAMP") != std::string::npos ||
+                 upperType.find("DATETIME") != std::string::npos) {
+        return "1970-01-01 00:00:00"; // Valor por defecto para fechas
+      } else if (upperType.find("DATE") != std::string::npos) {
+        return "1970-01-01"; // Valor por defecto para fechas
+      } else if (upperType.find("TIME") != std::string::npos) {
+        return "00:00:00"; // Valor por defecto para tiempo
+      } else if (upperType.find("BOOLEAN") != std::string::npos ||
+                 upperType.find("BOOL") != std::string::npos) {
+        return "false"; // Valor por defecto para booleanos
+      } else {
+        return "DEFAULT"; // Valor por defecto genérico
+      }
+    }
 
-          if (tableExistsInPG) {
-            updateStatus(*pgConn, schema_name, table_name, "LISTENING_CHANGES",
-                         totalProcessed);
-            syncedTables++;
+    // Limpiar caracteres de control restantes
+    cleanValue.erase(std::remove_if(cleanValue.begin(), cleanValue.end(),
+                                    [](unsigned char c) {
+                                      return c < 32 && c != 9 && c != 10 &&
+                                             c != 13;
+                                    }),
+                     cleanValue.end());
+
+    // Manejar tipos específicos
+    if (upperType.find("BOOLEAN") != std::string::npos ||
+        upperType.find("BOOL") != std::string::npos) {
+      if (cleanValue == "N" || cleanValue == "0" || cleanValue == "false" ||
+          cleanValue == "FALSE") {
+        cleanValue = "false";
+      } else if (cleanValue == "Y" || cleanValue == "1" ||
+                 cleanValue == "true" || cleanValue == "TRUE") {
+        cleanValue = "true";
+      }
+    } else if (upperType.find("BIT") != std::string::npos) {
+      if (cleanValue == "0" || cleanValue == "false" || cleanValue == "FALSE") {
+        cleanValue = "false";
+      } else if (cleanValue == "1" || cleanValue == "true" ||
+                 cleanValue == "TRUE") {
+        cleanValue = "true";
+      }
+    }
+
+    return cleanValue;
+  }
+
+  std::string extractDatabaseName(const std::string &connectionString) {
+    std::istringstream ss(connectionString);
+    std::string token;
+    while (std::getline(ss, token, ';')) {
+      auto pos = token.find('=');
+      if (pos == std::string::npos)
+        continue;
+      std::string key = token.substr(0, pos);
+      std::string value = token.substr(pos + 1);
+      if (key == "DATABASE") {
+        return value;
+      }
+    }
+    return "master"; // fallback
+  }
+
+  std::vector<std::vector<std::string>>
+  executeQueryMSSQL(SQLHDBC conn, const std::string &query) {
+    std::vector<std::vector<std::string>> results;
+    if (!conn) {
+      Logger::error(LogCategory::TRANSFER, "No valid MSSQL connection");
+      return results;
+    }
+
+    SQLHSTMT stmt;
+    SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, conn, &stmt);
+    if (ret != SQL_SUCCESS) {
+      Logger::error(LogCategory::TRANSFER, "SQLAllocHandle(STMT) failed");
+      return results;
+    }
+
+    ret = SQLExecDirect(stmt, (SQLCHAR *)query.c_str(), SQL_NTS);
+    if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
+      SQLCHAR sqlState[6];
+      SQLCHAR errorMsg[SQL_MAX_MESSAGE_LENGTH];
+      SQLINTEGER nativeError;
+      SQLSMALLINT msgLen;
+
+      SQLGetDiagRec(SQL_HANDLE_STMT, stmt, 1, sqlState, &nativeError, errorMsg,
+                    sizeof(errorMsg), &msgLen);
+
+      Logger::error(
+          "SQLExecDirect failed - SQLState: " + std::string((char *)sqlState) +
+          ", NativeError: " + std::to_string(nativeError) +
+          ", Error: " + std::string((char *)errorMsg) + ", Query: " + query);
+      SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+      return results;
+    }
+
+    // Get number of columns
+    SQLSMALLINT numCols;
+    SQLNumResultCols(stmt, &numCols);
+
+    // Fetch rows
+    while (SQLFetch(stmt) == SQL_SUCCESS) {
+      std::vector<std::string> row;
+      for (SQLSMALLINT i = 1; i <= numCols; i++) {
+        char buffer[1024];
+        SQLLEN len;
+        ret = SQLGetData(stmt, i, SQL_C_CHAR, buffer, sizeof(buffer), &len);
+        if (ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) {
+          if (len == SQL_NULL_DATA) {
+            row.push_back("NULL");
           } else {
-            std::cerr << "Table " << lowerSchemaName << "." << table_name
-                      << " does not exist in PostgreSQL, marking as error"
-                      << std::endl;
-            updateStatus(*pgConn, schema_name, table_name, "error",
-                         totalProcessed);
+            row.push_back(std::string(buffer, len));
           }
         } else {
-          updateStatus(*pgConn, schema_name, table_name, "PERFECT MATCH",
-                       totalProcessed);
-          syncedTables++;
+          row.push_back("NULL");
         }
       }
+      results.push_back(row);
     }
 
-    // Reporting handled by StreamingData loop
-
-    if (MSSQLSync::shutdownRequested) {
-      std::cout << "\nGraceful shutdown completed. Exiting..." << std::endl;
-      exit(0);
-    }
+    SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+    return results;
   }
 };
 
+// Definición de variables estáticas
 std::unordered_map<std::string, std::string> MSSQLToPostgres::dataTypeMap = {
     {"int", "INTEGER"},
     {"bigint", "BIGINT"},
     {"smallint", "SMALLINT"},
     {"tinyint", "SMALLINT"},
+    {"bit", "BOOLEAN"},
+    {"decimal", "NUMERIC"},
+    {"numeric", "NUMERIC"},
+    {"float", "REAL"},
+    {"real", "REAL"},
+    {"money", "NUMERIC(19,4)"},
+    {"smallmoney", "NUMERIC(10,4)"},
     {"varchar", "VARCHAR"},
     {"nvarchar", "VARCHAR"},
     {"char", "CHAR"},
     {"nchar", "CHAR"},
     {"text", "TEXT"},
     {"ntext", "TEXT"},
-    {"date", "DATE"},
     {"datetime", "TIMESTAMP"},
     {"datetime2", "TIMESTAMP"},
     {"smalldatetime", "TIMESTAMP"},
+    {"date", "DATE"},
     {"time", "TIME"},
-    {"float", "REAL"},
-    {"real", "REAL"},
-    {"double", "DOUBLE PRECISION"},
-    {"decimal", "NUMERIC"},
-    {"numeric", "NUMERIC"},
-    {"money", "NUMERIC(19,4)"},
-    {"smallmoney", "NUMERIC(10,4)"},
-    {"bit", "BOOLEAN"},
-    {"binary", "BYTEA"},
+    {"datetimeoffset", "TIMESTAMP WITH TIME ZONE"},
+    {"uniqueidentifier", "UUID"},
     {"varbinary", "BYTEA"},
     {"image", "BYTEA"},
-    {"xml", "XML"},
-    {"uniqueidentifier", "UUID"},
-    {"sql_variant", "TEXT"},
-    {"timestamp", "BYTEA"},
-    {"rowversion", "BYTEA"},
-    {"hierarchyid", "TEXT"},
-    {"geometry", "TEXT"},
-    {"geography", "TEXT"}};
+    {"binary", "BYTEA"},
+    {"xml", "TEXT"},
+    {"sql_variant", "TEXT"}};
 
 std::unordered_map<std::string, std::string> MSSQLToPostgres::collationMap = {
-    {"Latin1_General_CI_AS", "en_US"},
-    {"SQL_Latin1_General_CP1_CI_AS", "en_US"},
-    {"Latin1_General_BIN", "C"},
-    {"SQL_Latin1_General_CP1_CI_AI", "en_US"},
-    {"Latin1_General_100_CI_AS", "en_US"},
-    {"SQL_Latin1_General_CP1250_CI_AS", "en_US"},
-    {"Latin1_General_100_CS_AS", "C"},
-    {"SQL_Latin1_General_CP1_CS_AS", "C"}};
+    {"SQL_Latin1_General_CP1_CI_AS", "en_US.utf8"},
+    {"Latin1_General_CI_AS", "en_US.utf8"},
+    {"SQL_Latin1_General_CP1_CS_AS", "C"},
+    {"Latin1_General_CS_AS", "C"}};
 
-#endif // MSSQLTOPOSTGRES_H
+#endif
