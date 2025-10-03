@@ -12,9 +12,6 @@
 #include <string>
 #include <vector>
 
-// MongoDB includes
-#include <mongoc/mongoc.h>
-
 // Forward declarations for types that are already defined in libraries
 typedef void *SQLHDBC;
 
@@ -74,13 +71,6 @@ private:
   void exportPostgreSQLSequences(pqxx::connection &conn,
                                  const SchemaInfo &schema);
   void exportPostgreSQLTypes(pqxx::connection &conn, const SchemaInfo &schema);
-
-  void exportMongoDBDDL(const SchemaInfo &schema);
-  void exportMongoDBCollections(mongoc_client_t *client,
-                                const SchemaInfo &schema);
-  void exportMongoDBViews(mongoc_client_t *client, const SchemaInfo &schema);
-  void exportMongoDBFunctions(mongoc_client_t *client,
-                              const SchemaInfo &schema);
 
   void exportMSSQLDDL(const SchemaInfo &schema);
   void exportMSSQLViews(SQLHDBC conn, const SchemaInfo &schema);
