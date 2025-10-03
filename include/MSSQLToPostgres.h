@@ -43,7 +43,6 @@ public:
     std::string last_processed_pk;
     std::string pk_strategy;
     std::string pk_columns;
-    std::string candidate_columns;
     bool has_pk;
   };
 
@@ -194,14 +193,14 @@ public:
           "SELECT schema_name, table_name, cluster_name, db_engine, "
           "connection_string, last_sync_time, last_sync_column, "
           "status, last_offset, last_processed_pk, pk_strategy, "
-          "pk_columns, candidate_columns, has_pk, table_size "
+          "pk_columns, has_pk, table_size "
           "FROM metadata.catalog "
           "WHERE active=true AND db_engine='MSSQL' AND status != 'NO_DATA' "
           "ORDER BY table_size ASC, schema_name, table_name;");
       txn.commit();
 
       for (const auto &row : results) {
-        if (row.size() < 15)
+        if (row.size() < 14)
           continue;
 
         TableInfo t;
@@ -217,9 +216,7 @@ public:
         t.last_processed_pk = row[9].is_null() ? "" : row[9].as<std::string>();
         t.pk_strategy = row[10].is_null() ? "" : row[10].as<std::string>();
         t.pk_columns = row[11].is_null() ? "" : row[11].as<std::string>();
-        t.candidate_columns =
-            row[12].is_null() ? "" : row[12].as<std::string>();
-        t.has_pk = row[13].is_null() ? false : row[13].as<bool>();
+        t.has_pk = row[12].is_null() ? false : row[12].as<bool>();
         data.push_back(t);
       }
     } catch (const pqxx::sql_error &e) {
@@ -950,8 +947,6 @@ public:
             getPKStrategyFromCatalog(pgConn, schema_name, table_name);
         std::vector<std::string> pkColumns =
             getPKColumnsFromCatalog(pgConn, schema_name, table_name);
-        std::vector<std::string> candidateColumns =
-            getCandidateColumnsFromCatalog(pgConn, schema_name, table_name);
         std::string lastProcessedPK =
             getLastProcessedPKFromCatalog(pgConn, schema_name, table_name);
 
@@ -1044,18 +1039,6 @@ public:
                 selectQuery += ", ";
               selectQuery += "[" + pkColumns[i] + "]";
             }
-            selectQuery += " OFFSET 0 ROWS FETCH NEXT " +
-                           std::to_string(CHUNK_SIZE) + " ROWS ONLY;";
-          } else if (pkStrategy == "TEMPORAL_PK" && !candidateColumns.empty()) {
-            // CURSOR-BASED PAGINATION: Usar columnas candidatas para paginación
-            // eficiente
-            if (!lastProcessedPK.empty()) {
-              selectQuery += " WHERE [" + candidateColumns[0] + "] > '" +
-                             escapeSQL(lastProcessedPK) + "'";
-            }
-
-            // Ordenar por la primera columna candidata
-            selectQuery += " ORDER BY [" + candidateColumns[0] + "]";
             selectQuery += " OFFSET 0 ROWS FETCH NEXT " +
                            std::to_string(CHUNK_SIZE) + " ROWS ONLY;";
           } else {
@@ -1190,15 +1173,11 @@ public:
           }
 
           // OPTIMIZED: Update last_processed_pk for cursor-based pagination
-          if (((pkStrategy == "PK" && !pkColumns.empty()) ||
-               (pkStrategy == "TEMPORAL_PK" && !candidateColumns.empty())) &&
-              !results.empty()) {
+          if ((pkStrategy == "PK" && !pkColumns.empty()) && !results.empty()) {
             try {
               // Obtener el último PK del chunk procesado
-              std::vector<std::string> columnsToUse =
-                  (pkStrategy == "PK") ? pkColumns : candidateColumns;
               std::string lastPK =
-                  getLastPKFromResults(results, columnsToUse, columnNames);
+                  getLastPKFromResults(results, pkColumns, columnNames);
               if (!lastPK.empty()) {
                 updateLastProcessedPK(pgConn, schema_name, table_name, lastPK);
               }
@@ -1212,7 +1191,7 @@ public:
           // Update last_offset in database solo para tablas sin PK (OFFSET
           // pagination) Para tablas con PK o TEMPORAL_PK se usa
           // last_processed_pk en lugar de last_offset
-          if (pkStrategy != "PK" && pkStrategy != "TEMPORAL_PK") {
+          if (pkStrategy != "PK") {
             try {
               pqxx::work updateTxn(pgConn);
               updateTxn.exec("UPDATE metadata.catalog SET last_offset='" +
