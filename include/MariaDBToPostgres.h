@@ -3,6 +3,7 @@
 
 #include "Config.h"
 #include "catalog_manager.h"
+#include "json.hpp"
 #include "logger.h"
 #include <algorithm>
 #include <atomic>
@@ -18,6 +19,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+using json = nlohmann::json;
 
 class MariaDBToPostgres {
 private:
@@ -903,7 +906,8 @@ public:
           try {
             std::string countStr = countRes[0][0];
             if (!countStr.empty() &&
-                std::all_of(countStr.begin(), countStr.end(), ::isdigit)) {
+                std::all_of(countStr.begin(), countStr.end(),
+                            [](unsigned char c) { return std::isdigit(c); })) {
               sourceCount = std::stoul(countStr);
               Logger::info(LogCategory::TRANSFER,
                            "Source table " + schema_name + "." + table_name +
@@ -2560,28 +2564,23 @@ private:
   std::vector<std::string> parseJSONArray(const std::string &jsonArray) {
     std::vector<std::string> result;
     try {
-      // Simple JSON array parser for ["col1", "col2", "col3"]
       if (jsonArray.empty() || jsonArray == "[]") {
         return result;
       }
 
-      std::string content = jsonArray;
-      // Remove brackets
-      if (content.front() == '[' && content.back() == ']') {
-        content = content.substr(1, content.length() - 2);
+      auto j = json::parse(jsonArray);
+      if (!j.is_array()) {
+        throw std::runtime_error("Input is not a JSON array");
       }
 
-      // Split by comma and remove quotes
-      std::istringstream ss(content);
-      std::string item;
-      while (std::getline(ss, item, ',')) {
-        // Remove quotes and whitespace
-        item.erase(std::remove(item.begin(), item.end(), '"'), item.end());
-        item.erase(std::remove(item.begin(), item.end(), ' '), item.end());
-        if (!item.empty()) {
-          result.push_back(item);
+      for (const auto &element : j) {
+        if (element.is_string()) {
+          result.push_back(element.get<std::string>());
         }
       }
+    } catch (const json::parse_error &e) {
+      Logger::error(LogCategory::TRANSFER, "parseJSONArray",
+                    "JSON parse error: " + std::string(e.what()));
     } catch (const std::exception &e) {
       Logger::error(LogCategory::TRANSFER, "parseJSONArray",
                     "Error parsing JSON array: " + std::string(e.what()));

@@ -8,5 +8,6 @@ std::string DatabaseConfig::POSTGRES_USER = "tomy.berrios";
 std::string DatabaseConfig::POSTGRES_PASSWORD = "Yucaquemada1";
 std::string DatabaseConfig::POSTGRES_PORT = "5432";
 
-size_t SyncConfig::CHUNK_SIZE = SyncConfig::DEFAULT_CHUNK_SIZE;
-size_t SyncConfig::SYNC_INTERVAL_SECONDS = SyncConfig::DEFAULT_SYNC_INTERVAL;
+std::atomic<size_t> SyncConfig::CHUNK_SIZE = SyncConfig::DEFAULT_CHUNK_SIZE;
+std::atomic<size_t> SyncConfig::SYNC_INTERVAL_SECONDS =
+    SyncConfig::DEFAULT_SYNC_INTERVAL;
