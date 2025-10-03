@@ -1,8 +1,6 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#include "json.hpp"
-#include <fstream>
 #include <string>
 
 struct DatabaseConfig {
@@ -11,8 +9,6 @@ struct DatabaseConfig {
   static std::string POSTGRES_USER;
   static std::string POSTGRES_PASSWORD;
   static std::string POSTGRES_PORT;
-
-  static void loadFromConfig(const std::string &configPath = "config.json");
 
   static std::string getPostgresConnectionString() {
     return "host=" + POSTGRES_HOST + " dbname=" + POSTGRES_DB +
@@ -26,8 +22,6 @@ struct SyncConfig {
   static size_t SYNC_INTERVAL_SECONDS;
   static constexpr size_t DEFAULT_CHUNK_SIZE = 25000;
   static constexpr size_t DEFAULT_SYNC_INTERVAL = 30;
-
-  static void loadFromConfig(const std::string &configPath = "config.json");
 
   static void setChunkSize(size_t newSize) { CHUNK_SIZE = newSize; }
 
