@@ -670,8 +670,11 @@ public:
           continue;
         }
 
+        // Para FULL_LOAD, forzar la inserción de todos los datos
+        bool forceFullLoad = (table.status == "FULL_LOAD");
+
         // Si sourceCount = targetCount, verificar si hay cambios incrementales
-        if (sourceCount == targetCount) {
+        if (sourceCount == targetCount && !forceFullLoad) {
           // Procesar UPDATEs si hay columna de tiempo y last_sync_time
           if (!table.last_sync_column.empty() &&
               !table.last_sync_time.empty()) {
@@ -770,14 +773,70 @@ public:
           continue;
         }
 
+        // Obtener estrategia de PK antes de procesar deletes
+        std::string pkStrategy =
+            getPKStrategyFromCatalog(pgConn, schema_name, table_name);
+
         // Si sourceCount < targetCount, hay registros eliminados en el origen
-        // Procesar DELETEs por Primary Key
-        if (sourceCount < targetCount) {
+        // Procesar DELETEs según la estrategia
+        if (sourceCount < targetCount && !forceFullLoad) {
           Logger::info(LogCategory::TRANSFER,
                        "Detected " + std::to_string(targetCount - sourceCount) +
                            " deleted records in " + schema_name + "." +
                            table_name + " - processing deletes");
-          processDeletesByPrimaryKey(schema_name, table_name, dbc, pgConn);
+
+          if (pkStrategy == "PK") {
+            // Para tablas con PK, usar eliminación por PK
+            try {
+              processDeletesByPrimaryKey(schema_name, table_name, dbc, pgConn);
+              Logger::info(LogCategory::TRANSFER,
+                           "Delete processing completed for " + schema_name +
+                               "." + table_name);
+            } catch (const std::exception &e) {
+              Logger::error(LogCategory::TRANSFER,
+                            "ERROR processing deletes for " + schema_name +
+                                "." + table_name + ": " +
+                                std::string(e.what()));
+            }
+          } else {
+            // Para tablas OFFSET, hacer TRUNCATE + re-sincronización completa
+            Logger::info(LogCategory::TRANSFER,
+                         "OFFSET table with deletes detected - performing "
+                         "TRUNCATE + full resync for " +
+                             schema_name + "." + table_name);
+            try {
+              std::string lowerSchemaName = schema_name;
+              std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
+                             lowerSchemaName.begin(), ::tolower);
+
+              // TRUNCATE la tabla destino
+              pqxx::work truncateTxn(pgConn);
+              truncateTxn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
+                               table_name + "\" CASCADE;");
+              truncateTxn.commit();
+
+              // Resetear last_offset a 0 para re-sincronización completa
+              pqxx::work resetTxn(pgConn);
+              resetTxn.exec("UPDATE metadata.catalog SET last_offset='0' WHERE "
+                            "schema_name='" +
+                            escapeSQL(schema_name) + "' AND table_name='" +
+                            escapeSQL(table_name) + "';");
+              resetTxn.commit();
+
+              // Actualizar status a FULL_LOAD para procesamiento completo
+              updateStatus(pgConn, schema_name, table_name, "FULL_LOAD", 0);
+
+              Logger::info(
+                  LogCategory::TRANSFER,
+                  "OFFSET table truncated and reset for full resync: " +
+                      schema_name + "." + table_name);
+            } catch (const std::exception &e) {
+              Logger::error(LogCategory::TRANSFER,
+                            "ERROR truncating OFFSET table " + schema_name +
+                                "." + table_name + ": " +
+                                std::string(e.what()));
+            }
+          }
 
           // Después de procesar DELETEs, verificar el nuevo conteo
           std::string lowerSchemaName = schema_name;
@@ -792,6 +851,57 @@ public:
           Logger::info(LogCategory::TRANSFER,
                        "After deletes: source=" + std::to_string(sourceCount) +
                            ", target=" + std::to_string(targetCount));
+        }
+
+        // Para tablas OFFSET, si sourceCount > targetCount, hay nuevos INSERTs
+        // Necesitamos re-sincronizar completamente para mantener el orden
+        // correcto
+        if (pkStrategy == "OFFSET" && sourceCount > targetCount) {
+          Logger::info(LogCategory::TRANSFER,
+                       "OFFSET table with new INSERTs detected - performing "
+                       "full resync for " +
+                           schema_name + "." + table_name +
+                           " (source: " + std::to_string(sourceCount) +
+                           ", target: " + std::to_string(targetCount) + ")");
+          try {
+            std::string lowerSchemaName = schema_name;
+            std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
+                           lowerSchemaName.begin(), ::tolower);
+
+            // TRUNCATE la tabla destino
+            pqxx::work truncateTxn(pgConn);
+            truncateTxn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
+                             table_name + "\" CASCADE;");
+            truncateTxn.commit();
+
+            // Resetear last_offset a 0 para re-sincronización completa
+            pqxx::work resetTxn(pgConn);
+            resetTxn.exec("UPDATE metadata.catalog SET last_offset='0' WHERE "
+                          "schema_name='" +
+                          escapeSQL(schema_name) + "' AND table_name='" +
+                          escapeSQL(table_name) + "';");
+            resetTxn.commit();
+
+            // Actualizar status a FULL_LOAD para procesamiento completo
+            updateStatus(pgConn, schema_name, table_name, "FULL_LOAD", 0);
+
+            Logger::info(LogCategory::TRANSFER,
+                         "OFFSET table truncated and reset for full resync due "
+                         "to new INSERTs: " +
+                             schema_name + "." + table_name);
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::TRANSFER,
+                          "ERROR truncating OFFSET table for new INSERTs " +
+                              schema_name + "." + table_name + ": " +
+                              std::string(e.what()));
+          }
+        }
+
+        // Para FULL_LOAD, forzar la inserción de todos los datos
+        if (forceFullLoad) {
+          Logger::info(LogCategory::TRANSFER,
+                       "FULL_LOAD mode: forcing data insertion for " +
+                           schema_name + "." + table_name);
         }
 
         // Luego ejecutar la query sin prefijo de base de datos
@@ -942,17 +1052,16 @@ public:
           }
         }
 
-        // OPTIMIZED: Usar cursor-based pagination con primary key
-        std::string pkStrategy =
-            getPKStrategyFromCatalog(pgConn, schema_name, table_name);
+        // Obtener columnas de PK (ya tenemos la estrategia)
         std::vector<std::string> pkColumns =
             getPKColumnsFromCatalog(pgConn, schema_name, table_name);
         std::string lastProcessedPK =
             getLastProcessedPKFromCatalog(pgConn, schema_name, table_name);
 
         // Transferir datos faltantes usando CURSOR-BASED PAGINATION
-        bool hasMoreData = true;
-        size_t currentOffset = 0; // Usar variable separada para OFFSET
+        bool hasMoreData = forceFullLoad || (sourceCount > targetCount);
+        size_t currentOffset =
+            totalProcessed; // Inicializar con el offset de la DB
         size_t chunkNumber = 0;
 
         // CRITICAL: Add timeout to prevent infinite loops
@@ -1098,8 +1207,15 @@ public:
 
             if (rowsInserted > 0) {
               try {
-                performBulkUpsert(pgConn, results, columnNames, columnTypes,
-                                  lowerSchemaName, table_name, schema_name);
+                // Para tablas sin PK, usar INSERT directo para evitar
+                // duplicados
+                if (pkStrategy != "PK") {
+                  performBulkInsert(pgConn, results, columnNames, columnTypes,
+                                    lowerSchemaName, table_name);
+                } else {
+                  performBulkUpsert(pgConn, results, columnNames, columnTypes,
+                                    lowerSchemaName, table_name, schema_name);
+                }
                 Logger::info(LogCategory::TRANSFER,
                              "Successfully processed " +
                                  std::to_string(rowsInserted) + " rows for " +
@@ -1155,7 +1271,8 @@ public:
           // pagination). Para tablas con PK se usa cursor-based pagination con
           // last_processed_pk
           if (pkStrategy != "PK") {
-            currentOffset += rowsInserted;
+            currentOffset +=
+                results.size(); // Usar el número real de registros procesados
           }
 
           // If COPY failed but we have data, advance the offset by 1
@@ -1200,6 +1317,10 @@ public:
                              "' AND table_name='" + escapeSQL(table_name) +
                              "';");
               updateTxn.commit();
+              Logger::info(LogCategory::TRANSFER,
+                           "Updated last_offset to " +
+                               std::to_string(currentOffset) + " for " +
+                               schema_name + "." + table_name);
             } catch (const std::exception &e) {
               Logger::warning(LogCategory::TRANSFER,
                               "Failed to update last_offset: " +
@@ -1207,8 +1328,17 @@ public:
             }
           }
 
-          if (targetCount >= sourceCount) {
-            hasMoreData = false;
+          // Para OFFSET pagination, verificar si hemos procesado todos los
+          // registros
+          if (pkStrategy != "PK") {
+            if (results.size() < CHUNK_SIZE || currentOffset >= sourceCount) {
+              hasMoreData = false;
+            }
+          } else {
+            // Para PK pagination, usar el conteo de target
+            if (targetCount >= sourceCount) {
+              hasMoreData = false;
+            }
           }
         }
 
