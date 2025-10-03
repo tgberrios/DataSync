@@ -117,6 +117,25 @@ The system will:
 4. Provide real-time logging output
 5. Make monitoring data available via web dashboard
 
+## Deployment Targets (Bare Metal and Cloud)
+
+DataSync runs on both bare metal and cloud environments:
+
+- Bare metal: ensure PostgreSQL (DataLake) is reachable per `config.json`, then run `./DataSync` and the web stack (`npm run dev` for local or `node frontend/server.js` in prod behind a reverse proxy).
+- Cloud (VMs/containers/k8s): containerize DataSync and the Node server; point them to a managed PostgreSQL. Mount `config.json` (or inject env vars) and expose the Node server via load balancer/ingress. Serve the React build statically or from the Node server.
+
+### Pointing Connections to Cloud Databases
+
+- MSSQL (ODBC): update the connection string `SERVER` to your cloud endpoint and configure TLS as required (`TrustServerCertificate=no` or proper certs).
+- MariaDB/MySQL: update `host/user/password/db` for your cloud service and set SSL options (e.g., `ssl-ca`).
+- PostgreSQL (DataLake): in `config.json` set `host/port/user/password` to your cloud Postgres or managed service.
+
+Security tips
+
+- Open only required egress/ingress to database endpoints.
+- Prefer SSL/TLS; avoid `TrustServerCertificate=yes` in production.
+- Store credentials in secrets/env and template them into `config.json` at deploy time.
+
 ## Project Structure
 
 ```

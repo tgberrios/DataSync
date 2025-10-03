@@ -600,9 +600,8 @@ public:
                                   const std::string &timeColumn,
                                   const std::string &lastSyncTime) {
     try {
-      if (timeColumn.empty() || lastSyncTime.empty()) {
-        return;
-      }
+      // If we don't have a reliable time column (or it's created_at which does
+      // not change on updates), fall back to comparing all rows by PK
 
       std::string lowerSchemaName = schema_name;
       std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
@@ -622,10 +621,17 @@ public:
                        " since: " + lastSyncTime);
 
       // 2. Obtener registros modificados desde MariaDB
-      std::string selectQuery = "SELECT * FROM `" + schema_name + "`.`" +
-                                table_name + "` WHERE `" + timeColumn +
-                                "` > '" + escapeSQL(lastSyncTime) +
-                                "' ORDER BY `" + timeColumn + "`";
+      std::string selectQuery;
+      if (timeColumn.empty() || timeColumn == "created_at" ||
+          lastSyncTime.empty()) {
+        selectQuery = "SELECT * FROM `" + schema_name + "`.`" + table_name +
+                      "`"; // full compare by PK
+      } else {
+        selectQuery = "SELECT * FROM `" + schema_name + "`.`" + table_name +
+                      "` WHERE `" + timeColumn + "` > '" +
+                      escapeSQL(lastSyncTime) + "' ORDER BY `" + timeColumn +
+                      "`";
+      }
 
       std::vector<std::vector<std::string>> modifiedRecords =
           executeQueryMariaDB(mariadbConn, selectQuery);
@@ -1697,18 +1703,21 @@ public:
       }
 
       if (!lastSyncColumn.empty()) {
+        std::string lowerSchemaName = schema_name;
+        std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
+                       lowerSchemaName.begin(), ::tolower);
 
         auto tableCheck =
             txn.exec("SELECT COUNT(*) FROM information_schema.tables "
                      "WHERE table_schema='" +
-                     schema_name +
+                     lowerSchemaName +
                      "' "
                      "AND table_name='" +
                      table_name + "';");
 
         if (!tableCheck.empty() && tableCheck[0][0].as<int>() > 0) {
           updateQuery += ", last_sync_time=(SELECT MAX(\"" + lastSyncColumn +
-                         "\")::timestamp FROM \"" + schema_name + "\".\"" +
+                         "\")::timestamp FROM \"" + lowerSchemaName + "\".\"" +
                          table_name + "\")";
         } else {
           updateQuery += ", last_sync_time=NOW()";

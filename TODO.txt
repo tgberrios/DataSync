@@ -1,3 +1,5 @@
 ACTUALIZAR EL DIAGRAM
 
 testear DELTAS
+
+valdria la pena meterle AI ?
