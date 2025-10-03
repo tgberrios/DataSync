@@ -29,12 +29,6 @@ std::unordered_map<std::string, std::string> MariaDBToPostgres::dataTypeMap = {
     {"date", "DATE"},
     {"time", "TIME"}};
 
-std::unordered_map<std::string, std::string> MariaDBToPostgres::collationMap = {
-    {"utf8_general_ci", "en_US.utf8"},
-    {"utf8mb4_general_ci", "en_US.utf8"},
-    {"latin1_swedish_ci", "C"},
-    {"ascii_general_ci", "C"}};
-
 MYSQL *
 MariaDBToPostgres::getMariaDBConnection(const std::string &connectionString) {
   return connectionManager.getConnection(connectionString);
@@ -137,7 +131,7 @@ void MariaDBToPostgres::transferDataMariaDBToPostgres() {
 }
 
 std::vector<TableInfo>
-MariaDBToPostgres::getActiveTables(pqxx::connection &pgConn) {
+MariaDBToPostgres::getActiveTables(pqxx::connection &pgConn) const {
   std::vector<TableInfo> data;
 
   try {

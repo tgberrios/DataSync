@@ -326,7 +326,7 @@ std::pair<int, int> CatalogManager::getColumnCountsForEngine(
 
 // MariaDB sync helper functions
 std::vector<std::string>
-CatalogManager::getMariaDBConnections(pqxx::connection &pgConn) {
+CatalogManager::getMariaDBConnections(pqxx::connection &pgConn) const {
   std::vector<std::string> connections;
 
   pqxx::work txn(pgConn);
@@ -343,146 +343,67 @@ CatalogManager::getMariaDBConnections(pqxx::connection &pgConn) {
   return connections;
 }
 
-MariaDBConnectionInfo CatalogManager::parseMariaDBConnectionString(
-    const std::string &connectionString) {
-  MariaDBConnectionInfo connInfo;
+// parseMariaDBConnectionString function removed - using
+// ConnectionParsing::MariaDBConnectionInfo::fromString
 
-  std::istringstream ss(connectionString);
-  std::string token;
-  while (std::getline(ss, token, ';')) {
-    auto pos = token.find('=');
-    if (pos == std::string::npos)
-      continue;
-
-    std::string key = token.substr(0, pos);
-    std::string value = token.substr(pos + 1);
-
-    // Trim whitespace
-    key.erase(0, key.find_first_not_of(" \t\r\n"));
-    key.erase(key.find_last_not_of(" \t\r\n") + 1);
-    value.erase(0, value.find_first_not_of(" \t\r\n"));
-    value.erase(value.find_last_not_of(" \t\r\n") + 1);
-
-    if (key == "host")
-      connInfo.host = value;
-    else if (key == "user")
-      connInfo.user = value;
-    else if (key == "password")
-      connInfo.password = value;
-    else if (key == "db")
-      connInfo.database = value;
-    else if (key == "port")
-      connInfo.port = value;
-  }
-
-  // Parse port number
-  if (!connInfo.port.empty()) {
-    try {
-      connInfo.portNumber = std::stoul(connInfo.port);
-    } catch (...) {
-      connInfo.portNumber = 3306;
-    }
-  }
-
-  return connInfo;
-}
-
-MYSQL *CatalogManager::establishMariaDBConnection(
-    const std::string &connectionString) {
-  // Parse connection string to validate required parameters (like
-  // MariaDBToPostgres.h)
-  std::string host, user, password, db, port;
-  std::istringstream ss(connectionString);
-  std::string token;
-  while (std::getline(ss, token, ';')) {
-    auto pos = token.find('=');
-    if (pos == std::string::npos)
-      continue;
-    std::string key = token.substr(0, pos);
-    std::string value = token.substr(pos + 1);
-    key.erase(0, key.find_first_not_of(" \t\r\n"));
-    key.erase(key.find_last_not_of(" \t\r\n") + 1);
-    value.erase(0, value.find_first_not_of(" \t\r\n"));
-    value.erase(value.find_last_not_of(" \t\r\n") + 1);
-    if (key == "host")
-      host = value;
-    else if (key == "user")
-      user = value;
-    else if (key == "password")
-      password = value;
-    else if (key == "db")
-      db = value;
-    else if (key == "port")
-      port = value;
-  }
+std::optional<MySQLConnection> CatalogManager::establishMariaDBConnection(
+    const std::string &connectionString) const {
+  // Parse connection string using the unified parser
+  auto connInfo =
+      ConnectionParsing::MariaDBConnectionInfo::fromString(connectionString);
 
   // Validate required parameters
-  if (host.empty() || user.empty() || db.empty()) {
+  if (connInfo.host.empty() || connInfo.user.empty() ||
+      connInfo.database.empty()) {
     Logger::getInstance().error(
         LogCategory::DATABASE, "establishMariaDBConnection",
         "Missing required connection parameters (host, user, or db)");
-    return nullptr;
+    return std::nullopt;
   }
 
-  MYSQL *conn = mysql_init(nullptr);
-  if (!conn) {
+  MySQLConnection conn;
+  if (!conn.is_valid()) {
     Logger::getInstance().error(LogCategory::DATABASE,
                                 "establishMariaDBConnection",
                                 "mysql_init() failed");
-    return nullptr;
+    return std::nullopt;
   }
 
-  unsigned int portNum = 3306;
-  if (!port.empty()) {
-    try {
-      portNum = std::stoul(port);
-      if (portNum == 0 || portNum > 65535) {
-        Logger::getInstance().warning(
-            LogCategory::DATABASE, "establishMariaDBConnection",
-            "Invalid port number " + port + ", using default 3306");
-        portNum = 3306;
-      }
-    } catch (const std::exception &e) {
-      Logger::getInstance().warning(
-          LogCategory::DATABASE, "establishMariaDBConnection",
-          "Could not parse port " + port + ": " + std::string(e.what()) +
-              ", using default 3306");
-      portNum = 3306;
-    }
+  unsigned int portNum = connInfo.portNumber;
+  if (connInfo.portNumber == 0) {
+    portNum = 3306;
   }
 
-  if (mysql_real_connect(conn, host.c_str(), user.c_str(), password.c_str(),
-                         db.c_str(), portNum, nullptr, 0) == nullptr) {
-    std::string errorMsg = mysql_error(conn);
+  if (mysql_real_connect(conn.get(), connInfo.host.c_str(),
+                         connInfo.user.c_str(), connInfo.password.c_str(),
+                         connInfo.database.c_str(), portNum, nullptr,
+                         0) == nullptr) {
+    std::string errorMsg = mysql_error(conn.get());
     Logger::getInstance().error(
         LogCategory::DATABASE, "establishMariaDBConnection",
-        "MariaDB connection failed: " + errorMsg + " (host: " + host +
-            ", user: " + user + ", db: " + db +
+        "MariaDB connection failed: " + errorMsg + " (host: " + connInfo.host +
+            ", user: " + connInfo.user + ", db: " + connInfo.database +
             ", port: " + std::to_string(portNum) + ")");
-    mysql_close(conn);
-    return nullptr;
+    return std::nullopt;
   }
 
   // Test connection with a simple query
-  if (mysql_query(conn, "SELECT 1")) {
-    std::string errorMsg = mysql_error(conn);
+  if (mysql_query(conn.get(), "SELECT 1")) {
+    std::string errorMsg = mysql_error(conn.get());
     Logger::getInstance().error(LogCategory::DATABASE,
                                 "establishMariaDBConnection",
                                 "Connection test failed: " + errorMsg);
-    mysql_close(conn);
-    return nullptr;
+    return std::nullopt;
   }
 
   // Free the test result
-  MYSQL_RES *testResult = mysql_store_result(conn);
-  if (testResult) {
-    mysql_free_result(testResult);
-  }
+  MySQLResult testResult(mysql_store_result(conn.get()));
+  // RAII automatically handles cleanup
 
   return conn;
 }
 
-void CatalogManager::configureMariaDBTimeouts(MYSQL *conn) {
+void CatalogManager::configureMariaDBTimeouts(MYSQL *conn) const {
   std::string timeoutQuery = "SET SESSION wait_timeout = 600, "
                              "interactive_timeout = 600, "
                              "net_read_timeout = 600, "
@@ -493,7 +414,7 @@ void CatalogManager::configureMariaDBTimeouts(MYSQL *conn) {
 }
 
 std::vector<std::vector<std::string>>
-CatalogManager::discoverMariaDBTables(MYSQL *conn) {
+CatalogManager::discoverMariaDBTables(MYSQL *conn) const {
   std::string query = "SELECT table_schema, table_name "
                       "FROM information_schema.tables "
                       "WHERE table_schema NOT IN ('information_schema', "
@@ -506,7 +427,7 @@ CatalogManager::discoverMariaDBTables(MYSQL *conn) {
 
 CatalogTableMetadata
 CatalogManager::analyzeTableMetadata(MYSQL *conn, const std::string &schemaName,
-                                     const std::string &tableName) {
+                                     const std::string &tableName) const {
   CatalogTableMetadata metadata;
   metadata.schemaName = schemaName;
   metadata.tableName = tableName;
@@ -535,7 +456,7 @@ CatalogManager::analyzeTableMetadata(MYSQL *conn, const std::string &schemaName,
 
 int64_t CatalogManager::getTableSize(pqxx::connection &pgConn,
                                      const std::string &schemaName,
-                                     const std::string &tableName) {
+                                     const std::string &tableName) const {
   try {
     pqxx::work txn(pgConn);
     std::string query =
@@ -653,7 +574,8 @@ void CatalogManager::updateOrInsertTableMetadata(
         escapeSQL(metadata.schemaName) + "', '" +
         escapeSQL(metadata.tableName) + "', '', 'MariaDB', '" +
         escapeSQL(connectionString) + "', NOW(), '" +
-        escapeSQL(metadata.timeColumn) + "', 'FULL_LOAD', '0', true, '" +
+        escapeSQL(metadata.timeColumn) + "', 'FULL_LOAD', " +
+        (metadata.pkStrategy == "OFFSET" ? "'0'" : "NULL") + ", false, '" +
         escapeSQL(columnsToJSON(metadata.pkColumns)) + "', '" +
         escapeSQL(metadata.pkStrategy) + "', " +
         std::string(metadata.hasPK ? "true" : "false") + ", '" +
@@ -669,13 +591,14 @@ CatalogManager::processMariaDBConnection(pqxx::connection &pgConn,
                                          const std::string &connectionString) {
   SyncResults results;
 
-  MYSQL *conn = establishMariaDBConnection(connectionString);
-  if (!conn) {
+  auto connOpt = establishMariaDBConnection(connectionString);
+  if (!connOpt) {
     return results;
   }
 
-  configureMariaDBTimeouts(conn);
-  auto tables = discoverMariaDBTables(conn);
+  MySQLConnection conn = std::move(*connOpt);
+  configureMariaDBTimeouts(conn.get());
+  auto tables = discoverMariaDBTables(conn.get());
 
   results.totalTables = tables.size();
   results.processedConnections = 1;
@@ -687,14 +610,14 @@ CatalogManager::processMariaDBConnection(pqxx::connection &pgConn,
     std::string schemaName = row[0];
     std::string tableName = row[1];
 
-    auto metadata = analyzeTableMetadata(conn, schemaName, tableName);
+    auto metadata = analyzeTableMetadata(conn.get(), schemaName, tableName);
     metadata.tableSize = getTableSize(pgConn, schemaName, tableName);
 
     updateOrInsertTableMetadata(pgConn, connectionString, metadata);
     results.updatedTables++;
   }
 
-  mysql_close(conn);
+  // RAII automatically handles connection cleanup
   return results;
 }
 
@@ -766,7 +689,7 @@ void CatalogManager::syncCatalogMSSQLToPostgres() {
 
 // MSSQL sync helper functions
 std::vector<std::string>
-CatalogManager::getMSSQLConnections(pqxx::connection &pgConn) {
+CatalogManager::getMSSQLConnections(pqxx::connection &pgConn) const {
   std::vector<std::string> connections;
 
   pqxx::work txn(pgConn);
@@ -783,129 +706,67 @@ CatalogManager::getMSSQLConnections(pqxx::connection &pgConn) {
   return connections;
 }
 
-MSSQLConnectionInfo CatalogManager::parseMSSQLConnectionString(
-    const std::string &connectionString) {
-  MSSQLConnectionInfo connInfo;
+// parseMSSQLConnectionString function removed - using
+// ConnectionParsing::MSSQLConnectionInfo::fromString
 
-  std::istringstream ss(connectionString);
-  std::string token;
-  while (std::getline(ss, token, ';')) {
-    auto pos = token.find('=');
-    if (pos == std::string::npos)
-      continue;
+std::optional<ODBCConnection> CatalogManager::establishMSSQLConnection(
+    const std::string &connectionString) const {
+  // Parse connection string using the unified parser
+  auto connInfo =
+      ConnectionParsing::MSSQLConnectionInfo::fromString(connectionString);
 
-    std::string key = token.substr(0, pos);
-    std::string value = token.substr(pos + 1);
-
-    // Trim whitespace
-    key.erase(0, key.find_first_not_of(" \t\r\n"));
-    key.erase(key.find_last_not_of(" \t\r\n") + 1);
-    value.erase(0, value.find_first_not_of(" \t\r\n"));
-    value.erase(value.find_last_not_of(" \t\r\n") + 1);
-
-    if (key == "SERVER")
-      connInfo.server = value;
-    else if (key == "DATABASE")
-      connInfo.database = value;
-    else if (key == "UID")
-      connInfo.uid = value;
-    else if (key == "PWD")
-      connInfo.pwd = value;
-    else if (key == "DRIVER")
-      connInfo.driver = value;
-    else if (key == "PORT")
-      connInfo.port = value;
-    else if (key == "TrustServerCertificate")
-      connInfo.trustedConnection = value;
-  }
-
-  return connInfo;
-}
-
-SQLHDBC
-CatalogManager::establishMSSQLConnection(const std::string &connectionString) {
-  // Parse connection string to validate required parameters (like
-  // MSSQLToPostgres.h)
-  std::string server, database, uid, pwd, port;
-  std::istringstream ss(connectionString);
-  std::string token;
-  while (std::getline(ss, token, ';')) {
-    auto pos = token.find('=');
-    if (pos == std::string::npos)
-      continue;
-    std::string key = token.substr(0, pos);
-    std::string value = token.substr(pos + 1);
-    key.erase(0, key.find_first_not_of(" \t\r\n"));
-    key.erase(key.find_last_not_of(" \t\r\n") + 1);
-    value.erase(0, value.find_first_not_of(" \t\r\n"));
-    value.erase(value.find_last_not_of(" \t\r\n") + 1);
-    if (key == "SERVER")
-      server = value;
-    else if (key == "DATABASE")
-      database = value;
-    else if (key == "UID")
-      uid = value;
-    else if (key == "PWD")
-      pwd = value;
-    else if (key == "PORT")
-      port = value;
-  }
-
-  if (server.empty() || database.empty() || uid.empty()) {
+  if (connInfo.server.empty() || connInfo.database.empty() ||
+      connInfo.uid.empty()) {
     Logger::getInstance().error(
         LogCategory::DATABASE, "establishMSSQLConnection",
         "Missing required connection parameters (SERVER, DATABASE, or UID)");
-    return SQL_NULL_HDBC;
+    return std::nullopt;
   }
 
-  SQLHENV env;
-  SQLHDBC conn;
-  SQLRETURN ret;
-
-  ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env);
-  if (ret != SQL_SUCCESS) {
+  // Create environment handle with RAII
+  ODBCEnvironment env;
+  if (!env.is_valid()) {
     Logger::getInstance().error(LogCategory::DATABASE,
                                 "establishMSSQLConnection",
                                 "Failed to allocate environment handle");
-    return SQL_NULL_HDBC;
+    return std::nullopt;
   }
 
-  ret = SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION, (void *)SQL_OV_ODBC3, 0);
+  SQLRETURN ret =
+      SQLSetEnvAttr(env.get(), SQL_ATTR_ODBC_VERSION, (void *)SQL_OV_ODBC3, 0);
   if (ret != SQL_SUCCESS) {
     Logger::getInstance().error(LogCategory::DATABASE,
                                 "establishMSSQLConnection",
                                 "Failed to set ODBC version");
-    SQLFreeHandle(SQL_HANDLE_ENV, env);
-    return SQL_NULL_HDBC;
+    return std::nullopt;
   }
 
-  ret = SQLAllocHandle(SQL_HANDLE_DBC, env, &conn);
-  if (ret != SQL_SUCCESS) {
+  // Create connection handle with RAII
+  ODBCConnection conn(env.get());
+  if (!conn.is_valid()) {
     Logger::getInstance().error(LogCategory::DATABASE,
                                 "establishMSSQLConnection",
                                 "Failed to allocate connection handle");
-    SQLFreeHandle(SQL_HANDLE_ENV, env);
-    return SQL_NULL_HDBC;
+    return std::nullopt;
   }
 
-  // Use the original connection string directly (like MSSQLToPostgres.h)
-  ret = SQLDriverConnect(conn, NULL, (SQLCHAR *)connectionString.c_str(),
+  // Use the original connection string directly
+  ret = SQLDriverConnect(conn.get(), NULL, (SQLCHAR *)connectionString.c_str(),
                          SQL_NTS, NULL, 0, NULL, SQL_DRIVER_NOPROMPT);
   if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
     Logger::getInstance().error(LogCategory::DATABASE,
                                 "establishMSSQLConnection",
                                 "Failed to connect to MSSQL server");
-    SQLFreeHandle(SQL_HANDLE_DBC, conn);
-    SQLFreeHandle(SQL_HANDLE_ENV, env);
-    return SQL_NULL_HDBC;
+    return std::nullopt;
   }
 
-  SQLFreeHandle(SQL_HANDLE_ENV, env);
+  // Environment handle will be automatically cleaned up
+  // Return connection handle (will be moved, not copied)
   return conn;
 }
 
 std::vector<std::vector<std::string>>
-CatalogManager::discoverMSSQLTables(SQLHDBC conn) {
+CatalogManager::discoverMSSQLTables(SQLHDBC conn) const {
   std::string query = "SELECT s.name AS TABLE_SCHEMA, t.name AS TABLE_NAME "
                       "FROM sys.tables t "
                       "INNER JOIN sys.schemas s ON t.schema_id = s.schema_id "
@@ -921,8 +782,10 @@ CatalogManager::discoverMSSQLTables(SQLHDBC conn) {
   return executeQueryMSSQL(conn, query);
 }
 
-CatalogTableMetadata CatalogManager::analyzeMSSQLTableMetadata(
-    SQLHDBC conn, const std::string &schemaName, const std::string &tableName) {
+CatalogTableMetadata
+CatalogManager::analyzeMSSQLTableMetadata(SQLHDBC conn,
+                                          const std::string &schemaName,
+                                          const std::string &tableName) const {
   CatalogTableMetadata metadata;
   metadata.schemaName = schemaName;
   metadata.tableName = tableName;
@@ -971,12 +834,13 @@ CatalogManager::processMSSQLConnection(pqxx::connection &pgConn,
                                        const std::string &connectionString) {
   SyncResults results;
 
-  SQLHDBC conn = establishMSSQLConnection(connectionString);
-  if (conn == SQL_NULL_HDBC) {
+  auto connOpt = establishMSSQLConnection(connectionString);
+  if (!connOpt) {
     return results;
   }
 
-  auto tables = discoverMSSQLTables(conn);
+  ODBCConnection conn = std::move(*connOpt);
+  auto tables = discoverMSSQLTables(conn.get());
 
   Logger::getInstance().info(LogCategory::DATABASE,
                              "Found " + std::to_string(tables.size()) +
@@ -993,7 +857,8 @@ CatalogManager::processMSSQLConnection(pqxx::connection &pgConn,
     std::string tableName = row[1];
 
     // Analizar metadata de la tabla
-    auto metadata = analyzeMSSQLTableMetadata(conn, schemaName, tableName);
+    auto metadata =
+        analyzeMSSQLTableMetadata(conn.get(), schemaName, tableName);
     metadata.tableSize = getTableSize(pgConn, schemaName, tableName);
 
     // Verificar si la tabla ya existe en el catálogo
@@ -1050,8 +915,7 @@ CatalogManager::processMSSQLConnection(pqxx::connection &pgConn,
     }
   }
 
-  SQLDisconnect(conn);
-  SQLFreeHandle(SQL_HANDLE_DBC, conn);
+  // RAII automatically handles connection cleanup
   return results;
 }
 
@@ -1112,7 +976,7 @@ void CatalogManager::syncCatalogPostgresToPostgres() {
 
 // PostgreSQL sync helper functions
 std::vector<std::string>
-CatalogManager::getPostgresConnections(pqxx::connection &pgConn) {
+CatalogManager::getPostgresConnections(pqxx::connection &pgConn) const {
   std::vector<std::string> connections;
 
   pqxx::work txn(pgConn);
@@ -1129,44 +993,11 @@ CatalogManager::getPostgresConnections(pqxx::connection &pgConn) {
   return connections;
 }
 
-PostgresConnectionInfo CatalogManager::parsePostgresConnectionString(
-    const std::string &connectionString) {
-  PostgresConnectionInfo connInfo;
-
-  std::istringstream ss(connectionString);
-  std::string token;
-  while (std::getline(ss, token, ' ')) {
-    auto pos = token.find('=');
-    if (pos == std::string::npos)
-      continue;
-
-    std::string key = token.substr(0, pos);
-    std::string value = token.substr(pos + 1);
-
-    // Remove quotes if present
-    if (value.front() == '\'' && value.back() == '\'') {
-      value = value.substr(1, value.length() - 2);
-    }
-
-    if (key == "host")
-      connInfo.host = value;
-    else if (key == "port")
-      connInfo.port = value;
-    else if (key == "dbname")
-      connInfo.dbname = value;
-    else if (key == "user")
-      connInfo.user = value;
-    else if (key == "password")
-      connInfo.password = value;
-    else if (key == "sslmode")
-      connInfo.sslmode = value;
-  }
-
-  return connInfo;
-}
+// parsePostgresConnectionString function removed - using
+// ConnectionParsing::PostgresConnectionInfo::fromString
 
 std::unique_ptr<pqxx::connection> CatalogManager::establishPostgresConnection(
-    const PostgresConnectionInfo &connInfo) {
+    const ConnectionParsing::PostgresConnectionInfo &connInfo) const {
   if (connInfo.host.empty() || connInfo.dbname.empty()) {
     Logger::getInstance().error(
         LogCategory::DATABASE, "establishPostgresConnection",
@@ -1200,7 +1031,7 @@ std::unique_ptr<pqxx::connection> CatalogManager::establishPostgresConnection(
 }
 
 std::vector<std::vector<std::string>>
-CatalogManager::discoverPostgresTables(pqxx::connection &conn) {
+CatalogManager::discoverPostgresTables(pqxx::connection &conn) const {
   std::string query =
       "SELECT schemaname, tablename "
       "FROM pg_tables "
@@ -1229,10 +1060,9 @@ CatalogManager::discoverPostgresTables(pqxx::connection &conn) {
   return results;
 }
 
-CatalogTableMetadata
-CatalogManager::analyzePostgresTableMetadata(pqxx::connection &conn,
-                                             const std::string &schemaName,
-                                             const std::string &tableName) {
+CatalogTableMetadata CatalogManager::analyzePostgresTableMetadata(
+    pqxx::connection &conn, const std::string &schemaName,
+    const std::string &tableName) const {
   CatalogTableMetadata metadata;
   metadata.schemaName = schemaName;
   metadata.tableName = tableName;
@@ -1265,7 +1095,8 @@ CatalogManager::processPostgresConnection(pqxx::connection &pgConn,
                                           const std::string &connectionString) {
   SyncResults results;
 
-  auto connInfo = parsePostgresConnectionString(connectionString);
+  auto connInfo =
+      ConnectionParsing::PostgresConnectionInfo::fromString(connectionString);
   auto conn = establishPostgresConnection(connInfo);
   if (!conn) {
     return results;
@@ -1297,7 +1128,7 @@ CatalogManager::processPostgresConnection(pqxx::connection &pgConn,
 // UNIFIED UTILITY FUNCTIONS
 // ============================================================================
 
-std::string CatalogManager::escapeSQL(const std::string &input) {
+std::string CatalogManager::escapeSQL(const std::string &input) const {
   std::string escaped = input;
   size_t pos = 0;
 
@@ -1313,7 +1144,7 @@ std::string CatalogManager::escapeSQL(const std::string &input) {
 }
 
 std::string
-CatalogManager::columnsToJSON(const std::vector<std::string> &columns) {
+CatalogManager::columnsToJSON(const std::vector<std::string> &columns) const {
   if (columns.empty()) {
     return "[]";
   }
@@ -1335,7 +1166,7 @@ CatalogManager::columnsToJSON(const std::vector<std::string> &columns) {
 std::string CatalogManager::determinePKStrategy(
     const std::vector<std::string> &pkColumns,
     const std::vector<std::string> &candidateColumns,
-    const std::string &timeColumn) {
+    const std::string &timeColumn) const {
   if (!pkColumns.empty()) {
     Logger::getInstance().debug(LogCategory::DATABASE, "determinePKStrategy",
                                 "Using PK strategy - " +
@@ -1367,7 +1198,7 @@ std::string CatalogManager::determinePKStrategy(
 std::vector<std::string>
 CatalogManager::detectPrimaryKeyColumns(DBEngine engine, void *connection,
                                         const std::string &schema,
-                                        const std::string &table) {
+                                        const std::string &table) const {
   std::vector<std::string> pkColumns;
 
   try {
@@ -1460,7 +1291,7 @@ CatalogManager::detectPrimaryKeyColumns(DBEngine engine, void *connection,
 std::vector<std::string>
 CatalogManager::detectCandidateColumns(DBEngine engine, void *connection,
                                        const std::string &schema,
-                                       const std::string &table) {
+                                       const std::string &table) const {
   std::vector<std::string> candidateColumns;
 
   try {
@@ -1546,7 +1377,7 @@ CatalogManager::detectCandidateColumns(DBEngine engine, void *connection,
 
 std::string CatalogManager::detectTimeColumn(DBEngine engine, void *connection,
                                              const std::string &schema,
-                                             const std::string &table) {
+                                             const std::string &table) const {
   std::string timeColumn;
 
   try {
@@ -1671,7 +1502,7 @@ std::string CatalogManager::detectTimeColumn(DBEngine engine, void *connection,
 
 std::pair<int, int> CatalogManager::getColumnCounts(
     DBEngine engine, const std::string &connectionString,
-    const std::string &schema, const std::string &table) {
+    const std::string &schema, const std::string &table) const {
   try {
     switch (engine) {
     case DBEngine::MARIADB: {
@@ -1695,7 +1526,7 @@ std::pair<int, int> CatalogManager::getColumnCounts(
 
 std::vector<std::vector<std::string>>
 CatalogManager::executeQuery(DBEngine engine, void *connection,
-                             const std::string &query) {
+                             const std::string &query) const {
   std::vector<std::vector<std::string>> results;
 
   try {
@@ -1868,12 +1699,14 @@ std::string CatalogManager::extractHostnameFromConnection(
       break;
     }
     case DBEngine::MSSQL: {
-      auto connInfo = parseMSSQLConnectionString(connectionString);
+      auto connInfo =
+          ConnectionParsing::MSSQLConnectionInfo::fromString(connectionString);
       hostname = connInfo.server;
       break;
     }
     case DBEngine::POSTGRES: {
-      auto connInfo = parsePostgresConnectionString(connectionString);
+      auto connInfo = ConnectionParsing::PostgresConnectionInfo::fromString(
+          connectionString);
       hostname = connInfo.host;
       break;
     }
@@ -1927,7 +1760,8 @@ CatalogManager::getClusterNameFromHostname(const std::string &hostname) {
 // ============================================================================
 
 std::vector<std::vector<std::string>>
-CatalogManager::executeQueryMariaDB(MYSQL *conn, const std::string &query) {
+CatalogManager::executeQueryMariaDB(MYSQL *conn,
+                                    const std::string &query) const {
   std::vector<std::vector<std::string>> results;
 
   try {
@@ -1971,7 +1805,8 @@ CatalogManager::executeQueryMariaDB(MYSQL *conn, const std::string &query) {
 }
 
 std::vector<std::vector<std::string>>
-CatalogManager::executeQueryMSSQL(SQLHDBC conn, const std::string &query) {
+CatalogManager::executeQueryMSSQL(SQLHDBC conn,
+                                  const std::string &query) const {
   std::vector<std::vector<std::string>> results;
 
   try {
@@ -2025,12 +1860,14 @@ CatalogManager::executeQueryMSSQL(SQLHDBC conn, const std::string &query) {
 std::pair<int, int>
 CatalogManager::getColumnCountsMariaDB(const std::string &connectionString,
                                        const std::string &schema,
-                                       const std::string &table) {
+                                       const std::string &table) const {
   try {
-    MYSQL *conn = establishMariaDBConnection(connectionString);
-    if (!conn) {
+    auto connOpt = establishMariaDBConnection(connectionString);
+    if (!connOpt) {
       return {0, 0};
     }
+
+    MySQLConnection conn = std::move(*connOpt);
 
     std::string query = "SELECT COUNT(*) FROM information_schema.COLUMNS "
                         "WHERE TABLE_SCHEMA = '" +
@@ -2039,8 +1876,8 @@ CatalogManager::getColumnCountsMariaDB(const std::string &connectionString,
                         "AND TABLE_NAME = '" +
                         escapeSQL(table) + "'";
 
-    auto results = executeQueryMariaDB(conn, query);
-    mysql_close(conn);
+    auto results = executeQueryMariaDB(conn.get(), query);
+    // RAII automatically handles connection cleanup
 
     if (!results.empty() && !results[0].empty()) {
       int count = std::stoi(results[0][0]);
@@ -2063,12 +1900,14 @@ CatalogManager::getColumnCountsMariaDB(const std::string &connectionString,
 std::pair<int, int>
 CatalogManager::getColumnCountsMSSQL(const std::string &connectionString,
                                      const std::string &schema,
-                                     const std::string &table) {
+                                     const std::string &table) const {
   try {
-    SQLHDBC conn = establishMSSQLConnection(connectionString);
-    if (conn == SQL_NULL_HDBC) {
+    auto connOpt = establishMSSQLConnection(connectionString);
+    if (!connOpt) {
       return {0, 0};
     }
+
+    ODBCConnection conn = std::move(*connOpt);
 
     std::string query = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS "
                         "WHERE TABLE_SCHEMA = '" +
@@ -2077,9 +1916,8 @@ CatalogManager::getColumnCountsMSSQL(const std::string &connectionString,
                         "AND TABLE_NAME = '" +
                         escapeSQL(table) + "'";
 
-    auto results = executeQueryMSSQL(conn, query);
-    SQLDisconnect(conn);
-    SQLFreeHandle(SQL_HANDLE_DBC, conn);
+    auto results = executeQueryMSSQL(conn.get(), query);
+    // RAII automatically handles connection cleanup
 
     if (!results.empty() && !results[0].empty()) {
       int count = std::stoi(results[0][0]);
@@ -2101,9 +1939,10 @@ CatalogManager::getColumnCountsMSSQL(const std::string &connectionString,
 std::pair<int, int>
 CatalogManager::getColumnCountsPostgres(const std::string &connectionString,
                                         const std::string &schema,
-                                        const std::string &table) {
+                                        const std::string &table) const {
   try {
-    auto connInfo = parsePostgresConnectionString(connectionString);
+    auto connInfo =
+        ConnectionParsing::PostgresConnectionInfo::fromString(connectionString);
     auto conn = establishPostgresConnection(connInfo);
     if (!conn) {
       return {0, 0};
@@ -2142,63 +1981,63 @@ CatalogManager::getColumnCountsPostgres(const std::string &connectionString,
 // LEGACY DETECTION FUNCTIONS (for backward compatibility)
 // ============================================================================
 
-std::string CatalogManager::detectTimeColumnMariaDB(MYSQL *conn,
-                                                    const std::string &schema,
-                                                    const std::string &table) {
+std::string
+CatalogManager::detectTimeColumnMariaDB(MYSQL *conn, const std::string &schema,
+                                        const std::string &table) const {
   return detectTimeColumn(DBEngine::MARIADB, conn, schema, table);
 }
 
-std::string CatalogManager::detectTimeColumnMSSQL(SQLHDBC conn,
-                                                  const std::string &schema,
-                                                  const std::string &table) {
+std::string
+CatalogManager::detectTimeColumnMSSQL(SQLHDBC conn, const std::string &schema,
+                                      const std::string &table) const {
   return detectTimeColumn(DBEngine::MSSQL, conn, schema, table);
 }
 
-std::string CatalogManager::detectTimeColumnPostgres(pqxx::connection &conn,
-                                                     const std::string &schema,
-                                                     const std::string &table) {
+std::string
+CatalogManager::detectTimeColumnPostgres(pqxx::connection &conn,
+                                         const std::string &schema,
+                                         const std::string &table) const {
   return detectTimeColumn(DBEngine::POSTGRES, &conn, schema, table);
 }
 
 std::vector<std::string>
 CatalogManager::detectPrimaryKeyColumns(MYSQL *conn, const std::string &schema,
-                                        const std::string &table) {
+                                        const std::string &table) const {
   return detectPrimaryKeyColumns(DBEngine::MARIADB, conn, schema, table);
 }
 
 std::vector<std::string> CatalogManager::detectPrimaryKeyColumnsMSSQL(
-    SQLHDBC conn, const std::string &schema, const std::string &table) {
+    SQLHDBC conn, const std::string &schema, const std::string &table) const {
   return detectPrimaryKeyColumns(DBEngine::MSSQL, conn, schema, table);
 }
 
-std::vector<std::string>
-CatalogManager::detectPrimaryKeyColumnsPostgres(pqxx::connection &conn,
-                                                const std::string &schema,
-                                                const std::string &table) {
+std::vector<std::string> CatalogManager::detectPrimaryKeyColumnsPostgres(
+    pqxx::connection &conn, const std::string &schema,
+    const std::string &table) const {
   return detectPrimaryKeyColumns(DBEngine::POSTGRES, &conn, schema, table);
 }
 
 std::vector<std::string>
 CatalogManager::detectCandidateColumns(MYSQL *conn, const std::string &schema,
-                                       const std::string &table) {
+                                       const std::string &table) const {
   return detectCandidateColumns(DBEngine::MARIADB, conn, schema, table);
 }
 
 std::vector<std::string> CatalogManager::detectCandidateColumnsMSSQL(
-    SQLHDBC conn, const std::string &schema, const std::string &table) {
+    SQLHDBC conn, const std::string &schema, const std::string &table) const {
   return detectCandidateColumns(DBEngine::MSSQL, conn, schema, table);
 }
 
 std::vector<std::string>
 CatalogManager::detectCandidateColumnsPostgres(pqxx::connection &conn,
                                                const std::string &schema,
-                                               const std::string &table) {
+                                               const std::string &table) const {
   return detectCandidateColumns(DBEngine::POSTGRES, &conn, schema, table);
 }
 
 std::string CatalogManager::determinePKStrategy(
     const std::vector<std::string> &pkColumns,
-    const std::vector<std::string> &candidateColumns) {
+    const std::vector<std::string> &candidateColumns) const {
   return determinePKStrategy(pkColumns, candidateColumns, "");
 }
 

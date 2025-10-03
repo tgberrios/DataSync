@@ -6,23 +6,16 @@
 #include <chrono>
 #include <thread>
 
-TransferOrchestrator::TransferOrchestrator() {
-  // Initialize components
-  mariaToPg = new MariaDBToPostgres();
-  mssqlToPg = new MSSQLToPostgres();
-  pgToPg = new PostgresToPostgres();
-  catalogManager = new CatalogManager();
-
+TransferOrchestrator::TransferOrchestrator()
+    : mariaToPg(std::make_unique<MariaDBToPostgres>()),
+      mssqlToPg(std::make_unique<MSSQLToPostgres>()),
+      pgToPg(std::make_unique<PostgresToPostgres>()),
+      catalogManager(std::make_unique<CatalogManager>()) {
   Logger::getInstance().info(LogCategory::MONITORING,
                              "TransferOrchestrator initialized");
 }
 
-TransferOrchestrator::~TransferOrchestrator() {
-  delete mariaToPg;
-  delete mssqlToPg;
-  delete pgToPg;
-  delete catalogManager;
-}
+TransferOrchestrator::~TransferOrchestrator() = default;
 
 void TransferOrchestrator::initialize() {
   try {

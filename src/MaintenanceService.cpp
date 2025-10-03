@@ -3,17 +3,14 @@
 #include "catalog_manager.h"
 #include <chrono>
 
-MaintenanceService::MaintenanceService() {
-  catalogManager = new CatalogManager();
-  metricsCollector = new MetricsCollector();
+MaintenanceService::MaintenanceService()
+    : catalogManager(std::make_unique<CatalogManager>()),
+      metricsCollector(std::make_unique<MetricsCollector>()) {
   Logger::getInstance().info(LogCategory::MONITORING,
                              "MaintenanceService initialized");
 }
 
-MaintenanceService::~MaintenanceService() {
-  delete catalogManager;
-  delete metricsCollector;
-}
+MaintenanceService::~MaintenanceService() = default;
 
 void MaintenanceService::startMaintenance() {
   maintaining = true;

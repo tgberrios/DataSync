@@ -40,10 +40,10 @@ private:
   std::atomic<bool> running{true};
 
   // Transfer components
-  MariaDBToPostgres *mariaToPg;
-  MSSQLToPostgres *mssqlToPg;
-  PostgresToPostgres *pgToPg;
-  CatalogManager *catalogManager;
+  std::unique_ptr<MariaDBToPostgres> mariaToPg;
+  std::unique_ptr<MSSQLToPostgres> mssqlToPg;
+  std::unique_ptr<PostgresToPostgres> pgToPg;
+  std::unique_ptr<CatalogManager> catalogManager;
 
   // Helper methods
   void logTransferStart(const std::string &engine);

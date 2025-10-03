@@ -13,11 +13,30 @@ void MariaDBDataTransfer::transferData(MYSQL *mariadbConn,
                                  table.table_name +
                                  " (status: " + table.status + ")");
 
-  if (table.status == "FULL_LOAD") {
+  // Check current status in database
+  pqxx::work txn(pgConn);
+  std::string checkQuery =
+      "SELECT status FROM metadata.catalog WHERE schema_name = '" +
+      escapeSQL(table.schema_name) + "' AND table_name = '" +
+      escapeSQL(table.table_name) + "'";
+  auto result = txn.exec(checkQuery);
+  txn.commit();
+
+  std::string currentStatus =
+      result.empty() ? "" : result[0][0].as<std::string>();
+
+  if (table.status == "FULL_LOAD" && currentStatus != "LISTENING_CHANGES") {
     processFullLoad(mariadbConn, pgConn, table);
-  } else if (table.status == "LISTENING_CHANGES") {
+  } else if (table.status == "LISTENING_CHANGES" &&
+             currentStatus != "LISTENING_CHANGES") {
     processIncrementalUpdates(mariadbConn, pgConn, table);
     processDeletes(mariadbConn, pgConn, table);
+  } else {
+    Logger::getInstance().info(LogCategory::TRANSFER,
+                               "Table " + table.schema_name + "." +
+                                   table.table_name +
+                                   " is already in final state (" +
+                                   currentStatus + "), skipping transfer");
   }
 }
 
@@ -27,6 +46,40 @@ void MariaDBDataTransfer::processFullLoad(MYSQL *mariadbConn,
   Logger::getInstance().info(LogCategory::TRANSFER,
                              "Processing FULL_LOAD for table: " +
                                  table.schema_name + "." + table.table_name);
+
+  // Limpiar datos existentes antes de comenzar la carga
+  std::string lowerSchema = table.schema_name;
+  std::transform(lowerSchema.begin(), lowerSchema.end(), lowerSchema.begin(),
+                 ::tolower);
+
+  try {
+    // Verificar si la tabla existe antes de intentar TRUNCATE
+    pqxx::work checkTxn(pgConn);
+    auto tableExists = checkTxn.query_value<bool>(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+        "WHERE table_schema = " +
+        checkTxn.quote(lowerSchema) +
+        " AND table_name = " + checkTxn.quote(table.table_name) + ")");
+    checkTxn.commit();
+
+    if (tableExists) {
+      pqxx::work cleanTxn(pgConn);
+      cleanTxn.exec("TRUNCATE TABLE \"" + lowerSchema + "\".\"" +
+                    table.table_name + "\"");
+      cleanTxn.commit();
+      Logger::getInstance().info(LogCategory::TRANSFER,
+                                 "Cleaned existing data from target table: " +
+                                     lowerSchema + "." + table.table_name);
+    } else {
+      Logger::getInstance().info(LogCategory::TRANSFER,
+                                 "Target table does not exist yet: " +
+                                     lowerSchema + "." + table.table_name);
+    }
+  } catch (const std::exception &e) {
+    Logger::getInstance().error(LogCategory::TRANSFER,
+                                "Error during table cleanup: " +
+                                    std::string(e.what()));
+  }
 
   // Get table columns
   MariaDBQueryExecutor queryExecutor;
@@ -117,6 +170,7 @@ void MariaDBDataTransfer::processFullLoad(MYSQL *mariadbConn,
   if (sourceCount == 0) {
     Logger::getInstance().info(LogCategory::TRANSFER,
                                "Source table is empty - marking as NO_DATA");
+
     updateTableStatus(pgConn, table.schema_name, table.table_name, "NO_DATA",
                       0);
     return;
@@ -160,7 +214,10 @@ void MariaDBDataTransfer::processFullLoad(MYSQL *mariadbConn,
                       table.table_name);
 
     totalProcessed += results.size();
-    offset += CHUNK_SIZE;
+    // Solo incrementar el offset si procesamos registros exitosamente
+    if (!results.empty()) {
+      offset += CHUNK_SIZE;
+    }
 
     Logger::getInstance().info(
         LogCategory::TRANSFER,
@@ -176,8 +233,88 @@ void MariaDBDataTransfer::processFullLoad(MYSQL *mariadbConn,
                                    table.table_name);
   }
 
+  // Verificar conteo final
+  try {
+    pqxx::work verifyTxn(pgConn);
+    auto finalCount =
+        verifyTxn.query_value<size_t>("SELECT COUNT(*) FROM \"" + lowerSchema +
+                                      "\".\"" + table.table_name + "\"");
+    verifyTxn.commit();
+
+    if (finalCount != sourceCount) {
+      Logger::getInstance().warning(
+          LogCategory::TRANSFER,
+          "Count mismatch after transfer for " + table.schema_name + "." +
+              table.table_name + ": source=" + std::to_string(sourceCount) +
+              ", target=" + std::to_string(finalCount));
+
+      // Si hay discrepancia, intentar corregir
+      if (finalCount > sourceCount) {
+        Logger::getInstance().info(
+            LogCategory::TRANSFER,
+            "Attempting to fix duplicate records in target table");
+
+        pqxx::work fixTxn(pgConn);
+        // Para tablas con PK
+        auto pkColumns = getPrimaryKeyColumnsFromPostgres(pgConn, lowerSchema,
+                                                          table.table_name);
+        if (!pkColumns.empty()) {
+          std::string pkList;
+          for (size_t i = 0; i < pkColumns.size(); ++i) {
+            if (i > 0)
+              pkList += ", ";
+            pkList += "\"" + pkColumns[i] + "\"";
+          }
+
+          // Eliminar duplicados manteniendo la primera ocurrencia
+          std::string dedupeQuery = "DELETE FROM \"" + lowerSchema + "\".\"" +
+                                    table.table_name + "\" a USING \"" +
+                                    lowerSchema + "\".\"" + table.table_name +
+                                    "\" b " + "WHERE a.ctid > b.ctid AND ";
+
+          for (size_t i = 0; i < pkColumns.size(); ++i) {
+            if (i > 0)
+              dedupeQuery += " AND ";
+            dedupeQuery +=
+                "a.\"" + pkColumns[i] + "\" = b.\"" + pkColumns[i] + "\"";
+          }
+
+          fixTxn.exec(dedupeQuery);
+        } else {
+          // Para tablas sin PK, usar todos los campos
+          std::string dedupeQuery =
+              "DELETE FROM \"" + lowerSchema + "\".\"" + table.table_name +
+              "\" a USING \"" + lowerSchema + "\".\"" + table.table_name +
+              "\" b " +
+              "WHERE a.ctid > b.ctid AND a.* IS NOT DISTINCT FROM b.*";
+          fixTxn.exec(dedupeQuery);
+        }
+        fixTxn.commit();
+
+        // Verificar nuevamente después de la corrección
+        pqxx::work verifyFixTxn(pgConn);
+        auto fixedCount = verifyFixTxn.query_value<size_t>(
+            "SELECT COUNT(*) FROM \"" + lowerSchema + "\".\"" +
+            table.table_name + "\"");
+        verifyFixTxn.commit();
+
+        Logger::getInstance().info(LogCategory::TRANSFER,
+                                   "After duplicate removal: target count=" +
+                                       std::to_string(fixedCount));
+      }
+    } else {
+      Logger::getInstance().info(LogCategory::TRANSFER,
+                                 "Count verification successful: " +
+                                     std::to_string(sourceCount) + " records");
+    }
+  } catch (const std::exception &e) {
+    Logger::getInstance().error(LogCategory::TRANSFER,
+                                "Error during count verification: " +
+                                    std::string(e.what()));
+  }
+
   updateTableStatus(pgConn, table.schema_name, table.table_name,
-                    "LISTENING_CHANGES", totalProcessed);
+                    "LISTENING_CHANGES", offset);
   Logger::getInstance().info(LogCategory::TRANSFER, "FULL_LOAD completed for " +
                                                         table.schema_name +
                                                         "." + table.table_name);
@@ -191,6 +328,25 @@ void MariaDBDataTransfer::processIncrementalUpdates(MYSQL *mariadbConn,
         LogCategory::TRANSFER,
         "No time column available for incremental updates in " +
             table.schema_name + "." + table.table_name);
+    return;
+  }
+
+  // Check if table is already fully synced
+  pqxx::work txn(pgConn);
+  std::string checkQuery =
+      "SELECT status FROM metadata.catalog WHERE schema_name = '" +
+      escapeSQL(table.schema_name) + "' AND table_name = '" +
+      escapeSQL(table.table_name) + "'";
+  auto result = txn.exec(checkQuery);
+  txn.commit();
+
+  if (!result.empty() &&
+      result[0][0].as<std::string>() == "LISTENING_CHANGES") {
+    Logger::getInstance().info(LogCategory::TRANSFER,
+                               "Table " + table.schema_name + "." +
+                                   table.table_name +
+                                   " is already in LISTENING_CHANGES state, "
+                                   "skipping incremental update");
     return;
   }
 
@@ -213,6 +369,20 @@ void MariaDBDataTransfer::processIncrementalUpdates(MYSQL *mariadbConn,
     Logger::getInstance().info(LogCategory::TRANSFER,
                                "No incremental updates found for " +
                                    table.schema_name + "." + table.table_name);
+
+    // Si la tabla usa OFFSET, actualizar el last_offset al count actual
+    if (table.pk_strategy == "OFFSET") {
+      size_t currentCount = queryExecutor.getTableRowCount(
+          mariadbConn, table.schema_name, table.table_name);
+      updateTableStatus(pgConn, table.schema_name, table.table_name,
+                        "LISTENING_CHANGES", currentCount);
+
+      Logger::getInstance().info(LogCategory::TRANSFER,
+                                 "Updated last_offset to current count (" +
+                                     std::to_string(currentCount) + ") for " +
+                                     table.schema_name + "." +
+                                     table.table_name);
+    }
     return;
   }
 
@@ -284,9 +454,11 @@ void MariaDBDataTransfer::updateTableStatus(pqxx::connection &pgConn,
         std::string pkStrategy = pkStrategyResult[0][0].as<std::string>();
 
         if (pkStrategy == "PK") {
-          updateQuery += ", last_processed_pk='" + std::to_string(offset) + "'";
+          updateQuery += ", last_processed_pk='" + std::to_string(offset) +
+                         "', last_offset=NULL";
         } else {
-          updateQuery += ", last_offset='" + std::to_string(offset) + "'";
+          updateQuery += ", last_offset='" + std::to_string(offset) +
+                         "', last_processed_pk=NULL";
         }
       } else {
         // Default to OFFSET if strategy not found
@@ -418,7 +590,7 @@ void MariaDBDataTransfer::performBulkUpsert(
             if (cleanValue == "NULL") {
               rowValues += "NULL";
             } else {
-              rowValues += "'" + escapeSQL(cleanValue) + "'";
+              rowValues += "E'" + escapeSQL(cleanValue) + "'";
             }
           }
         }
@@ -427,13 +599,20 @@ void MariaDBDataTransfer::performBulkUpsert(
       }
 
       if (!values.empty()) {
-        batchQuery += values[0];
-        for (size_t i = 1; i < values.size(); ++i) {
-          batchQuery += ", " + values[i];
+        std::string valuesClause;
+        for (size_t i = 0; i < values.size(); ++i) {
+          if (i > 0)
+            valuesClause += ",\n";
+          valuesClause += values[i];
         }
-        batchQuery += conflictClause;
 
-        txn.exec(batchQuery);
+        // Log the query for debugging
+        std::string finalQuery =
+            batchQuery + valuesClause + conflictClause + ";";
+        Logger::getInstance().info(LogCategory::TRANSFER,
+                                   "Executing query: " + finalQuery);
+
+        txn.exec(finalQuery);
       }
 
       Logger::getInstance().info(LogCategory::TRANSFER,
@@ -480,7 +659,7 @@ void MariaDBDataTransfer::performBulkInsert(
         insertQuery += ", ";
       insertQuery += "\"" + columnNames[i] + "\"";
     }
-    insertQuery += ") VALUES ";
+    insertQuery += ")";
 
     pqxx::work txn(pgConn);
     txn.exec("SET statement_timeout = '600s'");
@@ -514,7 +693,7 @@ void MariaDBDataTransfer::performBulkInsert(
             if (cleanValue == "NULL") {
               rowValues += "NULL";
             } else {
-              rowValues += "'" + escapeSQL(cleanValue) + "'";
+              rowValues += "E'" + escapeSQL(cleanValue) + "'";
             }
           }
         }
@@ -523,7 +702,7 @@ void MariaDBDataTransfer::performBulkInsert(
       }
 
       if (!values.empty()) {
-        batchQuery += values[0];
+        batchQuery += " VALUES " + values[0];
         for (size_t i = 1; i < values.size(); ++i) {
           batchQuery += ", " + values[i];
         }
@@ -553,13 +732,15 @@ std::string MariaDBDataTransfer::buildUpsertQuery(
   std::string query =
       "INSERT INTO \"" + schemaName + "\".\"" + tableName + "\" (";
 
-  for (size_t i = 0; i < columnNames.size(); ++i) {
-    if (i > 0)
+  bool first = true;
+  for (const auto &colName : columnNames) {
+    if (!first)
       query += ", ";
-    query += "\"" + columnNames[i] + "\"";
+    first = false;
+    query += "\"" + colName + "\"";
   }
-  query += ") VALUES ";
 
+  query += ")\nVALUES\n"; // Add newlines for better readability in logs
   return query;
 }
 
@@ -568,6 +749,7 @@ std::string MariaDBDataTransfer::buildUpsertConflictClause(
     const std::vector<std::string> &pkColumns) {
   std::string conflictClause = " ON CONFLICT (";
 
+  // Add PK columns to conflict clause
   for (size_t i = 0; i < pkColumns.size(); ++i) {
     if (i > 0)
       conflictClause += ", ";
@@ -575,11 +757,19 @@ std::string MariaDBDataTransfer::buildUpsertConflictClause(
   }
   conflictClause += ") DO UPDATE SET ";
 
-  for (size_t i = 0; i < columnNames.size(); ++i) {
-    if (i > 0)
+  // Add non-PK columns to update clause
+  bool first = true;
+  for (const auto &colName : columnNames) {
+    // Skip PK columns in the update clause
+    if (std::find(pkColumns.begin(), pkColumns.end(), colName) !=
+        pkColumns.end()) {
+      continue;
+    }
+    if (!first) {
       conflictClause += ", ";
-    conflictClause +=
-        "\"" + columnNames[i] + "\" = EXCLUDED.\"" + columnNames[i] + "\"";
+    }
+    first = false;
+    conflictClause += "\"" + colName + "\" = EXCLUDED.\"" + colName + "\"";
   }
 
   return conflictClause;
@@ -630,11 +820,36 @@ std::string MariaDBDataTransfer::escapeSQL(const std::string &value) {
   if (value.empty())
     return "";
 
-  std::string escaped = value;
-  size_t pos = 0;
-  while ((pos = escaped.find("'", pos)) != std::string::npos) {
-    escaped.replace(pos, 1, "''");
-    pos += 2;
+  std::string escaped;
+  escaped.reserve(value.length() * 2); // Pre-allocate space for efficiency
+
+  for (char c : value) {
+    switch (c) {
+    case '\'':
+      escaped += "''";
+      break;
+    case '\\':
+      escaped += "\\\\";
+      break;
+    case '\n':
+      escaped += "\\n";
+      break;
+    case '\r':
+      escaped += "\\r";
+      break;
+    case '\t':
+      escaped += "\\t";
+      break;
+    case '\b':
+      escaped += "\\b";
+      break;
+    case '\f':
+      escaped += "\\f";
+      break;
+    default:
+      escaped += c;
+    }
   }
+
   return escaped;
 }

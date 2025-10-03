@@ -2,6 +2,8 @@
 #define CATALOG_MANAGER_H
 
 #include "Config.h"
+#include "ConnectionStringParser.h"
+#include "DatabaseResourceWrappers.h"
 #include "logger.h"
 #include <algorithm>
 #include <cctype>
@@ -9,6 +11,7 @@
 #include <iostream>
 #include <memory>
 #include <mysql/mysql.h>
+#include <optional>
 #include <pqxx/pqxx>
 #include <set>
 #include <sql.h>
@@ -20,11 +23,6 @@
 enum class DBEngine { MARIADB, MSSQL, POSTGRES };
 
 enum class CleanupType { NON_EXISTENT, ORPHANED, INCONSISTENT_PAGINATION };
-
-struct ODBCHandles {
-  SQLHENV env;
-  SQLHDBC dbc;
-};
 
 struct CatalogTableInfo {
   std::string schemaName;
@@ -40,14 +38,7 @@ struct ValidationResults {
   int resetTables = 0;
 };
 
-struct MariaDBConnectionInfo {
-  std::string host;
-  std::string user;
-  std::string password;
-  std::string database;
-  std::string port;
-  unsigned int portNumber = 3306;
-};
+// Use ConnectionParsing::MariaDBConnectionInfo instead
 
 struct CatalogTableMetadata {
   std::string schemaName;
@@ -68,24 +59,9 @@ struct SyncResults {
   int newTables = 0;
 };
 
-struct MSSQLConnectionInfo {
-  std::string server;
-  std::string database;
-  std::string uid;
-  std::string pwd;
-  std::string driver;
-  std::string port;
-  std::string trustedConnection;
-};
+// Use ConnectionParsing::MSSQLConnectionInfo instead
 
-struct PostgresConnectionInfo {
-  std::string host;
-  std::string port;
-  std::string dbname;
-  std::string user;
-  std::string password;
-  std::string sslmode;
-};
+// Use ConnectionParsing::PostgresConnectionInfo instead
 
 class CatalogManager {
 public:
@@ -105,42 +81,42 @@ public:
 
 private:
   // Primary key detection functions
-  std::vector<std::string> detectPrimaryKeyColumns(MYSQL *conn,
-                                                   const std::string &schema,
-                                                   const std::string &table);
-  std::vector<std::string> detectCandidateColumns(MYSQL *conn,
-                                                  const std::string &schema,
-                                                  const std::string &table);
+  std::vector<std::string>
+  detectPrimaryKeyColumns(MYSQL *conn, const std::string &schema,
+                          const std::string &table) const;
+  std::vector<std::string>
+  detectCandidateColumns(MYSQL *conn, const std::string &schema,
+                         const std::string &table) const;
   std::string
   determinePKStrategy(const std::vector<std::string> &pkColumns,
-                      const std::vector<std::string> &candidateColumns);
+                      const std::vector<std::string> &candidateColumns) const;
 
   // MSSQL-specific functions
   std::vector<std::string>
   detectPrimaryKeyColumnsMSSQL(SQLHDBC conn, const std::string &schema,
-                               const std::string &table);
+                               const std::string &table) const;
   std::vector<std::string>
   detectCandidateColumnsMSSQL(SQLHDBC conn, const std::string &schema,
-                              const std::string &table);
+                              const std::string &table) const;
 
   // PostgreSQL-specific functions
   std::vector<std::string>
   detectPrimaryKeyColumnsPostgres(pqxx::connection &conn,
                                   const std::string &schema,
-                                  const std::string &table);
+                                  const std::string &table) const;
   std::vector<std::string>
   detectCandidateColumnsPostgres(pqxx::connection &conn,
                                  const std::string &schema,
-                                 const std::string &table);
+                                 const std::string &table) const;
 
   // Time column detection functions
   std::string detectTimeColumnMSSQL(SQLHDBC conn, const std::string &schema,
-                                    const std::string &table);
+                                    const std::string &table) const;
   std::string detectTimeColumnMariaDB(MYSQL *conn, const std::string &schema,
-                                      const std::string &table);
+                                      const std::string &table) const;
   std::string detectTimeColumnPostgres(pqxx::connection &conn,
                                        const std::string &schema,
-                                       const std::string &table);
+                                       const std::string &table) const;
 
   // Utility functions
   std::string extractDatabaseName(const std::string &connectionString);
@@ -169,17 +145,18 @@ private:
                            const std::string &schema, const std::string &table);
 
   // MariaDB sync helper functions
-  std::vector<std::string> getMariaDBConnections(pqxx::connection &pgConn);
-  MariaDBConnectionInfo
-  parseMariaDBConnectionString(const std::string &connectionString);
-  MYSQL *establishMariaDBConnection(const std::string &connectionString);
-  void configureMariaDBTimeouts(MYSQL *conn);
-  std::vector<std::vector<std::string>> discoverMariaDBTables(MYSQL *conn);
+  std::vector<std::string>
+  getMariaDBConnections(pqxx::connection &pgConn) const;
+  std::optional<MySQLConnection>
+  establishMariaDBConnection(const std::string &connectionString) const;
+  void configureMariaDBTimeouts(MYSQL *conn) const;
+  std::vector<std::vector<std::string>>
+  discoverMariaDBTables(MYSQL *conn) const;
   CatalogTableMetadata analyzeTableMetadata(MYSQL *conn,
                                             const std::string &schemaName,
-                                            const std::string &tableName);
+                                            const std::string &tableName) const;
   int64_t getTableSize(pqxx::connection &pgConn, const std::string &schemaName,
-                       const std::string &tableName);
+                       const std::string &tableName) const;
   void updateOrInsertTableMetadata(pqxx::connection &pgConn,
                                    const std::string &connectionString,
                                    const CatalogTableMetadata &metadata);
@@ -188,60 +165,59 @@ private:
   void logSyncResults(const SyncResults &results);
 
   // MSSQL sync helper functions
-  std::vector<std::string> getMSSQLConnections(pqxx::connection &pgConn);
-  MSSQLConnectionInfo
-  parseMSSQLConnectionString(const std::string &connectionString);
-  SQLHDBC establishMSSQLConnection(const std::string &connectionString);
-  std::vector<std::vector<std::string>> discoverMSSQLTables(SQLHDBC conn);
-  CatalogTableMetadata analyzeMSSQLTableMetadata(SQLHDBC conn,
-                                                 const std::string &schemaName,
-                                                 const std::string &tableName);
+  std::vector<std::string> getMSSQLConnections(pqxx::connection &pgConn) const;
+  std::optional<ODBCConnection>
+  establishMSSQLConnection(const std::string &connectionString) const;
+  std::vector<std::vector<std::string>> discoverMSSQLTables(SQLHDBC conn) const;
+  CatalogTableMetadata
+  analyzeMSSQLTableMetadata(SQLHDBC conn, const std::string &schemaName,
+                            const std::string &tableName) const;
   SyncResults processMSSQLConnection(pqxx::connection &pgConn,
                                      const std::string &connectionString);
 
   // PostgreSQL sync helper functions
-  std::vector<std::string> getPostgresConnections(pqxx::connection &pgConn);
-  PostgresConnectionInfo
-  parsePostgresConnectionString(const std::string &connectionString);
-  std::unique_ptr<pqxx::connection>
-  establishPostgresConnection(const PostgresConnectionInfo &connInfo);
+  std::vector<std::string>
+  getPostgresConnections(pqxx::connection &pgConn) const;
+  std::unique_ptr<pqxx::connection> establishPostgresConnection(
+      const ConnectionParsing::PostgresConnectionInfo &connInfo) const;
   std::vector<std::vector<std::string>>
-  discoverPostgresTables(pqxx::connection &conn);
+  discoverPostgresTables(pqxx::connection &conn) const;
   CatalogTableMetadata
   analyzePostgresTableMetadata(pqxx::connection &conn,
                                const std::string &schemaName,
-                               const std::string &tableName);
+                               const std::string &tableName) const;
   SyncResults processPostgresConnection(pqxx::connection &pgConn,
                                         const std::string &connectionString);
 
   // Unified utility functions
-  std::string escapeSQL(const std::string &input);
-  std::string columnsToJSON(const std::vector<std::string> &columns);
+  std::string escapeSQL(const std::string &input) const;
+  std::string columnsToJSON(const std::vector<std::string> &columns) const;
   std::string
   determinePKStrategy(const std::vector<std::string> &pkColumns,
                       const std::vector<std::string> &candidateColumns,
-                      const std::string &timeColumn);
+                      const std::string &timeColumn) const;
 
   // Unified detection functions
-  std::vector<std::string> detectPrimaryKeyColumns(DBEngine engine,
-                                                   void *connection,
-                                                   const std::string &schema,
-                                                   const std::string &table);
-  std::vector<std::string> detectCandidateColumns(DBEngine engine,
-                                                  void *connection,
-                                                  const std::string &schema,
-                                                  const std::string &table);
+  std::vector<std::string>
+  detectPrimaryKeyColumns(DBEngine engine, void *connection,
+                          const std::string &schema,
+                          const std::string &table) const;
+  std::vector<std::string>
+  detectCandidateColumns(DBEngine engine, void *connection,
+                         const std::string &schema,
+                         const std::string &table) const;
   std::string detectTimeColumn(DBEngine engine, void *connection,
                                const std::string &schema,
-                               const std::string &table);
+                               const std::string &table) const;
 
   // Unified utility functions
   std::pair<int, int> getColumnCounts(DBEngine engine,
                                       const std::string &connectionString,
                                       const std::string &schema,
-                                      const std::string &table);
+                                      const std::string &table) const;
   std::vector<std::vector<std::string>>
-  executeQuery(DBEngine engine, void *connection, const std::string &query);
+  executeQuery(DBEngine engine, void *connection,
+               const std::string &query) const;
 
   // Unified cleanup functions
   void cleanCatalogTables(DBEngine engine, pqxx::connection &pgConn,
@@ -256,18 +232,20 @@ private:
 
   // Legacy functions (for backward compatibility)
   std::vector<std::vector<std::string>>
-  executeQueryMariaDB(MYSQL *conn, const std::string &query);
+  executeQueryMariaDB(MYSQL *conn, const std::string &query) const;
   std::vector<std::vector<std::string>>
-  executeQueryMSSQL(SQLHDBC conn, const std::string &query);
+  executeQueryMSSQL(SQLHDBC conn, const std::string &query) const;
   std::pair<int, int>
   getColumnCountsMariaDB(const std::string &connectionString,
-                         const std::string &schema, const std::string &table);
+                         const std::string &schema,
+                         const std::string &table) const;
   std::pair<int, int> getColumnCountsMSSQL(const std::string &connectionString,
                                            const std::string &schema,
-                                           const std::string &table);
+                                           const std::string &table) const;
   std::pair<int, int>
   getColumnCountsPostgres(const std::string &connectionString,
-                          const std::string &schema, const std::string &table);
+                          const std::string &schema,
+                          const std::string &table) const;
 };
 
 #endif // CATALOG_MANAGER_H

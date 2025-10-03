@@ -652,8 +652,25 @@ void MSSQLDataTransfer::updateStatus(pqxx::connection &pgConn,
     pqxx::work txn(pgConn);
     std::string updateQuery =
         "UPDATE metadata.catalog SET status = '" + escapeSQL(status) + "'";
-    if (offset > 0) {
-      updateQuery += ", last_offset = " + std::to_string(offset);
+    // Get PK strategy to determine which field to update
+    auto pkStrategyResult = txn.exec(
+        "SELECT pk_strategy FROM metadata.catalog WHERE schema_name='" +
+        escapeSQL(schema_name) + "' AND table_name='" + escapeSQL(table_name) +
+        "'");
+
+    if (!pkStrategyResult.empty() && !pkStrategyResult[0][0].is_null()) {
+      std::string pkStrategy = pkStrategyResult[0][0].as<std::string>();
+      if (pkStrategy == "PK") {
+        updateQuery += ", last_processed_pk='" + std::to_string(offset) +
+                       "', last_offset=NULL";
+      } else {
+        updateQuery += ", last_offset='" + std::to_string(offset) +
+                       "', last_processed_pk=NULL";
+      }
+    } else {
+      // Default to OFFSET if strategy not found
+      updateQuery += ", last_offset='" + std::to_string(offset) +
+                     "', last_processed_pk=NULL";
     }
     updateQuery += " WHERE schema_name = '" + escapeSQL(schema_name) +
                    "' AND table_name = '" + escapeSQL(table_name) + "';";

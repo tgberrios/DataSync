@@ -23,13 +23,12 @@ public:
   ~MariaDBToPostgres() = default;
 
   static std::unordered_map<std::string, std::string> dataTypeMap;
-  static std::unordered_map<std::string, std::string> collationMap;
 
   // Public interface methods
   MYSQL *getMariaDBConnection(const std::string &connectionString);
   void setupTableTargetMariaDBToPostgres();
   void transferDataMariaDBToPostgres();
-  std::vector<TableInfo> getActiveTables(pqxx::connection &pgConn);
+  std::vector<TableInfo> getActiveTables(pqxx::connection &pgConn) const;
   void syncIndexesAndConstraints(const std::string &schema_name,
                                  const std::string &table_name,
                                  pqxx::connection &pgConn,

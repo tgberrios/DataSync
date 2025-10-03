@@ -30,8 +30,8 @@ private:
   std::atomic<bool> maintaining{false};
 
   // Components
-  CatalogManager *catalogManager;
-  MetricsCollector *metricsCollector;
+  std::unique_ptr<CatalogManager> catalogManager;
+  std::unique_ptr<MetricsCollector> metricsCollector;
 
   // Helper methods
   void logMaintenanceStart();
