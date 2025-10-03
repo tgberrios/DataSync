@@ -1110,23 +1110,69 @@ public:
         }
 
         // Si sourceCount < targetCount, hay registros eliminados en el origen
-        // Procesar DELETEs por Primary Key
         if (sourceCount < targetCount) {
           size_t deletedCount = targetCount - sourceCount;
           Logger::info(LogCategory::TRANSFER,
                        "Detected " + std::to_string(deletedCount) +
                            " deleted records in " + schema_name + "." +
                            table_name + " - processing deletes");
-          try {
-            processDeletesByPrimaryKey(schema_name, table_name, mariadbConn,
-                                       pgConn);
+
+          // Obtener estrategia PK para determinar el método de eliminación
+          std::string pkStrategy =
+              getPKStrategyFromCatalog(pgConn, schema_name, table_name);
+
+          if (pkStrategy == "PK") {
+            // Para tablas con PK, usar eliminación por PK
+            try {
+              processDeletesByPrimaryKey(schema_name, table_name, mariadbConn,
+                                         pgConn);
+              Logger::info(LogCategory::TRANSFER,
+                           "Delete processing completed for " + schema_name +
+                               "." + table_name);
+            } catch (const std::exception &e) {
+              Logger::error(LogCategory::TRANSFER,
+                            "ERROR processing deletes for " + schema_name +
+                                "." + table_name + ": " +
+                                std::string(e.what()));
+            }
+          } else {
+            // Para tablas OFFSET, hacer TRUNCATE + re-sincronización completa
             Logger::info(LogCategory::TRANSFER,
-                         "Delete processing completed for " + schema_name +
-                             "." + table_name);
-          } catch (const std::exception &e) {
-            Logger::error(LogCategory::TRANSFER,
-                          "ERROR processing deletes for " + schema_name + "." +
-                              table_name + ": " + std::string(e.what()));
+                         "OFFSET table with deletes detected - performing "
+                         "TRUNCATE + full resync for " +
+                             schema_name + "." + table_name);
+            try {
+              std::string lowerSchemaName = schema_name;
+              std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
+                             lowerSchemaName.begin(), ::tolower);
+
+              // TRUNCATE la tabla destino
+              pqxx::work truncateTxn(pgConn);
+              truncateTxn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
+                               table_name + "\" CASCADE;");
+              truncateTxn.commit();
+
+              // Resetear last_offset a 0 para re-sincronización completa
+              pqxx::work resetTxn(pgConn);
+              resetTxn.exec("UPDATE metadata.catalog SET last_offset='0' WHERE "
+                            "schema_name='" +
+                            escapeSQL(schema_name) + "' AND table_name='" +
+                            escapeSQL(table_name) + "';");
+              resetTxn.commit();
+
+              // Actualizar status a FULL_LOAD para procesamiento completo
+              updateStatus(pgConn, schema_name, table_name, "FULL_LOAD", 0);
+
+              Logger::info(
+                  LogCategory::TRANSFER,
+                  "OFFSET table truncated and reset for full resync: " +
+                      schema_name + "." + table_name);
+            } catch (const std::exception &e) {
+              Logger::error(LogCategory::TRANSFER,
+                            "ERROR truncating OFFSET table " + schema_name +
+                                "." + table_name + ": " +
+                                std::string(e.what()));
+            }
           }
 
           // Después de procesar DELETEs, verificar el nuevo conteo
@@ -1142,6 +1188,52 @@ public:
           Logger::info(LogCategory::TRANSFER,
                        "After deletes: source=" + std::to_string(sourceCount) +
                            ", target=" + std::to_string(targetCount));
+        }
+
+        // Para tablas OFFSET, si sourceCount > targetCount, hay nuevos INSERTs
+        // Necesitamos re-sincronizar completamente para mantener el orden
+        // correcto
+        std::string pkStrategy =
+            getPKStrategyFromCatalog(pgConn, schema_name, table_name);
+        if (pkStrategy == "OFFSET" && sourceCount > targetCount) {
+          Logger::info(LogCategory::TRANSFER,
+                       "OFFSET table with new INSERTs detected - performing "
+                       "full resync for " +
+                           schema_name + "." + table_name +
+                           " (source: " + std::to_string(sourceCount) +
+                           ", target: " + std::to_string(targetCount) + ")");
+          try {
+            std::string lowerSchemaName = schema_name;
+            std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
+                           lowerSchemaName.begin(), ::tolower);
+
+            // TRUNCATE la tabla destino
+            pqxx::work truncateTxn(pgConn);
+            truncateTxn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
+                             table_name + "\" CASCADE;");
+            truncateTxn.commit();
+
+            // Resetear last_offset a 0 para re-sincronización completa
+            pqxx::work resetTxn(pgConn);
+            resetTxn.exec("UPDATE metadata.catalog SET last_offset='0' WHERE "
+                          "schema_name='" +
+                          escapeSQL(schema_name) + "' AND table_name='" +
+                          escapeSQL(table_name) + "';");
+            resetTxn.commit();
+
+            // Actualizar status a FULL_LOAD para procesamiento completo
+            updateStatus(pgConn, schema_name, table_name, "FULL_LOAD", 0);
+
+            Logger::info(LogCategory::TRANSFER,
+                         "OFFSET table truncated and reset for full resync due "
+                         "to new INSERTs: " +
+                             schema_name + "." + table_name);
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::TRANSFER,
+                          "ERROR truncating OFFSET table for new INSERTs " +
+                              schema_name + "." + table_name + ": " +
+                              std::string(e.what()));
+          }
         }
 
         // std::cerr << "Source > Target, proceeding with data transfer..." <<
@@ -1279,9 +1371,7 @@ public:
                          std::to_string(SyncConfig::getChunkSize()));
 
         // Obtener información de PK del catálogo (fuera del loop para
-        // reutilizar)
-        std::string pkStrategy =
-            getPKStrategyFromCatalog(pgConn, schema_name, table_name);
+        // reutilizar) - pkStrategy ya fue declarado arriba
         std::vector<std::string> pkColumns =
             getPKColumnsFromCatalog(pgConn, schema_name, table_name);
         std::string lastProcessedPK =
@@ -2456,6 +2546,16 @@ private:
                             std::to_string(cleanValue.length()) + " bytes");
         cleanValue = cleanValue.substr(0, 1000);
       }
+    }
+
+    // DEBUG: Log column type and value for troubleshooting
+    if (upperType.find("TEXT") != std::string::npos &&
+        (cleanValue.find("BYTEA") != std::string::npos ||
+         cleanValue.find("BLOB") != std::string::npos)) {
+      Logger::warning(
+          LogCategory::TRANSFER, "cleanValueForPostgres",
+          "TEXT column with binary-like content detected - column type: " +
+              columnType + ", value preview: " + cleanValue.substr(0, 100));
     }
 
     // Para fechas, cualquier valor que no sea una fecha válida = NULL
