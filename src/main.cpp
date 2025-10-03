@@ -8,19 +8,7 @@ int main() {
     Logger::initialize();
     Logger::info(LogCategory::SYSTEM, "main", "DataSync started");
 
-    // Load configuration from config.json with error handling
-    try {
-      DatabaseConfig::loadFromConfig();
-      SyncConfig::loadFromConfig();
-      Logger::info(LogCategory::SYSTEM, "main",
-                   "Configuration loaded successfully");
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::SYSTEM, "main",
-                    "Failed to load configuration: " + std::string(e.what()));
-      std::cerr << "Configuration error: " << e.what() << std::endl;
-      Logger::shutdown();
-      return 1;
-    }
+    Logger::info(LogCategory::SYSTEM, "main", "Using hardcoded configuration");
 
     std::cout << "Running... :)" << std::endl;
 
