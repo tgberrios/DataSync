@@ -600,8 +600,8 @@ public:
                                   const std::string &timeColumn,
                                   const std::string &lastSyncTime) {
     try {
-      // If we don't have a reliable time column (or it's created_at which does
-      // not change on updates), fall back to comparing all rows by PK
+      // If we don't have a time column or lastSyncTime, fall back to comparing
+      // all rows by PK
 
       std::string lowerSchemaName = schema_name;
       std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
@@ -622,8 +622,7 @@ public:
 
       // 2. Obtener registros modificados desde MariaDB
       std::string selectQuery;
-      if (timeColumn.empty() || timeColumn == "created_at" ||
-          lastSyncTime.empty()) {
+      if (timeColumn.empty() || lastSyncTime.empty()) {
         selectQuery = "SELECT * FROM `" + schema_name + "`.`" + table_name +
                       "`"; // full compare by PK
       } else {
