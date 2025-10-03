@@ -411,24 +411,21 @@ public:
             std::string timeColumn =
                 detectTimeColumnMariaDB(mariaConn, schemaName, tableName);
 
-            // NUEVO: Detectar PK y columnas candidatas
+            // Detectar PK
             Logger::info(LogCategory::DATABASE,
                          "Detecting PK for table: " + schemaName + "." +
                              tableName);
             std::vector<std::string> pkColumns =
                 detectPrimaryKeyColumns(mariaConn, schemaName, tableName);
-            std::vector<std::string> candidateColumns =
-                detectCandidateColumns(mariaConn, schemaName, tableName);
-            std::string pkStrategy =
-                determinePKStrategy(pkColumns, candidateColumns);
+            std::string pkStrategy = determinePKStrategy(pkColumns);
             bool hasPK = !pkColumns.empty();
 
-            Logger::info(
-                LogCategory::DATABASE,
-                "PK Detection Results for " + schemaName + "." + tableName +
-                    ": hasPK=" + (hasPK ? "true" : "false") + ", pkStrategy=" +
-                    pkStrategy + ", pkColumns=" + columnsToJSON(pkColumns) +
-                    ", candidateColumns=" + columnsToJSON(candidateColumns));
+            Logger::info(LogCategory::DATABASE,
+                         "PK Detection Results for " + schemaName + "." +
+                             tableName +
+                             ": hasPK=" + (hasPK ? "true" : "false") +
+                             ", pkStrategy=" + pkStrategy +
+                             ", pkColumns=" + columnsToJSON(pkColumns));
 
             pqxx::work txn(pgConn);
 
@@ -453,12 +450,12 @@ public:
               tableSize = 0;
             }
             // Check if table already exists
-            auto existingCheck = txn.exec(
-                "SELECT last_sync_column, pk_columns, pk_strategy, "
-                "has_pk, candidate_columns, table_size FROM metadata.catalog "
-                "WHERE schema_name='" +
-                escapeSQL(schemaName) + "' AND table_name='" +
-                escapeSQL(tableName) + "' AND db_engine='MariaDB';");
+            auto existingCheck =
+                txn.exec("SELECT last_sync_column, pk_columns, pk_strategy, "
+                         "has_pk, table_size FROM metadata.catalog "
+                         "WHERE schema_name='" +
+                         escapeSQL(schemaName) + "' AND table_name='" +
+                         escapeSQL(tableName) + "' AND db_engine='MariaDB';");
 
             if (!existingCheck.empty()) {
               // Table exists, update if any column information changed
@@ -477,10 +474,6 @@ public:
               bool currentHasPK = existingCheck[0][3].is_null()
                                       ? false
                                       : existingCheck[0][3].as<bool>();
-              std::string currentCandidateColumns =
-                  existingCheck[0][4].is_null()
-                      ? ""
-                      : existingCheck[0][4].as<std::string>();
 
               bool needsUpdate = false;
               std::string updateQuery = "UPDATE metadata.catalog SET ";
@@ -514,14 +507,6 @@ public:
                 needsUpdate = true;
               }
 
-              if (currentCandidateColumns != columnsToJSON(candidateColumns)) {
-                if (needsUpdate)
-                  updateQuery += ", ";
-                updateQuery += "candidate_columns = '" +
-                               escapeSQL(columnsToJSON(candidateColumns)) + "'";
-                needsUpdate = true;
-              }
-
               // NUEVO: Actualizar table_size siempre para mantenerlo
               // sincronizado
               if (needsUpdate)
@@ -541,7 +526,7 @@ public:
                        "(schema_name, table_name, cluster_name, db_engine, "
                        "connection_string, last_sync_time, last_sync_column, "
                        "status, last_offset, active, pk_columns, pk_strategy, "
-                       "has_pk, candidate_columns, table_size) "
+                       "has_pk, table_size) "
                        "VALUES ('" +
                        escapeSQL(schemaName) + "', '" + escapeSQL(tableName) +
                        "', '', 'MariaDB', '" + escapeSQL(connStr) +
@@ -550,7 +535,6 @@ public:
                        escapeSQL(columnsToJSON(pkColumns)) + "', '" +
                        escapeSQL(pkStrategy) + "', " +
                        std::string(hasPK ? "true" : "false") + ", '" +
-                       escapeSQL(columnsToJSON(candidateColumns)) + "', " +
                        std::to_string(tableSize) + ");");
             }
             txn.commit();
@@ -693,13 +677,10 @@ public:
             std::string timeColumn =
                 detectTimeColumnMSSQL(dbc, schemaName, tableName);
 
-            // NUEVO: Detectar PK y columnas candidatas para MSSQL
+            // Detectar PK para MSSQL
             std::vector<std::string> pkColumns =
                 detectPrimaryKeyColumnsMSSQL(dbc, schemaName, tableName);
-            std::vector<std::string> candidateColumns =
-                detectCandidateColumnsMSSQL(dbc, schemaName, tableName);
-            std::string pkStrategy =
-                determinePKStrategy(pkColumns, candidateColumns);
+            std::string pkStrategy = determinePKStrategy(pkColumns);
             bool hasPK = !pkColumns.empty();
 
             // Obtener tamaño de la tabla para ordenamiento
@@ -720,12 +701,12 @@ public:
 
             pqxx::work txn(pgConn);
             // Verificar si la tabla ya existe (sin importar connection_string)
-            auto existingCheck = txn.exec(
-                "SELECT last_sync_column, pk_columns, pk_strategy, "
-                "has_pk, candidate_columns, table_size FROM metadata.catalog "
-                "WHERE schema_name='" +
-                escapeSQL(schemaName) + "' AND table_name='" +
-                escapeSQL(tableName) + "' AND db_engine='MSSQL';");
+            auto existingCheck =
+                txn.exec("SELECT last_sync_column, pk_columns, pk_strategy, "
+                         "has_pk, table_size FROM metadata.catalog "
+                         "WHERE schema_name='" +
+                         escapeSQL(schemaName) + "' AND table_name='" +
+                         escapeSQL(tableName) + "' AND db_engine='MSSQL';");
 
             if (!existingCheck.empty()) {
               // Tabla ya existe, verificar si timeColumn cambió
@@ -744,10 +725,6 @@ public:
               bool currentHasPK = existingCheck[0][3].is_null()
                                       ? false
                                       : existingCheck[0][3].as<bool>();
-              std::string currentCandidateColumns =
-                  existingCheck[0][4].is_null()
-                      ? ""
-                      : existingCheck[0][4].as<std::string>();
 
               bool needsUpdate = false;
               std::string updateQuery = "UPDATE metadata.catalog SET ";
@@ -781,14 +758,6 @@ public:
                 needsUpdate = true;
               }
 
-              if (currentCandidateColumns != columnsToJSON(candidateColumns)) {
-                if (needsUpdate)
-                  updateQuery += ", ";
-                updateQuery += "candidate_columns = '" +
-                               escapeSQL(columnsToJSON(candidateColumns)) + "'";
-                needsUpdate = true;
-              }
-
               // NUEVO: Actualizar table_size siempre para mantenerlo
               // sincronizado
               if (needsUpdate)
@@ -808,7 +777,7 @@ public:
                        "(schema_name, table_name, cluster_name, db_engine, "
                        "connection_string, last_sync_time, last_sync_column, "
                        "status, last_offset, active, pk_columns, pk_strategy, "
-                       "has_pk, candidate_columns, table_size) "
+                       "has_pk, table_size) "
                        "VALUES ('" +
                        escapeSQL(schemaName) + "', '" + escapeSQL(tableName) +
                        "', '', 'MSSQL', '" + escapeSQL(connStr) +
@@ -817,7 +786,6 @@ public:
                        escapeSQL(columnsToJSON(pkColumns)) + "', '" +
                        escapeSQL(pkStrategy) + "', " +
                        std::string(hasPK ? "true" : "false") + ", '" +
-                       escapeSQL(columnsToJSON(candidateColumns)) + "', " +
                        std::to_string(tableSize) + ");");
             }
             txn.commit();
@@ -920,15 +888,11 @@ public:
             std::string timeColumn =
                 detectTimeColumnPostgres(sourcePgConn, schemaName, tableName);
 
-            // NUEVO: Detectar PK y columnas candidatas para PostgreSQL
+            // Detectar PK para PostgreSQL
             std::vector<std::string> pkColumns =
                 detectPrimaryKeyColumnsPostgres(sourcePgConn, schemaName,
                                                 tableName);
-            std::vector<std::string> candidateColumns =
-                detectCandidateColumnsPostgres(sourcePgConn, schemaName,
-                                               tableName);
-            std::string pkStrategy =
-                determinePKStrategy(pkColumns, candidateColumns);
+            std::string pkStrategy = determinePKStrategy(pkColumns);
             bool hasPK = !pkColumns.empty();
 
             pqxx::work txn(pgConn);
@@ -976,10 +940,6 @@ public:
               bool currentHasPK = existingCheck[0][3].is_null()
                                       ? false
                                       : existingCheck[0][3].as<bool>();
-              std::string currentCandidateColumns =
-                  existingCheck[0][4].is_null()
-                      ? ""
-                      : existingCheck[0][4].as<std::string>();
 
               bool needsUpdate = false;
               std::string updateQuery = "UPDATE metadata.catalog SET ";
@@ -1013,14 +973,6 @@ public:
                 needsUpdate = true;
               }
 
-              if (currentCandidateColumns != columnsToJSON(candidateColumns)) {
-                if (needsUpdate)
-                  updateQuery += ", ";
-                updateQuery += "candidate_columns = '" +
-                               escapeSQL(columnsToJSON(candidateColumns)) + "'";
-                needsUpdate = true;
-              }
-
               // NUEVO: Actualizar table_size siempre para mantenerlo
               // sincronizado
               if (needsUpdate)
@@ -1040,7 +992,7 @@ public:
                        "(schema_name, table_name, cluster_name, db_engine, "
                        "connection_string, last_sync_time, last_sync_column, "
                        "status, last_offset, active, pk_columns, pk_strategy, "
-                       "has_pk, candidate_columns, table_size) "
+                       "has_pk, table_size) "
                        "VALUES ('" +
                        escapeSQL(schemaName) + "', '" + escapeSQL(tableName) +
                        "', '', 'PostgreSQL', '" + escapeSQL(connStr) +
@@ -1049,7 +1001,6 @@ public:
                        escapeSQL(columnsToJSON(pkColumns)) + "', '" +
                        escapeSQL(pkStrategy) + "', " +
                        std::string(hasPK ? "true" : "false") + ", '" +
-                       escapeSQL(columnsToJSON(candidateColumns)) + "', " +
                        std::to_string(tableSize) + ");");
             }
             txn.commit();
@@ -1079,7 +1030,7 @@ public:
   }
 
 private:
-  // NUEVAS FUNCIONES PARA DETECCIÓN DE PK Y COLUMNAS CANDIDATAS
+  // FUNCIONES PARA DETECCIÓN DE PK
   // NUEVAS FUNCIONES PARA OBTENER TAMAÑO DE TABLAS
   // NUEVAS FUNCIONES PARA DISASTER RECOVERY
 
@@ -1120,76 +1071,9 @@ private:
     return pkColumns;
   }
 
-  std::vector<std::string> detectCandidateColumns(MYSQL *conn,
-                                                  const std::string &schema,
-                                                  const std::string &table) {
-    std::vector<std::string> candidateColumns;
-    try {
-      std::string query = "SELECT COLUMN_NAME, DATA_TYPE, COLUMN_KEY, EXTRA "
-                          "FROM information_schema.COLUMNS "
-                          "WHERE TABLE_SCHEMA = '" +
-                          escapeSQL(schema) +
-                          "' "
-                          "AND TABLE_NAME = '" +
-                          escapeSQL(table) +
-                          "' "
-                          "ORDER BY CASE DATA_TYPE "
-                          "  WHEN 'int' THEN 1 "
-                          "  WHEN 'bigint' THEN 2 "
-                          "  WHEN 'varchar' THEN 3 "
-                          "  WHEN 'char' THEN 4 "
-                          "  WHEN 'timestamp' THEN 5 "
-                          "  WHEN 'datetime' THEN 6 "
-                          "  WHEN 'date' THEN 7 "
-                          "  ELSE 8 END, "
-                          "CASE COLUMN_KEY "
-                          "  WHEN 'PRI' THEN 1 "
-                          "  WHEN 'UNI' THEN 2 "
-                          "  WHEN 'MUL' THEN 3 "
-                          "  ELSE 4 END, "
-                          "CASE EXTRA "
-                          "  WHEN 'auto_increment' THEN 1 "
-                          "  ELSE 2 END;";
-
-      auto results = executeQueryMariaDB(conn, query);
-      for (const auto &row : results) {
-        if (row.size() >= 4 && !row[0].empty()) {
-          std::string columnName = row[0];
-          std::string dataType = row[1];
-          std::string columnKey = row[2];
-          std::string extra = row[3];
-
-          // Priorizar columnas candidatas para cursor-based pagination
-          if (dataType == "int" || dataType == "bigint" ||
-              dataType == "varchar" || dataType == "char" ||
-              dataType == "timestamp" || dataType == "datetime" ||
-              dataType == "date") {
-
-            // Prioridad: auto_increment > PRIMARY > UNIQUE > INDEX > otros
-            if (extra == "auto_increment" || columnKey == "PRI" ||
-                columnKey == "UNI" || columnKey == "MUL") {
-              candidateColumns.push_back(columnName);
-            }
-          }
-        }
-      }
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::DATABASE, "detectCandidateColumns",
-                    "ERROR detecting candidate columns: " +
-                        std::string(e.what()));
-    }
-    return candidateColumns;
-  }
-
-  std::string
-  determinePKStrategy(const std::vector<std::string> &pkColumns,
-                      const std::vector<std::string> &candidateColumns) {
+  std::string determinePKStrategy(const std::vector<std::string> &pkColumns) {
     if (!pkColumns.empty()) {
       return "PK"; // Tabla tiene PK real
-    } else if (!candidateColumns.empty()) {
-      // Si hay columnas candidatas, usar TEMPORAL_PK para cursor-based pagination
-      // Esto es más eficiente que OFFSET para tablas grandes
-      return "TEMPORAL_PK"; // Usar columnas candidatas para cursor-based pagination
     } else {
       return "OFFSET"; // Último recurso: OFFSET pagination
     }
@@ -1247,77 +1131,6 @@ private:
     return pkColumns;
   }
 
-  std::vector<std::string>
-  detectCandidateColumnsMSSQL(SQLHDBC conn, const std::string &schema,
-                              const std::string &table) {
-    std::vector<std::string> candidateColumns;
-    try {
-      std::string query =
-          "SELECT c.name AS COLUMN_NAME, t.name AS DATA_TYPE, "
-          "CASE WHEN i.is_primary_key = 1 THEN 'PRI' "
-          "     WHEN i.is_unique = 1 THEN 'UNI' "
-          "     WHEN i.index_id > 1 THEN 'MUL' "
-          "     ELSE '' END AS COLUMN_KEY, "
-          "CASE WHEN c.is_identity = 1 THEN 'auto_increment' ELSE '' END AS "
-          "EXTRA "
-          "FROM sys.columns c "
-          "INNER JOIN sys.tables t ON c.object_id = t.object_id "
-          "INNER JOIN sys.schemas s ON t.schema_id = s.schema_id "
-          "LEFT JOIN sys.index_columns ic ON c.object_id = ic.object_id AND "
-          "c.column_id = ic.column_id "
-          "LEFT JOIN sys.indexes i ON ic.object_id = i.object_id AND "
-          "ic.index_id = i.index_id "
-          "WHERE s.name = '" +
-          escapeSQL(schema) +
-          "' "
-          "AND t.name = '" +
-          escapeSQL(table) +
-          "' "
-          "ORDER BY CASE t.name "
-          "  WHEN 'int' THEN 1 "
-          "  WHEN 'bigint' THEN 2 "
-          "  WHEN 'varchar' THEN 3 "
-          "  WHEN 'char' THEN 4 "
-          "  WHEN 'datetime' THEN 5 "
-          "  WHEN 'timestamp' THEN 6 "
-          "  WHEN 'date' THEN 7 "
-          "  ELSE 8 END, "
-          "CASE WHEN i.is_primary_key = 1 THEN 1 "
-          "     WHEN i.is_unique = 1 THEN 2 "
-          "     WHEN i.index_id > 1 THEN 3 "
-          "     ELSE 4 END, "
-          "CASE WHEN c.is_identity = 1 THEN 1 ELSE 2 END;";
-
-      auto results = executeQueryMSSQL(conn, query);
-      for (const auto &row : results) {
-        if (row.size() >= 4 && !row[0].empty()) {
-          std::string columnName = row[0];
-          std::string dataType = row[1];
-          std::string columnKey = row[2];
-          std::string extra = row[3];
-
-          // Priorizar columnas candidatas para cursor-based pagination
-          if (dataType == "int" || dataType == "bigint" ||
-              dataType == "varchar" || dataType == "char" ||
-              dataType == "datetime" || dataType == "timestamp" ||
-              dataType == "date") {
-
-            // Prioridad: auto_increment > PRIMARY > UNIQUE > INDEX > otros
-            if (extra == "auto_increment" || columnKey == "PRI" ||
-                columnKey == "UNI" || columnKey == "MUL") {
-              candidateColumns.push_back(columnName);
-            }
-          }
-        }
-      }
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::DATABASE, "detectCandidateColumnsMSSQL",
-                    "ERROR detecting candidate columns: " +
-                        std::string(e.what()));
-    }
-    return candidateColumns;
-  }
-
   // FUNCIONES ESPECÍFICAS PARA POSTGRESQL
   std::vector<std::string>
   detectPrimaryKeyColumnsPostgres(pqxx::connection &conn,
@@ -1362,123 +1175,6 @@ private:
                         std::string(e.what()));
     }
     return pkColumns;
-  }
-
-  std::vector<std::string>
-  detectCandidateColumnsPostgres(pqxx::connection &conn,
-                                 const std::string &schema,
-                                 const std::string &table) {
-    std::vector<std::string> candidateColumns;
-    try {
-      std::string query =
-          "SELECT c.column_name, c.data_type, "
-          "CASE WHEN pk.column_name IS NOT NULL THEN 'PRI' "
-          "     WHEN u.column_name IS NOT NULL THEN 'UNI' "
-          "     WHEN i.column_name IS NOT NULL THEN 'MUL' "
-          "     ELSE '' END AS column_key, "
-          "CASE WHEN c.column_default LIKE 'nextval%' THEN 'auto_increment' "
-          "ELSE '' END AS extra "
-          "FROM information_schema.columns c "
-          "LEFT JOIN ( "
-          "  SELECT kcu.column_name "
-          "  FROM information_schema.table_constraints tc "
-          "  INNER JOIN information_schema.key_column_usage kcu "
-          "  ON tc.constraint_name = kcu.constraint_name "
-          "  WHERE tc.table_schema = '" +
-          escapeSQL(schema) +
-          "' "
-          "  AND tc.table_name = '" +
-          escapeSQL(table) +
-          "' "
-          "  AND tc.constraint_type = 'PRIMARY KEY' "
-          ") pk ON c.column_name = pk.column_name "
-          "LEFT JOIN ( "
-          "  SELECT kcu.column_name "
-          "  FROM information_schema.table_constraints tc "
-          "  INNER JOIN information_schema.key_column_usage kcu "
-          "  ON tc.constraint_name = kcu.constraint_name "
-          "  WHERE tc.table_schema = '" +
-          escapeSQL(schema) +
-          "' "
-          "  AND tc.table_name = '" +
-          escapeSQL(table) +
-          "' "
-          "  AND tc.constraint_type = 'UNIQUE' "
-          ") u ON c.column_name = u.column_name "
-          "LEFT JOIN ( "
-          "  SELECT kcu.column_name "
-          "  FROM information_schema.table_constraints tc "
-          "  INNER JOIN information_schema.key_column_usage kcu "
-          "  ON tc.constraint_name = kcu.constraint_name "
-          "  WHERE tc.table_schema = '" +
-          escapeSQL(schema) +
-          "' "
-          "  AND tc.table_name = '" +
-          escapeSQL(table) +
-          "' "
-          "  AND tc.constraint_type = 'FOREIGN KEY' "
-          ") i ON c.column_name = i.column_name "
-          "WHERE c.table_schema = '" +
-          escapeSQL(schema) +
-          "' "
-          "AND c.table_name = '" +
-          escapeSQL(table) +
-          "' "
-          "ORDER BY CASE c.data_type "
-          "  WHEN 'integer' THEN 1 "
-          "  WHEN 'bigint' THEN 2 "
-          "  WHEN 'character varying' THEN 3 "
-          "  WHEN 'character' THEN 4 "
-          "  WHEN 'timestamp with time zone' THEN 5 "
-          "  WHEN 'timestamp without time zone' THEN 6 "
-          "  WHEN 'date' THEN 7 "
-          "  ELSE 8 END, "
-          "CASE WHEN pk.column_name IS NOT NULL THEN 1 "
-          "     WHEN u.column_name IS NOT NULL THEN 2 "
-          "     WHEN i.column_name IS NOT NULL THEN 3 "
-          "     ELSE 4 END, "
-          "CASE WHEN c.column_default LIKE 'nextval%' THEN 1 ELSE 2 END;";
-
-      pqxx::work txn(conn);
-      auto results = txn.exec(query);
-      txn.commit();
-
-      for (const auto &row : results) {
-        if (row.size() >= 4 && !row[0].is_null()) {
-          std::string columnName = row[0].as<std::string>();
-          std::string dataType = row[1].as<std::string>();
-          std::string columnKey = row[2].as<std::string>();
-          std::string extra = row[3].as<std::string>();
-
-          // Priorizar columnas candidatas para cursor-based pagination
-          if (dataType == "integer" || dataType == "bigint" ||
-              dataType == "character varying" || dataType == "character" ||
-              dataType.find("timestamp") != std::string::npos ||
-              dataType == "date") {
-
-            // Prioridad: auto_increment > PRIMARY > UNIQUE > INDEX > otros
-            if (extra == "auto_increment" || columnKey == "PRI" ||
-                columnKey == "UNI" || columnKey == "MUL") {
-              candidateColumns.push_back(columnName);
-            }
-          }
-        }
-      }
-    } catch (const pqxx::sql_error &e) {
-      Logger::error(
-          LogCategory::DATABASE, "detectCandidateColumnsPostgres",
-          "SQL ERROR detecting candidate columns: " + std::string(e.what()) +
-              " [SQL State: " + e.sqlstate() + "]");
-    } catch (const pqxx::broken_connection &e) {
-      Logger::error(LogCategory::DATABASE, "detectCandidateColumnsPostgres",
-                    "CONNECTION ERROR detecting candidate columns: " +
-                        std::string(e.what()));
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::DATABASE, "detectCandidateColumnsPostgres",
-                    "ERROR detecting candidate columns: " +
-                        std::string(e.what()));
-    }
-    return candidateColumns;
   }
 
   std::string detectTimeColumnMSSQL(SQLHDBC conn, const std::string &schema,
