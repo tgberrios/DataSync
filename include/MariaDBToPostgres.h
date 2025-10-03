@@ -1465,10 +1465,9 @@ public:
           // Update targetCount and currentOffset based on actual processed rows
           targetCount += rowsInserted;
 
-          // Solo incrementar currentOffset para tablas sin PK ni columnas
-          // candidatas (OFFSET pagination) Para tablas con PK o TEMPORAL_PK se
-          // usa cursor-based pagination con last_processed_pk
-          if (pkStrategy != "PK" && pkStrategy != "TEMPORAL_PK") {
+          // Solo incrementar currentOffset para tablas sin PK (OFFSET
+          // pagination)
+          if (pkStrategy != "PK") {
             currentOffset += rowsInserted;
           }
           Logger::info(
@@ -2556,31 +2555,6 @@ private:
                         std::string(e.what()));
     }
     return ""; // Fallback
-  }
-
-  std::vector<std::string>
-  getCandidateColumnsFromCatalog(pqxx::connection &pgConn,
-                                 const std::string &schema_name,
-                                 const std::string &table_name) {
-    std::vector<std::string> candidateColumns;
-    try {
-      pqxx::work txn(pgConn);
-      auto result = txn.exec("SELECT candidate_columns FROM metadata.catalog "
-                             "WHERE schema_name='" +
-                             escapeSQL(schema_name) + "' AND table_name='" +
-                             escapeSQL(table_name) + "'");
-      txn.commit();
-
-      if (!result.empty() && !result[0][0].is_null()) {
-        std::string candidateColumnsJSON = result[0][0].as<std::string>();
-        candidateColumns = parseJSONArray(candidateColumnsJSON);
-      }
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::TRANSFER, "getCandidateColumnsFromCatalog",
-                    "Error getting candidate columns: " +
-                        std::string(e.what()));
-    }
-    return candidateColumns;
   }
 
   std::vector<std::string> parseJSONArray(const std::string &jsonArray) {
