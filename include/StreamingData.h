@@ -8,7 +8,6 @@
 #include "MSSQLToPostgres.h"
 #include "MariaDBToPostgres.h"
 #include "MetricsCollector.h"
-#include "PostgresToPostgres.h"
 #include "catalog_manager.h"
 #include "logger.h"
 #include <atomic>
@@ -54,10 +53,10 @@ public:
 
     // Launch transfer threads immediately
     Logger::info(LogCategory::MONITORING,
-                 "Launching transfer threads (MariaDB, MSSQL, PostgreSQL)");
+                 "Launching transfer threads (MariaDB, MSSQL)");
     threads.emplace_back(&StreamingData::mariaTransferThread, this);
     threads.emplace_back(&StreamingData::mssqlTransferThread, this);
-    threads.emplace_back(&StreamingData::postgresTransferThread, this);
+
     Logger::info(LogCategory::MONITORING,
                  "Transfer threads launched successfully");
 
@@ -115,7 +114,6 @@ private:
   // Database objects
   MariaDBToPostgres mariaToPg;
   MSSQLToPostgres mssqlToPg;
-  PostgresToPostgres pgToPg;
   CatalogManager catalogManager;
   DataQuality dataQuality;
 
@@ -330,19 +328,6 @@ private:
                           std::string(e.what()) + " - MSSQL sync may fail");
       }
 
-      try {
-        Logger::info(LogCategory::MONITORING,
-                     "Setting up PostgreSQL target tables");
-        pgToPg.setupTableTargetPostgresToPostgres();
-        Logger::info(LogCategory::MONITORING,
-                     "PostgreSQL target tables setup completed");
-      } catch (const std::exception &e) {
-        Logger::error(LogCategory::MONITORING,
-                      "CRITICAL ERROR in PostgreSQL table setup: " +
-                          std::string(e.what()) +
-                          " - PostgreSQL sync may fail");
-      }
-
       Logger::info(LogCategory::MONITORING,
                    "System initialization thread completed successfully");
     } catch (const std::exception &e) {
@@ -394,23 +379,6 @@ private:
                 LogCategory::MONITORING,
                 "ERROR in MSSQL catalog sync: " + std::string(e.what()) +
                     " - MSSQL catalog may be out of sync");
-            std::lock_guard<std::mutex> lock(exceptionMutex);
-            exceptions.push_back(std::current_exception());
-          }
-        });
-
-        syncThreads.emplace_back([this, &exceptions, &exceptionMutex]() {
-          try {
-            Logger::info(LogCategory::MONITORING,
-                         "Starting PostgreSQL catalog sync");
-            catalogManager.syncCatalogPostgresToPostgres();
-            Logger::info(LogCategory::MONITORING,
-                         "PostgreSQL catalog sync completed successfully");
-          } catch (const std::exception &e) {
-            Logger::error(
-                LogCategory::MONITORING,
-                "ERROR in PostgreSQL catalog sync: " + std::string(e.what()) +
-                    " - PostgreSQL catalog may be out of sync");
             std::lock_guard<std::mutex> lock(exceptionMutex);
             exceptions.push_back(std::current_exception());
           }
@@ -531,39 +499,6 @@ private:
           std::max(5, static_cast<int>(SyncConfig::getSyncInterval() / 4))));
     }
     Logger::info(LogCategory::MONITORING, "MSSQL transfer thread stopped");
-  }
-
-  void postgresTransferThread() {
-    Logger::info(LogCategory::MONITORING, "PostgreSQL transfer thread started");
-    while (running) {
-      try {
-        Logger::info(LogCategory::MONITORING,
-                     "Starting PostgreSQL transfer cycle - sync interval: " +
-                         std::to_string(SyncConfig::getSyncInterval()) +
-                         " seconds");
-
-        auto startTime = std::chrono::high_resolution_clock::now();
-        pgToPg.transferDataPostgresToPostgres();
-        auto endTime = std::chrono::high_resolution_clock::now();
-
-        auto duration = std::chrono::duration_cast<std::chrono::seconds>(
-            endTime - startTime);
-        Logger::info(LogCategory::MONITORING,
-                     "PostgreSQL transfer cycle completed successfully in " +
-                         std::to_string(duration.count()) + " seconds");
-      } catch (const std::exception &e) {
-        Logger::error(LogCategory::MONITORING,
-                      "CRITICAL ERROR in PostgreSQL transfer cycle: " +
-                          std::string(e.what()) +
-                          " - PostgreSQL data sync failed, retrying in " +
-                          std::to_string(SyncConfig::getSyncInterval()) +
-                          " seconds");
-      }
-
-      std::this_thread::sleep_for(std::chrono::seconds(
-          std::max(5, static_cast<int>(SyncConfig::getSyncInterval() / 4))));
-    }
-    Logger::info(LogCategory::MONITORING, "PostgreSQL transfer thread stopped");
   }
 
   void qualityThread() {
@@ -762,19 +697,6 @@ private:
                         "ERROR in MSSQL catalog sync maintenance: " +
                             std::string(e.what()) +
                             " - MSSQL catalog may be out of sync");
-        }
-
-        try {
-          Logger::info(LogCategory::MONITORING,
-                       "Performing PostgreSQL catalog sync maintenance");
-          catalogManager.syncCatalogPostgresToPostgres();
-          Logger::info(LogCategory::MONITORING,
-                       "PostgreSQL catalog sync maintenance completed");
-        } catch (const std::exception &e) {
-          Logger::error(LogCategory::MONITORING,
-                        "ERROR in PostgreSQL catalog sync maintenance: " +
-                            std::string(e.what()) +
-                            " - PostgreSQL catalog may be out of sync");
         }
 
         // Cleanup
