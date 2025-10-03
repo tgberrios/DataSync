@@ -112,9 +112,18 @@ app.get("/api/catalog", async (req, res) => {
     const total = parseInt(countResult.rows[0].count);
 
     paramCount++;
-    const dataQuery = `SELECT * FROM metadata.catalog ${whereClause} ORDER BY schema_name, table_name LIMIT $${paramCount} OFFSET $${
-      paramCount + 1
-    }`;
+    const dataQuery = `SELECT * FROM metadata.catalog ${whereClause} ORDER BY 
+      CASE 
+        WHEN status = 'LISTENING_CHANGES' THEN 1
+        WHEN status = 'ERROR' THEN 2
+        WHEN status = 'NO_DATA' THEN 3
+        WHEN status = 'SKIP' THEN 4
+        ELSE 5
+      END,
+      cluster_name, 
+      schema_name, 
+      table_name 
+      LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
     queryParams.push(limit, offset);
 
     const result = await pool.query(dataQuery, queryParams);
@@ -819,11 +828,14 @@ app.get("/api/governance/data", async (req, res) => {
         ? "WHERE " + whereConditions.join(" AND ")
         : "";
 
-    // Query principal
+    // Query principal - obtener db_engine de catalog o asumir PostgreSQL
     const result = await pool.query(
       `
-      SELECT *
-      FROM metadata.data_governance_catalog
+      SELECT 
+        dgc.*,
+        COALESCE(c.db_engine, 'PostgreSQL') as db_engine
+      FROM metadata.data_governance_catalog dgc
+      LEFT JOIN metadata.catalog c ON dgc.schema_name = c.schema_name AND dgc.table_name = c.table_name
       ${whereClause}
       ORDER BY last_analyzed DESC NULLS LAST
       LIMIT $${paramCount} OFFSET $${paramCount + 1}
@@ -973,8 +985,12 @@ app.get("/api/logs", async (req, res) => {
       search = "",
       startDate = "",
       endDate = "",
+      logType = "main", // "main" or "errors"
     } = req.query;
-    const logFilePath = path.join(process.cwd(), "..", "DataSync.log");
+
+    const logFileName =
+      logType === "errors" ? "DataSync_Errors.log" : "DataSync.log";
+    const logFilePath = path.join(process.cwd(), "..", logFileName);
 
     // Verificar si el archivo existe
     if (!fs.existsSync(logFilePath)) {
@@ -1086,12 +1102,14 @@ app.get("/api/logs", async (req, res) => {
       totalLines: filteredLines.length,
       filePath: logFilePath,
       lastModified: fs.statSync(logFilePath).mtime,
+      logType: logType,
       filters: {
         level,
         category,
         search,
         startDate,
         endDate,
+        logType,
       },
     });
   } catch (err) {
@@ -1106,7 +1124,10 @@ app.get("/api/logs", async (req, res) => {
 // Endpoint para obtener información del archivo de logs
 app.get("/api/logs/info", async (req, res) => {
   try {
-    const logFilePath = path.join(process.cwd(), "..", "DataSync.log");
+    const { logType = "main" } = req.query;
+    const logFileName =
+      logType === "errors" ? "DataSync_Errors.log" : "DataSync.log";
+    const logFilePath = path.join(process.cwd(), "..", logFileName);
 
     if (!fs.existsSync(logFilePath)) {
       return res.json({
@@ -1128,6 +1149,7 @@ app.get("/api/logs/info", async (req, res) => {
       totalLines: totalLines,
       lastModified: stats.mtime,
       created: stats.birthtime,
+      logType: logType,
     });
   } catch (err) {
     console.error("Error getting log info:", err);
@@ -1245,35 +1267,73 @@ app.get("/api/logs/stats", async (req, res) => {
 // Endpoint para limpiar logs
 app.delete("/api/logs", async (req, res) => {
   try {
+    const { logType = "both" } = req.query; // "main", "errors", or "both"
     const logDir = path.join(process.cwd(), "..");
-    const logFilePath = path.join(logDir, "DataSync.log");
 
     let totalClearedSize = 0;
     let clearedFiles = [];
 
-    // Clear the main log file
-    if (fs.existsSync(logFilePath)) {
-      const stats = fs.statSync(logFilePath);
-      totalClearedSize += stats.size;
-      clearedFiles.push("DataSync.log");
-      fs.writeFileSync(logFilePath, "");
+    // Clear main log file
+    if (logType === "main" || logType === "both") {
+      const mainLogPath = path.join(logDir, "DataSync.log");
+      if (fs.existsSync(mainLogPath)) {
+        const stats = fs.statSync(mainLogPath);
+        totalClearedSize += stats.size;
+        clearedFiles.push("DataSync.log");
+        fs.writeFileSync(mainLogPath, "");
+      }
+
+      // Find and delete rotated main log files
+      const files = fs.readdirSync(logDir);
+      const rotatedMainLogFiles = files.filter((file) =>
+        file.match(/^DataSync\.log\.\d+$/)
+      );
+
+      for (const rotatedFile of rotatedMainLogFiles) {
+        const rotatedFilePath = path.join(logDir, rotatedFile);
+        try {
+          const stats = fs.statSync(rotatedFilePath);
+          totalClearedSize += stats.size;
+          clearedFiles.push(rotatedFile);
+          fs.unlinkSync(rotatedFilePath);
+        } catch (err) {
+          console.warn(
+            `Warning: Could not delete ${rotatedFile}:`,
+            err.message
+          );
+        }
+      }
     }
 
-    // Find and delete rotated log files (DataSync.log.1, DataSync.log.2, etc.)
-    const files = fs.readdirSync(logDir);
-    const rotatedLogFiles = files.filter((file) =>
-      file.match(/^DataSync\.log\.\d+$/)
-    );
-
-    for (const rotatedFile of rotatedLogFiles) {
-      const rotatedFilePath = path.join(logDir, rotatedFile);
-      try {
-        const stats = fs.statSync(rotatedFilePath);
+    // Clear error log file
+    if (logType === "errors" || logType === "both") {
+      const errorLogPath = path.join(logDir, "DataSync_Errors.log");
+      if (fs.existsSync(errorLogPath)) {
+        const stats = fs.statSync(errorLogPath);
         totalClearedSize += stats.size;
-        clearedFiles.push(rotatedFile);
-        fs.unlinkSync(rotatedFilePath);
-      } catch (err) {
-        console.warn(`Warning: Could not delete ${rotatedFile}:`, err.message);
+        clearedFiles.push("DataSync_Errors.log");
+        fs.writeFileSync(errorLogPath, "");
+      }
+
+      // Find and delete rotated error log files
+      const files = fs.readdirSync(logDir);
+      const rotatedErrorLogFiles = files.filter((file) =>
+        file.match(/^DataSync_Errors\.log\.\d+$/)
+      );
+
+      for (const rotatedFile of rotatedErrorLogFiles) {
+        const rotatedFilePath = path.join(logDir, rotatedFile);
+        try {
+          const stats = fs.statSync(rotatedFilePath);
+          totalClearedSize += stats.size;
+          clearedFiles.push(rotatedFile);
+          fs.unlinkSync(rotatedFilePath);
+        } catch (err) {
+          console.warn(
+            `Warning: Could not delete ${rotatedFile}:`,
+            err.message
+          );
+        }
       }
     }
 
@@ -1307,7 +1367,7 @@ app.get("/api/dashboard/currently-processing", async (req, res) => {
         processed_at
       FROM metadata.processing_log
       WHERE processed_at > NOW() - INTERVAL '5 minutes'
-      ORDER BY processed_at DESC
+      ORDER BY processed_at ASC
       LIMIT 1
     `);
 
@@ -1318,27 +1378,14 @@ app.get("/api/dashboard/currently-processing", async (req, res) => {
     const processingTable = result.rows[0];
 
     // Hacer COUNT de la tabla que se está procesando
+    // Todas las consultas se ejecutan en PostgreSQL, usar sintaxis de PostgreSQL
     let countResult;
     try {
-      if (processingTable.db_engine === "MariaDB") {
-        // Para MariaDB, usar backticks para case-sensitive names
-        countResult = await pool.query(`
-          SELECT COUNT(*) as total_records
-          FROM \`${processingTable.schema_name}\`.\`${processingTable.table_name}\`
-        `);
-      } else if (processingTable.db_engine === "MSSQL") {
-        // Para MSSQL, usar brackets para case-sensitive names
-        countResult = await pool.query(`
-          SELECT COUNT(*) as total_records
-          FROM [${processingTable.schema_name}].[${processingTable.table_name}]
-        `);
-      } else {
-        // Para PostgreSQL, usar comillas dobles para case-sensitive names
-        countResult = await pool.query(`
-          SELECT COUNT(*) as total_records
-          FROM "${processingTable.schema_name}"."${processingTable.table_name}"
-        `);
-      }
+      // Para todas las bases de datos, usar sintaxis: schema."TableName"
+      countResult = await pool.query(`
+        SELECT COUNT(*) as total_records
+        FROM ${processingTable.schema_name}."${processingTable.table_name}"
+      `);
     } catch (countError) {
       console.warn(
         `Could not get count for ${processingTable.schema_name}.${processingTable.table_name}:`,
@@ -1479,22 +1526,26 @@ app.get("/api/monitor/processing-logs", async (req, res) => {
     const total = parseInt(countResult.rows[0].total);
     const totalPages = Math.ceil(total / limit);
 
-    // Get paginated data
+    // Get paginated data with pk_strategy from catalog
     const result = await pool.query(
       `
       SELECT 
-        id,
-        schema_name,
-        table_name,
-        db_engine,
-        old_offset,
-        new_offset,
-        old_pk,
-        new_pk,
-        status,
-        processed_at
-      FROM metadata.processing_log
-      ORDER BY processed_at ASC
+        pl.id,
+        pl.schema_name,
+        pl.table_name,
+        pl.db_engine,
+        pl.old_offset,
+        pl.new_offset,
+        pl.old_pk,
+        pl.new_pk,
+        pl.status,
+        pl.processed_at,
+        c.pk_strategy
+      FROM metadata.processing_log pl
+      LEFT JOIN metadata.catalog c ON pl.schema_name = c.schema_name 
+        AND pl.table_name = c.table_name 
+        AND pl.db_engine = c.db_engine
+      ORDER BY pl.processed_at ASC
       LIMIT $1 OFFSET $2
     `,
       [limit, offset]

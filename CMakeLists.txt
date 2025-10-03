@@ -27,10 +27,43 @@ add_executable(DataSync
     src/main.cpp 
     src/Config.cpp 
     src/logger.cpp 
+    src/LogFormatter.cpp
+    src/LogFileManager.cpp
+    src/LogConfigManager.cpp
     src/DataGovernance.cpp 
+    src/DataClassifier.cpp 
+    src/DataQualityCalculator.cpp 
     src/DDLExporter.cpp 
+    src/DatabaseConnectionManager.cpp
+    src/DDLFileManager.cpp
+    src/DDLExporterInterface.cpp
+    src/MariaDBDDLExporter.cpp
+    src/PostgreSQLDDLExporter.cpp
+    src/MSSQLDDLExporter.cpp
     src/MetricsCollector.cpp 
+    src/TransferMetricsData.cpp
+    src/MetricsDatabaseManager.cpp
+    src/MetricsCalculator.cpp
+    src/MetricsReporter.cpp
     src/DataQuality.cpp
+    src/catalog_manager.cpp
+    src/StreamingData.cpp
+    src/ThreadManager.cpp
+    src/ConfigManager.cpp
+    src/TransferOrchestrator.cpp
+    src/MonitoringService.cpp
+    src/MaintenanceService.cpp
+    src/MariaDBToPostgres.cpp
+    src/MariaDBConnectionManager.cpp
+    src/MariaDBQueryExecutor.cpp
+    src/MariaDBDataValidator.cpp
+    src/MariaDBDataTransfer.cpp
+    src/MSSQLToPostgres.cpp
+    src/MSSQLConnectionManager.cpp
+    src/MSSQLQueryExecutor.cpp
+    src/MSSQLDataValidator.cpp
+    src/MSSQLDataTransfer.cpp
+    src/MSSQLTableSetup.cpp
 )
 
 # Configurar para que el ejecutable se genere en el directorio raíz

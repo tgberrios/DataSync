@@ -127,9 +127,12 @@ const ProcessingItem = styled.div`
   }
 `;
 
-const ProcessingSummary = styled.div`
+const ProcessingSummary = styled.div<{ $showOffset: boolean; $showPK: boolean }>`
   display: grid;
-  grid-template-columns: 120px 120px 150px 1fr 140px 140px 140px 140px;
+  grid-template-columns: 120px 120px 150px 1fr ${props => 
+    (props.$showOffset ? '140px 140px ' : '') + 
+    (props.$showPK ? '140px 140px' : '')
+  };
   align-items: center;
   padding: 12px 15px;
   cursor: pointer;
@@ -250,26 +253,27 @@ const PaginationInfo = styled.div`
 const LiveChanges = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [processings, setProcessings] = useState<any[]>([]);
+  const [allProcessings, setAllProcessings] = useState<any[]>([]);
   const [stats, setStats] = useState<any>({});
   const [openProcessingId, setOpenProcessingId] = useState<number | null>(null);
   const [isPaused, setIsPaused] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [engineFilter, setEngineFilter] = useState('ALL');
+  const [strategyFilter, setStrategyFilter] = useState('ALL');
   const [currentPage, setCurrentPage] = useState(1);
   const [pagination, setPagination] = useState<any>({});
+  const itemsPerPage = 20;
 
   useEffect(() => {
     const fetchData = async () => {
       try {
         setError(null);
         const [processingsResponse, statsData] = await Promise.all([
-          monitorApi.getProcessingLogs(currentPage, 20),
+          monitorApi.getProcessingLogs(1, 1000), // Get all data
           monitorApi.getProcessingStats()
         ]);
-        setProcessings(processingsResponse.data);
-        setPagination(processingsResponse.pagination);
+        setAllProcessings(processingsResponse.data);
         setStats(statsData);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Error loading data');
@@ -284,7 +288,12 @@ const LiveChanges = () => {
       const interval = setInterval(fetchData, 5000); // Refresh every 5 seconds
       return () => clearInterval(interval);
     }
-  }, [isPaused, currentPage]);
+  }, [isPaused]);
+
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, statusFilter, engineFilter, strategyFilter]);
 
   const toggleProcessing = (id: number) => {
     setOpenProcessingId(openProcessingId === id ? null : id);
@@ -300,14 +309,15 @@ const LiveChanges = () => {
   };
 
   const handlePrevPage = () => {
-    if (pagination.hasPrev) {
+    if (currentPage > 1) {
       setCurrentPage(currentPage - 1);
       setOpenProcessingId(null);
     }
   };
 
   const handleNextPage = () => {
-    if (pagination.hasNext) {
+    const totalPages = Math.ceil(filteredProcessings.length / itemsPerPage);
+    if (currentPage < totalPages) {
       setCurrentPage(currentPage + 1);
       setOpenProcessingId(null);
     }
@@ -325,8 +335,16 @@ const LiveChanges = () => {
     return date.toLocaleString();
   };
 
+  // Helper function to determine which fields to show based on pk_strategy
+  const getFieldVisibility = (pkStrategy: string) => {
+    const strategy = pkStrategy || 'PK'; // Default to PK if null/undefined
+    const showOffset = strategy === 'OFFSET';
+    const showPK = strategy === 'PK' || strategy === 'TEMPORAL_PK';
+    return { showOffset, showPK };
+  };
+
   // Filter and search logic
-  const filteredProcessings = processings.filter(processing => {
+  const filteredProcessings = allProcessings.filter(processing => {
     const matchesSearch = searchTerm === '' || 
       processing.schema_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       processing.table_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -334,9 +352,16 @@ const LiveChanges = () => {
     
     const matchesStatus = statusFilter === 'ALL' || processing.status === statusFilter;
     const matchesEngine = engineFilter === 'ALL' || processing.db_engine === engineFilter;
+    const matchesStrategy = strategyFilter === 'ALL' || (processing.pk_strategy || 'PK') === strategyFilter;
     
-    return matchesSearch && matchesStatus && matchesEngine;
+    return matchesSearch && matchesStatus && matchesEngine && matchesStrategy;
   });
+
+  // Pagination logic
+  const totalPages = Math.ceil(filteredProcessings.length / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const paginatedProcessings = filteredProcessings.slice(startIndex, endIndex);
 
   return (
     <LiveChangesContainer>
@@ -367,6 +392,15 @@ const LiveChanges = () => {
             <option value="MSSQL">MSSQL</option>
             <option value="MariaDB">MariaDB</option>
             <option value="PostgreSQL">PostgreSQL</option>
+          </FilterSelect>
+          <FilterSelect
+            value={strategyFilter}
+            onChange={(e) => setStrategyFilter(e.target.value)}
+          >
+            <option value="ALL">All Strategies</option>
+            <option value="PK">PK</option>
+            <option value="OFFSET">OFFSET</option>
+            <option value="TEMPORAL_PK">TEMPORAL_PK</option>
           </FilterSelect>
           <RefreshToggle 
             onClick={toggleRefresh}
@@ -415,39 +449,58 @@ const LiveChanges = () => {
           </StatsContainer>
 
           <ProcessingList>
-            {filteredProcessings.length === 0 ? (
+            {paginatedProcessings.length === 0 ? (
               <EmptyState>
                 No processing events found
               </EmptyState>
             ) : (
-              filteredProcessings.map((processing) => (
-                <ProcessingItem key={processing.id}>
-                  <ProcessingSummary onClick={() => toggleProcessing(processing.id)}>
-                    <RegularCell>
-                      {formatTimestamp(processing.processed_at)}
-                    </RegularCell>
-                    <RegularCell>{processing.schema_name}</RegularCell>
-                    <RegularCell>{processing.table_name}</RegularCell>
-                    <RegularCell>
-                      {processing.db_engine} - {processing.status}
-                    </RegularCell>
-                    <DataCell>
-                      <div style={{ fontSize: '0.8em', color: '#666', marginBottom: '2px' }}>Old Offset</div>
-                      {processing.old_offset || 0}
-                    </DataCell>
-                    <DataCell>
-                      <div style={{ fontSize: '0.8em', color: '#666', marginBottom: '2px' }}>New Offset</div>
-                      {processing.new_offset || 0}
-                    </DataCell>
-                    <DataCell>
-                      <div style={{ fontSize: '0.8em', color: '#666', marginBottom: '2px' }}>Old PK</div>
-                      {processing.old_pk || 'N/A'}
-                    </DataCell>
-                    <DataCell>
-                      <div style={{ fontSize: '0.8em', color: '#666', marginBottom: '2px' }}>New PK</div>
-                      {processing.new_pk || 'N/A'}
-                    </DataCell>
-                  </ProcessingSummary>
+              paginatedProcessings.map((processing) => {
+                const { showOffset, showPK } = getFieldVisibility(processing.pk_strategy);
+                
+                return (
+                  <ProcessingItem key={processing.id}>
+                    <ProcessingSummary 
+                      onClick={() => toggleProcessing(processing.id)}
+                      $showOffset={showOffset}
+                      $showPK={showPK}
+                    >
+                      <RegularCell>
+                        {formatTimestamp(processing.processed_at)}
+                      </RegularCell>
+                      <RegularCell>{processing.schema_name}</RegularCell>
+                      <RegularCell>{processing.table_name}</RegularCell>
+                      <RegularCell>
+                        {processing.db_engine} - {processing.status}
+                      </RegularCell>
+                      {showOffset && (
+                        <>
+                          <DataCell>
+                            <div style={{ fontSize: '0.8em', color: '#666', marginBottom: '2px' }}>Old Offset</div>
+                            {processing.old_offset || 0}
+                          </DataCell>
+                          <DataCell>
+                            <div style={{ fontSize: '0.8em', color: '#666', marginBottom: '2px' }}>New Offset</div>
+                            {processing.new_offset || 0}
+                          </DataCell>
+                        </>
+                      )}
+                      {showPK && (
+                        <>
+                          <DataCell>
+                            <div style={{ fontSize: '0.8em', color: '#666', marginBottom: '2px' }}>
+                              {processing.pk_strategy === 'TEMPORAL_PK' ? 'Old Offset' : 'Old PK'}
+                            </div>
+                            {processing.old_pk || 'N/A'}
+                          </DataCell>
+                          <DataCell>
+                            <div style={{ fontSize: '0.8em', color: '#666', marginBottom: '2px' }}>
+                              {processing.pk_strategy === 'TEMPORAL_PK' ? 'New Offset' : 'New PK'}
+                            </div>
+                            {processing.new_pk || 'N/A'}
+                          </DataCell>
+                        </>
+                      )}
+                    </ProcessingSummary>
                   
                   <ProcessingDetails $isOpen={openProcessingId === processing.id}>
                     <DetailGrid>
@@ -463,37 +516,49 @@ const LiveChanges = () => {
                       <DetailLabel>Status:</DetailLabel>
                       <DetailValue>{processing.status}</DetailValue>
                       
-                      <DetailLabel>Old Offset:</DetailLabel>
-                      <DetailValue>{processing.old_offset || 0}</DetailValue>
+                      <DetailLabel>Strategy:</DetailLabel>
+                      <DetailValue>{processing.pk_strategy || 'PK'}</DetailValue>
                       
-                      <DetailLabel>New Offset:</DetailLabel>
-                      <DetailValue>{processing.new_offset || 0}</DetailValue>
+                      {showOffset && (
+                        <>
+                          <DetailLabel>Old Offset:</DetailLabel>
+                          <DetailValue>{processing.old_offset || 0}</DetailValue>
+                          
+                          <DetailLabel>New Offset:</DetailLabel>
+                          <DetailValue>{processing.new_offset || 0}</DetailValue>
+                        </>
+                      )}
                       
-                      <DetailLabel>Old PK:</DetailLabel>
-                      <DetailValue>{processing.old_pk || 'N/A'}</DetailValue>
-                      
-                      <DetailLabel>New PK:</DetailLabel>
-                      <DetailValue>{processing.new_pk || 'N/A'}</DetailValue>
+                      {showPK && (
+                        <>
+                          <DetailLabel>Old PK:</DetailLabel>
+                          <DetailValue>{processing.old_pk || 'N/A'}</DetailValue>
+                          
+                          <DetailLabel>New PK:</DetailLabel>
+                          <DetailValue>{processing.new_pk || 'N/A'}</DetailValue>
+                        </>
+                      )}
                       
                       <DetailLabel>Processed At:</DetailLabel>
                       <DetailValue>{new Date(processing.processed_at).toLocaleString()}</DetailValue>
                     </DetailGrid>
                   </ProcessingDetails>
                 </ProcessingItem>
-              ))
+                );
+              })
             )}
           </ProcessingList>
 
-          {pagination.totalPages > 1 && (
+          {totalPages > 1 && (
             <PaginationContainer>
               <PaginationButton 
                 onClick={handlePrevPage} 
-                disabled={!pagination.hasPrev}
+                disabled={currentPage <= 1}
               >
                 {'[<]'} Prev
               </PaginationButton>
               
-              {Array.from({ length: Math.min(5, pagination.totalPages) }, (_, i) => {
+              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
                 const pageNum = i + 1;
                 return (
                   <PaginationButton
@@ -508,14 +573,14 @@ const LiveChanges = () => {
               
               <PaginationButton 
                 onClick={handleNextPage} 
-                disabled={!pagination.hasNext}
+                disabled={currentPage >= totalPages}
               >
                 Next {'[>]'}
               </PaginationButton>
               
               <PaginationInfo>
-                Page {pagination.page} of {pagination.totalPages} 
-                ({pagination.total} total events)
+                Page {currentPage} of {totalPages} 
+                ({filteredProcessings.length} total events)
               </PaginationInfo>
             </PaginationContainer>
           )}

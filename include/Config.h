@@ -13,6 +13,7 @@ struct DatabaseConfig {
   static std::string POSTGRES_PORT;
 
   static void loadFromConfig(const std::string &configPath = "config.json");
+  static void loadFromDatabase();
 
   static std::string getPostgresConnectionString() {
     return "host=" + POSTGRES_HOST + " dbname=" + POSTGRES_DB +
@@ -28,6 +29,7 @@ struct SyncConfig {
   static constexpr size_t DEFAULT_SYNC_INTERVAL = 30;
 
   static void loadFromConfig(const std::string &configPath = "config.json");
+  static void loadFromDatabase();
 
   static void setChunkSize(size_t newSize) { CHUNK_SIZE = newSize; }
 
