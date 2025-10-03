@@ -1,0 +1,11 @@
+{
+  "database": {
+    "postgres": {
+      "host": "localhost",
+      "port": "5432",
+      "database": "DataLake",
+      "user": "your_username",
+      "password": "your_password"
+    }
+  }
+}

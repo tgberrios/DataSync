@@ -1,0 +1,38 @@
+#ifndef CONFIG_H
+#define CONFIG_H
+
+#include <atomic>
+#include <string>
+
+struct DatabaseConfig {
+  static std::string POSTGRES_HOST;
+  static std::string POSTGRES_DB;
+  static std::string POSTGRES_USER;
+  static std::string POSTGRES_PASSWORD;
+  static std::string POSTGRES_PORT;
+
+  static std::string getPostgresConnectionString() {
+    return "host=" + POSTGRES_HOST + " dbname=" + POSTGRES_DB +
+           " user=" + POSTGRES_USER + " password=" + POSTGRES_PASSWORD +
+           " port=" + POSTGRES_PORT;
+  }
+};
+
+struct SyncConfig {
+  static std::atomic<size_t> CHUNK_SIZE;
+  static std::atomic<size_t> SYNC_INTERVAL_SECONDS;
+  static constexpr size_t DEFAULT_CHUNK_SIZE = 25000;
+  static constexpr size_t DEFAULT_SYNC_INTERVAL = 30;
+
+  static void setChunkSize(size_t newSize) { CHUNK_SIZE = newSize; }
+
+  static size_t getChunkSize() { return CHUNK_SIZE; }
+
+  static void setSyncInterval(size_t newInterval) {
+    SYNC_INTERVAL_SECONDS = newInterval;
+  }
+
+  static size_t getSyncInterval() { return SYNC_INTERVAL_SECONDS; }
+};
+
+#endif
