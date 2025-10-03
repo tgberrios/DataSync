@@ -12,7 +12,7 @@ DDL_EXPORT/
 DataSync
 
 # IDE files
-.cursor
+.cursor/
 .qodo
 .vscode
 .vscode/
