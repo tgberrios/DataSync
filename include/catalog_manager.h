@@ -43,6 +43,9 @@ public:
       // Limpiar tablas huérfanas (sin conexión válida)
       cleanOrphanedTables(pgConn);
 
+      // Limpiar valores de offset inválidos según la estrategia
+      cleanInvalidOffsetValues();
+
       // Actualizar cluster names después de la limpieza
       updateClusterNames();
 
@@ -1955,6 +1958,49 @@ private:
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "cleanOrphanedTables",
                     "ERROR cleaning orphaned tables: " + std::string(e.what()));
+    }
+  }
+
+  void cleanInvalidOffsetValues() {
+    try {
+      pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
+      pqxx::work txn(pgConn);
+
+      // Limpiar last_offset en tablas con estrategia PK (deberían usar
+      // last_processed_pk)
+      auto pkResult =
+          txn.exec("UPDATE metadata.catalog SET last_offset = NULL "
+                   "WHERE pk_strategy = 'PK' AND last_offset IS NOT NULL;");
+
+      // Limpiar last_processed_pk en tablas con estrategia OFFSET (deberían
+      // usar last_offset)
+      auto offsetResult = txn.exec(
+          "UPDATE metadata.catalog SET last_processed_pk = NULL "
+          "WHERE pk_strategy = 'OFFSET' AND last_processed_pk IS NOT NULL;");
+
+      txn.commit();
+
+      Logger::info(LogCategory::DATABASE,
+                   "Cleaned " + std::to_string(pkResult.affected_rows()) +
+                       " PK strategy tables with invalid last_offset values");
+      Logger::info(
+          LogCategory::DATABASE,
+          "Cleaned " + std::to_string(offsetResult.affected_rows()) +
+              " OFFSET strategy tables with invalid last_processed_pk values");
+
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(
+          LogCategory::DATABASE, "cleanInvalidOffsetValues",
+          "SQL ERROR cleaning invalid offset values: " + std::string(e.what()) +
+              " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::DATABASE, "cleanInvalidOffsetValues",
+                    "CONNECTION ERROR cleaning invalid offset values: " +
+                        std::string(e.what()));
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::DATABASE, "cleanInvalidOffsetValues",
+                    "ERROR cleaning invalid offset values: " +
+                        std::string(e.what()));
     }
   }
 
