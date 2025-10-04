@@ -1,5 +1,10 @@
 ACTUALIZAR EL DIAGRAM
 
-testear DELTAS
-
 valdria la pena meterle AI ?
+
+
+
+last_offset ALGO QUE LIMPIE ESO A CERO PORQUE SI ESTAMOS EN STRATEGY PK no deberia tener data ahi deberia ser NULL
+
+
+
