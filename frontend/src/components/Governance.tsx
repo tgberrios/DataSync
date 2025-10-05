@@ -258,6 +258,49 @@ const DetailValue = styled.div`
   font-weight: 500;
 `;
 
+const Tooltip = styled.div`
+  position: relative;
+  display: inline-block;
+  
+  &:hover .tooltip-content {
+    visibility: visible;
+    opacity: 1;
+  }
+`;
+
+const TooltipContent = styled.div`
+  visibility: hidden;
+  opacity: 0;
+  position: absolute;
+  z-index: 1000;
+  bottom: 125%;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: #333;
+  color: white;
+  text-align: center;
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 0.85em;
+  white-space: nowrap;
+  min-width: 200px;
+  max-width: 300px;
+  white-space: normal;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  transition: opacity 0.3s;
+  
+  &:after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    margin-left: -5px;
+    border-width: 5px;
+    border-style: solid;
+    border-color: #333 transparent transparent transparent;
+  }
+`;
+
 const formatDate = (date: string) => {
   if (!date) return '-';
   return new Date(date).toLocaleString();
@@ -275,6 +318,45 @@ const formatSize = (mb: number | null | undefined) => {
 
 const formatNumber = (num: number) => {
   return num?.toLocaleString() || '0';
+};
+
+const getCategoryDescription = (category: string) => {
+  const descriptions: { [key: string]: string } = {
+    'TRANSACTIONAL': 'Data that represents business transactions and events that occur in real-time',
+    'ANALYTICAL': 'Data used for analysis, reporting, and business intelligence purposes',
+    'REFERENCE': 'Lookup tables and master data used across multiple systems',
+    'MASTER_DATA': 'Core business entities like customers, products, and suppliers',
+    'OPERATIONAL': 'Data used for day-to-day operational processes and workflows',
+    'TEMPORAL': 'Time-series data that tracks changes over time',
+    'GEOSPATIAL': 'Location-based data including coordinates and geographic information',
+    'FINANCIAL': 'Financial transactions, accounts, and monetary data',
+    'COMPLIANCE': 'Data required for regulatory compliance and auditing',
+    'TECHNICAL': 'System-generated data for technical monitoring and maintenance',
+    'SPORTS': 'Sports-related data including scores, statistics, and player information'
+  };
+  return descriptions[category] || 'Data category classification';
+};
+
+const getHealthDescription = (health: string) => {
+  const descriptions: { [key: string]: string } = {
+    'EXCELLENT': 'Optimal data quality with no issues detected',
+    'HEALTHY': 'Good data quality with minor or no issues',
+    'WARNING': 'Some data quality issues detected that need attention',
+    'CRITICAL': 'Significant data quality issues requiring immediate attention',
+    'EMERGENCY': 'Severe data quality issues that may impact system functionality'
+  };
+  return descriptions[health] || 'Health status of the data';
+};
+
+const getSensitivityDescription = (sensitivity: string) => {
+  const descriptions: { [key: string]: string } = {
+    'PUBLIC': 'Data that can be freely shared and accessed by anyone',
+    'LOW': 'Data with minimal sensitivity requirements',
+    'MEDIUM': 'Data with moderate sensitivity requiring controlled access',
+    'HIGH': 'Data with high sensitivity requiring strict access controls',
+    'CRITICAL': 'Data with critical sensitivity requiring maximum security measures'
+  };
+  return descriptions[sensitivity] || 'Data sensitivity level';
 };
 
 const Governance = () => {
@@ -451,58 +533,73 @@ const Governance = () => {
             ) : (
               data.map((item) => (
                 <GovernanceItem key={item.id}>
-                  <GovernanceSummary>
-                    <div onClick={() => handleSort('table_name')} style={{ cursor: 'pointer' }}>
+                  <GovernanceSummary onClick={() => toggleItem(item.id)}>
+                    <div onClick={(e) => { e.stopPropagation(); handleSort('table_name'); }} style={{ cursor: 'pointer' }}>
                       {item.schema_name}.{item.table_name}
                       {sort.field === 'table_name' && (sort.direction === 'asc' ? ' ↑' : ' ↓')}
                     </div>
-                    <div onClick={() => handleSort('inferred_source_engine')} style={{ cursor: 'pointer' }}>
+                    <div onClick={(e) => { e.stopPropagation(); handleSort('inferred_source_engine'); }} style={{ cursor: 'pointer' }}>
                       {item.inferred_source_engine}
                       {sort.field === 'inferred_source_engine' && (sort.direction === 'asc' ? ' ↑' : ' ↓')}
                     </div>
-                    <div onClick={() => handleSort('data_category')} style={{ cursor: 'pointer' }}>
-                      <Badge type={item.data_category}>
-                        {item.data_category}
-                      </Badge>
+                    <div onClick={(e) => { e.stopPropagation(); handleSort('data_category'); }} style={{ cursor: 'pointer' }}>
+                      <Tooltip>
+                        <Badge type={item.data_category}>
+                          {item.data_category}
+                        </Badge>
+                        <TooltipContent className="tooltip-content">
+                          {getCategoryDescription(item.data_category)}
+                        </TooltipContent>
+                      </Tooltip>
                       {sort.field === 'data_category' && (sort.direction === 'asc' ? ' ↑' : ' ↓')}
                     </div>
-                    <div onClick={() => handleSort('business_domain')} style={{ cursor: 'pointer' }}>
+                    <div onClick={(e) => { e.stopPropagation(); handleSort('business_domain'); }} style={{ cursor: 'pointer' }}>
                       {item.business_domain}
                       {sort.field === 'business_domain' && (sort.direction === 'asc' ? ' ↑' : ' ↓')}
                     </div>
-                    <div onClick={() => handleSort('health_status')} style={{ cursor: 'pointer' }}>
-                      <Badge type={item.health_status}>
-                        {item.health_status}
-                      </Badge>
+                    <div onClick={(e) => { e.stopPropagation(); handleSort('health_status'); }} style={{ cursor: 'pointer' }}>
+                      <Tooltip>
+                        <Badge type={item.health_status}>
+                          {item.health_status}
+                        </Badge>
+                        <TooltipContent className="tooltip-content">
+                          {getHealthDescription(item.health_status)}
+                        </TooltipContent>
+                      </Tooltip>
                       {sort.field === 'health_status' && (sort.direction === 'asc' ? ' ↑' : ' ↓')}
                     </div>
-                    <div onClick={() => handleSort('sensitivity_level')} style={{ cursor: 'pointer' }}>
-                      <Badge type={`${item.sensitivity_level}_SENSITIVITY`}>
-                        {item.sensitivity_level}
-                      </Badge>
+                    <div onClick={(e) => { e.stopPropagation(); handleSort('sensitivity_level'); }} style={{ cursor: 'pointer' }}>
+                      <Tooltip>
+                        <Badge type={`${item.sensitivity_level}_SENSITIVITY`}>
+                          {item.sensitivity_level}
+                        </Badge>
+                        <TooltipContent className="tooltip-content">
+                          {getSensitivityDescription(item.sensitivity_level)}
+                        </TooltipContent>
+                      </Tooltip>
                       {sort.field === 'sensitivity_level' && (sort.direction === 'asc' ? ' ↑' : ' ↓')}
                     </div>
-                    <div onClick={() => handleSort('data_quality_score')} style={{ cursor: 'pointer' }}>
+                    <div onClick={(e) => { e.stopPropagation(); handleSort('data_quality_score'); }} style={{ cursor: 'pointer' }}>
                       <QualityScore score={item.data_quality_score}>
                         {item.data_quality_score}%
                       </QualityScore>
                       {sort.field === 'data_quality_score' && (sort.direction === 'asc' ? ' ↑' : ' ↓')}
                     </div>
-                    <div onClick={() => handleSort('table_size_mb')} style={{ cursor: 'pointer' }}>
+                    <div onClick={(e) => { e.stopPropagation(); handleSort('table_size_mb'); }} style={{ cursor: 'pointer' }}>
                       {formatSize(item.table_size_mb)}
                       {sort.field === 'table_size_mb' && (sort.direction === 'asc' ? ' ↑' : ' ↓')}
                     </div>
-                    <div onClick={() => handleSort('total_rows')} style={{ cursor: 'pointer' }}>
+                    <div onClick={(e) => { e.stopPropagation(); handleSort('total_rows'); }} style={{ cursor: 'pointer' }}>
                       {formatNumber(item.total_rows)}
                       {sort.field === 'total_rows' && (sort.direction === 'asc' ? ' ↑' : ' ↓')}
                     </div>
-                    <div onClick={() => handleSort('access_frequency')} style={{ cursor: 'pointer' }}>
+                    <div onClick={(e) => { e.stopPropagation(); handleSort('access_frequency'); }} style={{ cursor: 'pointer' }}>
                       <Badge type={item.access_frequency}>
                         {item.access_frequency}
                       </Badge>
                       {sort.field === 'access_frequency' && (sort.direction === 'asc' ? ' ↑' : ' ↓')}
                     </div>
-                    <div onClick={() => handleSort('last_analyzed')} style={{ textAlign: 'right', color: '#666', fontSize: '0.85em', cursor: 'pointer' }}>
+                    <div onClick={(e) => { e.stopPropagation(); handleSort('last_analyzed'); }} style={{ textAlign: 'right', color: '#666', fontSize: '0.85em', cursor: 'pointer' }}>
                       {formatDate(item.last_analyzed)}
                       {sort.field === 'last_analyzed' && (sort.direction === 'asc' ? ' ↑' : ' ↓')}
                     </div>
@@ -525,9 +622,14 @@ const Governance = () => {
                       <DetailCard>
                         <DetailLabel>Data Category</DetailLabel>
                         <DetailValue>
-                          <Badge type={item.data_category}>
-                            {item.data_category}
-                          </Badge>
+                          <Tooltip>
+                            <Badge type={item.data_category}>
+                              {item.data_category}
+                            </Badge>
+                            <TooltipContent className="tooltip-content">
+                              {getCategoryDescription(item.data_category)}
+                            </TooltipContent>
+                          </Tooltip>
                         </DetailValue>
                       </DetailCard>
                       <DetailCard>
@@ -537,17 +639,27 @@ const Governance = () => {
                       <DetailCard>
                         <DetailLabel>Health Status</DetailLabel>
                         <DetailValue>
-                          <Badge type={item.health_status}>
-                            {item.health_status}
-                          </Badge>
+                          <Tooltip>
+                            <Badge type={item.health_status}>
+                              {item.health_status}
+                            </Badge>
+                            <TooltipContent className="tooltip-content">
+                              {getHealthDescription(item.health_status)}
+                            </TooltipContent>
+                          </Tooltip>
                         </DetailValue>
                       </DetailCard>
                       <DetailCard>
                         <DetailLabel>Sensitivity Level</DetailLabel>
                         <DetailValue>
-                          <Badge type={`${item.sensitivity_level}_SENSITIVITY`}>
-                            {item.sensitivity_level}
-                          </Badge>
+                          <Tooltip>
+                            <Badge type={`${item.sensitivity_level}_SENSITIVITY`}>
+                              {item.sensitivity_level}
+                            </Badge>
+                            <TooltipContent className="tooltip-content">
+                              {getSensitivityDescription(item.sensitivity_level)}
+                            </TooltipContent>
+                          </Tooltip>
                         </DetailValue>
                       </DetailCard>
                       <DetailCard>

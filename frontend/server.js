@@ -263,6 +263,7 @@ app.get("/api/dashboard/stats", async (req, res) => {
         COUNT(*) FILTER (WHERE active = true) as full_load_active,
         COUNT(*) FILTER (WHERE active = false) as full_load_inactive,
         COUNT(*) FILTER (WHERE active = false AND status = 'NO_DATA') as no_data,
+        COUNT(*) FILTER (WHERE status = 'SKIP') as skip,
         COUNT(*) FILTER (WHERE active = true AND status = 'ERROR') as errors,
         '' as current_process
       FROM metadata.catalog
@@ -414,6 +415,7 @@ app.get("/api/dashboard/stats", async (req, res) => {
         fullLoadActive: fullLoadActive,
         fullLoadInactive: parseInt(syncStatus.rows[0]?.full_load_inactive || 0),
         noData: parseInt(syncStatus.rows[0]?.no_data || 0),
+        skip: parseInt(syncStatus.rows[0]?.skip || 0),
         errors: parseInt(syncStatus.rows[0]?.errors || 0),
         currentProcess: currentProcessText,
         totalLastOffset: parseInt(dataProgress.rows[0]?.total_last_offset || 0),

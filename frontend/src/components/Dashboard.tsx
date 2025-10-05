@@ -219,6 +219,7 @@ const Dashboard = () => {
               <Value>Active: {stats.syncStatus.fullLoadActive}</Value>
               <Value>Inactive: {stats.syncStatus.fullLoadInactive}</Value>
               <Value>No Data: {stats.syncStatus.noData}</Value>
+              <Value>Skip: {stats.syncStatus.skip || 0}</Value>
               <Value>Errors: {stats.syncStatus.errors}</Value>
             </Grid>
             

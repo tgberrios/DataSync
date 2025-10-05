@@ -1,7 +1,3 @@
-cuando intento expandir en  datagovernance no se expande y tambien en la parte de category digamos si muy bien que salen las category pero no tengo una leyenda que cuando haga hover me diga porque ? 
-ANADIR STATUS SKIP EN FRONTEND
-
-
 hay que anadir una columna notes varchart a catalog al DDL y quitar  la otra de canditate columns
 y mostrar notes en el catalog
 
