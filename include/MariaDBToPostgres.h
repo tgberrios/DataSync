@@ -622,14 +622,13 @@ public:
 
       // 2. Obtener registros modificados desde MariaDB
       std::string selectQuery;
+      
       if (timeColumn.empty() || lastSyncTime.empty()) {
-        selectQuery = "SELECT * FROM `" + schema_name + "`.`" + table_name +
-                      "`"; // full compare by PK
+        selectQuery = "SELECT * FROM `" + schema_name + "`.`" + table_name + "`"; // full compare by PK
       } else {
         selectQuery = "SELECT * FROM `" + schema_name + "`.`" + table_name +
                       "` WHERE `" + timeColumn + "` > '" +
-                      escapeSQL(lastSyncTime) + "' ORDER BY `" + timeColumn +
-                      "`";
+                      escapeSQL(lastSyncTime) + "' ORDER BY `" + timeColumn + "`";
       }
 
       std::vector<std::vector<std::string>> modifiedRecords =
@@ -655,15 +654,30 @@ public:
         return;
       }
 
-      // 4. Procesar cada registro modificado
+      // 4. Procesar cada registro modificado con límite de seguridad
       size_t totalUpdated = 0;
+      size_t processedRecords = 0;
+      const size_t MAX_PROCESSED_RECORDS = 10000; // Límite adicional de seguridad
+      
       for (const std::vector<std::string> &record : modifiedRecords) {
+        // Verificar límite de registros procesados para evitar bucles infinitos
+        if (processedRecords >= MAX_PROCESSED_RECORDS) {
+          Logger::warning(LogCategory::TRANSFER,
+                          "Update processing reached maximum processed records limit (" +
+                              std::to_string(MAX_PROCESSED_RECORDS) +
+                              ") for " + schema_name + "." + table_name +
+                              " - stopping to prevent infinite loop");
+          break;
+        }
+        
         if (record.size() != columnNames.size()) {
           Logger::warning(LogCategory::TRANSFER,
                           "Record size mismatch for " + schema_name + "." +
                               table_name + " - skipping record");
           continue;
         }
+        
+        processedRecords++;
 
         // Construir WHERE clause para primary key
         std::string whereClause = "";
@@ -725,8 +739,12 @@ public:
       if (totalUpdated > 0) {
         Logger::info(LogCategory::TRANSFER,
                      "Updated " + std::to_string(totalUpdated) +
-                         " records in " + schema_name + "." + table_name);
+                         " out of " + std::to_string(processedRecords) +
+                         " processed records in " + schema_name + "." + table_name);
       } else {
+        Logger::info(LogCategory::TRANSFER,
+                     "No updates needed for " + std::to_string(processedRecords) +
+                         " processed records in " + schema_name + "." + table_name);
       }
 
     } catch (const std::exception &e) {
@@ -994,7 +1012,8 @@ public:
         }
 
         // Si sourceCount = targetCount, verificar si hay cambios incrementales
-        if (sourceCount == targetCount) {
+        // PERO SOLO si NO es una tabla FULL_LOAD (que debe completarse primero)
+        if (sourceCount == targetCount && table.status != "FULL_LOAD") {
           Logger::info(LogCategory::TRANSFER,
                        "Source and target counts match (" +
                            std::to_string(sourceCount) +
