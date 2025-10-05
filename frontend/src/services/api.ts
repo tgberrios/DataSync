@@ -641,6 +641,50 @@ export const logsApi = {
       throw error;
     }
   },
+
+  // Error logs API
+  getErrorLogs: async (
+    params: {
+      lines?: number;
+      level?: string;
+      category?: string;
+      search?: string;
+      startDate?: string;
+      endDate?: string;
+    } = {}
+  ) => {
+    try {
+      const response = await api.get<LogsResponse>("/logs/errors", { params });
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching error logs:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getErrorLogInfo: async () => {
+    try {
+      const response = await api.get<LogInfo>("/logs/errors/info");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching error log info:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
 };
 
 export const securityApi = {

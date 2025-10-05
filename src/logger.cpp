@@ -4,8 +4,10 @@
 
 // Definición de variables estáticas
 std::ofstream Logger::logFile;
+std::ofstream Logger::errorLogFile;
 std::mutex Logger::logMutex;
 std::string Logger::logFileName = "DataSync.log";
+std::string Logger::errorLogFileName = "DataSyncErrors.log";
 size_t Logger::messageCount = 0;
 
 // Debug configuration variables
@@ -161,6 +163,10 @@ void Logger::initialize(const std::string &fileName) {
   std::filesystem::path logPath = executablePath / fileName;
   logFileName = logPath.string();
 
+  // Set error log file name
+  std::filesystem::path errorLogPath = executablePath / "DataSyncErrors.log";
+  errorLogFileName = errorLogPath.string();
+
   // Validate file path and permissions
   std::filesystem::path parentDir = logPath.parent_path();
 
@@ -183,7 +189,7 @@ void Logger::initialize(const std::string &fileName) {
     return;
   }
 
-  // Try to open the log file
+  // Try to open the main log file
   logFile.open(logFileName, std::ios::app);
   if (!logFile.is_open()) {
     std::cerr << "Logger::initialize: Failed to open log file: " << logFileName
@@ -191,6 +197,15 @@ void Logger::initialize(const std::string &fileName) {
     std::cerr << "Logger::initialize: Check file permissions and disk space"
               << std::endl;
     return;
+  }
+
+  // Try to open the error log file
+  errorLogFile.open(errorLogFileName, std::ios::app);
+  if (!errorLogFile.is_open()) {
+    std::cerr << "Logger::initialize: Failed to open error log file: "
+              << errorLogFileName << std::endl;
+    std::cerr << "Logger::initialize: Check file permissions and disk space"
+              << std::endl;
   }
 
   // Removed logger initialization log to reduce noise

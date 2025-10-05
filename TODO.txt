@@ -1,6 +1,8 @@
 hay que anadir una columna notes varchart a catalog al DDL y quitar  la otra de canditate columns
 y mostrar notes en el catalog
 
-separar los logs en una tabla diferente o en un archivo diferente
-
-talvez tener nuestro propio query store ? 
+Enfocar esfuerzos en:
+Mejorar queries existentes
+Optimizar índices
+Agregar más métricas útiles
+Mejorar la UI/UX

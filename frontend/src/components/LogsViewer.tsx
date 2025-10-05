@@ -333,6 +333,42 @@ const PageInfo = styled.span`
   font-size: 0.9em;
 `;
 
+const TabsContainer = styled.div`
+  display: flex;
+  border-bottom: 2px solid #ddd;
+  margin-bottom: 20px;
+  background-color: #fafafa;
+  border-radius: 4px 4px 0 0;
+`;
+
+const Tab = styled.button<{ $active: boolean }>`
+  padding: 12px 20px;
+  border: none;
+  background-color: ${props => props.$active ? '#333' : 'transparent'};
+  color: ${props => props.$active ? 'white' : '#666'};
+  cursor: pointer;
+  font-family: monospace;
+  font-size: 1em;
+  font-weight: ${props => props.$active ? 'bold' : 'normal'};
+  border-radius: 4px 4px 0 0;
+  margin-right: 2px;
+  transition: all 0.2s ease;
+
+  &:hover {
+    background-color: ${props => props.$active ? '#333' : '#f0f0f0'};
+    color: ${props => props.$active ? 'white' : '#333'};
+  }
+
+  &:first-child {
+    border-radius: 4px 0 0 0;
+  }
+
+  &:last-child {
+    border-radius: 0 4px 0 0;
+    margin-right: 0;
+  }
+`;
+
 const LogsViewer = () => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [logInfo, setLogInfo] = useState<LogInfo | null>(null);
@@ -352,6 +388,9 @@ const LogsViewer = () => {
   const [isCopying, setIsCopying] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
   
+  // Tab state
+  const [activeTab, setActiveTab] = useState<'all' | 'errors'>('all');
+  
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
@@ -365,17 +404,28 @@ const LogsViewer = () => {
       setIsRefreshing(true);
       setError(null);
       
-      // Fetch logs with specified number of lines
+      // Fetch logs based on active tab
       const [logsData, infoData] = await Promise.all([
-        logsApi.getLogs({ 
-          lines, 
-          level, 
-          category,
-          search,
-          startDate,
-          endDate
-        }),
-        logsApi.getLogInfo()
+        activeTab === 'errors' 
+          ? logsApi.getErrorLogs({ 
+              lines, 
+              level, 
+              category,
+              search,
+              startDate,
+              endDate
+            })
+          : logsApi.getLogs({ 
+              lines, 
+              level, 
+              category,
+              search,
+              startDate,
+              endDate
+            }),
+        activeTab === 'errors' 
+          ? logsApi.getErrorLogInfo()
+          : logsApi.getLogInfo()
       ]);
       
       setAllLogs(logsData.logs);
@@ -401,6 +451,15 @@ const LogsViewer = () => {
 
   const scrollToBottom = () => {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const handleTabChange = (tab: 'all' | 'errors') => {
+    setActiveTab(tab);
+    setCurrentPage(1);
+    // Reset filters for error tab to show only ERROR, WARNING, CRITICAL levels
+    if (tab === 'errors') {
+      setLevel('ALL'); // Keep ALL to show all error levels
+    }
   };
 
   const goToPage = (page: number) => {
@@ -498,7 +557,7 @@ const LogsViewer = () => {
 
   useEffect(() => {
     fetchLogs();
-  }, [lines, level, category, search, startDate, endDate]);
+  }, [lines, level, category, search, startDate, endDate, activeTab]);
 
   useEffect(() => {
     // Clear any existing countdown interval
@@ -615,6 +674,15 @@ const LogsViewer = () => {
   return (
     <LogsContainer>
       <Header>DataSync Logs Viewer</Header>
+      
+      <TabsContainer>
+        <Tab $active={activeTab === 'all'} onClick={() => handleTabChange('all')}>
+          ■ All Logs
+        </Tab>
+        <Tab $active={activeTab === 'errors'} onClick={() => handleTabChange('errors')}>
+          ● Error Logs
+        </Tab>
+      </TabsContainer>
       
       <Section>
         <SectionTitle>⚙ LOG CONTROLS</SectionTitle>
