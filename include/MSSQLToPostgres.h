@@ -674,8 +674,28 @@ public:
         bool forceFullLoad = (table.status == "FULL_LOAD");
 
         // Si sourceCount = targetCount, verificar si hay cambios incrementales
-        // PERO SOLO si NO es una tabla FULL_LOAD (que debe completarse primero)
-        if (sourceCount == targetCount && table.status != "FULL_LOAD") {
+        if (sourceCount == targetCount) {
+          // Si es una tabla FULL_LOAD que se completó, marcarla como
+          // LISTENING_CHANGES
+          if (table.status == "FULL_LOAD") {
+            Logger::info(LogCategory::TRANSFER,
+                         "FULL_LOAD completed for " + schema_name + "." +
+                             table_name +
+                             " (source: " + std::to_string(sourceCount) +
+                             ", target: " + std::to_string(targetCount) +
+                             ") - marking as LISTENING_CHANGES");
+            updateStatus(pgConn, schema_name, table_name, "LISTENING_CHANGES",
+                         targetCount);
+
+            // Cerrar conexión MSSQL antes de continuar
+            if (dbc) {
+              closeMSSQLConnection(dbc);
+              dbc = nullptr;
+            }
+            continue;
+          }
+
+          // Para tablas que NO son FULL_LOAD, procesar cambios incrementales
           // Procesar UPDATEs si hay columna de tiempo y last_sync_time
           if (!table.last_sync_column.empty() &&
               !table.last_sync_time.empty()) {
