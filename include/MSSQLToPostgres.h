@@ -674,7 +674,8 @@ public:
         bool forceFullLoad = (table.status == "FULL_LOAD");
 
         // Si sourceCount = targetCount, verificar si hay cambios incrementales
-        if (sourceCount == targetCount && !forceFullLoad) {
+        // PERO SOLO si NO es una tabla FULL_LOAD (que debe completarse primero)
+        if (sourceCount == targetCount && table.status != "FULL_LOAD") {
           // Procesar UPDATEs si hay columna de tiempo y last_sync_time
           if (!table.last_sync_column.empty() &&
               !table.last_sync_time.empty()) {
@@ -1676,15 +1677,31 @@ public:
         return;
       }
 
-      // 4. Procesar cada registro modificado
+      // 4. Procesar cada registro modificado con límite de seguridad
       size_t totalUpdated = 0;
+      size_t processedRecords = 0;
+      const size_t MAX_PROCESSED_RECORDS =
+          10000; // Límite adicional de seguridad
+
       for (const auto &record : modifiedRecords) {
+        // Verificar límite de registros procesados para evitar bucles infinitos
+        if (processedRecords >= MAX_PROCESSED_RECORDS) {
+          Logger::warning(
+              LogCategory::TRANSFER,
+              "Update processing reached maximum processed records limit (" +
+                  std::to_string(MAX_PROCESSED_RECORDS) + ") for " +
+                  schema_name + "." + table_name +
+                  " - stopping to prevent infinite loop");
+          break;
+        }
         if (record.size() != columnNames.size()) {
           Logger::warning(LogCategory::TRANSFER,
                           "Record size mismatch for " + schema_name + "." +
                               table_name + " - skipping record");
           continue;
         }
+
+        processedRecords++;
 
         // Construir WHERE clause para primary key
         std::string whereClause = "";
@@ -1732,9 +1749,15 @@ public:
 
       if (totalUpdated > 0) {
         Logger::info(LogCategory::TRANSFER,
-                     "Updated " + std::to_string(totalUpdated) +
-                         " records in " + schema_name + "." + table_name);
+                     "Updated " + std::to_string(totalUpdated) + " out of " +
+                         std::to_string(processedRecords) +
+                         " processed records in " + schema_name + "." +
+                         table_name);
       } else {
+        Logger::info(
+            LogCategory::TRANSFER,
+            "No updates needed for " + std::to_string(processedRecords) +
+                " processed records in " + schema_name + "." + table_name);
       }
 
     } catch (const std::exception &e) {
