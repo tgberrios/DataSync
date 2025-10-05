@@ -37,8 +37,10 @@ enum class LogCategory {
 class Logger {
 private:
   static std::ofstream logFile;
+  static std::ofstream errorLogFile;
   static std::mutex logMutex;
   static std::string logFileName;
+  static std::string errorLogFileName;
   static size_t messageCount;
   static const size_t MAX_MESSAGES_BEFORE_FLUSH = 100;
   static const size_t MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
@@ -204,6 +206,7 @@ private:
     std::string levelStr = getLevelString(level);
     std::string categoryStr = getCategoryString(category);
 
+    // Write to main log file
     logFile << "[" << timestamp << "] [" << levelStr << "] [" << categoryStr
             << "]";
     if (!function.empty()) {
@@ -216,6 +219,29 @@ private:
       std::cerr << "[LOGGER ERROR] Failed to write to log file" << std::endl;
       logFile.close();
       return;
+    }
+
+    // Write to error log file if level is ERROR, WARNING, or CRITICAL
+    if (level >= LogLevel::WARNING) {
+      // Try to reopen error log file if it's not open
+      if (!errorLogFile.is_open()) {
+        errorLogFile.open(errorLogFileName, std::ios::app);
+        if (!errorLogFile.is_open()) {
+          std::cerr << "[LOGGER ERROR] Cannot open error log file: "
+                    << errorLogFileName << std::endl;
+        }
+      }
+
+      // Write to error log file if it's open
+      if (errorLogFile.is_open()) {
+        errorLogFile << "[" << timestamp << "] [" << levelStr << "] ["
+                     << categoryStr << "]";
+        if (!function.empty()) {
+          errorLogFile << " [" << function << "]";
+        }
+        errorLogFile << " " << message << std::endl;
+        errorLogFile.flush(); // Always flush error logs immediately
+      }
     }
 
     if (level >= LogLevel::ERROR) {
@@ -252,6 +278,10 @@ public:
     if (logFile.is_open()) {
       logFile.flush();
       logFile.close();
+    }
+    if (errorLogFile.is_open()) {
+      errorLogFile.flush();
+      errorLogFile.close();
     }
     messageCount = 0;
   }

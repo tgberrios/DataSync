@@ -1126,6 +1126,135 @@ app.get("/api/logs", async (req, res) => {
   }
 });
 
+// Endpoint para obtener logs de errores
+app.get("/api/logs/errors", async (req, res) => {
+  try {
+    const {
+      lines = 100,
+      level = "ALL",
+      category = "ALL",
+      search = "",
+      startDate = "",
+      endDate = "",
+    } = req.query;
+    const errorLogFilePath = path.join(
+      process.cwd(),
+      "..",
+      "DataSyncErrors.log"
+    );
+
+    // Verificar si el archivo existe
+    if (!fs.existsSync(errorLogFilePath)) {
+      return res.json({
+        logs: [],
+        totalLines: 0,
+        message: "No error log file found",
+      });
+    }
+
+    // Leer el archivo de logs de errores
+    const logContent = fs.readFileSync(errorLogFilePath, "utf8");
+    let allLines = logContent.split("\n").filter((line) => line.trim() !== "");
+
+    // Si se solicitan muchas líneas, devolver todas las líneas del archivo
+    const requestedLines = parseInt(lines);
+    if (requestedLines >= 10000 || requestedLines >= allLines.length) {
+      // Devolver todas las líneas
+      allLines = allLines;
+    } else {
+      // Limitar a las últimas N líneas
+      allLines = allLines.slice(-requestedLines);
+    }
+
+    // Parsear logs y aplicar filtros (mismo formato que logs normales)
+    let filteredLines = allLines.map((line) => {
+      // Formato: [timestamp] [level] [category] [function] message
+      const newMatch = line.match(
+        /^\[([^\]]+)\] \[([^\]]+)\] \[([^\]]+)\] \[([^\]]+)\] (.+)$/
+      );
+      if (newMatch) {
+        return {
+          timestamp: newMatch[1],
+          level: newMatch[2],
+          category: newMatch[3],
+          function: newMatch[4],
+          message: newMatch[5],
+          raw: line,
+          parsed: true,
+        };
+      }
+      return {
+        timestamp: "",
+        level: "UNKNOWN",
+        category: "UNKNOWN",
+        function: "",
+        message: line,
+        raw: line,
+        parsed: false,
+      };
+    });
+
+    // Aplicar filtros
+    if (level !== "ALL") {
+      filteredLines = filteredLines.filter((log) => log.level === level);
+    }
+
+    if (category !== "ALL") {
+      filteredLines = filteredLines.filter((log) => log.category === category);
+    }
+
+    if (search) {
+      filteredLines = filteredLines.filter(
+        (log) =>
+          log.message.toLowerCase().includes(search.toLowerCase()) ||
+          (log.function &&
+            log.function.toLowerCase().includes(search.toLowerCase()))
+      );
+    }
+
+    if (startDate) {
+      const start = new Date(startDate);
+      filteredLines = filteredLines.filter((log) => {
+        if (!log.timestamp) return false;
+        const logDate = new Date(log.timestamp);
+        return logDate >= start;
+      });
+    }
+
+    if (endDate) {
+      const end = new Date(endDate);
+      filteredLines = filteredLines.filter((log) => {
+        if (!log.timestamp) return false;
+        const logDate = new Date(log.timestamp);
+        return logDate <= end;
+      });
+    }
+
+    // Obtener las últimas N líneas
+    const lastLines = filteredLines.slice(-parseInt(lines));
+
+    res.json({
+      logs: lastLines,
+      totalLines: filteredLines.length,
+      filePath: errorLogFilePath,
+      lastModified: fs.statSync(errorLogFilePath).mtime,
+      filters: {
+        level,
+        category,
+        search,
+        startDate,
+        endDate,
+      },
+    });
+  } catch (err) {
+    console.error("Error reading error logs:", err);
+    res.status(500).json({
+      error: "Error al leer logs de errores",
+      details: err.message,
+    });
+  }
+});
+
 // Endpoint para obtener información del archivo de logs
 app.get("/api/logs/info", async (req, res) => {
   try {
@@ -1156,6 +1285,45 @@ app.get("/api/logs/info", async (req, res) => {
     console.error("Error getting log info:", err);
     res.status(500).json({
       error: "Error al obtener información de logs",
+      details: err.message,
+    });
+  }
+});
+
+// Endpoint para obtener información del archivo de logs de errores
+app.get("/api/logs/errors/info", async (req, res) => {
+  try {
+    const errorLogFilePath = path.join(
+      process.cwd(),
+      "..",
+      "DataSyncErrors.log"
+    );
+
+    if (!fs.existsSync(errorLogFilePath)) {
+      return res.json({
+        exists: false,
+        message: "No error log file found",
+      });
+    }
+
+    const stats = fs.statSync(errorLogFilePath);
+    const logContent = fs.readFileSync(errorLogFilePath, "utf8");
+    const totalLines = logContent
+      .split("\n")
+      .filter((line) => line.trim() !== "").length;
+
+    res.json({
+      exists: true,
+      filePath: errorLogFilePath,
+      size: stats.size,
+      totalLines: totalLines,
+      lastModified: stats.mtime,
+      created: stats.birthtime,
+    });
+  } catch (err) {
+    console.error("Error getting error log info:", err);
+    res.status(500).json({
+      error: "Error al obtener información de logs de errores",
       details: err.message,
     });
   }
