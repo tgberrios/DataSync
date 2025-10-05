@@ -38,6 +38,7 @@ export interface DashboardStats {
     fullLoadActive: number;
     fullLoadInactive: number;
     noData: number;
+    skip: number;
     errors: number;
     currentProcess: string;
     totalLastOffset?: number;
