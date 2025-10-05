@@ -244,16 +244,53 @@ const Dashboard = () => {
                   : 'No active processing detected'
               }
             </Value>
+            
+            {/* PK Strategy Information */}
+            <div style={{ marginTop: '15px' }}>
+              <SectionTitle style={{ fontSize: '1em', marginBottom: '10px' }}>■ PK STRATEGY INFORMATION</SectionTitle>
+              <Grid>
+                <Value>
+                  <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>Current Table Strategy</div>
+                  <div style={{ fontSize: '1.2em', color: '#333' }}>
+                    {currentlyProcessing ? 'PK' : 'N/A'}
+                  </div>
+                  <div style={{ fontSize: '0.8em', color: '#666' }}>Primary Key based pagination</div>
+                </Value>
+                <Value>
+                  <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>Strategy Status</div>
+                  <div style={{ fontSize: '1.2em', color: '#333' }}>
+                    {currentlyProcessing ? 'Active' : 'Idle'}
+                  </div>
+                  <div style={{ fontSize: '0.8em', color: '#666' }}>Cursor-based processing</div>
+                </Value>
+              </Grid>
+            </div>
           </Section>
 
 
           <Section>
             <SectionTitle>● SYSTEM RESOURCES</SectionTitle>
             <Grid>
-              <Value>CPU Usage: {stats.systemResources.cpuUsage}</Value>
-              <Value>Memory: {stats.systemResources.memoryUsed}</Value>
-              <Value>RSS: {stats.systemResources.rss}</Value>
-              <Value>Virtual: {stats.systemResources.virtual}</Value>
+              <Value>
+                <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>CPU Usage</div>
+                <div style={{ fontSize: '1.2em', color: '#333' }}>{stats.systemResources.cpuUsage}%</div>
+                <div style={{ fontSize: '0.8em', color: '#666' }}>(20 cores)</div>
+              </Value>
+              <Value>
+                <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>Memory</div>
+                <div style={{ fontSize: '1.2em', color: '#333' }}>{stats.systemResources.memoryUsed}/{stats.systemResources.memoryTotal} GB</div>
+                <div style={{ fontSize: '0.8em', color: '#666' }}>({stats.systemResources.memoryPercentage}%)</div>
+              </Value>
+              <Value>
+                <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>RSS</div>
+                <div style={{ fontSize: '1.2em', color: '#333' }}>{stats.systemResources.rss} GB</div>
+                <div style={{ fontSize: '0.8em', color: '#666' }}>Resident Set Size</div>
+              </Value>
+              <Value>
+                <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>Virtual</div>
+                <div style={{ fontSize: '1.2em', color: '#333' }}>{stats.systemResources.virtual} GB</div>
+                <div style={{ fontSize: '0.8em', color: '#666' }}>Virtual Memory</div>
+              </Value>
             </Grid>
           </Section>
 
@@ -267,6 +304,7 @@ const Dashboard = () => {
               <Value>Status: ✓ {stats.dbHealth.status}</Value>
             </Grid>
           </Section>
+
 
           <Section>
             <SectionTitle>⚙️ CONFIGURATION</SectionTitle>

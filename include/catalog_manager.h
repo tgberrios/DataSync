@@ -75,22 +75,42 @@ public:
                                   "status = 'NO_DATA' AND active = true");
       int noDataCount = countResult[0][0].as<int>();
 
-      if (noDataCount == 0) {
+      // Contar tablas inactivas que no son NO_DATA antes de marcar como SKIP
+      auto inactiveCountResult =
+          txn.exec("SELECT COUNT(*) FROM metadata.catalog WHERE "
+                   "active = false AND status != 'NO_DATA'");
+      int inactiveCount = inactiveCountResult[0][0].as<int>();
+
+      if (noDataCount == 0 && inactiveCount == 0) {
         txn.commit();
         return;
       }
 
       // Desactivar tablas NO_DATA
-      auto updateResult =
-          txn.exec("UPDATE metadata.catalog SET active = false WHERE status = "
-                   "'NO_DATA' AND active = true");
+      if (noDataCount > 0) {
+        auto updateResult = txn.exec(
+            "UPDATE metadata.catalog SET active = false WHERE status = "
+            "'NO_DATA' AND active = true");
+        Logger::info(LogCategory::DATABASE,
+                     "Deactivated " +
+                         std::to_string(updateResult.affected_rows()) +
+                         " NO_DATA tables");
+      }
+
+      // Marcar tablas inactivas como SKIP y resetear valores
+      if (inactiveCount > 0) {
+        auto skipResult =
+            txn.exec("UPDATE metadata.catalog SET "
+                     "status = 'SKIP', "
+                     "last_offset = 0, "
+                     "last_processed_pk = 0 "
+                     "WHERE active = false AND status != 'NO_DATA'");
+        Logger::info(LogCategory::DATABASE,
+                     "Marked " + std::to_string(skipResult.affected_rows()) +
+                         " inactive tables as SKIP with reset values");
+      }
 
       txn.commit();
-
-      Logger::info(LogCategory::DATABASE,
-                   "Deactivated " +
-                       std::to_string(updateResult.affected_rows()) +
-                       " NO_DATA tables");
 
     } catch (const pqxx::sql_error &e) {
       Logger::error(
