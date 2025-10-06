@@ -14,3 +14,6 @@ podemos ir prepando los batchs mientras insetamos o hacer un non stop de creacio
 
 
 paralelismo ? 
+
+
+se puodria hacer que los threads sean perpetuos sin tiemp odigamos ?
