@@ -6,7 +6,6 @@
 #include <filesystem>
 #include <map>
 #include <mysql/mysql.h>
-#include <pqxx/pqxx>
 #include <sql.h>
 #include <sqlext.h>
 #include <string>
@@ -60,17 +59,7 @@ private:
   void exportMariaDBConstraints(MYSQL *conn, const SchemaInfo &schema);
   void exportMariaDBEvents(MYSQL *conn, const SchemaInfo &schema);
 
-  void exportPostgreSQLDDL(const SchemaInfo &schema);
-  void exportPostgreSQLViews(pqxx::connection &conn, const SchemaInfo &schema);
-  void exportPostgreSQLFunctions(pqxx::connection &conn,
-                                 const SchemaInfo &schema);
-  void exportPostgreSQLTriggers(pqxx::connection &conn,
-                                const SchemaInfo &schema);
-  void exportPostgreSQLConstraints(pqxx::connection &conn,
-                                   const SchemaInfo &schema);
-  void exportPostgreSQLSequences(pqxx::connection &conn,
-                                 const SchemaInfo &schema);
-  void exportPostgreSQLTypes(pqxx::connection &conn, const SchemaInfo &schema);
+  
 
   void exportMSSQLDDL(const SchemaInfo &schema);
   void exportMSSQLViews(SQLHDBC conn, const SchemaInfo &schema);

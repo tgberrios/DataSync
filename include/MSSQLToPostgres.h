@@ -286,12 +286,17 @@ public:
       std::string columnName = row[2];
       std::transform(columnName.begin(), columnName.end(), columnName.begin(),
                      ::tolower);
+      std::transform(indexName.begin(), indexName.end(), indexName.begin(),
+                     ::tolower);
+      std::string lowerTableName = table_name;
+      std::transform(lowerTableName.begin(), lowerTableName.end(),
+                     lowerTableName.begin(), ::tolower);
 
       std::string createQuery = "CREATE ";
       if (uniqueness == "UNIQUE")
         createQuery += "UNIQUE ";
       createQuery += "INDEX IF NOT EXISTS \"" + indexName + "\" ON \"" +
-                     lowerSchemaName + "\".\"" + table_name + "\" (\"" +
+                     lowerSchemaName + "\".\"" + lowerTableName + "\" (\"" +
                      columnName + "\");";
 
       try {
@@ -437,8 +442,11 @@ public:
           txn.commit();
         }
 
+        std::string lowerTableName = table.table_name;
+        std::transform(lowerTableName.begin(), lowerTableName.end(),
+                       lowerTableName.begin(), ::tolower);
         std::string createQuery = "CREATE TABLE IF NOT EXISTS \"" +
-                                  lowerSchema + "\".\"" + table.table_name +
+                                  lowerSchema + "\".\"" + lowerTableName +
                                   "\" (";
         std::vector<std::string> primaryKeys;
 
@@ -626,8 +634,11 @@ public:
 
         // Obtener conteo de registros en la tabla destino
 
+        std::string lowerTableNamePG = table_name;
+        std::transform(lowerTableNamePG.begin(), lowerTableNamePG.end(),
+                       lowerTableNamePG.begin(), ::tolower);
         std::string targetCountQuery = "SELECT COUNT(*) FROM \"" +
-                                       lowerSchemaName + "\".\"" + table_name +
+                                       lowerSchemaName + "\".\"" + lowerTableNamePG +
                                        "\";";
         size_t targetCount = 0;
         try {
@@ -833,7 +844,7 @@ public:
               // TRUNCATE la tabla destino
               pqxx::work truncateTxn(pgConn);
               truncateTxn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
-                               table_name + "\" CASCADE;");
+                               lowerTableNamePG + "\" CASCADE;");
               truncateTxn.commit();
 
               // Resetear last_offset a 0 para re-sincronización completa
@@ -866,7 +877,7 @@ public:
           pqxx::work countTxn(pgConn);
           auto newTargetCount =
               countTxn.exec("SELECT COUNT(*) FROM \"" + lowerSchemaName +
-                            "\".\"" + table_name + "\";");
+                            "\".\"" + lowerTableNamePG + "\";");
           countTxn.commit();
           targetCount = newTargetCount[0][0].as<int>();
           Logger::info(LogCategory::TRANSFER,
@@ -891,8 +902,8 @@ public:
 
             // TRUNCATE la tabla destino
             pqxx::work truncateTxn(pgConn);
-            truncateTxn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
-                             table_name + "\" CASCADE;");
+              truncateTxn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
+                               lowerTableNamePG + "\" CASCADE;");
             truncateTxn.commit();
 
             // Resetear last_offset a 0 para re-sincronización completa
@@ -1034,7 +1045,7 @@ public:
                              table_name);
             pqxx::work txn(pgConn);
             txn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
-                     table_name + "\" CASCADE;");
+                     lowerTableNamePG + "\" CASCADE;");
             txn.commit();
           }
         } else if (table.status == "RESET") {
@@ -1043,7 +1054,7 @@ public:
                            table_name);
           pqxx::work txn(pgConn);
           txn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
-                   table_name + "\" CASCADE;");
+                   lowerTableNamePG + "\" CASCADE;");
           txn.exec("UPDATE metadata.catalog SET last_offset='0' WHERE "
                    "schema_name='" +
                    escapeSQL(schema_name) + "' AND table_name='" +
@@ -1088,39 +1099,13 @@ public:
         // CRITICAL: Add timeout to prevent infinite loops
         auto startTime = std::chrono::steady_clock::now();
         const auto MAX_PROCESSING_TIME =
-            std::chrono::hours(2); // 2 hours max per table
+            std::chrono::hours(24);
 
         while (hasMoreData) {
           chunkNumber++;
           const size_t CHUNK_SIZE = SyncConfig::getChunkSize();
 
-          // CRITICAL: Check timeout to prevent infinite loops
           auto currentTime = std::chrono::steady_clock::now();
-          auto elapsedTime = currentTime - startTime;
-          if (elapsedTime > MAX_PROCESSING_TIME) {
-            Logger::error(
-                LogCategory::TRANSFER,
-                "CRITICAL: Maximum processing time reached (" +
-                    std::to_string(
-                        std::chrono::duration_cast<std::chrono::minutes>(
-                            elapsedTime)
-                            .count()) +
-                    " minutes) for table " + schema_name + "." + table_name +
-                    " - breaking to prevent infinite loop");
-            hasMoreData = false;
-            break;
-          }
-
-          // CRITICAL: Add maximum chunk limit to prevent infinite loops
-          if (chunkNumber > 10000) {
-            Logger::error(LogCategory::TRANSFER,
-                          "CRITICAL: Maximum chunk limit reached (" +
-                              std::to_string(chunkNumber) + ") for table " +
-                              schema_name + "." + table_name +
-                              " - breaking to prevent infinite loop");
-            hasMoreData = false;
-            break;
-          }
 
           // Asegurar que estamos en la base de datos correcta
           executeQueryMSSQL(dbc, "USE [" + databaseName + "];");
@@ -1441,8 +1426,14 @@ public:
       }
 
       // Usar una consulta optimizada con índice en la columna de tiempo
-      std::string query = "SELECT MAX(\"" + lastSyncColumn + "\") FROM \"" +
-                          schema_name + "\".\"" + table_name + "\";";
+      std::string lowerSchema = schema_name;
+      std::transform(lowerSchema.begin(), lowerSchema.end(), lowerSchema.begin(), ::tolower);
+      std::string lowerTable = table_name;
+      std::transform(lowerTable.begin(), lowerTable.end(), lowerTable.begin(), ::tolower);
+      std::string lowerColumn = lastSyncColumn;
+      std::transform(lowerColumn.begin(), lowerColumn.end(), lowerColumn.begin(), ::tolower);
+      std::string query = "SELECT MAX(\"" + lowerColumn + "\") FROM \"" +
+                          lowerSchema + "\".\"" + lowerTable + "\";";
 
       pqxx::work txn(pgConn);
       auto result = txn.exec(query);
@@ -1485,33 +1476,37 @@ public:
       }
 
       if (!lastSyncColumn.empty()) {
+        std::string lowerSchemaName = schema_name;
+        std::transform(lowerSchemaName.begin(), lowerSchemaName.end(), lowerSchemaName.begin(), ::tolower);
+        std::string lowerTableName = table_name;
+        std::transform(lowerTableName.begin(), lowerTableName.end(), lowerTableName.begin(), ::tolower);
+        std::string lowerLastSyncColumn = lastSyncColumn;
+        std::transform(lowerLastSyncColumn.begin(), lowerLastSyncColumn.end(), lowerLastSyncColumn.begin(), ::tolower);
 
         auto tableCheck =
             txn.exec("SELECT COUNT(*) FROM information_schema.tables "
                      "WHERE table_schema='" +
-                     schema_name +
+                     lowerSchemaName +
                      "' "
                      "AND table_name='" +
-                     table_name + "';");
+                     lowerTableName + "';");
 
         if (!tableCheck.empty() && tableCheck[0][0].as<int>() > 0) {
           // Verificar el tipo de columna antes de hacer el cast
           auto columnTypeCheck =
               txn.exec("SELECT data_type FROM information_schema.columns "
                        "WHERE table_schema='" +
-                       schema_name + "' AND table_name='" + table_name +
-                       "' AND column_name='" + lastSyncColumn + "';");
+                       lowerSchemaName + "' AND table_name='" + lowerTableName +
+                       "' AND column_name='" + lowerLastSyncColumn + "';");
 
           if (!columnTypeCheck.empty()) {
             std::string columnType = columnTypeCheck[0][0].as<std::string>();
             if (columnType == "time without time zone") {
-              // Para columnas TIME, usar NOW() en lugar de MAX()
               updateQuery += ", last_sync_time=NOW()";
             } else {
-              // Para columnas TIMESTAMP/DATE, usar MAX con cast apropiado
               updateQuery += ", last_sync_time=(SELECT MAX(\"" +
-                             lastSyncColumn + "\")::timestamp FROM \"" +
-                             schema_name + "\".\"" + table_name + "\")";
+                             lowerLastSyncColumn + "\")::timestamp FROM \"" +
+                             lowerSchemaName + "\".\"" + lowerTableName + "\")";
             }
           } else {
             updateQuery += ", last_sync_time=NOW()";
@@ -1747,8 +1742,11 @@ public:
         }
 
         // Verificar si el registro existe en PostgreSQL
+        std::string lowerTableNamePG = table_name;
+        std::transform(lowerTableNamePG.begin(), lowerTableNamePG.end(),
+                       lowerTableNamePG.begin(), ::tolower);
         std::string checkQuery = "SELECT COUNT(*) FROM \"" + lowerSchemaName +
-                                 "\".\"" + table_name + "\" WHERE " +
+                                 "\".\"" + lowerTableNamePG + "\" WHERE " +
                                  whereClause;
 
         pqxx::work txn(pgConn);
@@ -1794,8 +1792,11 @@ public:
       const std::string &whereClause) {
     try {
       // Obtener el registro actual de PostgreSQL
+      std::string lowerTableName = tableName;
+      std::transform(lowerTableName.begin(), lowerTableName.end(),
+                     lowerTableName.begin(), ::tolower);
       std::string selectQuery = "SELECT * FROM \"" + schemaName + "\".\"" +
-                                tableName + "\" WHERE " + whereClause;
+                                lowerTableName + "\" WHERE " + whereClause;
 
       pqxx::work txn(pgConn);
       auto result = txn.exec(selectQuery);
@@ -1833,7 +1834,7 @@ public:
       if (hasChanges) {
         // Ejecutar UPDATE
         std::string updateQuery =
-            "UPDATE \"" + schemaName + "\".\"" + tableName + "\" SET ";
+            "UPDATE \"" + schemaName + "\".\"" + lowerTableName + "\" SET ";
         for (size_t i = 0; i < updateFields.size(); ++i) {
           if (i > 0)
             updateQuery += ", ";
@@ -2348,14 +2349,19 @@ private:
                          const std::string &lowerSchemaName,
                          const std::string &tableName) {
     try {
+      std::string lowerTableName = tableName;
+      std::transform(lowerTableName.begin(), lowerTableName.end(),
+                     lowerTableName.begin(), ::tolower);
       std::string insertQuery =
-          "INSERT INTO \"" + lowerSchemaName + "\".\"" + tableName + "\" (";
+          "INSERT INTO \"" + lowerSchemaName + "\".\"" + lowerTableName + "\" (";
 
       // Construir lista de columnas
       for (size_t i = 0; i < columnNames.size(); ++i) {
         if (i > 0)
           insertQuery += ", ";
-        insertQuery += "\"" + columnNames[i] + "\"";
+        std::string col = columnNames[i];
+        std::transform(col.begin(), col.end(), col.begin(), ::tolower);
+        insertQuery += "\"" + col + "\"";
       }
       insertQuery += ") VALUES ";
 

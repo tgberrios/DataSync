@@ -29,6 +29,8 @@ std::string cleanSchemaNameForPostgres(const std::string &schemaName) {
         schemaName);
   }
 
+  // Lowercase for PostgreSQL identifier standardization
+  std::transform(cleaned.begin(), cleaned.end(), cleaned.begin(), ::tolower);
   return cleaned;
 }
 
@@ -64,12 +66,15 @@ bool DataQuality::validateTable(pqxx::connection &conn,
 
   try {
     QualityMetrics metrics;
-    metrics.schema_name = schema;
-    metrics.table_name = table;
+    std::string lowerSchema = cleanSchemaNameForPostgres(schema);
+    std::string lowerTable = table;
+    std::transform(lowerTable.begin(), lowerTable.end(), lowerTable.begin(), ::tolower);
+    metrics.schema_name = lowerSchema;
+    metrics.table_name = lowerTable;
     metrics.source_db_engine = engine;
 
     // Collect all metrics
-    metrics = collectMetrics(conn, schema, table);
+    metrics = collectMetrics(conn, lowerSchema, lowerTable);
 
     // Calculate duration
     auto end = std::chrono::high_resolution_clock::now();
@@ -91,8 +96,11 @@ DataQuality::QualityMetrics
 DataQuality::collectMetrics(pqxx::connection &conn, const std::string &schema,
                             const std::string &table) {
   QualityMetrics metrics;
-  metrics.schema_name = schema;
-  metrics.table_name = table;
+  std::string lowerSchema = cleanSchemaNameForPostgres(schema);
+  std::string lowerTable = table;
+  std::transform(lowerTable.begin(), lowerTable.end(), lowerTable.begin(), ::tolower);
+  metrics.schema_name = lowerSchema;
+  metrics.table_name = lowerTable;
 
   try {
     // Check data types and collect type-related metrics

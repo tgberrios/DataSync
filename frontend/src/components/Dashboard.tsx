@@ -221,6 +221,7 @@ const Dashboard = () => {
               <Value>No Data: {stats.syncStatus.noData}</Value>
               <Value>Skip: {stats.syncStatus.skip || 0}</Value>
               <Value>Errors: {stats.syncStatus.errors}</Value>
+              <Value>Total Tables: {stats.syncStatus.totalTables || 0}</Value>
             </Grid>
             
             {/* Data Progress Metrics */}
