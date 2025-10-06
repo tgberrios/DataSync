@@ -446,7 +446,7 @@ private:
                          " seconds");
 
         auto startTime = std::chrono::high_resolution_clock::now();
-        mariaToPg.transferDataMariaDBToPostgres();
+        mariaToPg.transferDataMariaDBToPostgresParallel();
         auto endTime = std::chrono::high_resolution_clock::now();
 
         auto duration = std::chrono::duration_cast<std::chrono::seconds>(
