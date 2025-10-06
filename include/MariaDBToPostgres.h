@@ -239,6 +239,10 @@ public:
     std::vector<std::vector<std::string>> results =
         executeQueryMariaDB(mariadbConn, query);
 
+    std::string lowerTableName = table_name;
+    std::transform(lowerTableName.begin(), lowerTableName.end(),
+                   lowerTableName.begin(), ::tolower);
+
     for (const auto &row : results) {
       if (row.size() < 3)
         continue;
@@ -248,10 +252,12 @@ public:
       std::string columnName = row[2];
       std::transform(columnName.begin(), columnName.end(), columnName.begin(),
                      ::tolower);
+      std::transform(indexName.begin(), indexName.end(), indexName.begin(),
+                     ::tolower);
 
       std::string createQuery = "CREATE INDEX IF NOT EXISTS \"" + indexName +
                                 "\" ON \"" + lowerSchemaName + "\".\"" +
-                                table_name + "\" (\"" + columnName + "\");";
+                                lowerTableName + "\" (\"" + columnName + "\");";
 
       try {
         pqxx::work txn(pgConn);
@@ -363,6 +369,9 @@ public:
         std::string lowerSchema = table.schema_name;
         std::transform(lowerSchema.begin(), lowerSchema.end(),
                        lowerSchema.begin(), ::tolower);
+        std::string lowerTableName = table.table_name;
+        std::transform(lowerTableName.begin(), lowerTableName.end(),
+                       lowerTableName.begin(), ::tolower);
 
         {
           pqxx::work txn(pgConn);
@@ -371,7 +380,7 @@ public:
         }
 
         std::string createQuery = "CREATE TABLE IF NOT EXISTS \"" +
-                                  lowerSchema + "\".\"" + table.table_name +
+                                  lowerSchema + "\".\"" + lowerTableName +
                                   "\" (";
         std::vector<std::string> primaryKeys;
 
@@ -525,8 +534,11 @@ public:
           }
           pkSelectQuery += "\"" + pkColumns[i] + "\"";
         }
+        std::string lowerTableName = table_name;
+        std::transform(lowerTableName.begin(), lowerTableName.end(),
+                       lowerTableName.begin(), ::tolower);
         pkSelectQuery +=
-            " FROM \"" + lowerSchemaName + "\".\"" + table_name + "\"";
+            " FROM \"" + lowerSchemaName + "\".\"" + lowerTableName + "\"";
         pkSelectQuery += " LIMIT " + std::to_string(BATCH_SIZE) + " OFFSET " +
                          std::to_string(offset) + ";";
 
@@ -649,6 +661,12 @@ public:
 
       std::vector<std::vector<std::string>> columnNames =
           executeQueryMariaDB(mariadbConn, columnQuery);
+      for (auto &row : columnNames) {
+        if (!row.empty()) {
+          std::transform(row[0].begin(), row[0].end(), row[0].begin(),
+                         ::tolower);
+        }
+      }
       if (columnNames.empty() || columnNames[0].empty()) {
         Logger::warning(LogCategory::TRANSFER,
                         "Could not get column names for " + schema_name + "." +
@@ -720,8 +738,11 @@ public:
         }
 
         // Verificar si el registro existe en PostgreSQL
+        std::string lowerTableName = table_name;
+        std::transform(lowerTableName.begin(), lowerTableName.end(),
+                       lowerTableName.begin(), ::tolower);
         std::string checkQuery = "SELECT COUNT(*) FROM \"" + lowerSchemaName +
-                                 "\".\"" + table_name + "\" WHERE " +
+                                 "\".\"" + lowerTableName + "\" WHERE " +
                                  whereClause;
 
         pqxx::work txn(pgConn);
@@ -786,6 +807,8 @@ public:
 
       for (size_t i = 0; i < columnNames.size(); ++i) {
         std::string columnName = columnNames[i][0];
+        std::transform(columnName.begin(), columnName.end(), columnName.begin(),
+                       ::tolower);
         std::string newValue = newRecord[i];
 
         // Obtener valor actual de PostgreSQL
@@ -963,8 +986,11 @@ public:
         }
         // Obtener conteo de registros en la tabla destino
 
+        std::string lowerTableName = table_name;
+        std::transform(lowerTableName.begin(), lowerTableName.end(),
+                       lowerTableName.begin(), ::tolower);
         std::string targetCountQuery = "SELECT COUNT(*) FROM \"" +
-                                       lowerSchemaName + "\".\"" + table_name +
+                                       lowerSchemaName + "\".\"" + lowerTableName +
                                        "\";";
         size_t targetCount = 0;
         try {
@@ -1190,7 +1216,7 @@ public:
               // TRUNCATE la tabla destino
               pqxx::work truncateTxn(pgConn);
               truncateTxn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
-                               table_name + "\" CASCADE;");
+                               lowerTableName + "\" CASCADE;");
               truncateTxn.commit();
 
               // Resetear last_offset a 0 para re-sincronización completa
@@ -1220,11 +1246,11 @@ public:
           std::string lowerSchemaName = schema_name;
           std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
                          lowerSchemaName.begin(), ::tolower);
-          pqxx::work countTxn(pgConn);
-          auto newTargetCount =
-              countTxn.exec("SELECT COUNT(*) FROM \"" + lowerSchemaName +
-                            "\".\"" + table_name + "\";");
-          countTxn.commit();
+      pqxx::work countTxn(pgConn);
+      auto newTargetCount =
+          countTxn.exec("SELECT COUNT(*) FROM \"" + lowerSchemaName +
+                        "\".\"" + lowerTableName + "\";");
+      countTxn.commit();
           targetCount = newTargetCount[0][0].as<int>();
           Logger::info(LogCategory::TRANSFER,
                        "After deletes: source=" + std::to_string(sourceCount) +
@@ -1251,7 +1277,7 @@ public:
             // TRUNCATE la tabla destino
             pqxx::work truncateTxn(pgConn);
             truncateTxn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
-                             table_name + "\" CASCADE;");
+                             lowerTableName + "\" CASCADE;");
             truncateTxn.commit();
 
             // Resetear last_offset a 0 para re-sincronización completa
@@ -1365,9 +1391,12 @@ public:
             Logger::info(LogCategory::TRANSFER,
                          "Truncating table: " + lowerSchemaName + "." +
                              table_name);
-            pqxx::work txn(pgConn);
-            txn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
-                     table_name + "\" CASCADE;");
+          pqxx::work txn(pgConn);
+          std::string lowerTableName = table_name;
+          std::transform(lowerTableName.begin(), lowerTableName.end(),
+                         lowerTableName.begin(), ::tolower);
+          txn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
+                   lowerTableName + "\" CASCADE;");
             txn.commit();
           }
         } else if (table.status == "RESET") {
@@ -1375,8 +1404,11 @@ public:
                        "Processing RESET table: " + schema_name + "." +
                            table_name);
           pqxx::work txn(pgConn);
+          std::string lowerTableName = table_name;
+          std::transform(lowerTableName.begin(), lowerTableName.end(),
+                         lowerTableName.begin(), ::tolower);
           txn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
-                   table_name + "\" CASCADE;");
+                   lowerTableName + "\" CASCADE;");
           txn.exec("UPDATE metadata.catalog SET last_offset='0' WHERE "
                    "schema_name='" +
                    escapeSQL(schema_name) + "' AND table_name='" +
@@ -1425,39 +1457,13 @@ public:
         // CRITICAL: Add timeout to prevent infinite loops
         auto startTime = std::chrono::steady_clock::now();
         const auto MAX_PROCESSING_TIME =
-            std::chrono::hours(2); // 2 hours max per table
+            std::chrono::hours(24);
 
         while (hasMoreData) {
           chunkNumber++;
           const size_t CHUNK_SIZE = SyncConfig::getChunkSize();
 
-          // CRITICAL: Check timeout to prevent infinite loops
           auto currentTime = std::chrono::steady_clock::now();
-          auto elapsedTime = currentTime - startTime;
-          if (elapsedTime > MAX_PROCESSING_TIME) {
-            Logger::error(
-                LogCategory::TRANSFER,
-                "CRITICAL: Maximum processing time reached (" +
-                    std::to_string(
-                        std::chrono::duration_cast<std::chrono::minutes>(
-                            elapsedTime)
-                            .count()) +
-                    " minutes) for table " + schema_name + "." + table_name +
-                    " - breaking to prevent infinite loop");
-            hasMoreData = false;
-            break;
-          }
-
-          // CRITICAL: Add maximum chunk limit to prevent infinite loops
-          if (chunkNumber > 10000) {
-            Logger::error(LogCategory::TRANSFER,
-                          "CRITICAL: Maximum chunk limit reached (" +
-                              std::to_string(chunkNumber) + ") for table " +
-                              schema_name + "." + table_name +
-                              " - breaking to prevent infinite loop");
-            hasMoreData = false;
-            break;
-          }
 
           Logger::info(LogCategory::TRANSFER,
                        "Processing chunk " + std::to_string(chunkNumber) +
@@ -1837,6 +1843,12 @@ public:
         std::string lowerSchemaName = schema_name;
         std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
                        lowerSchemaName.begin(), ::tolower);
+        std::string lowerTableName = table_name;
+        std::transform(lowerTableName.begin(), lowerTableName.end(),
+                       lowerTableName.begin(), ::tolower);
+        std::string lowerLastSyncColumn = lastSyncColumn;
+        std::transform(lowerLastSyncColumn.begin(), lowerLastSyncColumn.end(),
+                       lowerLastSyncColumn.begin(), ::tolower);
 
         auto tableCheck =
             txn.exec("SELECT COUNT(*) FROM information_schema.tables "
@@ -1844,12 +1856,12 @@ public:
                      lowerSchemaName +
                      "' "
                      "AND table_name='" +
-                     table_name + "';");
+                     lowerTableName + "';");
 
         if (!tableCheck.empty() && tableCheck[0][0].as<int>() > 0) {
-          updateQuery += ", last_sync_time=(SELECT MAX(\"" + lastSyncColumn +
+          updateQuery += ", last_sync_time=(SELECT MAX(\"" + lowerLastSyncColumn +
                          "\")::timestamp FROM \"" + lowerSchemaName + "\".\"" +
-                         table_name + "\")";
+                         lowerTableName + "\")";
         } else {
           updateQuery += ", last_sync_time=NOW()";
         }
@@ -2005,11 +2017,14 @@ private:
     size_t deletedCount = 0;
 
     try {
+      std::string lowerTableName = table_name;
+      std::transform(lowerTableName.begin(), lowerTableName.end(),
+                     lowerTableName.begin(), ::tolower);
       pqxx::work txn(pgConn);
 
       // Construir query DELETE
       std::string deleteQuery = "DELETE FROM \"" + lowerSchemaName + "\".\"" +
-                                table_name + "\" WHERE (";
+                                lowerTableName + "\" WHERE (";
 
       for (size_t i = 0; i < deletedPKs.size(); ++i) {
         if (i > 0)
@@ -2359,14 +2374,19 @@ private:
                          const std::string &lowerSchemaName,
                          const std::string &tableName) {
     try {
+      std::string lowerTableName = tableName;
+      std::transform(lowerTableName.begin(), lowerTableName.end(),
+                     lowerTableName.begin(), ::tolower);
       std::string insertQuery =
-          "INSERT INTO \"" + lowerSchemaName + "\".\"" + tableName + "\" (";
+          "INSERT INTO \"" + lowerSchemaName + "\".\"" + lowerTableName + "\" (";
 
       // Construir lista de columnas
       for (size_t i = 0; i < columnNames.size(); ++i) {
         if (i > 0)
           insertQuery += ", ";
-        insertQuery += "\"" + columnNames[i] + "\"";
+        std::string col = columnNames[i];
+        std::transform(col.begin(), col.end(), col.begin(), ::tolower);
+        insertQuery += "\"" + col + "\"";
       }
       insertQuery += ") VALUES ";
 
@@ -2475,14 +2495,19 @@ private:
                                const std::vector<std::string> &pkColumns,
                                const std::string &schemaName,
                                const std::string &tableName) {
+    std::string lowerTableName = tableName;
+    std::transform(lowerTableName.begin(), lowerTableName.end(),
+                   lowerTableName.begin(), ::tolower);
     std::string query =
-        "INSERT INTO \"" + schemaName + "\".\"" + tableName + "\" (";
+        "INSERT INTO \"" + schemaName + "\".\"" + lowerTableName + "\" (";
 
     // Lista de columnas
-    for (size_t i = 0; i < columnNames.size(); ++i) {
-      if (i > 0)
-        query += ", ";
-      query += "\"" + columnNames[i] + "\"";
+      for (size_t i = 0; i < columnNames.size(); ++i) {
+        if (i > 0)
+          query += ", ";
+        std::string col = columnNames[i];
+        std::transform(col.begin(), col.end(), col.begin(), ::tolower);
+        query += "\"" + col + "\"";
     }
     query += ") VALUES ";
 
@@ -2497,7 +2522,9 @@ private:
     for (size_t i = 0; i < pkColumns.size(); ++i) {
       if (i > 0)
         conflictClause += ", ";
-      conflictClause += "\"" + pkColumns[i] + "\"";
+      std::string col = pkColumns[i];
+      std::transform(col.begin(), col.end(), col.begin(), ::tolower);
+      conflictClause += "\"" + col + "\"";
     }
     conflictClause += ") DO UPDATE SET ";
 
@@ -2505,8 +2532,10 @@ private:
     for (size_t i = 0; i < columnNames.size(); ++i) {
       if (i > 0)
         conflictClause += ", ";
+      std::string col = columnNames[i];
+      std::transform(col.begin(), col.end(), col.begin(), ::tolower);
       conflictClause +=
-          "\"" + columnNames[i] + "\" = EXCLUDED.\"" + columnNames[i] + "\"";
+          "\"" + col + "\" = EXCLUDED.\"" + col + "\"";
     }
 
     return conflictClause;

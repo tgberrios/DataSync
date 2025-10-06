@@ -417,9 +417,11 @@ export const catalogApi = {
     active: boolean
   ) => {
     try {
+      const s = schema_name.toLowerCase();
+      const t = table_name.toLowerCase();
       const response = await api.patch<CatalogEntry>("/catalog/status", {
-        schema_name,
-        table_name,
+        schema_name: s,
+        table_name: t,
         db_engine,
         active,
       });
@@ -437,9 +439,11 @@ export const catalogApi = {
     db_engine: string
   ) => {
     try {
+      const s = schema_name.toLowerCase();
+      const t = table_name.toLowerCase();
       const response = await api.post<CatalogEntry>("/catalog/sync", {
-        schema_name,
-        table_name,
+        schema_name: s,
+        table_name: t,
         db_engine,
       });
       return response.data;
@@ -478,13 +482,15 @@ export const catalogApi = {
     db_engine: string
   ) => {
     try {
+      const s = schema_name.toLowerCase();
+      const t = table_name.toLowerCase();
       const response = await api.patch<{
         message: string;
         affectedRows: number;
         entry: CatalogEntry;
       }>("/catalog/skip-table", {
-        schema_name,
-        table_name,
+        schema_name: s,
+        table_name: t,
         db_engine,
       });
       return response.data;
@@ -497,11 +503,12 @@ export const catalogApi = {
   // Desactivar schema completo
   deactivateSchema: async (schema_name: string) => {
     try {
+      const s = schema_name.toLowerCase();
       const response = await api.patch<{
         message: string;
         affectedRows: number;
         rows: CatalogEntry[];
-      }>("/catalog/deactivate-schema", { schema_name });
+      }>("/catalog/deactivate-schema", { schema_name: s });
       return response.data;
     } catch (error) {
       console.error("Error deactivating schema:", error);

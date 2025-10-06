@@ -88,8 +88,8 @@ void MetricsCollector::collectTransferMetrics() {
 
     std::string transferQuery =
         "SELECT "
-        "c.schema_name,"
-        "c.table_name,"
+        "lower(c.schema_name) as schema_name,"
+        "lower(c.table_name) as table_name,"
         "c.db_engine,"
         "c.status,"
         "c.last_sync_time,"
@@ -97,8 +97,8 @@ void MetricsCollector::collectTransferMetrics() {
         "COALESCE(pg.n_live_tup, 0) as current_records,"
         "COALESCE(pg_total_relation_size(pc.oid), 0) as table_size_bytes "
         "FROM metadata.catalog c "
-        "LEFT JOIN pg_stat_user_tables pg ON c.schema_name = pg.schemaname AND "
-        "c.table_name = pg.relname "
+        "LEFT JOIN pg_stat_user_tables pg ON lower(c.schema_name) = pg.schemaname AND "
+        "lower(c.table_name) = pg.relname "
         "LEFT JOIN pg_class pc ON pg.relname = pc.relname AND pg.schemaname "
         "= pc.relnamespace::regnamespace::text "
         "WHERE c.db_engine IS NOT NULL AND c.active = true;";
@@ -233,7 +233,7 @@ void MetricsCollector::collectPerformanceMetrics() {
         "LEFT JOIN pg_class pc ON pst.relname = pc.relname "
         "AND pst.schemaname = "
         "pc.relnamespace::regnamespace::text "
-        "WHERE pst.schemaname IN (SELECT DISTINCT schema_name FROM "
+        "WHERE pst.schemaname IN (SELECT DISTINCT lower(schema_name) FROM "
         "metadata.catalog);";
 
     auto result = txn.exec(performanceQuery);
@@ -271,8 +271,8 @@ void MetricsCollector::collectMetadataMetrics() {
 
     // Query para obtener metadatos
     std::string metadataQuery = "SELECT "
-                                "schema_name,"
-                                "table_name,"
+                                "lower(schema_name) as schema_name,"
+                                "lower(table_name) as table_name,"
                                 "db_engine,"
                                 "status,"
                                 "active,"
@@ -331,8 +331,8 @@ void MetricsCollector::collectTimestampMetrics() {
 
     std::string timestampQuery =
         "SELECT "
-        "schema_name,"
-        "table_name,"
+        "lower(schema_name) as schema_name,"
+        "lower(table_name) as table_name,"
         "db_engine,"
         "last_sync_time "
         "FROM metadata.catalog "
@@ -532,9 +532,14 @@ MetricsCollector::calculateBytesTransferred(const std::string &schema_name,
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
     pqxx::work txn(conn);
 
+    std::string lowerSchema = schema_name;
+    std::transform(lowerSchema.begin(), lowerSchema.end(), lowerSchema.begin(), ::tolower);
+    std::string lowerTable = table_name;
+    std::transform(lowerTable.begin(), lowerTable.end(), lowerTable.begin(), ::tolower);
+
     std::string sizeQuery =
         "SELECT COALESCE(pg_total_relation_size(to_regclass('\"" +
-        escapeSQL(schema_name) + "\".\"" + escapeSQL(table_name) +
+        escapeSQL(lowerSchema) + "\".\"" + escapeSQL(lowerTable) +
         "\"')), 0) as size_bytes;";
 
     auto result = txn.exec(sizeQuery);

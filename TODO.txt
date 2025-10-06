@@ -6,3 +6,11 @@ Mejorar queries existentes
 Optimizar índices
 Agregar más métricas útiles
 Mejorar la UI/UX
+
+
+
+
+podemos ir prepando los batchs mientras insertamos o hacer un non stop de creaciones de batches para que siempre esten listos para la insercion porque lo que toma mas tiempo es la creacion de los batches si ya estan listos a la hora de insertas ?
+durante full load que piensas ? 
+
+paralelismo ? 

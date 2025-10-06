@@ -41,6 +41,29 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Middleware: normalize schema/table identifiers to lowercase in body and query
+app.use((req, _res, next) => {
+  try {
+    if (req.body) {
+      if (typeof req.body.schema_name === "string") {
+        req.body.schema_name = req.body.schema_name.toLowerCase();
+      }
+      if (typeof req.body.table_name === "string") {
+        req.body.table_name = req.body.table_name.toLowerCase();
+      }
+    }
+    if (req.query) {
+      if (typeof req.query.schema_name === "string") {
+        req.query.schema_name = req.query.schema_name.toLowerCase();
+      }
+      if (typeof req.query.table_name === "string") {
+        req.query.table_name = req.query.table_name.toLowerCase();
+      }
+    }
+  } catch {}
+  next();
+});
+
 const pool = new Pool({
   host: config.database.postgres.host,
   port: config.database.postgres.port,
@@ -293,13 +316,11 @@ app.get("/api/dashboard/stats", async (req, res) => {
 
     const currentProcessText =
       currentProcessingTable.rows.length > 0
-        ? `${currentProcessingTable.rows[0].schema_name}.${
-            currentProcessingTable.rows[0].table_name
-          } [${currentProcessingTable.rows[0].db_engine}] (${
-            currentProcessingTable.rows[0].last_offset || 0
-          }/${currentProcessingTable.rows[0].table_size || 0} - ${
-            currentProcessingTable.rows[0].progress_percentage || 0
-          }%) - Status: ${currentProcessingTable.rows[0].status}`
+        ? `${String(currentProcessingTable.rows[0].schema_name).toLowerCase()}.${
+            String(currentProcessingTable.rows[0].table_name).toLowerCase()
+          } [${currentProcessingTable.rows[0].db_engine}] (${currentProcessingTable.rows[0].last_offset || 0}/${
+            currentProcessingTable.rows[0].table_size || 0
+          } - ${currentProcessingTable.rows[0].progress_percentage || 0}%) - Status: ${currentProcessingTable.rows[0].status}`
         : "No active transfers";
 
     // 2. TRANSFER PERFORMANCE BY ENGINE
@@ -400,6 +421,9 @@ app.get("/api/dashboard/stats", async (req, res) => {
       WHERE created_at > NOW() - INTERVAL '1 hour'
     `);
 
+    // Total tables count
+    const totalTablesResult = await pool.query(`SELECT COUNT(*) as total FROM metadata.catalog`);
+
     // Construir el objeto de respuesta
     const listeningChanges = parseInt(
       syncStatus.rows[0]?.listening_changes || 0
@@ -420,6 +444,7 @@ app.get("/api/dashboard/stats", async (req, res) => {
         currentProcess: currentProcessText,
         totalLastOffset: parseInt(dataProgress.rows[0]?.total_last_offset || 0),
         totalData: parseInt(dataProgress.rows[0]?.total_data || 0),
+        totalTables: parseInt(totalTablesResult.rows[0]?.total || 0),
       },
       systemResources: {
         cpuUsage:
@@ -837,18 +862,36 @@ app.get("/api/governance/data", async (req, res) => {
         ? "WHERE " + whereConditions.join(" AND ")
         : "";
 
+    // Sorting
+    const allowedSortFields = new Set([
+      "table_name",
+      "schema_name",
+      "inferred_source_engine",
+      "data_category",
+      "business_domain",
+      "health_status",
+      "sensitivity_level",
+      "data_quality_score",
+      "table_size_mb",
+      "total_rows",
+      "access_frequency",
+      "last_analyzed",
+    ]);
+    const sortField = String(req.query.sort_field || "");
+    const sortDir = String(req.query.sort_direction || "desc").toLowerCase() === "asc" ? "ASC" : "DESC";
+    let orderClause =
+      "ORDER BY CASE health_status WHEN 'HEALTHY' THEN 1 WHEN 'WARNING' THEN 2 WHEN 'CRITICAL' THEN 3 ELSE 4 END";
+    if (allowedSortFields.has(sortField)) {
+      orderClause = `ORDER BY ${sortField} ${sortDir}`;
+    }
+
     // Query principal
     const result = await pool.query(
       `
       SELECT *
       FROM metadata.data_governance_catalog
       ${whereClause}
-      ORDER BY CASE health_status
-        WHEN 'HEALTHY' THEN 1
-        WHEN 'WARNING' THEN 2
-        WHEN 'CRITICAL' THEN 3
-        ELSE 4
-      END
+      ${orderClause}
       LIMIT $${paramCount} OFFSET $${paramCount + 1}
     `,
       params
@@ -1230,6 +1273,9 @@ app.get("/api/logs/errors", async (req, res) => {
       });
     }
 
+    // Enforce only ERROR level for error logs view
+    filteredLines = filteredLines.filter((log) => log.level === "ERROR");
+
     // Obtener las últimas N líneas
     const lastLines = filteredLines.slice(-parseInt(lines));
 
@@ -1438,6 +1484,7 @@ app.delete("/api/logs", async (req, res) => {
   try {
     const logDir = path.join(process.cwd(), "..");
     const logFilePath = path.join(logDir, "DataSync.log");
+    const errorLogFilePath = path.join(logDir, "DataSyncErrors.log");
 
     let totalClearedSize = 0;
     let clearedFiles = [];
@@ -1457,6 +1504,30 @@ app.delete("/api/logs", async (req, res) => {
     );
 
     for (const rotatedFile of rotatedLogFiles) {
+      const rotatedFilePath = path.join(logDir, rotatedFile);
+      try {
+        const stats = fs.statSync(rotatedFilePath);
+        totalClearedSize += stats.size;
+        clearedFiles.push(rotatedFile);
+        fs.unlinkSync(rotatedFilePath);
+      } catch (err) {
+        console.warn(`Warning: Could not delete ${rotatedFile}:`, err.message);
+      }
+    }
+
+    // Clear the error log file
+    if (fs.existsSync(errorLogFilePath)) {
+      const stats = fs.statSync(errorLogFilePath);
+      totalClearedSize += stats.size;
+      clearedFiles.push("DataSyncErrors.log");
+      fs.writeFileSync(errorLogFilePath, "");
+    }
+
+    // Delete rotated error log files (DataSyncErrors.log.1, ...)
+    const rotatedErrorLogFiles = files.filter((file) =>
+      file.match(/^DataSyncErrors\.log\.\d+$/)
+    );
+    for (const rotatedFile of rotatedErrorLogFiles) {
       const rotatedFilePath = path.join(logDir, rotatedFile);
       try {
         const stats = fs.statSync(rotatedFilePath);
@@ -1545,6 +1616,9 @@ app.get("/api/dashboard/currently-processing", async (req, res) => {
 
     const response = {
       ...processingTable,
+      schema_name: String(processingTable.schema_name).toLowerCase(),
+      table_name: String(processingTable.table_name).toLowerCase(),
+      db_engine: String(processingTable.db_engine),
       total_records: parseInt(countResult.rows[0]?.total_records || 0),
     };
 

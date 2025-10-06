@@ -168,13 +168,17 @@ DataGovernance::extractTableMetadata(const std::string &schema_name,
 
     // Verify that the table exists before analyzing
     pqxx::work checkTxn(conn);
+    std::string lowerSchema = schema_name;
+    std::transform(lowerSchema.begin(), lowerSchema.end(), lowerSchema.begin(), ::tolower);
+    std::string lowerTable = table_name;
+    std::transform(lowerTable.begin(), lowerTable.end(), lowerTable.begin(), ::tolower);
     std::string checkTableQuery =
         "SELECT COUNT(*) FROM information_schema.tables "
         "WHERE table_schema = '" +
-        escapeSQL(schema_name) +
+        escapeSQL(lowerSchema) +
         "' "
         "AND table_name = '" +
-        escapeSQL(table_name) + "';";
+        escapeSQL(lowerTable) + "';";
 
     auto checkResult = checkTxn.exec(checkTableQuery);
     checkTxn.commit();
@@ -184,10 +188,10 @@ DataGovernance::extractTableMetadata(const std::string &schema_name,
                                "' does not exist");
     }
 
-    analyzeTableStructure(conn, schema_name, table_name, metadata);
-    analyzeDataQuality(conn, schema_name, table_name, metadata);
-    analyzeUsageStatistics(conn, schema_name, table_name, metadata);
-    analyzeHealthStatus(conn, schema_name, table_name, metadata);
+    analyzeTableStructure(conn, lowerSchema, lowerTable, metadata);
+    analyzeDataQuality(conn, lowerSchema, lowerTable, metadata);
+    analyzeUsageStatistics(conn, lowerSchema, lowerTable, metadata);
+    analyzeHealthStatus(conn, lowerSchema, lowerTable, metadata);
 
     classifyTable(metadata);
     inferSourceEngine(metadata);
@@ -220,27 +224,31 @@ void DataGovernance::analyzeTableStructure(pqxx::connection &conn,
   try {
     pqxx::work txn(conn);
 
+    std::string lowerSchema = schema_name;
+    std::transform(lowerSchema.begin(), lowerSchema.end(), lowerSchema.begin(), ::tolower);
+    std::string lowerTable = table_name;
+    std::transform(lowerTable.begin(), lowerTable.end(), lowerTable.begin(), ::tolower);
     std::string columnCountQuery =
         "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = "
         "'" +
-        escapeSQL(schema_name) + "' AND table_name = '" +
-        escapeSQL(table_name) + "';";
+        escapeSQL(lowerSchema) + "' AND table_name = '" +
+        escapeSQL(lowerTable) + "';";
     auto columnResult = txn.exec(columnCountQuery);
     if (!columnResult.empty()) {
       metadata.total_columns = columnResult[0][0].as<int>();
     }
 
     std::string rowCountQuery = "SELECT COUNT(*) FROM \"" +
-                                escapeSQL(schema_name) + "\".\"" +
-                                escapeSQL(table_name) + "\";";
+                                escapeSQL(lowerSchema) + "\".\"" +
+                                escapeSQL(lowerTable) + "\";";
     auto rowResult = txn.exec(rowCountQuery);
     if (!rowResult.empty()) {
       metadata.total_rows = rowResult[0][0].as<long long>();
     }
 
     std::string sizeQuery = "SELECT pg_total_relation_size('" +
-                            escapeSQL(schema_name) + ".\"" +
-                            escapeSQL(table_name) + "\"') as size_bytes;";
+                            escapeSQL(lowerSchema) + ".\"" +
+                            escapeSQL(lowerTable) + "\"') as size_bytes;";
     auto sizeResult = txn.exec(sizeQuery);
     if (!sizeResult.empty()) {
       try {
@@ -257,10 +265,10 @@ void DataGovernance::analyzeTableStructure(pqxx::connection &conn,
                           "JOIN information_schema.key_column_usage kcu ON "
                           "tc.constraint_name = kcu.constraint_name "
                           "WHERE tc.table_schema = '" +
-                          escapeSQL(schema_name) +
+                          escapeSQL(lowerSchema) +
                           "' "
                           "AND tc.table_name = '" +
-                          escapeSQL(table_name) +
+                          escapeSQL(lowerTable) +
                           "' "
                           "AND tc.constraint_type = 'PRIMARY KEY';";
     auto pkResult = txn.exec(pkQuery);
@@ -270,7 +278,7 @@ void DataGovernance::analyzeTableStructure(pqxx::connection &conn,
 
     std::string indexQuery =
         "SELECT COUNT(*) FROM pg_indexes WHERE schemaname = '" +
-        escapeSQL(schema_name) + "' AND tablename = '" + escapeSQL(table_name) +
+        escapeSQL(lowerSchema) + "' AND tablename = '" + escapeSQL(lowerTable) +
         "';";
     auto indexResult = txn.exec(indexQuery);
     if (!indexResult.empty()) {
@@ -280,8 +288,8 @@ void DataGovernance::analyzeTableStructure(pqxx::connection &conn,
     std::string constraintQuery =
         "SELECT COUNT(*) FROM information_schema.table_constraints WHERE "
         "table_schema = '" +
-        escapeSQL(schema_name) + "' AND table_name = '" +
-        escapeSQL(table_name) + "';";
+        escapeSQL(lowerSchema) + "' AND table_name = '" +
+        escapeSQL(lowerTable) + "';";
     auto constraintResult = txn.exec(constraintQuery);
     if (!constraintResult.empty()) {
       metadata.constraint_count = constraintResult[0][0].as<int>();
