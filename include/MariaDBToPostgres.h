@@ -9,24 +9,136 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <condition_variable>
 #include <iostream>
 #include <mutex>
 #include <mysql/mysql.h>
 #include <pqxx/pqxx>
+#include <queue>
 #include <set>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 using json = nlohmann::json;
 
+// Thread-safe queue template
+template <typename T> class ThreadSafeQueue {
+private:
+  mutable std::mutex mtx;
+  std::queue<T> queue;
+  std::condition_variable cv;
+  std::atomic<bool> shutdown{false};
+
+public:
+  ThreadSafeQueue() = default;
+
+  // Delete copy constructor and assignment operator
+  ThreadSafeQueue(const ThreadSafeQueue &) = delete;
+  ThreadSafeQueue &operator=(const ThreadSafeQueue &) = delete;
+
+  // Allow move constructor and assignment
+  ThreadSafeQueue(ThreadSafeQueue &&other) noexcept
+      : mtx{}, queue(std::move(other.queue)), cv{},
+        shutdown(other.shutdown.load()) {}
+
+  ThreadSafeQueue &operator=(ThreadSafeQueue &&other) noexcept {
+    if (this != &other) {
+      queue = std::move(other.queue);
+      shutdown = other.shutdown.load();
+    }
+    return *this;
+  }
+
+  void push(T item) {
+    std::lock_guard<std::mutex> lock(mtx);
+    queue.push(std::move(item));
+    cv.notify_one();
+  }
+
+  bool pop(T &item,
+           std::chrono::milliseconds timeout = std::chrono::milliseconds(100)) {
+    std::unique_lock<std::mutex> lock(mtx);
+    if (cv.wait_for(lock, timeout,
+                    [this] { return !queue.empty() || shutdown; })) {
+      if (!queue.empty()) {
+        item = std::move(queue.front());
+        queue.pop();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void shutdown_queue() {
+    shutdown = true;
+    cv.notify_all();
+  }
+
+  void reset_queue() { shutdown = false; }
+
+  void clear() {
+    std::lock_guard<std::mutex> lock(mtx);
+    std::queue<T> empty;
+    queue.swap(empty);
+  }
+
+  size_t size() const {
+    std::lock_guard<std::mutex> lock(mtx);
+    return queue.size();
+  }
+};
+
+// Data structures for parallel processing
+struct DataChunk {
+  std::vector<std::vector<std::string>> rawData;
+  size_t chunkNumber;
+  std::string schemaName;
+  std::string tableName;
+  bool isLastChunk{false};
+};
+
+struct PreparedBatch {
+  std::string batchQuery;
+  std::string conflictClause;
+  size_t batchSize;
+  size_t chunkNumber;
+  std::string schemaName;
+  std::string tableName;
+  std::vector<std::string> columnNames;
+  std::vector<std::string> columnTypes;
+};
+
+struct ProcessedResult {
+  size_t rowsProcessed;
+  size_t chunkNumber;
+  std::string schemaName;
+  std::string tableName;
+  bool success;
+  std::string errorMessage;
+};
+
 class MariaDBToPostgres {
 private:
+  // Parallel processing members
+  std::atomic<bool> parallelProcessingActive{false};
+  std::vector<std::thread> parallelThreads;
+  ThreadSafeQueue<DataChunk> rawDataQueue;
+  ThreadSafeQueue<PreparedBatch> preparedBatchQueue;
+  ThreadSafeQueue<ProcessedResult> resultQueue;
+
+  // Configuration for parallel processing
+  static constexpr size_t MAX_QUEUE_SIZE = 10;
+  static constexpr size_t MAX_BATCH_PREPARERS = 4;
+  static constexpr size_t MAX_BATCH_INSERTERS = 4;
+  static constexpr size_t BATCH_PREPARATION_TIMEOUT_MS = 5000;
+
 public:
   MariaDBToPostgres() = default;
-  ~MariaDBToPostgres() = default;
+  ~MariaDBToPostgres() { shutdownParallelProcessing(); }
 
   static std::unordered_map<std::string, std::string> dataTypeMap;
   static std::unordered_map<std::string, std::string> collationMap;
@@ -990,8 +1102,8 @@ public:
         std::transform(lowerTableName.begin(), lowerTableName.end(),
                        lowerTableName.begin(), ::tolower);
         std::string targetCountQuery = "SELECT COUNT(*) FROM \"" +
-                                       lowerSchemaName + "\".\"" + lowerTableName +
-                                       "\";";
+                                       lowerSchemaName + "\".\"" +
+                                       lowerTableName + "\";";
         size_t targetCount = 0;
         try {
           pqxx::work txn(pgConn);
@@ -1246,11 +1358,11 @@ public:
           std::string lowerSchemaName = schema_name;
           std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
                          lowerSchemaName.begin(), ::tolower);
-      pqxx::work countTxn(pgConn);
-      auto newTargetCount =
-          countTxn.exec("SELECT COUNT(*) FROM \"" + lowerSchemaName +
-                        "\".\"" + lowerTableName + "\";");
-      countTxn.commit();
+          pqxx::work countTxn(pgConn);
+          auto newTargetCount =
+              countTxn.exec("SELECT COUNT(*) FROM \"" + lowerSchemaName +
+                            "\".\"" + lowerTableName + "\";");
+          countTxn.commit();
           targetCount = newTargetCount[0][0].as<int>();
           Logger::info(LogCategory::TRANSFER,
                        "After deletes: source=" + std::to_string(sourceCount) +
@@ -1391,12 +1503,12 @@ public:
             Logger::info(LogCategory::TRANSFER,
                          "Truncating table: " + lowerSchemaName + "." +
                              table_name);
-          pqxx::work txn(pgConn);
-          std::string lowerTableName = table_name;
-          std::transform(lowerTableName.begin(), lowerTableName.end(),
-                         lowerTableName.begin(), ::tolower);
-          txn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
-                   lowerTableName + "\" CASCADE;");
+            pqxx::work txn(pgConn);
+            std::string lowerTableName = table_name;
+            std::transform(lowerTableName.begin(), lowerTableName.end(),
+                           lowerTableName.begin(), ::tolower);
+            txn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
+                     lowerTableName + "\" CASCADE;");
             txn.commit();
           }
         } else if (table.status == "RESET") {
@@ -1456,8 +1568,7 @@ public:
 
         // CRITICAL: Add timeout to prevent infinite loops
         auto startTime = std::chrono::steady_clock::now();
-        const auto MAX_PROCESSING_TIME =
-            std::chrono::hours(24);
+        const auto MAX_PROCESSING_TIME = std::chrono::hours(24);
 
         while (hasMoreData) {
           chunkNumber++;
@@ -1813,6 +1924,616 @@ public:
     }
   }
 
+  // PARALLEL PROCESSING METHODS
+  // Test method for parallel processing
+  void testParallelProcessing() {
+    Logger::info(LogCategory::TRANSFER, "Starting PARALLEL processing test");
+
+    try {
+      transferDataMariaDBToPostgresParallel();
+      Logger::info(LogCategory::TRANSFER,
+                   "PARALLEL processing test completed successfully");
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER, "PARALLEL processing test failed: " +
+                                               std::string(e.what()));
+    }
+  }
+
+  void transferDataMariaDBToPostgresParallel() {
+    Logger::info(LogCategory::TRANSFER,
+                 "Starting PARALLEL MariaDB to PostgreSQL data transfer");
+
+    try {
+      pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
+
+      if (!pgConn.is_open()) {
+        Logger::error(LogCategory::TRANSFER,
+                      "CRITICAL ERROR: Cannot establish PostgreSQL connection "
+                      "for parallel MariaDB data transfer");
+        return;
+      }
+
+      Logger::info(LogCategory::TRANSFER, "PostgreSQL connection established "
+                                          "for parallel MariaDB data transfer");
+
+      auto tables = getActiveTables(pgConn);
+
+      if (tables.empty()) {
+        Logger::info(
+            LogCategory::TRANSFER,
+            "No active MariaDB tables found for parallel data transfer");
+        return;
+      }
+
+      // Sort tables by priority
+      std::sort(tables.begin(), tables.end(),
+                [](const TableInfo &a, const TableInfo &b) {
+                  if (a.status == "FULL_LOAD" && b.status != "FULL_LOAD")
+                    return true;
+                  if (a.status != "FULL_LOAD" && b.status == "FULL_LOAD")
+                    return false;
+                  if (a.status == "RESET" && b.status != "RESET")
+                    return true;
+                  if (a.status != "RESET" && b.status == "RESET")
+                    return false;
+                  if (a.status == "LISTENING_CHANGES" &&
+                      b.status != "LISTENING_CHANGES")
+                    return true;
+                  if (a.status != "LISTENING_CHANGES" &&
+                      b.status != "LISTENING_CHANGES")
+                    return false;
+                  return false;
+                });
+
+      Logger::info(LogCategory::TRANSFER,
+                   "Processing " + std::to_string(tables.size()) +
+                       " MariaDB tables in HYBRID parallel mode");
+
+      // Process multiple tables in parallel
+      std::vector<std::thread> tableProcessors;
+      for (auto &table : tables) {
+        if (table.db_engine != "MariaDB") {
+          Logger::warning(LogCategory::TRANSFER,
+                          "Skipping non-MariaDB table in parallel transfer: " +
+                              table.db_engine + " - " + table.schema_name +
+                              "." + table.table_name);
+          continue;
+        }
+
+        // Create separate PostgreSQL connection for each table processor
+        tableProcessors.emplace_back(
+            &MariaDBToPostgres::processTableParallelWithConnection, this,
+            table);
+      }
+
+      // Wait for all table processors to complete
+      for (auto &processor : tableProcessors) {
+        if (processor.joinable()) {
+          processor.join();
+        }
+      }
+
+      Logger::info(LogCategory::TRANSFER, "PARALLEL MariaDB to PostgreSQL data "
+                                          "transfer completed successfully");
+    } catch (const std::exception &e) {
+      Logger::error(
+          LogCategory::TRANSFER,
+          "CRITICAL ERROR in transferDataMariaDBToPostgresParallel: " +
+              std::string(e.what()) +
+              " - Parallel MariaDB data transfer completely failed");
+    }
+  }
+
+  void processTableParallelWithConnection(const TableInfo &table) {
+    Logger::info(LogCategory::TRANSFER,
+                 "Starting HYBRID parallel processing for table " +
+                     table.schema_name + "." + table.table_name);
+
+    try {
+      // Create dedicated PostgreSQL connection for this table
+      pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
+      if (!pgConn.is_open()) {
+        Logger::error(LogCategory::TRANSFER,
+                      "Failed to establish PostgreSQL connection for table " +
+                          table.schema_name + "." + table.table_name);
+        return;
+      }
+
+      processTableParallel(table, pgConn);
+
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER,
+                    "Error in hybrid parallel table processing: " +
+                        std::string(e.what()));
+    }
+  }
+
+  void processTableParallel(const TableInfo &table, pqxx::connection &pgConn) {
+    Logger::info(LogCategory::TRANSFER,
+                 "Starting parallel processing for table " + table.schema_name +
+                     "." + table.table_name);
+
+    try {
+      // Initialize parallel processing for this table
+      startParallelProcessing();
+
+      MYSQL *mariadbConn = getMariaDBConnection(table.connection_string);
+      if (!mariadbConn) {
+        Logger::error(
+            LogCategory::TRANSFER,
+            "Failed to get MariaDB connection for parallel processing");
+        updateStatus(pgConn, table.schema_name, table.table_name, "ERROR");
+        return;
+      }
+
+      // Get table metadata
+      std::string query = "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, "
+                          "COLUMN_KEY, EXTRA, CHARACTER_MAXIMUM_LENGTH "
+                          "FROM information_schema.columns "
+                          "WHERE table_schema = '" +
+                          table.schema_name + "' AND table_name = '" +
+                          table.table_name + "';";
+
+      std::vector<std::vector<std::string>> columns =
+          executeQueryMariaDB(mariadbConn, query);
+
+      if (columns.empty()) {
+        Logger::error(LogCategory::TRANSFER,
+                      "No columns found for table " + table.schema_name + "." +
+                          table.table_name + " - skipping parallel processing");
+        mysql_close(mariadbConn);
+        return;
+      }
+
+      // Prepare column information
+      std::vector<std::string> columnNames;
+      std::vector<std::string> columnTypes;
+      for (const std::vector<std::string> &col : columns) {
+        if (col.size() < 6)
+          continue;
+
+        std::string colName = col[0];
+        std::transform(colName.begin(), colName.end(), colName.begin(),
+                       ::tolower);
+        columnNames.push_back(colName);
+
+        std::string dataType = col[1];
+        std::string maxLength = col[5];
+        std::string pgType = "TEXT";
+
+        if (dataType == "char" || dataType == "varchar") {
+          if (!maxLength.empty() && maxLength != "NULL") {
+            try {
+              size_t length = std::stoul(maxLength);
+              if (length >= 1 && length <= 65535) {
+                pgType = dataType + "(" + maxLength + ")";
+              } else {
+                pgType = "VARCHAR";
+              }
+            } catch (const std::exception &) {
+              pgType = "VARCHAR";
+            }
+          } else {
+            pgType = "VARCHAR";
+          }
+        } else if (dataTypeMap.count(dataType)) {
+          pgType = dataTypeMap[dataType];
+        }
+
+        columnTypes.push_back(pgType);
+      }
+
+      // Start parallel data processing
+      std::thread dataFetcher(&MariaDBToPostgres::dataFetcherThread, this,
+                              mariadbConn, table, columnNames, columnTypes);
+
+      // Start batch preparers
+      std::vector<std::thread> batchPreparers;
+      for (size_t i = 0; i < MAX_BATCH_PREPARERS; ++i) {
+        batchPreparers.emplace_back(&MariaDBToPostgres::batchPreparerThread,
+                                    this, columnNames, columnTypes);
+      }
+
+      // Start multiple batch inserters
+      std::vector<std::thread> batchInserters;
+      for (size_t i = 0; i < MAX_BATCH_INSERTERS; ++i) {
+        batchInserters.emplace_back(&MariaDBToPostgres::batchInserterThread,
+                                    this, std::ref(pgConn));
+      }
+
+      // Wait for data fetcher to complete
+      if (dataFetcher.joinable()) {
+        dataFetcher.join();
+      }
+
+      // Signal end of data to preparers
+      DataChunk lastChunk;
+      lastChunk.isLastChunk = true;
+      rawDataQueue.push(std::move(lastChunk));
+
+      // Wait for all batch preparers to complete
+      for (auto &preparer : batchPreparers) {
+        if (preparer.joinable()) {
+          preparer.join();
+        }
+      }
+
+      // Signal end of batches to inserters
+      for (size_t i = 0; i < MAX_BATCH_INSERTERS; ++i) {
+        PreparedBatch lastBatch;
+        lastBatch.batchSize = 0; // Signal to stop
+        preparedBatchQueue.push(std::move(lastBatch));
+      }
+
+      // Wait for all batch inserters to complete
+      for (auto &inserter : batchInserters) {
+        if (inserter.joinable()) {
+          inserter.join();
+        }
+      }
+
+      // Clean up
+      mysql_close(mariadbConn);
+      shutdownParallelProcessing();
+
+      Logger::info(LogCategory::TRANSFER,
+                   "Parallel processing completed for table " +
+                       table.schema_name + "." + table.table_name);
+
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER,
+                    "Error in parallel table processing: " +
+                        std::string(e.what()));
+      shutdownParallelProcessing();
+    }
+  }
+
+  void startParallelProcessing() {
+    if (parallelProcessingActive.load()) {
+      shutdownParallelProcessing();
+    }
+
+    parallelProcessingActive.store(true);
+
+    // Clear and reset queues
+    rawDataQueue.clear();
+    preparedBatchQueue.clear();
+    resultQueue.clear();
+
+    // Reset shutdown flags
+    rawDataQueue.reset_queue();
+    preparedBatchQueue.reset_queue();
+    resultQueue.reset_queue();
+
+    Logger::info(LogCategory::TRANSFER, "Parallel processing started");
+  }
+
+  void shutdownParallelProcessing() {
+    if (!parallelProcessingActive.load()) {
+      return;
+    }
+
+    parallelProcessingActive.store(false);
+
+    // Shutdown queues
+    rawDataQueue.shutdown_queue();
+    preparedBatchQueue.shutdown_queue();
+    resultQueue.shutdown_queue();
+
+    // Wait for all threads to complete
+    for (auto &thread : parallelThreads) {
+      if (thread.joinable()) {
+        thread.join();
+      }
+    }
+    parallelThreads.clear();
+
+    Logger::info(LogCategory::TRANSFER,
+                 "Parallel processing shutdown completed");
+  }
+
+  void dataFetcherThread(MYSQL *mariadbConn, const TableInfo &table,
+                         const std::vector<std::string> &columnNames,
+                         const std::vector<std::string> &columnTypes) {
+    Logger::info(LogCategory::TRANSFER, "Data fetcher thread started for " +
+                                            table.schema_name + "." +
+                                            table.table_name);
+
+    try {
+      size_t chunkNumber = 0;
+      size_t currentOffset = 0;
+      const size_t CHUNK_SIZE = SyncConfig::getChunkSize();
+
+      // Get PK strategy and columns
+      pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
+      std::string pkStrategy =
+          getPKStrategyFromCatalog(pgConn, table.schema_name, table.table_name);
+      std::vector<std::string> pkColumns =
+          getPKColumnsFromCatalog(pgConn, table.schema_name, table.table_name);
+      std::string lastProcessedPK = getLastProcessedPKFromCatalog(
+          pgConn, table.schema_name, table.table_name);
+
+      while (parallelProcessingActive.load()) {
+        chunkNumber++;
+
+        // Build select query
+        std::string selectQuery = "SELECT * FROM `" + table.schema_name +
+                                  "`.`" + table.table_name + "`";
+
+        if (pkStrategy == "PK" && !pkColumns.empty()) {
+          if (!lastProcessedPK.empty()) {
+            selectQuery += " WHERE ";
+            std::vector<std::string> lastPKValues =
+                parseLastPK(lastProcessedPK);
+            if (!lastPKValues.empty()) {
+              selectQuery += "`" + pkColumns[0] + "` > '" +
+                             escapeSQL(lastPKValues[0]) + "'";
+            }
+          }
+          selectQuery += " ORDER BY `" + pkColumns[0] + "`";
+          selectQuery += " LIMIT " + std::to_string(CHUNK_SIZE) + ";";
+        } else {
+          selectQuery += " LIMIT " + std::to_string(CHUNK_SIZE) + " OFFSET " +
+                         std::to_string(currentOffset) + ";";
+        }
+
+        // Fetch data
+        std::vector<std::vector<std::string>> results =
+            executeQueryMariaDB(mariadbConn, selectQuery);
+
+        if (results.empty()) {
+          Logger::info(LogCategory::TRANSFER, "No more data available for " +
+                                                  table.schema_name + "." +
+                                                  table.table_name);
+          break;
+        }
+
+        // Create data chunk
+        DataChunk chunk;
+        chunk.rawData = std::move(results);
+        chunk.chunkNumber = chunkNumber;
+        chunk.schemaName = table.schema_name;
+        chunk.tableName = table.table_name;
+        chunk.isLastChunk = false;
+
+        // Push to queue (with timeout to prevent blocking)
+        auto start = std::chrono::steady_clock::now();
+        while (parallelProcessingActive.load() &&
+               rawDataQueue.size() >= MAX_QUEUE_SIZE) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+          auto elapsed = std::chrono::steady_clock::now() - start;
+          if (elapsed > std::chrono::seconds(30)) {
+            Logger::warning(LogCategory::TRANSFER,
+                            "Data fetcher timeout - queue full for " +
+                                table.schema_name + "." + table.table_name);
+            break;
+          }
+        }
+
+        if (parallelProcessingActive.load()) {
+          rawDataQueue.push(std::move(chunk));
+          Logger::info(LogCategory::TRANSFER,
+                       "Pushed chunk " + std::to_string(chunkNumber) +
+                           " with " + std::to_string(chunk.rawData.size()) +
+                           " rows to queue");
+        }
+
+        // Update offset for next iteration
+        if (pkStrategy != "PK") {
+          currentOffset += CHUNK_SIZE;
+        }
+
+        // Check if we got less data than expected (end of table)
+        if (results.size() < CHUNK_SIZE) {
+          break;
+        }
+      }
+
+      // Signal end of data
+      DataChunk lastChunk;
+      lastChunk.isLastChunk = true;
+      lastChunk.chunkNumber = chunkNumber + 1;
+      lastChunk.schemaName = table.schema_name;
+      lastChunk.tableName = table.table_name;
+      rawDataQueue.push(std::move(lastChunk));
+
+      Logger::info(LogCategory::TRANSFER, "Data fetcher thread completed for " +
+                                              table.schema_name + "." +
+                                              table.table_name);
+
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER,
+                    "Error in data fetcher thread: " + std::string(e.what()));
+    }
+  }
+
+  void batchPreparerThread(const std::vector<std::string> &columnNames,
+                           const std::vector<std::string> &columnTypes) {
+    Logger::info(LogCategory::TRANSFER, "Batch preparer thread started");
+
+    try {
+      while (parallelProcessingActive.load()) {
+        DataChunk chunk;
+        if (!rawDataQueue.pop(chunk, std::chrono::milliseconds(1000))) {
+          continue;
+        }
+
+        if (chunk.isLastChunk) {
+          // Push last chunk marker to batch queue and exit
+          PreparedBatch lastBatch;
+          lastBatch.batchSize = 0;
+          lastBatch.chunkNumber = chunk.chunkNumber;
+          lastBatch.schemaName = chunk.schemaName;
+          lastBatch.tableName = chunk.tableName;
+          preparedBatchQueue.push(std::move(lastBatch));
+          break;
+        }
+
+        // Prepare batches from raw data
+        const size_t BATCH_SIZE = SyncConfig::getChunkSize();
+
+        for (size_t batchStart = 0; batchStart < chunk.rawData.size();
+             batchStart += BATCH_SIZE) {
+          size_t batchEnd =
+              std::min(batchStart + BATCH_SIZE, chunk.rawData.size());
+
+          PreparedBatch preparedBatch;
+          preparedBatch.chunkNumber = chunk.chunkNumber;
+          preparedBatch.schemaName = chunk.schemaName;
+          preparedBatch.tableName = chunk.tableName;
+          preparedBatch.columnNames = columnNames;
+          preparedBatch.columnTypes = columnTypes;
+          preparedBatch.batchSize = batchEnd - batchStart;
+
+          // Build batch query
+          std::string lowerSchemaName = chunk.schemaName;
+          std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
+                         lowerSchemaName.begin(), ::tolower);
+          std::string lowerTableName = chunk.tableName;
+          std::transform(lowerTableName.begin(), lowerTableName.end(),
+                         lowerTableName.begin(), ::tolower);
+
+          // Get PK columns for UPSERT
+          pqxx::connection pgConn(
+              DatabaseConfig::getPostgresConnectionString());
+          std::vector<std::string> pkColumns = getPrimaryKeyColumnsFromPostgres(
+              pgConn, lowerSchemaName, lowerTableName);
+
+          if (!pkColumns.empty()) {
+            preparedBatch.batchQuery = buildUpsertQuery(
+                columnNames, pkColumns, lowerSchemaName, lowerTableName);
+            preparedBatch.conflictClause =
+                buildUpsertConflictClause(columnNames, pkColumns);
+          } else {
+            // Simple INSERT
+            std::string insertQuery = "INSERT INTO \"" + lowerSchemaName +
+                                      "\".\"" + lowerTableName + "\" (";
+            for (size_t i = 0; i < columnNames.size(); ++i) {
+              if (i > 0)
+                insertQuery += ", ";
+              insertQuery += "\"" + columnNames[i] + "\"";
+            }
+            insertQuery += ") VALUES ";
+            preparedBatch.batchQuery = insertQuery;
+            preparedBatch.conflictClause = ";";
+          }
+
+          // Build VALUES clause
+          std::string valuesClause;
+          for (size_t i = batchStart; i < batchEnd; ++i) {
+            if (i > batchStart)
+              valuesClause += ", ";
+
+            const auto &row = chunk.rawData[i];
+            if (row.size() != columnNames.size())
+              continue;
+
+            valuesClause += "(";
+            for (size_t j = 0; j < row.size(); ++j) {
+              if (j > 0)
+                valuesClause += ", ";
+
+              if (row[j].empty()) {
+                valuesClause += "NULL";
+              } else {
+                std::string cleanValue =
+                    cleanValueForPostgres(row[j], columnTypes[j]);
+                if (cleanValue == "NULL") {
+                  valuesClause += "NULL";
+                } else {
+                  valuesClause += "'" + escapeSQL(cleanValue) + "'";
+                }
+              }
+            }
+            valuesClause += ")";
+          }
+
+          preparedBatch.batchQuery +=
+              valuesClause + preparedBatch.conflictClause;
+
+          // Push prepared batch to queue
+          preparedBatchQueue.push(std::move(preparedBatch));
+        }
+
+        Logger::info(LogCategory::TRANSFER,
+                     "Prepared batches for chunk " +
+                         std::to_string(chunk.chunkNumber) + " (" +
+                         std::to_string(chunk.rawData.size()) + " rows)");
+      }
+
+      Logger::info(LogCategory::TRANSFER, "Batch preparer thread completed");
+
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER,
+                    "Error in batch preparer thread: " + std::string(e.what()));
+    }
+  }
+
+  void batchInserterThread(pqxx::connection &pgConn) {
+    Logger::info(LogCategory::TRANSFER, "Batch inserter thread started");
+
+    try {
+      size_t totalProcessed = 0;
+
+      while (parallelProcessingActive.load()) {
+        PreparedBatch batch;
+        if (!preparedBatchQueue.pop(batch, std::chrono::milliseconds(1000))) {
+          continue;
+        }
+
+        if (batch.batchSize == 0) {
+          // End marker received
+          break;
+        }
+
+        // Execute batch insert
+        ProcessedResult result;
+        result.chunkNumber = batch.chunkNumber;
+        result.schemaName = batch.schemaName;
+        result.tableName = batch.tableName;
+        result.success = false;
+
+        try {
+          pqxx::work txn(pgConn);
+          txn.exec("SET statement_timeout = '600s'");
+          txn.exec(batch.batchQuery);
+          txn.commit();
+
+          result.rowsProcessed = batch.batchSize;
+          result.success = true;
+          totalProcessed += batch.batchSize;
+
+          Logger::info(LogCategory::TRANSFER,
+                       "Successfully inserted batch " +
+                           std::to_string(batch.chunkNumber) + " (" +
+                           std::to_string(batch.batchSize) + " rows) for " +
+                           batch.schemaName + "." + batch.tableName);
+
+        } catch (const std::exception &e) {
+          result.errorMessage = e.what();
+          result.rowsProcessed = 0;
+
+          Logger::error(LogCategory::TRANSFER,
+                        "Error inserting batch " +
+                            std::to_string(batch.chunkNumber) + " for " +
+                            batch.schemaName + "." + batch.tableName + ": " +
+                            result.errorMessage);
+        }
+
+        resultQueue.push(std::move(result));
+      }
+
+      Logger::info(LogCategory::TRANSFER,
+                   "Batch inserter thread completed. Total rows processed: " +
+                       std::to_string(totalProcessed));
+
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER,
+                    "Error in batch inserter thread: " + std::string(e.what()));
+    }
+  }
+
   void updateStatus(pqxx::connection &pgConn, const std::string &schema_name,
                     const std::string &table_name, const std::string &status,
                     size_t offset = 0) {
@@ -1859,9 +2580,9 @@ public:
                      lowerTableName + "';");
 
         if (!tableCheck.empty() && tableCheck[0][0].as<int>() > 0) {
-          updateQuery += ", last_sync_time=(SELECT MAX(\"" + lowerLastSyncColumn +
-                         "\")::timestamp FROM \"" + lowerSchemaName + "\".\"" +
-                         lowerTableName + "\")";
+          updateQuery += ", last_sync_time=(SELECT MAX(\"" +
+                         lowerLastSyncColumn + "\")::timestamp FROM \"" +
+                         lowerSchemaName + "\".\"" + lowerTableName + "\")";
         } else {
           updateQuery += ", last_sync_time=NOW()";
         }
@@ -2377,8 +3098,8 @@ private:
       std::string lowerTableName = tableName;
       std::transform(lowerTableName.begin(), lowerTableName.end(),
                      lowerTableName.begin(), ::tolower);
-      std::string insertQuery =
-          "INSERT INTO \"" + lowerSchemaName + "\".\"" + lowerTableName + "\" (";
+      std::string insertQuery = "INSERT INTO \"" + lowerSchemaName + "\".\"" +
+                                lowerTableName + "\" (";
 
       // Construir lista de columnas
       for (size_t i = 0; i < columnNames.size(); ++i) {
@@ -2502,12 +3223,12 @@ private:
         "INSERT INTO \"" + schemaName + "\".\"" + lowerTableName + "\" (";
 
     // Lista de columnas
-      for (size_t i = 0; i < columnNames.size(); ++i) {
-        if (i > 0)
-          query += ", ";
-        std::string col = columnNames[i];
-        std::transform(col.begin(), col.end(), col.begin(), ::tolower);
-        query += "\"" + col + "\"";
+    for (size_t i = 0; i < columnNames.size(); ++i) {
+      if (i > 0)
+        query += ", ";
+      std::string col = columnNames[i];
+      std::transform(col.begin(), col.end(), col.begin(), ::tolower);
+      query += "\"" + col + "\"";
     }
     query += ") VALUES ";
 
@@ -2534,8 +3255,7 @@ private:
         conflictClause += ", ";
       std::string col = columnNames[i];
       std::transform(col.begin(), col.end(), col.begin(), ::tolower);
-      conflictClause +=
-          "\"" + col + "\" = EXCLUDED.\"" + col + "\"";
+      conflictClause += "\"" + col + "\" = EXCLUDED.\"" + col + "\"";
     }
 
     return conflictClause;
