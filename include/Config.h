@@ -23,6 +23,10 @@ struct SyncConfig {
   static std::atomic<size_t> SYNC_INTERVAL_SECONDS;
   static constexpr size_t DEFAULT_CHUNK_SIZE = 25000;
   static constexpr size_t DEFAULT_SYNC_INTERVAL = 30;
+  static std::atomic<size_t> MAX_WORKERS;
+  static std::atomic<size_t> MAX_TABLES_PER_CYCLE;
+  static constexpr size_t DEFAULT_MAX_WORKERS = 4;
+  static constexpr size_t DEFAULT_MAX_TABLES_PER_CYCLE = 1000;
 
   static void setChunkSize(size_t newSize) { CHUNK_SIZE = newSize; }
 
@@ -33,6 +37,12 @@ struct SyncConfig {
   }
 
   static size_t getSyncInterval() { return SYNC_INTERVAL_SECONDS; }
+
+  static void setMaxWorkers(size_t v) { MAX_WORKERS = v; }
+  static size_t getMaxWorkers() { return MAX_WORKERS; }
+
+  static void setMaxTablesPerCycle(size_t v) { MAX_TABLES_PER_CYCLE = v; }
+  static size_t getMaxTablesPerCycle() { return MAX_TABLES_PER_CYCLE; }
 };
 
 #endif

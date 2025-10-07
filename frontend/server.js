@@ -1029,349 +1029,186 @@ app.get("/api/config/batch", async (req, res) => {
   }
 });
 
-// Endpoint para leer logs
+// Endpoint para leer logs desde DB (metadata.logs)
 app.get("/api/logs", async (req, res) => {
   try {
     const {
       lines = 100,
       level = "ALL",
       category = "ALL",
+      function: func = "ALL",
       search = "",
       startDate = "",
       endDate = "",
     } = req.query;
-    const logFilePath = path.join(process.cwd(), "..", "DataSync.log");
 
-    // Verificar si el archivo existe
-    if (!fs.existsSync(logFilePath)) {
-      return res.json({
-        logs: [],
-        totalLines: 0,
-        message: "No log file found",
-      });
+    const params = [];
+    let where = [];
+
+    if (level && level !== "ALL") {
+      params.push(level);
+      where.push(`level = $${params.length}`);
+    }
+    if (category && category !== "ALL") {
+      params.push(category);
+      where.push(`category = $${params.length}`);
+    }
+    if (func && func !== "ALL") {
+      params.push(func);
+      where.push(`function = $${params.length}`);
+    }
+    if (search && String(search).trim() !== "") {
+      params.push(`%${search}%`);
+      params.push(`%${search}%`);
+      where.push(`(message ILIKE $${params.length - 1} OR function ILIKE $${params.length})`);
+    }
+    if (startDate) {
+      params.push(startDate);
+      where.push(`ts >= $${params.length}`);
+    }
+    if (endDate) {
+      params.push(endDate);
+      where.push(`ts <= $${params.length}`);
     }
 
-    // Leer el archivo de logs
-    const logContent = fs.readFileSync(logFilePath, "utf8");
-    let allLines = logContent.split("\n").filter((line) => line.trim() !== "");
+    const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const limit = Math.max(1, parseInt(lines));
 
-    // Si se solicitan muchas líneas, devolver todas las líneas del archivo
-    const requestedLines = parseInt(lines);
-    if (requestedLines >= 10000 || requestedLines >= allLines.length) {
-      // Devolver todas las líneas
-      allLines = allLines;
-    } else {
-      // Limitar a las últimas N líneas
-      allLines = allLines.slice(-requestedLines);
-    }
+    const query = `
+      SELECT ts, level, category, function, message
+      FROM metadata.logs
+      ${whereClause}
+      ORDER BY ts DESC
+      LIMIT $${params.length + 1}
+    `;
+    const result = await pool.query(query, [...params, limit]);
 
-    // Parsear logs y aplicar filtros
-    let filteredLines = allLines.map((line) => {
-      // Nuevo formato con categoría: [timestamp] [level] [category] [function] message
-      const newMatch = line.match(
-        /^\[([^\]]+)\] \[([^\]]+)\] \[([^\]]+)\] \[([^\]]+)\] (.+)$/
-      );
-      if (newMatch) {
-        return {
-          timestamp: newMatch[1],
-          level: newMatch[2],
-          category: newMatch[3],
-          function: newMatch[4],
-          message: newMatch[5],
-          raw: line,
-          parsed: true,
-        };
-      }
-      // Formato antiguo: [timestamp] [level] [function] message
-      const oldMatch = line.match(
-        /^\[([^\]]+)\] \[([^\]]+)\](?: \[([^\]]+)\])? (.+)$/
-      );
-      if (oldMatch) {
-        return {
-          timestamp: oldMatch[1],
-          level: oldMatch[2],
-          category: "SYSTEM",
-          function: oldMatch[3] || "",
-          message: oldMatch[4],
-          raw: line,
-          parsed: true,
-        };
-      }
+    const logs = result.rows.map((r) => {
+      const tsIso = r.ts ? new Date(r.ts).toISOString() : null;
+      const lvl = (r.level || '').toUpperCase();
+      const cat = (r.category || '').toUpperCase();
       return {
-        timestamp: "",
-        level: "UNKNOWN",
-        category: "UNKNOWN",
-        function: "",
-        message: line,
-        raw: line,
-        parsed: false,
+        timestamp: tsIso,
+        level: lvl,
+        category: cat,
+        function: r.function || '',
+        message: r.message || '',
+        raw: `[${tsIso ?? ''}] [${lvl}] [${cat}] [${r.function || ''}] ${r.message || ''}`,
+        parsed: true,
       };
     });
 
-    // Aplicar filtros
-    if (level !== "ALL") {
-      filteredLines = filteredLines.filter((log) => log.level === level);
-    }
-
-    if (category !== "ALL") {
-      filteredLines = filteredLines.filter((log) => log.category === category);
-    }
-
-    if (search) {
-      filteredLines = filteredLines.filter(
-        (log) =>
-          log.message.toLowerCase().includes(search.toLowerCase()) ||
-          (log.function &&
-            log.function.toLowerCase().includes(search.toLowerCase()))
-      );
-    }
-
-    if (startDate) {
-      const start = new Date(startDate);
-      filteredLines = filteredLines.filter((log) => {
-        if (!log.timestamp) return false;
-        const logDate = new Date(log.timestamp);
-        return logDate >= start;
-      });
-    }
-
-    if (endDate) {
-      const end = new Date(endDate);
-      filteredLines = filteredLines.filter((log) => {
-        if (!log.timestamp) return false;
-        const logDate = new Date(log.timestamp);
-        return logDate <= end;
-      });
-    }
-
-    // Obtener las últimas N líneas
-    const lastLines = filteredLines.slice(-parseInt(lines));
-
     res.json({
-      logs: lastLines,
-      totalLines: filteredLines.length,
-      filePath: logFilePath,
-      lastModified: fs.statSync(logFilePath).mtime,
-      filters: {
-        level,
-        category,
-        search,
-        startDate,
-        endDate,
-      },
+      logs,
+      totalLines: logs.length,
+      filePath: "metadata.logs",
+      lastModified: new Date().toISOString(),
+      filters: { level, category, function: func, search, startDate, endDate },
     });
   } catch (err) {
-    console.error("Error reading logs:", err);
-    res.status(500).json({
-      error: "Error al leer logs",
-      details: err.message,
-    });
+    console.error("Error reading logs from DB:", err);
+    res.status(500).json({ error: "Error al leer logs", details: err.message });
   }
 });
 
-// Endpoint para obtener logs de errores
+// Endpoint para obtener logs de errores desde DB (niveles WARNING/ERROR/CRITICAL)
 app.get("/api/logs/errors", async (req, res) => {
   try {
-    const {
-      lines = 100,
-      level = "ALL",
-      category = "ALL",
-      search = "",
-      startDate = "",
-      endDate = "",
-    } = req.query;
-    const errorLogFilePath = path.join(
-      process.cwd(),
-      "..",
-      "DataSyncErrors.log"
-    );
-
-    // Verificar si el archivo existe
-    if (!fs.existsSync(errorLogFilePath)) {
-      return res.json({
-        logs: [],
-        totalLines: 0,
-        message: "No error log file found",
-      });
+    const { lines = 100, category = "ALL", search = "", startDate = "", endDate = "" } = req.query;
+    const params = [];
+    let where = ["level IN ('WARNING','ERROR','CRITICAL')"];
+    if (category && category !== "ALL") {
+      params.push(category);
+      where.push(`category = $${params.length}`);
     }
-
-    // Leer el archivo de logs de errores
-    const logContent = fs.readFileSync(errorLogFilePath, "utf8");
-    let allLines = logContent.split("\n").filter((line) => line.trim() !== "");
-
-    // Si se solicitan muchas líneas, devolver todas las líneas del archivo
-    const requestedLines = parseInt(lines);
-    if (requestedLines >= 10000 || requestedLines >= allLines.length) {
-      // Devolver todas las líneas
-      allLines = allLines;
-    } else {
-      // Limitar a las últimas N líneas
-      allLines = allLines.slice(-requestedLines);
+    if (search && String(search).trim() !== "") {
+      params.push(`%${search}%`);
+      params.push(`%${search}%`);
+      where.push(`(message ILIKE $${params.length - 1} OR function ILIKE $${params.length})`);
     }
-
-    // Parsear logs y aplicar filtros (mismo formato que logs normales)
-    let filteredLines = allLines.map((line) => {
-      // Formato: [timestamp] [level] [category] [function] message
-      const newMatch = line.match(
-        /^\[([^\]]+)\] \[([^\]]+)\] \[([^\]]+)\] \[([^\]]+)\] (.+)$/
-      );
-      if (newMatch) {
-        return {
-          timestamp: newMatch[1],
-          level: newMatch[2],
-          category: newMatch[3],
-          function: newMatch[4],
-          message: newMatch[5],
-          raw: line,
-          parsed: true,
-        };
-      }
-      return {
-        timestamp: "",
-        level: "UNKNOWN",
-        category: "UNKNOWN",
-        function: "",
-        message: line,
-        raw: line,
-        parsed: false,
-      };
-    });
-
-    // Aplicar filtros
-    if (level !== "ALL") {
-      filteredLines = filteredLines.filter((log) => log.level === level);
-    }
-
-    if (category !== "ALL") {
-      filteredLines = filteredLines.filter((log) => log.category === category);
-    }
-
-    if (search) {
-      filteredLines = filteredLines.filter(
-        (log) =>
-          log.message.toLowerCase().includes(search.toLowerCase()) ||
-          (log.function &&
-            log.function.toLowerCase().includes(search.toLowerCase()))
-      );
-    }
-
     if (startDate) {
-      const start = new Date(startDate);
-      filteredLines = filteredLines.filter((log) => {
-        if (!log.timestamp) return false;
-        const logDate = new Date(log.timestamp);
-        return logDate >= start;
-      });
+      params.push(startDate);
+      where.push(`ts >= $${params.length}`);
     }
-
     if (endDate) {
-      const end = new Date(endDate);
-      filteredLines = filteredLines.filter((log) => {
-        if (!log.timestamp) return false;
-        const logDate = new Date(log.timestamp);
-        return logDate <= end;
-      });
+      params.push(endDate);
+      where.push(`ts <= $${params.length}`);
     }
-
-    // Enforce only ERROR level for error logs view
-    filteredLines = filteredLines.filter((log) => log.level === "ERROR");
-
-    // Obtener las últimas N líneas
-    const lastLines = filteredLines.slice(-parseInt(lines));
-
-    res.json({
-      logs: lastLines,
-      totalLines: filteredLines.length,
-      filePath: errorLogFilePath,
-      lastModified: fs.statSync(errorLogFilePath).mtime,
-      filters: {
-        level,
-        category,
-        search,
-        startDate,
-        endDate,
-      },
-    });
+    const whereClause = `WHERE ${where.join(" AND ")}`;
+    const limit = Math.max(1, parseInt(lines));
+    const q = `SELECT ts, level, category, function, message FROM metadata.logs ${whereClause} ORDER BY ts DESC LIMIT $${params.length + 1}`;
+    const result = await pool.query(q, [...params, limit]);
+    const logs = result.rows.map((r) => ({
+      timestamp: r.ts,
+      level: r.level,
+      category: r.category,
+      function: r.function,
+      message: r.message,
+      raw: `[${r.ts}] [${r.level}] [${r.category}] [${r.function}] ${r.message}`,
+      parsed: true,
+    }));
+    res.json({ logs, totalLines: logs.length, filePath: "metadata.logs", lastModified: new Date().toISOString(), filters: { category, search, startDate, endDate } });
   } catch (err) {
-    console.error("Error reading error logs:", err);
-    res.status(500).json({
-      error: "Error al leer logs de errores",
-      details: err.message,
-    });
+    console.error("Error reading error logs from DB:", err);
+    res.status(500).json({ error: "Error al leer logs de errores", details: err.message });
   }
 });
 
-// Endpoint para obtener información del archivo de logs
+// Información de logs desde DB
 app.get("/api/logs/info", async (req, res) => {
   try {
-    const logFilePath = path.join(process.cwd(), "..", "DataSync.log");
-
-    if (!fs.existsSync(logFilePath)) {
-      return res.json({
-        exists: false,
-        message: "No log file found",
-      });
-    }
-
-    const stats = fs.statSync(logFilePath);
-    const logContent = fs.readFileSync(logFilePath, "utf8");
-    const totalLines = logContent
-      .split("\n")
-      .filter((line) => line.trim() !== "").length;
-
+    const countRes = await pool.query("SELECT COUNT(*) AS total FROM metadata.logs");
+    const lastRes = await pool.query("SELECT MAX(ts) AS last_modified FROM metadata.logs");
     res.json({
       exists: true,
-      filePath: logFilePath,
-      size: stats.size,
-      totalLines: totalLines,
-      lastModified: stats.mtime,
-      created: stats.birthtime,
+      filePath: "metadata.logs",
+      size: null,
+      totalLines: parseInt(countRes.rows[0]?.total || 0),
+      lastModified: lastRes.rows[0]?.last_modified || null,
+      created: null,
     });
   } catch (err) {
-    console.error("Error getting log info:", err);
-    res.status(500).json({
-      error: "Error al obtener información de logs",
-      details: err.message,
-    });
+    console.error("Error getting DB log info:", err);
+    res.status(500).json({ error: "Error al obtener información de logs", details: err.message });
   }
 });
 
-// Endpoint para obtener información del archivo de logs de errores
 app.get("/api/logs/errors/info", async (req, res) => {
   try {
-    const errorLogFilePath = path.join(
-      process.cwd(),
-      "..",
-      "DataSyncErrors.log"
-    );
-
-    if (!fs.existsSync(errorLogFilePath)) {
-      return res.json({
-        exists: false,
-        message: "No error log file found",
-      });
-    }
-
-    const stats = fs.statSync(errorLogFilePath);
-    const logContent = fs.readFileSync(errorLogFilePath, "utf8");
-    const totalLines = logContent
-      .split("\n")
-      .filter((line) => line.trim() !== "").length;
-
-    res.json({
-      exists: true,
-      filePath: errorLogFilePath,
-      size: stats.size,
-      totalLines: totalLines,
-      lastModified: stats.mtime,
-      created: stats.birthtime,
-    });
+    const countRes = await pool.query("SELECT COUNT(*) AS total FROM metadata.logs WHERE level IN ('WARNING','ERROR','CRITICAL')");
+    const lastRes = await pool.query("SELECT MAX(ts) AS last_modified FROM metadata.logs WHERE level IN ('WARNING','ERROR','CRITICAL')");
+    res.json({ exists: true, filePath: "metadata.logs", size: null, totalLines: parseInt(countRes.rows[0]?.total || 0), lastModified: lastRes.rows[0]?.last_modified || null, created: null });
   } catch (err) {
-    console.error("Error getting error log info:", err);
-    res.status(500).json({
-      error: "Error al obtener información de logs de errores",
-      details: err.message,
-    });
+    console.error("Error getting DB error log info:", err);
+    res.status(500).json({ error: "Error al obtener información de logs de errores", details: err.message });
+  }
+});
+
+// Endpoints de filtros para logs desde DB
+app.get("/api/logs/levels", async (_req, res) => {
+  try {
+    const result = await pool.query("SELECT DISTINCT level FROM metadata.logs ORDER BY level");
+    res.json(result.rows.map((r) => r.level));
+  } catch (err) {
+    res.status(500).json({ error: "Error al obtener niveles", details: err.message });
+  }
+});
+
+app.get("/api/logs/categories", async (_req, res) => {
+  try {
+    const result = await pool.query("SELECT DISTINCT category FROM metadata.logs ORDER BY category");
+    res.json(result.rows.map((r) => r.category));
+  } catch (err) {
+    res.status(500).json({ error: "Error al obtener categorías", details: err.message });
+  }
+});
+
+app.get("/api/logs/functions", async (_req, res) => {
+  try {
+    const result = await pool.query("SELECT DISTINCT function FROM metadata.logs ORDER BY function");
+    res.json(result.rows.map((r) => r.function));
+  } catch (err) {
+    res.status(500).json({ error: "Error al obtener funciones", details: err.message });
   }
 });
 
@@ -1482,76 +1319,11 @@ app.get("/api/logs/stats", async (req, res) => {
 // Endpoint para limpiar logs
 app.delete("/api/logs", async (req, res) => {
   try {
-    const logDir = path.join(process.cwd(), "..");
-    const logFilePath = path.join(logDir, "DataSync.log");
-    const errorLogFilePath = path.join(logDir, "DataSyncErrors.log");
-
-    let totalClearedSize = 0;
-    let clearedFiles = [];
-
-    // Clear the main log file
-    if (fs.existsSync(logFilePath)) {
-      const stats = fs.statSync(logFilePath);
-      totalClearedSize += stats.size;
-      clearedFiles.push("DataSync.log");
-      fs.writeFileSync(logFilePath, "");
-    }
-
-    // Find and delete rotated log files (DataSync.log.1, DataSync.log.2, etc.)
-    const files = fs.readdirSync(logDir);
-    const rotatedLogFiles = files.filter((file) =>
-      file.match(/^DataSync\.log\.\d+$/)
-    );
-
-    for (const rotatedFile of rotatedLogFiles) {
-      const rotatedFilePath = path.join(logDir, rotatedFile);
-      try {
-        const stats = fs.statSync(rotatedFilePath);
-        totalClearedSize += stats.size;
-        clearedFiles.push(rotatedFile);
-        fs.unlinkSync(rotatedFilePath);
-      } catch (err) {
-        console.warn(`Warning: Could not delete ${rotatedFile}:`, err.message);
-      }
-    }
-
-    // Clear the error log file
-    if (fs.existsSync(errorLogFilePath)) {
-      const stats = fs.statSync(errorLogFilePath);
-      totalClearedSize += stats.size;
-      clearedFiles.push("DataSyncErrors.log");
-      fs.writeFileSync(errorLogFilePath, "");
-    }
-
-    // Delete rotated error log files (DataSyncErrors.log.1, ...)
-    const rotatedErrorLogFiles = files.filter((file) =>
-      file.match(/^DataSyncErrors\.log\.\d+$/)
-    );
-    for (const rotatedFile of rotatedErrorLogFiles) {
-      const rotatedFilePath = path.join(logDir, rotatedFile);
-      try {
-        const stats = fs.statSync(rotatedFilePath);
-        totalClearedSize += stats.size;
-        clearedFiles.push(rotatedFile);
-        fs.unlinkSync(rotatedFilePath);
-      } catch (err) {
-        console.warn(`Warning: Could not delete ${rotatedFile}:`, err.message);
-      }
-    }
-
-    res.json({
-      success: true,
-      message: "Logs cleared successfully",
-      clearedFiles: clearedFiles,
-      totalClearedSize: totalClearedSize,
-      clearedAt: new Date().toISOString(),
-    });
+    await pool.query("TRUNCATE TABLE metadata.logs");
+    res.json({ success: true, message: "Logs table truncated", clearedAt: new Date().toISOString() });
   } catch (err) {
-    console.error("Error clearing logs:", err);
-    res.status(500).json({
-      error: "Error clearing logs",
-      details: err.message,
-    });
+    console.error("Error truncating logs:", err);
+    res.status(500).json({ error: "Error al truncar logs", details: err.message });
   }
 });
 
