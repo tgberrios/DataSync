@@ -11,36 +11,26 @@ Mejorar la UI/UX
 
 For PostgreSQL we try current_setting('cluster_name', true) then inet_server_addr(). esto hay que quitarlo
 
+eliminar el procesamient singular y solo dejar el multiple
 
-
-
-
-una funcion en catalog para estar truncando metadata.logs cada 48 o 24 horas EN BASE A LA COLUMNA TS
-
-
-
-[ERROR][TRANSFER]CRITICAL ERROR: Bulk upsert failed for chunk 11773 in table account_service_jetu.players: ERROR: date/time field value out of range: "1989-09-00 00:00:00" LINE 1: ..., 'HomeSweetSoccer@gmail.com', '4043530607', 'M', '1989-09-0... ^ HINT: Perhaps you need a different "datestyle" setting.
-[ERROR][TRANSFER]Error in bulk upsert: ERROR: date/time field value out of range: "1989-09-00 00:00:00" LINE 1: ..., 'HomeSweetSoccer@gmail.com', '4043530607', 'M', '1989-09-0... ^ HINT: Perhaps you need a different "datestyle" setting.
-
-
-en la vara de procesamiento multiple si estamos ceerando y haciendo commits a todas las conexiones correctamente ? 
 
 
 el error de las conexiones me imagino que es cuando falla un query se queda infinito haciendo retry 
 
-
-
-
-hay otro lugar donde last_offset lo ponen a 0 
-
-
-account_service_jetu,external_account_type_player,MariaDB,host=10.12.240.82;user=datalake.dbuser;password=vNV^cz#2W/+[H~WQK?;db=account_service_jetu,true,LISTENING_CHANGES,,updated_at,,MARIADB32.DGW.JETU.CR,2025-10-06 19:24:36.497293,"[""id""]",12522847,PK,true,-1,
-
-player_services,reward_balances,MariaDB,host=10.12.240.82;user=datalake.dbuser;password=vNV^cz#2W/+[H~WQK?;db=account_service_jetu,true,LISTENING_CHANGES,,updated_at,,MARIADB32.DGW.JETU.CR,2025-10-06 19:24:38.721085,"[""id""]",1,PK,true,-1,
-
-
 TODAS LAS CONSULTAS TIENEN QUE SER SEPARADAS NO PUEDEN SER ANIDADAS
 
 
-[ERROR][TRANSFER]CRITICAL ERROR: Bulk upsert failed for chunk 11773 in table account_service_jetu.players: ERROR: date/time field value out of range: "1989-09-00 00:00:00" LINE 1: ..., 'HomeSweetSoccer@gmail.com', '4043530607', 'M', '1989-09-0... ^ HINT: Perhaps you need a different "datestyle" setting.
-[ERROR][TRANSFER]Error in bulk upsert: ERROR: date/time field value out of range: "1989-09-00 00:00:00" LINE 1: ..., 'HomeSweetSoccer@gmail.com', '4043530607', 'M', '1989-09-0... ^ HINT: Perhaps you need a different "datestyle" setting.
+
+En MariaDBToPostgres.h (5 lugares):
+Línea 1200: Reset para re-sincronización completa
+Línea 1262: Reset para tablas OFFSET
+Línea 1393: Reset para tablas RESET
+Línea 2080: Reset en procesamiento paralelo
+Línea 2156: Reset en procesamiento paralelo
+En MSSQLToPostgres.h (3 lugares):
+Línea 874: Reset para re-sincronización completa
+Línea 933: Reset para tablas OFFSET
+Línea 1080: Reset para tablas RESET
+En catalog_manager.h (2 lugares):
+Línea 103: Reset para tablas inactivas
+Línea 243: Reset para tablas que necesitan FULL_LOAD
