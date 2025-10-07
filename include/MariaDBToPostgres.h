@@ -868,7 +868,13 @@ public:
     }
   }
 
+  // SINGULAR PROCESSING REMOVED - ONLY PARALLEL PROCESSING REMAINS
   void transferDataMariaDBToPostgres() {
+    // Redirect to parallel processing
+    transferDataMariaDBToPostgresParallel();
+  }
+
+  void transferDataMariaDBToPostgresOld() {
     Logger::info(LogCategory::TRANSFER,
                  "Starting MariaDB to PostgreSQL data transfer");
 
@@ -1773,19 +1779,6 @@ public:
   }
 
   // PARALLEL PROCESSING METHODS
-  // Test method for parallel processing
-  void testParallelProcessing() {
-    Logger::info(LogCategory::TRANSFER, "Starting parallel processing test");
-
-    try {
-      transferDataMariaDBToPostgresParallel();
-
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::TRANSFER, "testParallelProcessing",
-                    "PARALLEL processing test failed: " +
-                        std::string(e.what()));
-    }
-  }
 
   void transferDataMariaDBToPostgresParallel() {
     Logger::info(LogCategory::TRANSFER,
@@ -2037,57 +2030,69 @@ public:
         targetCount = 0;
       }
 
-      // 3) FULL_LOAD / RESET: truncar y resetear last_offset
+      // 3) FULL_LOAD / RESET: SIEMPRE truncar para evitar duplicados
       if (table.status == "FULL_LOAD" || table.status == "RESET") {
-        bool shouldTruncate = true;
-        if (table.status == "FULL_LOAD") {
-          // Respetar offset distinto de 0 como en no-paralelo
-          try {
-            pqxx::work txn(pgConn);
-            auto offsetCheck = txn.exec(
-                "SELECT last_offset FROM metadata.catalog WHERE schema_name='" +
-                escapeSQL(table.schema_name) + "' AND table_name='" +
-                escapeSQL(table.table_name) + "';");
-            txn.commit();
-            if (!offsetCheck.empty() && !offsetCheck[0][0].is_null()) {
-              std::string currentOffset = offsetCheck[0][0].as<std::string>();
-              if (currentOffset != "0" && !currentOffset.empty()) {
-                shouldTruncate = false;
-              }
-            }
-          } catch (const std::exception &e) {
-            Logger::error(LogCategory::TRANSFER, "processTableParallel",
-                          "Error checking last_offset for table " +
-                              table.schema_name + "." + table.table_name +
-                              ": " + std::string(e.what()));
-            shouldTruncate = true;
-          } catch (...) {
-            Logger::error(LogCategory::TRANSFER, "processTableParallel",
-                          "Unknown error checking last_offset for table " +
-                              table.schema_name + "." + table.table_name);
-            shouldTruncate = true;
-          }
-        }
+        Logger::info(
+            LogCategory::TRANSFER, "processTableParallel",
+            "FULL_LOAD/RESET detected - performing mandatory truncate for " +
+                table.schema_name + "." + table.table_name);
 
-        if (shouldTruncate) {
+        try {
           pqxx::work txn(pgConn);
           txn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
                    lowerTableNamePG + "\" CASCADE;");
-          // Solo resetear last_offset para tablas OFFSET (no PK)
+
+          // Resetear metadatos para tablas OFFSET y PK
           std::string pkStrategy = getPKStrategyFromCatalog(
               pgConn, table.schema_name, table.table_name);
+
           if (pkStrategy != "PK") {
-            txn.exec("UPDATE metadata.catalog SET last_offset='0' WHERE "
+            // Para tablas OFFSET: resetear last_offset
+            txn.exec("UPDATE metadata.catalog SET last_offset='0', "
+                     "last_processed_pk=NULL WHERE "
                      "schema_name='" +
                      escapeSQL(table.schema_name) + "' AND table_name='" +
                      escapeSQL(table.table_name) + "';");
+            Logger::info(LogCategory::TRANSFER, "processTableParallel",
+                         "Reset last_offset to 0 for OFFSET table " +
+                             table.schema_name + "." + table.table_name);
+          } else {
+            // Para tablas PK: resetear last_processed_pk
+            txn.exec("UPDATE metadata.catalog SET last_processed_pk=NULL, "
+                     "last_offset=NULL WHERE "
+                     "schema_name='" +
+                     escapeSQL(table.schema_name) + "' AND table_name='" +
+                     escapeSQL(table.table_name) + "';");
+            Logger::info(LogCategory::TRANSFER, "processTableParallel",
+                         "Reset last_processed_pk to NULL for PK table " +
+                             table.schema_name + "." + table.table_name);
           }
+
           txn.commit();
           targetCount = 0;
+
+          Logger::info(LogCategory::TRANSFER, "processTableParallel",
+                       "Successfully truncated and reset metadata for " +
+                           table.schema_name + "." + table.table_name);
+
+        } catch (const std::exception &e) {
+          Logger::error(LogCategory::TRANSFER, "processTableParallel",
+                        "Error truncating table " + table.schema_name + "." +
+                            table.table_name + ": " + std::string(e.what()));
+          // Continuar con el procesamiento aunque falle el truncate
+        } catch (...) {
+          Logger::error(LogCategory::TRANSFER, "processTableParallel",
+                        "Unknown error truncating table " + table.schema_name +
+                            "." + table.table_name);
         }
       }
 
       // 4) Rama por conteos (NO_DATA / iguales / deletes / inserts)
+      Logger::info(LogCategory::TRANSFER, "processTableParallel",
+                   "Counts for " + table.schema_name + "." + table.table_name +
+                       ": source=" + std::to_string(sourceCount) +
+                       ", target=" + std::to_string(targetCount));
+
       if (sourceCount == 0) {
         if (targetCount == 0) {
           updateStatus(pgConn, table.schema_name, table.table_name, "NO_DATA",
@@ -2105,39 +2110,78 @@ public:
       }
 
       if (sourceCount == targetCount) {
-        // Si es FULL_LOAD, ya quedó completado; marcar LISTENING_CHANGES
-        if (table.status == "FULL_LOAD") {
+        // CRÍTICO: Verificar consistencia real de datos antes de asumir
+        // sincronización
+        Logger::info(LogCategory::TRANSFER, "processTableParallel",
+                     "Counts match (" + std::to_string(sourceCount) +
+                         "), verifying data consistency for " +
+                         table.schema_name + "." + table.table_name);
+
+        bool isConsistent = verifyDataConsistency(mariadbConn, pgConn, table);
+
+        if (isConsistent) {
+          // Los datos están realmente sincronizados
+          Logger::info(LogCategory::TRANSFER, "processTableParallel",
+                       "Data consistency verified for " + table.schema_name +
+                           "." + table.table_name);
+
+          // Si es FULL_LOAD, ya quedó completado; marcar LISTENING_CHANGES
+          if (table.status == "FULL_LOAD") {
+            updateStatus(pgConn, table.schema_name, table.table_name,
+                         "LISTENING_CHANGES", targetCount);
+            mysql_close(mariadbConn);
+            shutdownParallelProcessing();
+            return;
+          }
+
+          // Si hay columna de tiempo configurada, ejecutar updates
+          // incrementales
+          if (!table.last_sync_column.empty() &&
+              !table.last_sync_time.empty()) {
+            try {
+              processUpdatesByPrimaryKey(
+                  table.schema_name, table.table_name, mariadbConn, pgConn,
+                  table.last_sync_column, table.last_sync_time);
+            } catch (const std::exception &e) {
+              Logger::error(LogCategory::TRANSFER, "processTableParallel",
+                            "Error processing updates for table " +
+                                table.schema_name + "." + table.table_name +
+                                ": " + std::string(e.what()));
+            } catch (...) {
+              Logger::error(LogCategory::TRANSFER, "processTableParallel",
+                            "Unknown error processing updates for table " +
+                                table.schema_name + "." + table.table_name);
+            }
+          }
+
+          // Marcar LISTENING_CHANGES y salir
           updateStatus(pgConn, table.schema_name, table.table_name,
                        "LISTENING_CHANGES", targetCount);
           mysql_close(mariadbConn);
           shutdownParallelProcessing();
           return;
-        }
+        } else {
+          // Los datos NO están sincronizados a pesar de tener conteos iguales
+          Logger::warning(
+              LogCategory::TRANSFER, "processTableParallel",
+              "Data inconsistency detected despite matching counts for " +
+                  table.schema_name + "." + table.table_name +
+                  " - proceeding with full data transfer");
 
-        // Si hay columna de tiempo configurada, ejecutar updates incrementales
-        if (!table.last_sync_column.empty() && !table.last_sync_time.empty()) {
-          try {
-            processUpdatesByPrimaryKey(
-                table.schema_name, table.table_name, mariadbConn, pgConn,
-                table.last_sync_column, table.last_sync_time);
-          } catch (const std::exception &e) {
-            Logger::error(LogCategory::TRANSFER, "processTableParallel",
-                          "Error processing updates for table " +
-                              table.schema_name + "." + table.table_name +
-                              ": " + std::string(e.what()));
-          } catch (...) {
-            Logger::error(LogCategory::TRANSFER, "processTableParallel",
-                          "Unknown error processing updates for table " +
-                              table.schema_name + "." + table.table_name);
-          }
+          // Continuar con la transferencia completa para sincronizar los datos
         }
+      }
 
-        // Marcar LISTENING_CHANGES y salir
-        updateStatus(pgConn, table.schema_name, table.table_name,
-                     "LISTENING_CHANGES", targetCount);
-        mysql_close(mariadbConn);
-        shutdownParallelProcessing();
-        return;
+      if (sourceCount > targetCount) {
+        // CRÍTICO: Hay más datos en origen que en destino - proceder con
+        // transferencia
+        Logger::info(LogCategory::TRANSFER, "processTableParallel",
+                     "Source has more data (" + std::to_string(sourceCount) +
+                         ") than target (" + std::to_string(targetCount) +
+                         ") - proceeding with data transfer for " +
+                         table.schema_name + "." + table.table_name);
+
+        // Continuar con la transferencia de datos
       }
 
       if (sourceCount < targetCount) {
@@ -2281,6 +2325,12 @@ public:
       std::string lastProcessedPK = getLastProcessedPKFromCatalog(
           pgConn, table.schema_name, table.table_name);
 
+      Logger::info(LogCategory::TRANSFER, "dataFetcherThread",
+                   "Starting data fetch for " + table.schema_name + "." +
+                       table.table_name + " - pkStrategy=" + pkStrategy +
+                       ", lastProcessedPK=" +
+                       (lastProcessedPK.empty() ? "empty" : lastProcessedPK));
+
       bool hasMoreData = true;
       while (hasMoreData && parallelProcessingActive.load()) {
         chunkNumber++;
@@ -2299,11 +2349,34 @@ public:
                              escapeSQL(lastPKValues[0]) + "'";
             }
           } else {
-            // Initialize PK cursor by starting from the first record
+            // CRÍTICO: Obtener el primer PK de la tabla para inicializar cursor
+            // correctamente
             Logger::info(LogCategory::TRANSFER,
                          "Initializing PK cursor for " + table.schema_name +
                              "." + table.table_name +
-                             " - starting from first record");
+                             " - getting first PK value");
+
+            std::string firstPKQuery = "SELECT `" + pkColumns[0] + "` FROM `" +
+                                       table.schema_name + "`.`" +
+                                       table.table_name + "` ORDER BY `" +
+                                       pkColumns[0] + "` LIMIT 1";
+
+            auto firstPKRes = executeQueryMariaDB(mariadbConn, firstPKQuery);
+            if (!firstPKRes.empty() && !firstPKRes[0].empty()) {
+              std::string firstPK = firstPKRes[0][0];
+              selectQuery += " WHERE `" + pkColumns[0] + "` >= '" +
+                             escapeSQL(firstPK) + "'";
+              Logger::info(LogCategory::TRANSFER,
+                           "PK cursor initialized with first value: " +
+                               firstPK);
+            } else {
+              // Tabla vacía, no hay datos que procesar
+              Logger::info(LogCategory::TRANSFER, "Table " + table.schema_name +
+                                                      "." + table.table_name +
+                                                      " is empty");
+              hasMoreData = false;
+              break;
+            }
           }
           selectQuery += " ORDER BY `" + pkColumns[0] + "`";
           selectQuery += " LIMIT " + std::to_string(CHUNK_SIZE) + ";";
@@ -2313,11 +2386,23 @@ public:
         }
 
         // Fetch data
+        Logger::info(LogCategory::TRANSFER, "dataFetcherThread",
+                     "Executing query for chunk " +
+                         std::to_string(chunkNumber) + " on " +
+                         table.schema_name + "." + table.table_name);
+
         std::vector<std::vector<std::string>> results =
             executeQueryMariaDB(mariadbConn, selectQuery);
 
-        if (results.empty()) {
+        Logger::info(LogCategory::TRANSFER, "dataFetcherThread",
+                     "Retrieved " + std::to_string(results.size()) +
+                         " rows for chunk " + std::to_string(chunkNumber) +
+                         " on " + table.schema_name + "." + table.table_name);
 
+        if (results.empty()) {
+          Logger::info(LogCategory::TRANSFER, "dataFetcherThread",
+                       "No more data to fetch for " + table.schema_name + "." +
+                           table.table_name);
           hasMoreData = false;
           break;
         }
@@ -2428,8 +2513,21 @@ public:
                               ": " + std::string(e.what()));
           }
 
-          // Update offset for next iteration (after saving to database)
-          currentOffset += CHUNK_SIZE;
+          // CRÍTICO: Solo incrementar offset si realmente se procesaron datos
+          if (rowsInserted > 0) {
+            currentOffset +=
+                rowsInserted; // Usar rowsInserted real, no CHUNK_SIZE
+            Logger::info(LogCategory::TRANSFER,
+                         "Incremented offset by " +
+                             std::to_string(rowsInserted) + " to " +
+                             std::to_string(currentOffset) + " for " +
+                             table.schema_name + "." + table.table_name);
+          } else {
+            Logger::warning(LogCategory::TRANSFER,
+                            "No rows inserted, keeping offset at " +
+                                std::to_string(currentOffset) + " for " +
+                                table.schema_name + "." + table.table_name);
+          }
         }
 
         // Verificar si hemos procesado todos los datos disponibles (identical
@@ -2444,78 +2542,14 @@ public:
         }
       }
 
-      // OPTIMIZED: Update last_processed_pk for completed transfer (identical
-      // to non-parallel) This ensures all PK tables get their last_processed_pk
-      // updated even if they had no new data
-      if (pkStrategy == "PK" && !pkColumns.empty()) {
-        try {
-          // Obtener el último PK de la tabla para marcar como completamente
-          // procesada
-          std::string maxPKQuery = "SELECT ";
-          for (size_t i = 0; i < pkColumns.size(); ++i) {
-            if (i > 0)
-              maxPKQuery += ", ";
-            maxPKQuery += "`" + pkColumns[i] + "`";
-          }
-          maxPKQuery += " FROM `" + table.schema_name + "`.`" +
-                        table.table_name + "` ORDER BY ";
-          for (size_t i = 0; i < pkColumns.size(); ++i) {
-            if (i > 0)
-              maxPKQuery += ", ";
-            maxPKQuery += "`" + pkColumns[i] + "`";
-          }
-          maxPKQuery += " DESC LIMIT 1;";
+      // COMENTADO: Este bloque actualizaba last_processed_pk al final, causando
+      // problemas cuando la tabla estaba en FULL_LOAD y acababa de ser
+      // truncada. El last_processed_pk se actualiza correctamente dentro del
+      // bucle de transferencia.
 
-          Logger::info(LogCategory::TRANSFER,
-                       "DEBUG: Executing maxPKQuery for " + table.schema_name +
-                           "." + table.table_name + ": " + maxPKQuery);
-
-          std::vector<std::vector<std::string>> maxPKResults =
-              executeQueryMariaDB(mariadbConn, maxPKQuery);
-
-          Logger::info(LogCategory::TRANSFER,
-                       "DEBUG: maxPKQuery result for " + table.schema_name +
-                           "." + table.table_name + " - rows returned: " +
-                           std::to_string(maxPKResults.size()));
-
-          if (!maxPKResults.empty() && !maxPKResults[0].empty()) {
-            std::string lastPK;
-            for (size_t i = 0; i < maxPKResults[0].size(); ++i) {
-              if (i > 0)
-                lastPK += "|";
-              lastPK += maxPKResults[0][i];
-            }
-
-            Logger::info(LogCategory::TRANSFER,
-                         "DEBUG: Updating last_processed_pk to " + lastPK +
-                             " for " + table.schema_name + "." +
-                             table.table_name);
-
-            updateLastProcessedPK(pgConn, table.schema_name, table.table_name,
-                                  lastPK);
-            Logger::info(LogCategory::TRANSFER,
-                         "Updated last_processed_pk to " + lastPK +
-                             " for completed table " + table.schema_name + "." +
-                             table.table_name);
-          } else {
-            Logger::warning(
-                LogCategory::TRANSFER,
-                "No PK data found for completed table " + table.schema_name +
-                    "." + table.table_name + " - maxPKResults.empty()=" +
-                    (maxPKResults.empty() ? "true" : "false") +
-                    ", first row empty=" +
-                    (!maxPKResults.empty() && maxPKResults[0].empty()
-                         ? "true"
-                         : "false"));
-          }
-        } catch (const std::exception &e) {
-          Logger::error(LogCategory::TRANSFER,
-                        "ERROR: Failed to update last_processed_pk for "
-                        "completed table " +
-                            table.schema_name + "." + table.table_name + ": " +
-                            std::string(e.what()));
-        }
-      }
+      // if (pkStrategy == "PK" && !pkColumns.empty()) {
+      //   // ... código comentado ...
+      // }
 
     } catch (const std::exception &e) {
       Logger::error(LogCategory::TRANSFER, "dataFetcherThread",
@@ -2752,9 +2786,17 @@ public:
                      lowerTableName + "';");
 
         if (!tableCheck.empty() && tableCheck[0][0].as<int>() > 0) {
-          updateQuery += ", last_sync_time=(SELECT MAX(\"" +
-                         lowerLastSyncColumn + "\")::timestamp FROM \"" +
-                         lowerSchemaName + "\".\"" + lowerTableName + "\")";
+          // Verificar si la tabla tiene datos antes de intentar obtener MAX
+          auto countCheck =
+              txn.exec("SELECT COUNT(*) FROM \"" + lowerSchemaName + "\".\"" +
+                       lowerTableName + "\"");
+          if (!countCheck.empty() && countCheck[0][0].as<int>() > 0) {
+            updateQuery += ", last_sync_time=(SELECT MAX(\"" +
+                           lowerLastSyncColumn + "\")::timestamp FROM \"" +
+                           lowerSchemaName + "\".\"" + lowerTableName + "\")";
+          } else {
+            updateQuery += ", last_sync_time=NOW()";
+          }
         } else {
           updateQuery += ", last_sync_time=NOW()";
         }
@@ -3021,7 +3063,13 @@ private:
           getPrimaryKeyColumnsFromPostgres(pgConn, lowerSchemaName, tableName);
 
       if (pkColumns.empty()) {
-        // Si no hay PK, usar INSERT simple
+        // CRÍTICO: Si no hay PK, usar INSERT simple en lugar de UPSERT
+        Logger::warning(LogCategory::TRANSFER, "performBulkUpsert",
+                        "No PK found for table " + lowerSchemaName + "." +
+                            tableName +
+                            " - using simple INSERT instead of UPSERT");
+
+        // Usar INSERT simple para tablas sin PK
         performBulkInsert(pgConn, results, columnNames, columnTypes,
                           lowerSchemaName, tableName);
         return;
@@ -3750,6 +3798,155 @@ private:
                     "Error parsing last PK: " + std::string(e.what()));
     }
     return pkValues;
+  }
+
+  // NUEVA FUNCIÓN: Verificar consistencia real de datos
+  bool verifyDataConsistency(MYSQL *mariadbConn, pqxx::connection &pgConn,
+                             const TableInfo &table) {
+    try {
+      std::string lowerSchemaName = table.schema_name;
+      std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
+                     lowerSchemaName.begin(), ::tolower);
+      std::string lowerTableName = table.table_name;
+      std::transform(lowerTableName.begin(), lowerTableName.end(),
+                     lowerTableName.begin(), ::tolower);
+
+      // Obtener PK columns
+      std::vector<std::string> pkColumns =
+          getPKColumnsFromCatalog(pgConn, table.schema_name, table.table_name);
+
+      if (pkColumns.empty()) {
+        // Sin PK: comparar conteos y algunos registros aleatorios
+        Logger::info(LogCategory::TRANSFER, "verifyDataConsistency",
+                     "No PK found, using count-based verification for " +
+                         table.schema_name + "." + table.table_name);
+
+        // Obtener conteo de MariaDB
+        auto mariaCountRes = executeQueryMariaDB(
+            mariadbConn, "SELECT COUNT(*) FROM `" + table.schema_name + "`.`" +
+                             table.table_name + "`");
+        size_t mariaCount = 0;
+        if (!mariaCountRes.empty() && !mariaCountRes[0].empty()) {
+          mariaCount = std::stoul(mariaCountRes[0][0]);
+        }
+
+        // Obtener conteo de PostgreSQL
+        pqxx::work txn(pgConn);
+        auto pgCountRes = txn.exec("SELECT COUNT(*) FROM \"" + lowerSchemaName +
+                                   "\".\"" + lowerTableName + "\"");
+        size_t pgCount = 0;
+        if (!pgCountRes.empty()) {
+          pgCount = pgCountRes[0][0].as<size_t>();
+        }
+        txn.commit();
+
+        return (mariaCount == pgCount);
+      }
+
+      // Con PK: verificar que todos los PKs de MariaDB existan en PostgreSQL
+      Logger::info(LogCategory::TRANSFER, "verifyDataConsistency",
+                   "Using PK-based verification for " + table.schema_name +
+                       "." + table.table_name);
+
+      // Obtener todos los PKs de MariaDB
+      std::string pkQuery = "SELECT ";
+      for (size_t i = 0; i < pkColumns.size(); ++i) {
+        if (i > 0)
+          pkQuery += ", ";
+        pkQuery += "`" + pkColumns[i] + "`";
+      }
+      pkQuery += " FROM `" + table.schema_name + "`.`" + table.table_name +
+                 "` ORDER BY `" + pkColumns[0] + "`";
+
+      auto mariaPKs = executeQueryMariaDB(mariadbConn, pkQuery);
+
+      Logger::info(LogCategory::TRANSFER, "verifyDataConsistency",
+                   "MariaDB table " + table.schema_name + "." +
+                       table.table_name + " has " +
+                       std::to_string(mariaPKs.size()) + " records");
+
+      if (mariaPKs.empty()) {
+        // Tabla vacía en MariaDB, verificar que PostgreSQL también esté vacía
+        Logger::info(LogCategory::TRANSFER, "verifyDataConsistency",
+                     "MariaDB table " + table.schema_name + "." +
+                         table.table_name + " is empty");
+        pqxx::work txn(pgConn);
+        auto pgCountRes = txn.exec("SELECT COUNT(*) FROM \"" + lowerSchemaName +
+                                   "\".\"" + lowerTableName + "\"");
+        size_t pgCount = 0;
+        if (!pgCountRes.empty()) {
+          pgCount = pgCountRes[0][0].as<size_t>();
+        }
+        txn.commit();
+        Logger::info(LogCategory::TRANSFER, "verifyDataConsistency",
+                     "PostgreSQL table " + lowerSchemaName + "." +
+                         lowerTableName + " has " + std::to_string(pgCount) +
+                         " rows");
+        return (pgCount == 0);
+      }
+
+      // Verificar que cada PK de MariaDB exista en PostgreSQL
+      const size_t BATCH_SIZE = 1000;
+      for (size_t batchStart = 0; batchStart < mariaPKs.size();
+           batchStart += BATCH_SIZE) {
+        size_t batchEnd = std::min(batchStart + BATCH_SIZE, mariaPKs.size());
+
+        std::string checkQuery = "SELECT COUNT(*) FROM \"" + lowerSchemaName +
+                                 "\".\"" + lowerTableName + "\" WHERE (";
+
+        for (size_t i = batchStart; i < batchEnd; ++i) {
+          if (i > batchStart)
+            checkQuery += " OR ";
+          checkQuery += "(";
+          for (size_t j = 0; j < pkColumns.size() && j < mariaPKs[i].size();
+               ++j) {
+            if (j > 0)
+              checkQuery += " AND ";
+            std::string value = mariaPKs[i][j];
+            if (value.empty() || value == "NULL") {
+              checkQuery += "\"" + pkColumns[j] + "\" IS NULL";
+            } else {
+              checkQuery +=
+                  "\"" + pkColumns[j] + "\" = '" + escapeSQL(value) + "'";
+            }
+          }
+          checkQuery += ")";
+        }
+        checkQuery += ")";
+
+        pqxx::work txn(pgConn);
+        auto result = txn.exec(checkQuery);
+        txn.commit();
+
+        size_t foundCount = 0;
+        if (!result.empty()) {
+          foundCount = result[0][0].as<size_t>();
+        }
+
+        // Si no encontramos todos los registros del batch, no están
+        // sincronizados
+        if (foundCount != (batchEnd - batchStart)) {
+          Logger::warning(
+              LogCategory::TRANSFER, "verifyDataConsistency",
+              "Data inconsistency detected: batch " +
+                  std::to_string(batchStart) + "-" + std::to_string(batchEnd) +
+                  " found " + std::to_string(foundCount) + " out of " +
+                  std::to_string(batchEnd - batchStart) + " records");
+          return false;
+        }
+      }
+
+      Logger::info(LogCategory::TRANSFER, "verifyDataConsistency",
+                   "Data consistency verified for " + table.schema_name + "." +
+                       table.table_name);
+      return true;
+
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER, "verifyDataConsistency",
+                    "Error verifying data consistency: " +
+                        std::string(e.what()));
+      return false;
+    }
   }
 };
 
