@@ -24,32 +24,23 @@ void Logger::loadDebugConfig() {
   std::lock_guard<std::mutex> lock(configMutex);
 
   try {
-    // Validate connection string
     std::string connStr = DatabaseConfig::getPostgresConnectionString();
     if (connStr.empty()) {
-      std::cerr << "Logger::loadDebugConfig: Empty database connection string"
-                << std::endl;
       setDefaultConfig();
       return;
     }
 
-    // Create connection with timeout
     pqxx::connection conn(connStr);
     if (!conn.is_open()) {
-      std::cerr << "Logger::loadDebugConfig: Failed to connect to database"
-                << std::endl;
       setDefaultConfig();
       return;
     }
 
-    // Test connection with a simple query
     try {
       pqxx::work testTxn(conn);
       testTxn.exec("SELECT 1");
       testTxn.commit();
     } catch (const std::exception &e) {
-      std::cerr << "Logger::loadDebugConfig: Database connection test failed: "
-                << e.what() << std::endl;
       setDefaultConfig();
       return;
     }
@@ -96,21 +87,14 @@ void Logger::loadDebugConfig() {
     // Removed debug config load log to reduce noise
 
   } catch (const pqxx::sql_error &e) {
-    std::cerr << "Logger::loadDebugConfig: SQL error: " << e.what()
-              << " [SQL State: " << e.sqlstate() << "]" << std::endl;
     setDefaultConfig();
   } catch (const std::exception &e) {
-    std::cerr << "Logger::loadDebugConfig: Database error: " << e.what()
-              << std::endl;
     setDefaultConfig();
   }
 }
 
 void Logger::setDefaultConfig() {
-  std::cerr << "Logger::loadDebugConfig: Using default configuration (database "
-               "unavailable)"
-            << std::endl;
-  currentLogLevel = LogLevel::INFO; // Use INFO as default for production
+  currentLogLevel = LogLevel::INFO;
   showTimestamps = true;
   showThreadId = false;
   showFileLine = false;
@@ -128,12 +112,9 @@ void Logger::setLogLevel(LogLevel level) {
 
 void Logger::setLogLevel(const std::string &levelStr) {
   if (levelStr.empty()) {
-    std::cerr << "Logger::setLogLevel: Empty log level string provided"
-              << std::endl;
     return;
   }
 
-  // Validate the log level string before converting
   std::string upperLevelStr = levelStr;
   std::transform(upperLevelStr.begin(), upperLevelStr.end(),
                  upperLevelStr.begin(), ::toupper);
@@ -142,8 +123,6 @@ void Logger::setLogLevel(const std::string &levelStr) {
       upperLevelStr != "WARN" && upperLevelStr != "WARNING" &&
       upperLevelStr != "ERROR" && upperLevelStr != "FATAL" &&
       upperLevelStr != "CRITICAL") {
-    std::cerr << "Logger::setLogLevel: Invalid log level string: " << levelStr
-              << std::endl;
     return;
   }
 
@@ -162,8 +141,12 @@ void Logger::initialize(const std::string &fileName) {
   std::lock_guard<std::mutex> lock(logMutex);
 
   messageCount = 0;
+  logFileName = fileName;
 
-  // Load debug configuration from database
+  if (!logFile.is_open()) {
+    logFile.open(logFileName, std::ios::app);
+  }
+
   loadDebugConfig();
 
   try {
