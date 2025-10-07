@@ -10,7 +10,24 @@ int main() {
 
     Logger::info(LogCategory::SYSTEM, "main", "Using hardcoded configuration");
 
-    std::cout << "Running... :)" << std::endl;
+    std::cout << "\n";
+    std::cout << "██████╗  █████╗ ████████╗ █████╗ ███████╗██╗   ██╗███╗   ██╗ "
+                 "██████╗\n";
+    std::cout << "██╔══██╗██╔══██╗╚══██╔══╝██╔══██╗██╔════╝╚██╗ ██╔╝████╗  "
+                 "██║██╔════╝\n";
+    std::cout << "██║  ██║███████║   ██║   ███████║███████╗ ╚████╔╝ ██╔██╗ "
+                 "██║██║     \n";
+    std::cout << "██║  ██║██╔══██║   ██║   ██╔══██║╚════██║  ╚██╔╝  "
+                 "██║╚██╗██║██║     \n";
+    std::cout << "██████╔╝██║  ██║   ██║   ██║  ██║███████║   ██║   ██║ "
+                 "╚████║╚██████╗\n";
+    std::cout << "╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝╚══════╝   ╚═╝   ╚═╝  ╚═══╝ "
+                 "╚═════╝\n";
+    std::cout << "\n";
+    std::cout
+        << "          Enterprise Data Synchronization & Replication System\n";
+    std::cout << "                            Version 1.0.0\n";
+    std::cout << "\n" << std::endl;
 
     // Initialize StreamingData with error handling
     StreamingData sd;

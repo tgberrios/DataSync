@@ -6,11 +6,11 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <pqxx/pqxx>
 #include <sstream>
 #include <string>
-#include <memory>
 
 enum class LogLevel {
   DEBUG = 0,
@@ -199,29 +199,38 @@ private:
       try {
         if (!dbStatementPrepared) {
           pqxx::work w(*dbConn);
-          w.conn().prepare(
-              "log_insert",
-              "INSERT INTO metadata.logs (ts, level, category, function, message) VALUES (NOW(), $1, $2, $3, $4)");
+          w.conn().prepare("log_insert",
+                           "INSERT INTO metadata.logs (ts, level, category, "
+                           "function, message) VALUES (NOW(), $1, $2, $3, $4)");
           w.commit();
           dbStatementPrepared = true;
         }
         pqxx::work txn(*dbConn);
-        txn.exec_prepared("log_insert", levelStr, categoryStr, function, message);
+        txn.exec_prepared("log_insert", levelStr, categoryStr, function,
+                          message);
         txn.commit();
       } catch (const std::exception &) {
         dbLoggingEnabled = false;
-        std::cerr << "[LOGGER ERROR] DB logging disabled due to failure. Level="
-                  << levelStr << " Category=" << categoryStr << " Msg="
-                  << message << std::endl;
+        if (logFile.is_open()) {
+          std::string timestamp = getCurrentTimestamp();
+          logFile << "[" << timestamp << "] [" << levelStr << "] ["
+                  << categoryStr << "]";
+          if (!function.empty()) {
+            logFile << " [" << function << "]";
+          }
+          logFile << " " << message << std::endl;
+        }
       }
     } else {
-      std::string timestamp = getCurrentTimestamp();
-      std::cerr << "[" << timestamp << "] [" << levelStr << "] ["
-                << categoryStr << "]";
-      if (!function.empty()) {
-        std::cerr << " [" << function << "]";
+      if (logFile.is_open()) {
+        std::string timestamp = getCurrentTimestamp();
+        logFile << "[" << timestamp << "] [" << levelStr << "] [" << categoryStr
+                << "]";
+        if (!function.empty()) {
+          logFile << " [" << function << "]";
+        }
+        logFile << " " << message << std::endl;
       }
-      std::cerr << " " << message << std::endl;
     }
   }
 
