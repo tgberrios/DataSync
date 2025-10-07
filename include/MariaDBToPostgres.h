@@ -3526,6 +3526,17 @@ private:
           cleanValue.find("-") == std::string::npos ||
           cleanValue.find("0000") != std::string::npos) {
         isNull = true;
+      } else {
+        // Validación específica para fechas inválidas como "1989-09-00"
+        if (cleanValue.find("-00") != std::string::npos ||
+            cleanValue.find("-00 ") != std::string::npos ||
+            cleanValue.find(" 00:00:00") != std::string::npos) {
+          Logger::warning(
+              LogCategory::TRANSFER, "cleanValueForPostgres",
+              "Invalid date detected (contains -00), converting to NULL: " +
+                  cleanValue);
+          isNull = true;
+        }
       }
     }
 

@@ -46,6 +46,9 @@ public:
       // Limpiar valores de offset inválidos según la estrategia
       cleanInvalidOffsetValues();
 
+      // Limpiar logs antiguos (por defecto 24 horas de retención)
+      cleanOldLogs(24);
+
       // Actualizar cluster names después de la limpieza
       updateClusterNames();
 
@@ -1940,6 +1943,56 @@ private:
       Logger::error(LogCategory::DATABASE, "cleanInvalidOffsetValues",
                     "ERROR cleaning invalid offset values: " +
                         std::string(e.what()));
+    }
+  }
+
+  void cleanOldLogs(int retentionHours = 24) {
+    try {
+      pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
+      pqxx::work txn(pgConn);
+
+      // Obtener conteo de logs antes de la limpieza
+      auto countBefore = txn.exec("SELECT COUNT(*) FROM metadata.logs;");
+      int logsBefore = countBefore[0][0].as<int>();
+
+      if (logsBefore == 0) {
+        Logger::info(LogCategory::MAINTENANCE, "cleanOldLogs",
+                     "No logs found in metadata.logs table");
+        txn.commit();
+        return;
+      }
+
+      // Eliminar logs más antiguos que el período de retención especificado
+      std::string deleteQuery =
+          "DELETE FROM metadata.logs WHERE ts < NOW() - INTERVAL '" +
+          std::to_string(retentionHours) + " hours';";
+
+      auto deleteResult = txn.exec(deleteQuery);
+      int deletedLogs = deleteResult.affected_rows();
+
+      // Obtener conteo de logs después de la limpieza
+      auto countAfter = txn.exec("SELECT COUNT(*) FROM metadata.logs;");
+      int logsAfter = countAfter[0][0].as<int>();
+
+      txn.commit();
+
+      Logger::info(
+          LogCategory::MAINTENANCE, "cleanOldLogs",
+          "Logs cleanup completed: deleted " + std::to_string(deletedLogs) +
+              " old logs (retention: " + std::to_string(retentionHours) +
+              " hours). Remaining logs: " + std::to_string(logsAfter));
+
+    } catch (const pqxx::sql_error &e) {
+      Logger::error(LogCategory::DATABASE, "cleanOldLogs",
+                    "SQL ERROR cleaning old logs: " + std::string(e.what()) +
+                        " [SQL State: " + e.sqlstate() + "]");
+    } catch (const pqxx::broken_connection &e) {
+      Logger::error(LogCategory::DATABASE, "cleanOldLogs",
+                    "CONNECTION ERROR cleaning old logs: " +
+                        std::string(e.what()));
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::DATABASE, "cleanOldLogs",
+                    "ERROR cleaning old logs: " + std::string(e.what()));
     }
   }
 
