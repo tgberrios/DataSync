@@ -15,12 +15,6 @@ For PostgreSQL we try current_setting('cluster_name', true) then inet_server_add
 
 
 
-arreglar categorias y funciones en todos los archivos! y estarizar logs todos en MAYUS
-anadir mas logger:error en las partes que haga falta etc
-principalmente en todas las trassaciones sean de hacia motor maria y mssql tanto como pg 
-
-
-
 una funcion en catalog para estar truncando metadata.logs cada 48 o 24 horas EN BASE A LA COLUMNA TS
 
 
