@@ -41,3 +41,6 @@ SÍ, AMBOS ARCHIVOS ESTÁN USANDO SOLO PROCESAMIENTO PARALELO porque StreamingDa
 PERO hay código legacy singular en MSSQLToPostgres.h que está sin usar pero presente.
 ¿Quieres que limpie MSSQLToPostgres.h para que sea consistente con MariaDBToPostgres.h?
 Es decir, que la función transferDataMSSQLToPostgres() solo redirija a transferDataMSSQLToPostgresParallel(), y mover el código singular a una función *Old() o eliminarlo completamente.
+
+
+TALVEZ PONERLE AL BANNER YA ABAJITO COMO RUNNING Y ASI
