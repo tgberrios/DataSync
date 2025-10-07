@@ -7,6 +7,14 @@
 -- Description: Core tables for managing data synchronization across multiple databases
 -- ============================================================================
 
+CREATE TABLE IF NOT EXISTS metadata.logs (
+  ts timestamptz NOT NULL,
+  level text NOT NULL,
+  category text NOT NULL,
+  function text,
+  message text NOT NULL
+);
+
 -- ============================================================================
 -- 1. CONFIGURATION TABLE
 -- ============================================================================
@@ -449,3 +457,7 @@ INSERT INTO metadata.catalog
 (schema_name, table_name, cluster_name, db_engine, connection_string, last_sync_time, last_sync_column, status, last_offset, active)
 VALUES ('dbo', 'customers', '', 'MSSQL', 'DRIVER={ODBC Driver 18 for SQL Server};SERVER=localhost;DATABASE=master;UID=sa;PWD=Yucaquemada1;TrustServerCertificate=yes;', NOW(), 'created_at', 'FULL_LOAD', '0', true);
 
+INSERT INTO metadata.config(key, value) VALUES
+('max_workers','8'),
+('max_tables_per_cycle','5000')
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;

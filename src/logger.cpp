@@ -9,6 +9,9 @@ std::mutex Logger::logMutex;
 std::string Logger::logFileName = "DataSync.log";
 std::string Logger::errorLogFileName = "DataSyncErrors.log";
 size_t Logger::messageCount = 0;
+std::unique_ptr<pqxx::connection> Logger::dbConn;
+bool Logger::dbLoggingEnabled = false;
+bool Logger::dbStatementPrepared = false;
 
 // Debug configuration variables
 LogLevel Logger::currentLogLevel = LogLevel::INFO;
@@ -158,66 +161,23 @@ void Logger::refreshConfig() { loadDebugConfig(); }
 void Logger::initialize(const std::string &fileName) {
   std::lock_guard<std::mutex> lock(logMutex);
 
-  // Use proper filesystem path handling for cross-platform compatibility
-  std::filesystem::path executablePath = std::filesystem::current_path();
-  std::filesystem::path logPath = executablePath / fileName;
-  logFileName = logPath.string();
-
-  // Set error log file name
-  std::filesystem::path errorLogPath = executablePath / "DataSyncErrors.log";
-  errorLogFileName = errorLogPath.string();
-
-  // Validate file path and permissions
-  std::filesystem::path parentDir = logPath.parent_path();
-
-  // Ensure parent directory exists
-  if (!parentDir.empty() && !std::filesystem::exists(parentDir)) {
-    try {
-      std::filesystem::create_directories(parentDir);
-    } catch (const std::filesystem::filesystem_error &e) {
-      std::cerr << "Logger::initialize: Failed to create log directory: "
-                << parentDir.string() << " - " << e.what() << std::endl;
-      return;
-    }
-  }
-
-  // Check if we can write to the directory
-  if (!parentDir.empty() && !std::filesystem::exists(parentDir)) {
-    std::cerr << "Logger::initialize: Log directory does not exist and could "
-                 "not be created: "
-              << parentDir.string() << std::endl;
-    return;
-  }
-
-  // Try to open the main log file
-  logFile.open(logFileName, std::ios::app);
-  if (!logFile.is_open()) {
-    std::cerr << "Logger::initialize: Failed to open log file: " << logFileName
-              << std::endl;
-    std::cerr << "Logger::initialize: Check file permissions and disk space"
-              << std::endl;
-    return;
-  }
-
-  // Try to open the error log file
-  errorLogFile.open(errorLogFileName, std::ios::app);
-  if (!errorLogFile.is_open()) {
-    std::cerr << "Logger::initialize: Failed to open error log file: "
-              << errorLogFileName << std::endl;
-    std::cerr << "Logger::initialize: Check file permissions and disk space"
-              << std::endl;
-  }
-
-  // Removed logger initialization log to reduce noise
-  if (!logFile.good()) {
-    std::cerr << "Logger::initialize: Failed to write to log file: "
-              << logFileName << std::endl;
-    logFile.close();
-    return;
-  }
-
   messageCount = 0;
 
   // Load debug configuration from database
   loadDebugConfig();
+
+  try {
+    std::string connStr = DatabaseConfig::getPostgresConnectionString();
+    if (!connStr.empty()) {
+      dbConn = std::make_unique<pqxx::connection>(connStr);
+      if (dbConn && dbConn->is_open()) {
+        dbLoggingEnabled = true;
+        dbStatementPrepared = false;
+      }
+    }
+  } catch (const std::exception &) {
+    dbLoggingEnabled = false;
+    dbStatementPrepared = false;
+    dbConn.reset();
+  }
 }

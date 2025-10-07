@@ -29,7 +29,6 @@ public:
     Logger::info(LogCategory::MONITORING,
                  "Initializing DataSync system components");
 
-    // Database connections will be created as needed
     Logger::info(LogCategory::MONITORING,
                  "Database connections will be created as needed");
 
@@ -71,7 +70,7 @@ public:
         try {
           thread.join();
         } catch (const std::exception &e) {
-          Logger::error(LogCategory::MONITORING,
+          Logger::error(LogCategory::MONITORING, "run",
                         "Error joining thread in run(): " +
                             std::string(e.what()));
         }
@@ -91,7 +90,7 @@ public:
         try {
           thread.join();
         } catch (const std::exception &e) {
-          Logger::error(LogCategory::MONITORING,
+          Logger::error(LogCategory::MONITORING, "shutdown",
                         "Error joining thread: " + std::string(e.what()));
         }
       }
@@ -132,7 +131,8 @@ private:
       pqxx::work txn(pgConn);
       auto results =
           txn.exec("SELECT key, value FROM metadata.config WHERE key IN "
-                   "('chunk_size', 'sync_interval');");
+                   "('chunk_size', 'sync_interval', 'max_workers', "
+                   "'max_tables_per_cycle');");
 
       Logger::info(LogCategory::MONITORING,
                    "Configuration query executed, found " +
@@ -150,7 +150,7 @@ private:
 
       for (const auto &row : results) {
         if (row.size() < 2) {
-          Logger::error(LogCategory::MONITORING,
+          Logger::error(LogCategory::MONITORING, "loadConfigFromDatabase",
                         "Invalid configuration row - insufficient columns: " +
                             std::to_string(row.size()));
           continue;
@@ -158,8 +158,6 @@ private:
 
         // Validate and extract configuration data
         if (row[0].is_null() || row[1].is_null()) {
-          Logger::warning(LogCategory::MONITORING,
-                          "Skipping configuration row with null key or value");
           continue;
         }
 
@@ -168,8 +166,6 @@ private:
 
         // Validate non-empty strings
         if (key.empty() || value.empty()) {
-          Logger::warning(LogCategory::MONITORING,
-                          "Skipping configuration row with empty key or value");
           continue;
         }
 
@@ -188,12 +184,9 @@ private:
                                " to " + std::to_string(newSize));
               SyncConfig::setChunkSize(newSize);
             } else if (newSize < 1 || newSize > 1024 * 1024 * 1024) {
-              Logger::warning(LogCategory::MONITORING,
-                              "Chunk size value out of range (1-1GB): " +
-                                  value);
             }
           } catch (const std::exception &e) {
-            Logger::error(LogCategory::MONITORING,
+            Logger::error(LogCategory::MONITORING, "loadConfigFromDatabase",
                           "Failed to parse chunk_size value '" + value +
                               "': " + std::string(e.what()));
           }
@@ -209,37 +202,64 @@ private:
                                " to " + std::to_string(newInterval));
               SyncConfig::setSyncInterval(newInterval);
             } else if (newInterval < 5 || newInterval > 3600) {
-              Logger::warning(LogCategory::MONITORING,
-                              "Sync interval value out of range (5s-1h): " +
-                                  value);
             }
           } catch (const std::exception &e) {
-            Logger::error(LogCategory::MONITORING,
+            Logger::error(LogCategory::MONITORING, "loadConfigFromDatabase",
                           "Failed to parse sync_interval value '" + value +
                               "': " + std::string(e.what()));
           }
+        } else if (key == "max_workers") {
+          try {
+            size_t v = std::stoul(value);
+            if (v >= 1 && v <= 128 && v != SyncConfig::getMaxWorkers()) {
+              Logger::info(LogCategory::MONITORING,
+                           "Updating max_workers from " +
+                               std::to_string(SyncConfig::getMaxWorkers()) +
+                               " to " + std::to_string(v));
+              SyncConfig::setMaxWorkers(v);
+            }
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::MONITORING, "loadConfigFromDatabase",
+                          "Failed to parse max_workers value '" + value +
+                              "': " + std::string(e.what()));
+          }
+        } else if (key == "max_tables_per_cycle") {
+          try {
+            size_t v = std::stoul(value);
+            if (v >= 1 && v <= 1000000 &&
+                v != SyncConfig::getMaxTablesPerCycle()) {
+              Logger::info(
+                  LogCategory::MONITORING,
+                  "Updating max_tables_per_cycle from " +
+                      std::to_string(SyncConfig::getMaxTablesPerCycle()) +
+                      " to " + std::to_string(v));
+              SyncConfig::setMaxTablesPerCycle(v);
+            }
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::MONITORING,
+                          "Failed to parse max_tables_per_cycle value '" +
+                              value + "': " + std::string(e.what()));
+          }
         } else {
-          Logger::warning(LogCategory::MONITORING,
-                          "Unknown configuration key: " + key);
         }
       }
 
       Logger::info(LogCategory::MONITORING,
                    "Configuration load completed successfully");
     } catch (const pqxx::sql_error &e) {
-      Logger::error(LogCategory::MONITORING,
+      Logger::error(LogCategory::MONITORING, "loadConfigFromDatabase",
                     "SQL ERROR in loadConfigFromDatabase: " +
                         std::string(e.what()) + " [SQL State: " + e.sqlstate() +
                         "] - Configuration may not be applied");
     } catch (const pqxx::broken_connection &e) {
       Logger::error(
-          LogCategory::MONITORING,
+          LogCategory::MONITORING, "loadConfigFromDatabase",
           "CONNECTION ERROR in loadConfigFromDatabase: " +
               std::string(e.what()) +
               " - Database connection lost during configuration load");
     } catch (const std::exception &e) {
       Logger::error(
-          LogCategory::MONITORING,
+          LogCategory::MONITORING, "loadConfigFromDatabase",
           "CRITICAL ERROR in loadConfigFromDatabase: " + std::string(e.what()) +
               " - Configuration may not be applied");
     }
@@ -268,7 +288,7 @@ private:
         Logger::info(LogCategory::MONITORING,
                      "DataGovernance report generated");
       } catch (const std::exception &e) {
-        Logger::error(LogCategory::MONITORING,
+        Logger::error(LogCategory::MONITORING, "initializationThread",
                       "CRITICAL ERROR in DataGovernance initialization: " +
                           std::string(e.what()) +
                           " - System may not function properly");
@@ -284,7 +304,7 @@ private:
                      "DDLExporter completed successfully");
       } catch (const std::exception &e) {
         Logger::error(
-            LogCategory::MONITORING,
+            LogCategory::MONITORING, "initializationThread",
             "CRITICAL ERROR in DDLExporter: " + std::string(e.what()) +
                 " - Schema exports may be incomplete");
       }
@@ -299,7 +319,7 @@ private:
                      "MetricsCollector completed successfully");
       } catch (const std::exception &e) {
         Logger::error(
-            LogCategory::MONITORING,
+            LogCategory::MONITORING, "initializationThread",
             "CRITICAL ERROR in MetricsCollector: " + std::string(e.what()) +
                 " - Metrics collection failed");
       }
@@ -312,7 +332,7 @@ private:
         Logger::info(LogCategory::MONITORING,
                      "MariaDB target tables setup completed");
       } catch (const std::exception &e) {
-        Logger::error(LogCategory::MONITORING,
+        Logger::error(LogCategory::MONITORING, "initializationThread",
                       "CRITICAL ERROR in MariaDB table setup: " +
                           std::string(e.what()) + " - MariaDB sync may fail");
       }
@@ -323,7 +343,7 @@ private:
         Logger::info(LogCategory::MONITORING,
                      "MSSQL target tables setup completed");
       } catch (const std::exception &e) {
-        Logger::error(LogCategory::MONITORING,
+        Logger::error(LogCategory::MONITORING, "initializationThread",
                       "CRITICAL ERROR in MSSQL table setup: " +
                           std::string(e.what()) + " - MSSQL sync may fail");
       }
@@ -332,7 +352,7 @@ private:
                    "System initialization thread completed successfully");
     } catch (const std::exception &e) {
       Logger::error(
-          LogCategory::MONITORING,
+          LogCategory::MONITORING, "initializationThread",
           "CRITICAL ERROR in initializationThread: " + std::string(e.what()) +
               " - System initialization failed completely");
     }
@@ -359,7 +379,7 @@ private:
                          "MariaDB catalog sync completed successfully");
           } catch (const std::exception &e) {
             Logger::error(
-                LogCategory::MONITORING,
+                LogCategory::MONITORING, "catalogSyncThread",
                 "ERROR in MariaDB catalog sync: " + std::string(e.what()) +
                     " - MariaDB catalog may be out of sync");
             std::lock_guard<std::mutex> lock(exceptionMutex);
@@ -376,7 +396,7 @@ private:
                          "MSSQL catalog sync completed successfully");
           } catch (const std::exception &e) {
             Logger::error(
-                LogCategory::MONITORING,
+                LogCategory::MONITORING, "catalogSyncThread",
                 "ERROR in MSSQL catalog sync: " + std::string(e.what()) +
                     " - MSSQL catalog may be out of sync");
             std::lock_guard<std::mutex> lock(exceptionMutex);
@@ -391,7 +411,7 @@ private:
 
         if (!exceptions.empty()) {
           Logger::error(
-              LogCategory::MONITORING,
+              LogCategory::MONITORING, "catalogSyncThread",
               "CRITICAL: " + std::to_string(exceptions.size()) +
                   " catalog sync operations failed - system may be in "
                   "inconsistent state");
@@ -403,7 +423,7 @@ private:
           Logger::info(LogCategory::MONITORING,
                        "Catalog cleanup completed successfully");
         } catch (const std::exception &e) {
-          Logger::error(LogCategory::MONITORING,
+          Logger::error(LogCategory::MONITORING, "catalogSyncThread",
                         "ERROR in catalog cleanup: " + std::string(e.what()) +
                             " - Catalog may contain stale data");
         }
@@ -416,7 +436,7 @@ private:
                        "No-data table deactivation completed successfully");
         } catch (const std::exception &e) {
           Logger::error(
-              LogCategory::MONITORING,
+              LogCategory::MONITORING, "catalogSyncThread",
               "ERROR in no-data table deactivation: " + std::string(e.what()) +
                   " - Inactive tables may not be properly marked");
         }
@@ -424,7 +444,7 @@ private:
         Logger::info(LogCategory::MONITORING,
                      "Catalog synchronization cycle completed");
       } catch (const std::exception &e) {
-        Logger::error(LogCategory::MONITORING,
+        Logger::error(LogCategory::MONITORING, "catalogSyncThread",
                       "CRITICAL ERROR in catalog synchronization cycle: " +
                           std::string(e.what()) +
                           " - Catalog sync completely failed");
@@ -455,7 +475,7 @@ private:
                      "MariaDB transfer cycle completed successfully in " +
                          std::to_string(duration.count()) + " seconds");
       } catch (const std::exception &e) {
-        Logger::error(LogCategory::MONITORING,
+        Logger::error(LogCategory::MONITORING, "mariaTransferThread",
                       "CRITICAL ERROR in MariaDB transfer cycle: " +
                           std::string(e.what()) +
                           " - MariaDB data sync failed, retrying in " +
@@ -489,7 +509,7 @@ private:
                          std::to_string(duration.count()) + " seconds");
       } catch (const std::exception &e) {
         Logger::error(
-            LogCategory::MONITORING,
+            LogCategory::MONITORING, "mssqlTransferThread",
             "CRITICAL ERROR in MSSQL transfer cycle: " + std::string(e.what()) +
                 " - MSSQL data sync failed, retrying in " +
                 std::to_string(SyncConfig::getSyncInterval()) + " seconds");
@@ -514,7 +534,7 @@ private:
         // Validate connection string before creating connection
         std::string connStr = DatabaseConfig::getPostgresConnectionString();
         if (connStr.empty()) {
-          Logger::error(LogCategory::MONITORING,
+          Logger::error(LogCategory::MONITORING, "qualityThread",
                         "CRITICAL ERROR: Empty PostgreSQL connection string");
           std::this_thread::sleep_for(
               std::chrono::seconds(SyncConfig::getSyncInterval() * 2));
@@ -528,7 +548,7 @@ private:
         pgConn->set_session_var("lock_timeout", "10000");      // 10 seconds
 
         if (!pgConn->is_open()) {
-          Logger::error(LogCategory::MONITORING,
+          Logger::error(LogCategory::MONITORING, "qualityThread",
                         "CRITICAL ERROR: Cannot establish PostgreSQL "
                         "connection for data quality validation");
           std::this_thread::sleep_for(
@@ -556,7 +576,7 @@ private:
                            "Validating MariaDB table: " + schema + "." + table);
               dataQuality.validateTable(*pgConn, schema, table, "MariaDB");
             } catch (const std::exception &e) {
-              Logger::error(LogCategory::MONITORING,
+              Logger::error(LogCategory::MONITORING, "qualityThread",
                             "ERROR validating MariaDB table " +
                                 row[0].as<std::string>() + "." +
                                 row[1].as<std::string>() + ": " +
@@ -566,7 +586,7 @@ private:
           Logger::info(LogCategory::MONITORING,
                        "MariaDB table validation completed");
         } catch (const std::exception &e) {
-          Logger::error(LogCategory::MONITORING,
+          Logger::error(LogCategory::MONITORING, "qualityThread",
                         "CRITICAL ERROR in MariaDB table validation: " +
                             std::string(e.what()) +
                             " - MariaDB data quality checks failed");
@@ -592,7 +612,7 @@ private:
                            "Validating MSSQL table: " + schema + "." + table);
               dataQuality.validateTable(*pgConn, schema, table, "MSSQL");
             } catch (const std::exception &e) {
-              Logger::error(LogCategory::MONITORING,
+              Logger::error(LogCategory::MONITORING, "qualityThread",
                             "ERROR validating MSSQL table " +
                                 row[0].as<std::string>() + "." +
                                 row[1].as<std::string>() + ": " +
@@ -602,7 +622,7 @@ private:
           Logger::info(LogCategory::MONITORING,
                        "MSSQL table validation completed");
         } catch (const std::exception &e) {
-          Logger::error(LogCategory::MONITORING,
+          Logger::error(LogCategory::MONITORING, "qualityThread",
                         "CRITICAL ERROR in MSSQL table validation: " +
                             std::string(e.what()) +
                             " - MSSQL data quality checks failed");
@@ -629,7 +649,7 @@ private:
                                table);
               dataQuality.validateTable(*pgConn, schema, table, "PostgreSQL");
             } catch (const std::exception &e) {
-              Logger::error(LogCategory::MONITORING,
+              Logger::error(LogCategory::MONITORING, "qualityThread",
                             "ERROR validating PostgreSQL table " +
                                 row[0].as<std::string>() + "." +
                                 row[1].as<std::string>() + ": " +
@@ -639,7 +659,7 @@ private:
           Logger::info(LogCategory::MONITORING,
                        "PostgreSQL table validation completed");
         } catch (const std::exception &e) {
-          Logger::error(LogCategory::MONITORING,
+          Logger::error(LogCategory::MONITORING, "qualityThread",
                         "CRITICAL ERROR in PostgreSQL table validation: " +
                             std::string(e.what()) +
                             " - PostgreSQL data quality checks failed");
@@ -648,7 +668,7 @@ private:
         Logger::info(LogCategory::MONITORING,
                      "Data quality validation cycle completed successfully");
       } catch (const std::exception &e) {
-        Logger::error(LogCategory::MONITORING,
+        Logger::error(LogCategory::MONITORING, "qualityThread",
                       "CRITICAL ERROR in data quality validation cycle: " +
                           std::string(e.what()) +
                           " - Data quality validation completely failed");
@@ -679,7 +699,7 @@ private:
           Logger::info(LogCategory::MONITORING,
                        "MariaDB table maintenance setup completed");
         } catch (const std::exception &e) {
-          Logger::error(LogCategory::MONITORING,
+          Logger::error(LogCategory::MONITORING, "maintenanceThread",
                         "ERROR in MariaDB table maintenance setup: " +
                             std::string(e.what()) +
                             " - MariaDB tables may not be properly maintained");
@@ -693,7 +713,7 @@ private:
           Logger::info(LogCategory::MONITORING,
                        "MSSQL catalog sync maintenance completed");
         } catch (const std::exception &e) {
-          Logger::error(LogCategory::MONITORING,
+          Logger::error(LogCategory::MONITORING, "maintenanceThread",
                         "ERROR in MSSQL catalog sync maintenance: " +
                             std::string(e.what()) +
                             " - MSSQL catalog may be out of sync");
@@ -708,7 +728,7 @@ private:
                        "Catalog cleanup maintenance completed");
         } catch (const std::exception &e) {
           Logger::error(
-              LogCategory::MONITORING,
+              LogCategory::MONITORING, "maintenanceThread",
               "ERROR in catalog cleanup maintenance: " + std::string(e.what()) +
                   " - Catalog may contain stale entries");
         }
@@ -720,7 +740,7 @@ private:
           Logger::info(LogCategory::MONITORING,
                        "No-data table deactivation maintenance completed");
         } catch (const std::exception &e) {
-          Logger::error(LogCategory::MONITORING,
+          Logger::error(LogCategory::MONITORING, "maintenanceThread",
                         "ERROR in no-data table deactivation maintenance: " +
                             std::string(e.what()) +
                             " - Inactive tables may not be properly marked");
@@ -735,7 +755,7 @@ private:
           Logger::info(LogCategory::MONITORING,
                        "Metrics collection maintenance completed");
         } catch (const std::exception &e) {
-          Logger::error(LogCategory::MONITORING,
+          Logger::error(LogCategory::MONITORING, "maintenanceThread",
                         "ERROR in metrics collection maintenance: " +
                             std::string(e.what()) +
                             " - System metrics may not be current");
@@ -748,7 +768,7 @@ private:
                      "Periodic maintenance cycle completed successfully in " +
                          std::to_string(cycleDuration.count()) + " seconds");
       } catch (const std::exception &e) {
-        Logger::error(LogCategory::MONITORING,
+        Logger::error(LogCategory::MONITORING, "maintenanceThread",
                       "CRITICAL ERROR in periodic maintenance cycle: " +
                           std::string(e.what()) +
                           " - Maintenance cycle completely failed");
@@ -773,7 +793,7 @@ private:
         // Validate connection string before creating connection
         std::string connStr = DatabaseConfig::getPostgresConnectionString();
         if (connStr.empty()) {
-          Logger::error(LogCategory::MONITORING,
+          Logger::error(LogCategory::MONITORING, "monitoringThread",
                         "CRITICAL ERROR: Empty PostgreSQL connection string "
                         "for monitoring");
           std::this_thread::sleep_for(
@@ -789,7 +809,7 @@ private:
 
         if (!pgConn->is_open()) {
           Logger::error(
-              LogCategory::MONITORING,
+              LogCategory::MONITORING, "monitoringThread",
               "CRITICAL ERROR: Cannot establish PostgreSQL connection for "
               "monitoring - system health cannot be monitored");
           std::this_thread::sleep_for(
@@ -803,7 +823,7 @@ private:
                        "Loading configuration from database");
           loadConfigFromDatabase(*pgConn);
         } catch (const std::exception &e) {
-          Logger::error(LogCategory::MONITORING,
+          Logger::error(LogCategory::MONITORING, "monitoringThread",
                         "ERROR loading configuration in monitoring cycle: " +
                             std::string(e.what()) +
                             " - Configuration may not be current");
@@ -824,7 +844,7 @@ private:
                          " milliseconds");
       } catch (const std::exception &e) {
         Logger::error(
-            LogCategory::MONITORING,
+            LogCategory::MONITORING, "monitoringThread",
             "CRITICAL ERROR in monitoring cycle: " + std::string(e.what()) +
                 " - System monitoring completely failed");
       }

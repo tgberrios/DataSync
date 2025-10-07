@@ -49,7 +49,6 @@ public:
       // Actualizar cluster names después de la limpieza
       updateClusterNames();
 
-      Logger::info(LogCategory::DATABASE, "Catalog cleanup completed");
     } catch (const pqxx::sql_error &e) {
       Logger::error(LogCategory::DATABASE, "cleanCatalog",
                     "SQL ERROR cleaning catalog: " + std::string(e.what()) +
@@ -91,10 +90,6 @@ public:
         auto updateResult = txn.exec(
             "UPDATE metadata.catalog SET active = false WHERE status = "
             "'NO_DATA' AND active = true");
-        Logger::info(LogCategory::DATABASE,
-                     "Deactivated " +
-                         std::to_string(updateResult.affected_rows()) +
-                         " NO_DATA tables");
       }
 
       // Marcar tablas inactivas como SKIP y resetear valores
@@ -105,9 +100,6 @@ public:
                      "last_offset = 0, "
                      "last_processed_pk = 0 "
                      "WHERE active = false AND status != 'NO_DATA'");
-        Logger::info(LogCategory::DATABASE,
-                     "Marked " + std::to_string(skipResult.affected_rows()) +
-                         " inactive tables as SKIP with reset values");
       }
 
       txn.commit();
@@ -163,15 +155,9 @@ public:
               escapeSQL(connectionString) + "' AND db_engine = '" +
               escapeSQL(dbEngine) + "'");
           updateTxn.commit();
-
-          Logger::info(LogCategory::DATABASE,
-                       "Updated cluster_name to '" + clusterName + "' for " +
-                           std::to_string(updateResult.affected_rows()) +
-                           " tables");
         }
       }
 
-      Logger::info(LogCategory::DATABASE, "Cluster name updates completed");
     } catch (const pqxx::sql_error &e) {
       Logger::error(
           LogCategory::DATABASE, "updateClusterNames",
@@ -191,9 +177,6 @@ public:
     try {
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
 
-      Logger::info(LogCategory::DATABASE,
-                   "Starting schema consistency validation");
-
       pqxx::work txn(pgConn);
       auto results = txn.exec("SELECT schema_name, table_name, db_engine, "
                               "connection_string, status "
@@ -207,20 +190,12 @@ public:
       int validatedTables = 0;
       int resetTables = 0;
 
-      Logger::info(LogCategory::DATABASE, "Found " +
-                                              std::to_string(totalTables) +
-                                              " tables to validate");
-
       for (const auto &row : results) {
         std::string schemaName = row[0].as<std::string>();
         std::string tableName = row[1].as<std::string>();
         std::string dbEngine = row[2].as<std::string>();
         std::string connectionString = row[3].as<std::string>();
         std::string status = row[4].as<std::string>();
-
-        Logger::info(LogCategory::DATABASE, "Validating schema: " + schemaName +
-                                                "." + tableName + " [" +
-                                                dbEngine + "]");
 
         bool needsReset = false;
         int sourceColumnCount = 0;
@@ -246,12 +221,6 @@ public:
         needsReset = (sourceColumnCount != targetColumnCount);
 
         if (needsReset) {
-          Logger::warning(
-              LogCategory::DATABASE,
-              "SCHEMA MISMATCH: " + schemaName + "." + tableName +
-                  " - Source columns: " + std::to_string(sourceColumnCount) +
-                  ", Target columns: " + std::to_string(targetColumnCount) +
-                  " - Dropping and resetting table");
 
           pqxx::work resetTxn(pgConn);
 
@@ -281,19 +250,10 @@ public:
           resetTxn.commit();
           resetTables++;
         } else {
-          Logger::info(
-              LogCategory::DATABASE,
-              "SCHEMA VALID: " + schemaName + "." + tableName +
-                  " - Columns match: " + std::to_string(sourceColumnCount));
+
           validatedTables++;
         }
       }
-
-      Logger::info(LogCategory::DATABASE,
-                   "Schema validation completed - Validated: " +
-                       std::to_string(validatedTables) +
-                       ", Reset: " + std::to_string(resetTables) +
-                       ", Total: " + std::to_string(totalTables));
 
     } catch (const pqxx::sql_error &e) {
       Logger::error(LogCategory::DATABASE, "validateSchemaConsistency",
@@ -328,12 +288,8 @@ public:
         }
       }
 
-      Logger::info(LogCategory::DATABASE,
-                   "Found " + std::to_string(mariaConnStrings.size()) +
-                       " MariaDB connection(s)");
       if (mariaConnStrings.empty()) {
-        Logger::warning(LogCategory::DATABASE,
-                        "No MariaDB connections found in catalog");
+
         return;
       }
 
@@ -441,20 +397,11 @@ public:
                 detectTimeColumnMariaDB(mariaConn, schemaName, tableName);
 
             // Detectar PK
-            Logger::info(LogCategory::DATABASE,
-                         "Detecting PK for table: " + schemaName + "." +
-                             tableName);
+
             std::vector<std::string> pkColumns =
                 detectPrimaryKeyColumns(mariaConn, schemaName, tableName);
             std::string pkStrategy = determinePKStrategy(pkColumns);
             bool hasPK = !pkColumns.empty();
-
-            Logger::info(LogCategory::DATABASE,
-                         "PK Detection Results for " + schemaName + "." +
-                             tableName +
-                             ": hasPK=" + (hasPK ? "true" : "false") +
-                             ", pkStrategy=" + pkStrategy +
-                             ", pkColumns=" + columnsToJSON(pkColumns));
 
             pqxx::work txn(pgConn);
 
@@ -480,8 +427,9 @@ public:
                 tableSize = sizeResult[0][0].as<int64_t>();
               }
             } catch (const std::exception &e) {
-              // Silently continue without table size - not critical for
-              // functionality
+              Logger::error(
+                  LogCategory::DATABASE, "syncCatalogMariaDBToPostgres",
+                  "ERROR getting table size: " + std::string(e.what()));
               tableSize = 0;
             }
             // Check if table already exists
@@ -565,11 +513,11 @@ public:
                        "VALUES ('" +
                        escapeSQL(schemaName) + "', '" + escapeSQL(tableName) +
                        "', '', 'MariaDB', '" + escapeSQL(connStr) +
-                       "', NOW(), '" + escapeSQL(timeColumn) +
-                       "', 'PENDING', '0', false, '" +
+                       "', NULL, '" + escapeSQL(timeColumn) +
+                       "', 'PENDING', 0, false, '" +
                        escapeSQL(columnsToJSON(pkColumns)) + "', '" +
                        escapeSQL(pkStrategy) + "', " +
-                       std::string(hasPK ? "true" : "false") + ", '" +
+                       std::string(hasPK ? "true" : "false") + ", " +
                        std::to_string(tableSize) + ");");
             }
             txn.commit();
@@ -617,12 +565,8 @@ public:
         }
       }
 
-      Logger::info(LogCategory::DATABASE,
-                   "Found " + std::to_string(mssqlConnStrings.size()) +
-                       " MSSQL connections");
       if (mssqlConnStrings.empty()) {
-        Logger::warning(LogCategory::DATABASE,
-                        "No MSSQL connections found in catalog");
+
         return;
       }
 
@@ -696,9 +640,6 @@ public:
             "ORDER BY s.name, t.name;";
 
         auto discoveredTables = executeQueryMSSQL(dbc, discoverQuery);
-        Logger::info(LogCategory::DATABASE,
-                     "Found " + std::to_string(discoveredTables.size()) +
-                         " tables");
 
         for (const std::vector<std::string> &row : discoveredTables) {
           if (row.size() < 2)
@@ -728,10 +669,9 @@ public:
               // Para MSSQL, usamos una query diferente
               tableSize = 1000; // Valor por defecto para MSSQL
             } catch (const std::exception &e) {
-              Logger::warning(LogCategory::DATABASE,
-                              "Could not get table size for " + schemaName +
-                                  "." + tableName + ": " +
-                                  std::string(e.what()));
+              Logger::error(LogCategory::DATABASE, "syncCatalogMSSQLToPostgres",
+                            "ERROR getting table size: " +
+                                std::string(e.what()));
             }
 
             pqxx::work txn(pgConn);
@@ -815,12 +755,11 @@ public:
                        "has_pk, table_size) "
                        "VALUES ('" +
                        escapeSQL(schemaName) + "', '" + escapeSQL(tableName) +
-                       "', '', 'MSSQL', '" + escapeSQL(connStr) +
-                       "', NOW(), '" + escapeSQL(timeColumn) +
-                       "', 'PENDING', '0', false, '" +
+                       "', '', 'MSSQL', '" + escapeSQL(connStr) + "', NULL, '" +
+                       escapeSQL(timeColumn) + "', 'PENDING', 0, false, '" +
                        escapeSQL(columnsToJSON(pkColumns)) + "', '" +
                        escapeSQL(pkStrategy) + "', " +
-                       std::string(hasPK ? "true" : "false") + ", '" +
+                       std::string(hasPK ? "true" : "false") + ", " +
                        std::to_string(tableSize) + ");");
             }
             txn.commit();
@@ -870,12 +809,8 @@ public:
         }
       }
 
-      Logger::info(LogCategory::DATABASE,
-                   "Found " + std::to_string(pgConnStrings.size()) +
-                       " PostgreSQL source connections");
       if (pgConnStrings.empty()) {
-        Logger::warning(LogCategory::DATABASE,
-                        "No PostgreSQL source connections found in catalog");
+
         return;
       }
 
@@ -906,10 +841,6 @@ public:
         pqxx::work sourceTxn(sourcePgConn);
         auto discoveredTables = sourceTxn.exec(discoverQuery);
         sourceTxn.commit();
-
-        Logger::info(LogCategory::DATABASE,
-                     "Found " + std::to_string(discoveredTables.size()) +
-                         " tables");
 
         for (const auto &row : discoveredTables) {
           if (row.size() < 2)
@@ -945,10 +876,9 @@ public:
                 tableSize = sizeResult[0][0].as<int64_t>();
               }
             } catch (const std::exception &e) {
-              Logger::warning(LogCategory::DATABASE,
-                              "Could not get table size for " + schemaName +
-                                  "." + tableName + ": " +
-                                  std::string(e.what()));
+              Logger::error(
+                  LogCategory::DATABASE, "syncCatalogPostgresToPostgres",
+                  "ERROR getting table size: " + std::string(e.what()));
             }
             // Check if table already exists
             auto existingCheck = txn.exec(
@@ -1031,11 +961,11 @@ public:
                        "VALUES ('" +
                        escapeSQL(schemaName) + "', '" + escapeSQL(tableName) +
                        "', '', 'PostgreSQL', '" + escapeSQL(connStr) +
-                       "', NOW(), '" + escapeSQL(timeColumn) +
-                       "', 'PENDING', '0', false, '" +
+                       "', NULL, '" + escapeSQL(timeColumn) +
+                       "', 'PENDING', 0, false, '" +
                        escapeSQL(columnsToJSON(pkColumns)) + "', '" +
                        escapeSQL(pkStrategy) + "', " +
-                       std::string(hasPK ? "true" : "false") + ", '" +
+                       std::string(hasPK ? "true" : "false") + ", " +
                        std::to_string(tableSize) + ");");
             }
             txn.commit();
@@ -1085,16 +1015,11 @@ private:
                           "AND CONSTRAINT_NAME = 'PRIMARY' "
                           "ORDER BY ORDINAL_POSITION;";
 
-      Logger::info(LogCategory::DATABASE,
-                   "Executing PK detection query: " + query);
       auto results = executeQueryMariaDB(conn, query);
-      Logger::info(LogCategory::DATABASE, "PK detection query returned " +
-                                              std::to_string(results.size()) +
-                                              " rows");
 
       for (const auto &row : results) {
         if (!row.empty() && !row[0].empty()) {
-          Logger::info(LogCategory::DATABASE, "Found PK column: " + row[0]);
+
           pkColumns.push_back(row[0]);
         }
       }
@@ -1349,8 +1274,7 @@ private:
         return value;
       }
     }
-    Logger::warning(
-        "No DATABASE found in connection string, using master fallback");
+
     return "master"; // fallback
   }
 
@@ -1532,8 +1456,6 @@ private:
       }
     }
 
-    Logger::warning(LogCategory::DATABASE,
-                    "No hostname found in connection string for " + dbEngine);
     return "";
   }
 
@@ -1635,9 +1557,6 @@ private:
                      lowerTableName + "';");
 
         if (!checkResult.empty() && checkResult[0][0].as<int>() == 0) {
-          Logger::info(LogCategory::DATABASE,
-                       "Removing non-existent PostgreSQL table: " +
-                           schema_name + "." + table_name);
 
           txn.exec("DELETE FROM metadata.catalog WHERE schema_name='" +
                    schema_name + "' AND table_name='" + table_name +
@@ -1702,9 +1621,7 @@ private:
 
         MYSQL *mariadbConn = mysql_init(nullptr);
         if (!mariadbConn) {
-          Logger::warning(LogCategory::DATABASE,
-                          "cleanNonExistentMariaDBTables",
-                          "mysql_init() failed");
+
           continue;
         }
 
@@ -1720,10 +1637,7 @@ private:
         if (mysql_real_connect(mariadbConn, host.c_str(), user.c_str(),
                                password.c_str(), db.c_str(), portNum, nullptr,
                                0) == nullptr) {
-          Logger::warning(LogCategory::DATABASE,
-                          "cleanNonExistentMariaDBTables",
-                          "MariaDB connection failed: " +
-                              std::string(mysql_error(mariadbConn)));
+
           mysql_close(mariadbConn);
           continue;
         }
@@ -1784,9 +1698,6 @@ private:
 
           if (existingTableSet.find({schema_name, table_name}) ==
               existingTableSet.end()) {
-            Logger::info(LogCategory::DATABASE,
-                         "Removing non-existent MariaDB table: " + schema_name +
-                             "." + table_name);
 
             txn.exec("DELETE FROM metadata.catalog WHERE schema_name='" +
                      schema_name + "' AND table_name='" + table_name +
@@ -1834,8 +1745,7 @@ private:
 
         ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env);
         if (!SQL_SUCCEEDED(ret)) {
-          Logger::warning(LogCategory::DATABASE, "cleanNonExistentMSSQLTables",
-                          "Failed to allocate ODBC environment handle");
+
           continue;
         }
 
@@ -1843,16 +1753,14 @@ private:
                             (SQLPOINTER)SQL_OV_ODBC3, 0);
         if (!SQL_SUCCEEDED(ret)) {
           SQLFreeHandle(SQL_HANDLE_ENV, env);
-          Logger::warning(LogCategory::DATABASE, "cleanNonExistentMSSQLTables",
-                          "Failed to set ODBC version");
+
           continue;
         }
 
         ret = SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc);
         if (!SQL_SUCCEEDED(ret)) {
           SQLFreeHandle(SQL_HANDLE_ENV, env);
-          Logger::warning(LogCategory::DATABASE, "cleanNonExistentMSSQLTables",
-                          "Failed to allocate ODBC connection handle");
+
           continue;
         }
 
@@ -1870,9 +1778,7 @@ private:
                         sizeof(msg), &msgLen);
           SQLFreeHandle(SQL_HANDLE_DBC, dbc);
           SQLFreeHandle(SQL_HANDLE_ENV, env);
-          Logger::warning(LogCategory::DATABASE, "cleanNonExistentMSSQLTables",
-                          "Failed to connect to MSSQL: " +
-                              std::string((char *)msg));
+
           continue;
         }
 
@@ -1934,9 +1840,6 @@ private:
 
           if (existingTableSet.find({schema_name, table_name}) ==
               existingTableSet.end()) {
-            Logger::info(LogCategory::DATABASE,
-                         "Removing non-existent MSSQL table: " + schema_name +
-                             "." + table_name);
 
             txn.exec("DELETE FROM metadata.catalog WHERE schema_name='" +
                      schema_name + "' AND table_name='" + table_name +
@@ -2005,7 +1908,7 @@ private:
       pqxx::work txn(pgConn);
 
       // Limpiar last_offset en tablas con estrategia PK (deberían usar
-      // last_processed_pk)
+      // last_processed_pk) - establecer a NULL para consistencia
       auto pkResult =
           txn.exec("UPDATE metadata.catalog SET last_offset = NULL "
                    "WHERE pk_strategy = 'PK' AND last_offset IS NOT NULL;");
@@ -2018,13 +1921,11 @@ private:
 
       txn.commit();
 
-      Logger::info(LogCategory::DATABASE,
-                   "Cleaned " + std::to_string(pkResult.affected_rows()) +
-                       " PK strategy tables with invalid last_offset values");
       Logger::info(
-          LogCategory::DATABASE,
-          "Cleaned " + std::to_string(offsetResult.affected_rows()) +
-              " OFFSET strategy tables with invalid last_processed_pk values");
+          LogCategory::MAINTENANCE, "cleanInvalidOffsetValues",
+          "Cleaned invalid offset values: " +
+              std::to_string(pkResult.affected_rows()) + " PK tables, " +
+              std::to_string(offsetResult.affected_rows()) + " OFFSET tables");
 
     } catch (const pqxx::sql_error &e) {
       Logger::error(

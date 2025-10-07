@@ -1484,8 +1484,13 @@ public:
                    "Processing " + std::to_string(tables.size()) +
                        " MSSQL tables in HYBRID parallel mode");
 
-      // Process multiple tables in parallel
+      // Process multiple tables in parallel (bounded by config)
+      size_t tablesCap = SyncConfig::getMaxTablesPerCycle();
+      if (tablesCap > 0 && tables.size() > tablesCap) {
+        tables.resize(tablesCap);
+      }
       std::vector<std::thread> tableProcessors;
+      size_t maxWorkers = std::max<size_t>(1, SyncConfig::getMaxWorkers());
       for (auto &table : tables) {
         if (table.db_engine != "MSSQL") {
           Logger::warning(LogCategory::TRANSFER,
@@ -1495,7 +1500,11 @@ public:
           continue;
         }
 
-        // Create separate PostgreSQL connection for each table processor
+        // Throttle to maxWorkers concurrent processors
+        while (tableProcessors.size() >= maxWorkers) {
+          if (tableProcessors.front().joinable()) tableProcessors.front().join();
+          tableProcessors.erase(tableProcessors.begin());
+        }
         tableProcessors.emplace_back(
             &MSSQLToPostgres::processTableParallelWithConnection, this, table);
       }

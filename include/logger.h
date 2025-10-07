@@ -10,6 +10,7 @@
 #include <pqxx/pqxx>
 #include <sstream>
 #include <string>
+#include <memory>
 
 enum class LogLevel {
   DEBUG = 0,
@@ -52,6 +53,10 @@ private:
   static bool showThreadId;
   static bool showFileLine;
   static std::mutex configMutex;
+
+  static std::unique_ptr<pqxx::connection> dbConn;
+  static bool dbLoggingEnabled;
+  static bool dbStatementPrepared;
 
   static std::string getCurrentTimestamp() {
     auto now = std::chrono::system_clock::now();
@@ -187,72 +192,36 @@ private:
       return;
     }
 
-    // Try to reopen file if it's not open
-    if (!logFile.is_open()) {
-      logFile.open(logFileName, std::ios::app);
-      if (!logFile.is_open()) {
-        // If we can't open the log file, write to stderr as fallback
-        std::cerr << "[LOGGER ERROR] Cannot open log file: " << logFileName
-                  << std::endl;
-        std::cerr << "[FALLBACK LOG] " << getLevelString(level) << ": "
-                  << message << std::endl;
-        return;
-      }
-    }
-
-    checkFileSize();
-
-    std::string timestamp = getCurrentTimestamp();
     std::string levelStr = getLevelString(level);
     std::string categoryStr = getCategoryString(category);
 
-    // Write to main log file
-    logFile << "[" << timestamp << "] [" << levelStr << "] [" << categoryStr
-            << "]";
-    if (!function.empty()) {
-      logFile << " [" << function << "]";
-    }
-    logFile << " " << message << std::endl;
-
-    // Check if write was successful
-    if (!logFile.good()) {
-      std::cerr << "[LOGGER ERROR] Failed to write to log file" << std::endl;
-      logFile.close();
-      return;
-    }
-
-    // Write to error log file if level is ERROR, WARNING, or CRITICAL
-    if (level >= LogLevel::WARNING) {
-      // Try to reopen error log file if it's not open
-      if (!errorLogFile.is_open()) {
-        errorLogFile.open(errorLogFileName, std::ios::app);
-        if (!errorLogFile.is_open()) {
-          std::cerr << "[LOGGER ERROR] Cannot open error log file: "
-                    << errorLogFileName << std::endl;
+    if (dbLoggingEnabled && dbConn) {
+      try {
+        if (!dbStatementPrepared) {
+          pqxx::work w(*dbConn);
+          w.conn().prepare(
+              "log_insert",
+              "INSERT INTO metadata.logs (ts, level, category, function, message) VALUES (NOW(), $1, $2, $3, $4)");
+          w.commit();
+          dbStatementPrepared = true;
         }
+        pqxx::work txn(*dbConn);
+        txn.exec_prepared("log_insert", levelStr, categoryStr, function, message);
+        txn.commit();
+      } catch (const std::exception &) {
+        dbLoggingEnabled = false;
+        std::cerr << "[LOGGER ERROR] DB logging disabled due to failure. Level="
+                  << levelStr << " Category=" << categoryStr << " Msg="
+                  << message << std::endl;
       }
-
-      // Write to error log file if it's open
-      if (errorLogFile.is_open()) {
-        errorLogFile << "[" << timestamp << "] [" << levelStr << "] ["
-                     << categoryStr << "]";
-        if (!function.empty()) {
-          errorLogFile << " [" << function << "]";
-        }
-        errorLogFile << " " << message << std::endl;
-        errorLogFile.flush(); // Always flush error logs immediately
-      }
-    }
-
-    if (level >= LogLevel::ERROR) {
-      logFile.flush();
-      messageCount = 0;
     } else {
-      messageCount++;
-      if (messageCount >= MAX_MESSAGES_BEFORE_FLUSH) {
-        logFile.flush();
-        messageCount = 0;
+      std::string timestamp = getCurrentTimestamp();
+      std::cerr << "[" << timestamp << "] [" << levelStr << "] ["
+                << categoryStr << "]";
+      if (!function.empty()) {
+        std::cerr << " [" << function << "]";
       }
+      std::cerr << " " << message << std::endl;
     }
   }
 
@@ -284,6 +253,9 @@ public:
       errorLogFile.close();
     }
     messageCount = 0;
+    dbStatementPrepared = false;
+    dbLoggingEnabled = false;
+    dbConn.reset();
   }
 
   // Convenience methods with categories

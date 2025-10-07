@@ -165,7 +165,7 @@ const LogLine = styled.div<{ level: string; category: string }>`
         case 'DATABASE':
           return '#9c27b0';
         case 'TRANSFER':
-          return '#ff9800';
+          return '#4caf50';
         case 'CONFIG':
           return '#2196f3';
         case 'VALIDATION':
@@ -227,7 +227,7 @@ const LogCategory = styled.span<{ category: string }>`
       case 'DATABASE':
         return '#9c27b0';
       case 'TRANSFER':
-        return '#ff9800';
+        return '#4caf50';
       case 'CONFIG':
         return '#2196f3';
       case 'VALIDATION':
@@ -379,6 +379,9 @@ const LogsViewer = () => {
   const [level, setLevel] = useState('ALL');
   const [category, setCategory] = useState('ALL');
   const [search, setSearch] = useState('');
+  const [func, setFunc] = useState('ALL');
+  const [categoriesList, setCategoriesList] = useState<string[]>(['ALL']);
+  const [functionsList, setFunctionsList] = useState<string[]>(['ALL']);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -388,8 +391,8 @@ const LogsViewer = () => {
   const [isCopying, setIsCopying] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
   
-  // Tab state
-  const [activeTab, setActiveTab] = useState<'all' | 'errors'>('all');
+  // Single tab (DB-backed)
+  const [activeTab] = useState<'all'>('all');
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
@@ -404,43 +407,30 @@ const LogsViewer = () => {
       setIsRefreshing(true);
       setError(null);
       
-      // Fetch logs based on active tab
       const [logsData, infoData] = await Promise.all([
-        activeTab === 'errors' 
-          ? logsApi.getErrorLogs({ 
-              lines, 
-              level, 
-              category,
-              search,
-              startDate,
-              endDate
-            })
-          : logsApi.getLogs({ 
-              lines, 
-              level, 
-              category,
-              search,
-              startDate,
-              endDate
-            }),
-        activeTab === 'errors' 
-          ? logsApi.getErrorLogInfo()
-          : logsApi.getLogInfo()
+        logsApi.getLogs({ 
+          lines, 
+          level, 
+          category,
+          function: func,
+          search,
+          startDate,
+          endDate
+        }),
+        logsApi.getLogInfo()
       ]);
       
       setAllLogs(logsData.logs);
       setLogInfo(infoData);
       
-      // Calculate pagination - Page 1 shows most recent logs
+      // Calculate pagination - Page 1 shows most recent logs (already DESC from server)
       const logsPerPage = 50;
       const totalPages = Math.ceil(logsData.logs.length / logsPerPage);
       setTotalPages(totalPages);
       
-      // Reverse logs so most recent appear first, then paginate
-      const reversedLogs = [...logsData.logs].reverse();
       const startIndex = (currentPage - 1) * logsPerPage;
       const endIndex = startIndex + logsPerPage;
-      setLogs(reversedLogs.slice(startIndex, endIndex));
+      setLogs(logsData.logs.slice(startIndex, endIndex));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error loading logs');
     } finally {
@@ -448,29 +438,36 @@ const LogsViewer = () => {
       setIsRefreshing(false);
     }
   };
+  // Load dynamic filters (categories/functions)
+  useEffect(() => {
+    const loadFilters = async () => {
+      try {
+        const [cats, funcs] = await Promise.all([
+          logsApi.getCategories(),
+          logsApi.getFunctions(),
+        ]);
+        setCategoriesList(['ALL', ...cats.filter(Boolean)]);
+        setFunctionsList(['ALL', ...funcs.filter(Boolean)]);
+      } catch {
+      }
+    };
+    loadFilters();
+  }, []);
+
 
   const scrollToBottom = () => {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  const handleTabChange = (tab: 'all' | 'errors') => {
-    setActiveTab(tab);
-    setCurrentPage(1);
-    // Reset filters for error tab to show only ERROR, WARNING, CRITICAL levels
-    if (tab === 'errors') {
-      setLevel('ALL'); // Keep ALL to show all error levels
-    }
-  };
+  // no-op; unified tab
 
   const goToPage = (page: number) => {
     if (page >= 1 && page <= totalPages) {
       setCurrentPage(page);
       const logsPerPage = 50;
-      // Reverse logs so most recent appear first, then paginate
-      const reversedLogs = [...allLogs].reverse();
       const startIndex = (page - 1) * logsPerPage;
       const endIndex = startIndex + logsPerPage;
-      setLogs(reversedLogs.slice(startIndex, endIndex));
+      setLogs(allLogs.slice(startIndex, endIndex));
     }
   };
 
@@ -557,7 +554,7 @@ const LogsViewer = () => {
 
   useEffect(() => {
     fetchLogs();
-  }, [lines, level, category, search, startDate, endDate, activeTab]);
+  }, [lines, level, category, func, search, startDate, endDate]);
 
   useEffect(() => {
     // Clear any existing countdown interval
@@ -603,11 +600,9 @@ const LogsViewer = () => {
   useEffect(() => {
     if (allLogs.length > 0) {
       const logsPerPage = 50;
-      // Reverse logs so most recent appear first, then paginate
-      const reversedLogs = [...allLogs].reverse();
       const startIndex = (currentPage - 1) * logsPerPage;
       const endIndex = startIndex + logsPerPage;
-      setLogs(reversedLogs.slice(startIndex, endIndex));
+      setLogs(allLogs.slice(startIndex, endIndex));
     }
   }, [allLogs, currentPage]);
 
@@ -659,30 +654,13 @@ const LogsViewer = () => {
     );
   }
 
-  if (!logInfo?.exists) {
-    return (
-      <LogsContainer>
-        <Header>DataSync Logs Viewer</Header>
-        <ErrorMessage>
-          <div style={{ fontWeight: 'bold', marginBottom: '10px' }}>No log file found</div>
-          <div>Make sure the DataSync application is running and generating logs.</div>
-        </ErrorMessage>
-      </LogsContainer>
-    );
-  }
+  // DB-backed logs: always render
 
   return (
     <LogsContainer>
       <Header>DataSync Logs Viewer</Header>
       
-      <TabsContainer>
-        <Tab $active={activeTab === 'all'} onClick={() => handleTabChange('all')}>
-          ■ All Logs
-        </Tab>
-        <Tab $active={activeTab === 'errors'} onClick={() => handleTabChange('errors')}>
-          ● Error Logs
-        </Tab>
-      </TabsContainer>
+      {/* Unified logs view (DB-backed) */}
       
       <Section>
         <SectionTitle>⚙ LOG CONTROLS</SectionTitle>
@@ -713,18 +691,18 @@ const LogsViewer = () => {
           <ControlGroup>
             <Label>Category:</Label>
             <Select value={category} onChange={(e) => setCategory(e.target.value)}>
-              <option value="ALL">All Categories</option>
-              <option value="SYSTEM">SYSTEM</option>
-              <option value="DATABASE">DATABASE</option>
-              <option value="TRANSFER">TRANSFER</option>
-              <option value="CONFIG">CONFIG</option>
-              <option value="VALIDATION">VALIDATION</option>
-              <option value="MAINTENANCE">MAINTENANCE</option>
-              <option value="MONITORING">MONITORING</option>
-              <option value="DDL_EXPORT">DDL_EXPORT</option>
-              <option value="METRICS">METRICS</option>
-              <option value="GOVERNANCE">GOVERNANCE</option>
-              <option value="QUALITY">QUALITY</option>
+              {categoriesList.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </Select>
+          </ControlGroup>
+
+          <ControlGroup>
+            <Label>Function:</Label>
+            <Select value={func} onChange={(e) => setFunc(e.target.value)}>
+              {functionsList.map((f) => (
+                <option key={f} value={f}>{f}</option>
+              ))}
             </Select>
           </ControlGroup>
           
@@ -842,13 +820,13 @@ const LogsViewer = () => {
       </Section>
 
       <Section>
-        <SectionTitle>■ LOG ENTRIES</SectionTitle>
+        <SectionTitle>■ LOG ENTRIES (DB)</SectionTitle>
         <LogsArea>
           {logs.map((log, index) => (
             <LogLine key={log.id || index} level={log.level} category={log.category || 'SYSTEM'}>
-              <LogTimestamp>{log.timestamp}</LogTimestamp>
-              <LogLevel level={log.level}>[{log.level}]</LogLevel>
-              {log.category && <LogCategory category={log.category}>[{log.category}]</LogCategory>}
+              <LogTimestamp>{log.timestamp ? formatDate(log.timestamp) : ''}</LogTimestamp>
+              <LogLevel level={log.level}>[{(log.level || '').toUpperCase()}]</LogLevel>
+              {log.category && <LogCategory category={log.category}>[{(log.category || '').toUpperCase()}]</LogCategory>}
               {log.function && <LogFunction>[{log.function}]</LogFunction>}
               <LogMessage>{log.message}</LogMessage>
             </LogLine>
@@ -921,26 +899,7 @@ const LogsViewer = () => {
         )}
       </Section>
 
-      <Section>
-        <SectionTitle>■ LOG FILE STATUS</SectionTitle>
-        <StatusBar>
-          <StatusItem>
-            Showing {logs.length} of {logInfo.totalLines} log entries (Page {currentPage} - Most Recent First)
-          </StatusItem>
-          <StatusItem>
-            File: {logInfo.filePath}
-          </StatusItem>
-          <StatusItem>
-            Size: {formatFileSize(logInfo.size || 0)}
-          </StatusItem>
-          <StatusItem>
-            Last modified: {logInfo.lastModified ? formatDate(logInfo.lastModified) : 'Unknown'}
-          </StatusItem>
-          <StatusItem>
-            Auto refresh: {autoRefresh ? `ON (Next: ${refreshCountdown}s)` : 'OFF'}
-          </StatusItem>
-        </StatusBar>
-      </Section>
+      {/* Removed file status section for DB-backed logs */}
 
       {showClearDialog && (
         <div style={{
@@ -968,11 +927,9 @@ const LogsViewer = () => {
               ⚠️ CLEAR LOGS CONFIRMATION
             </h3>
             <p style={{ marginBottom: '25px', lineHeight: '1.5' }}>
-              This action will permanently delete:
+              This action will TRUNCATE the database table:
               <br />
-              • All entries from DataSync.log file
-              <br />
-              • All rotated log files (DataSync.log.1, .2, .3, etc.)
+              • metadata.logs (all log entries will be removed)
               <br />
               <strong>This operation cannot be undone!</strong>
             </p>

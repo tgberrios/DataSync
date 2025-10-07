@@ -1,5 +1,6 @@
 hay que anadir una columna notes varchart a catalog al DDL y quitar  la otra de canditate columns
 y mostrar notes en el catalog
+tambien aplicar la nueva tabla de logs en casa
 
 Enfocar esfuerzos en:
 Mejorar queries existentes
@@ -10,10 +11,42 @@ Mejorar la UI/UX
 
 For PostgreSQL we try current_setting('cluster_name', true) then inet_server_addr(). esto hay que quitarlo
 
-podemos ir prepando los batchs mientras insetamos o hacer un non stop de creaciones de batches para que siempre esten listos para la insercion porque lo que toma mas tiempo es la creacion de los batches si ya estan listos a la hora de insertas ?
 
 
-paralelismo ? 
 
 
-se puodria hacer que los threads sean perpetuos sin tiemp odigamos ?
+arreglar categorias y funciones en todos los archivos! y estarizar logs todos en MAYUS
+anadir mas logger:error en las partes que haga falta etc
+principalmente en todas las trassaciones sean de hacia motor maria y mssql tanto como pg 
+
+
+
+una funcion en catalog para estar truncando metadata.logs cada 48 o 24 horas EN BASE A LA COLUMNA TS
+
+
+
+[ERROR][TRANSFER]CRITICAL ERROR: Bulk upsert failed for chunk 11773 in table account_service_jetu.players: ERROR: date/time field value out of range: "1989-09-00 00:00:00" LINE 1: ..., 'HomeSweetSoccer@gmail.com', '4043530607', 'M', '1989-09-0... ^ HINT: Perhaps you need a different "datestyle" setting.
+[ERROR][TRANSFER]Error in bulk upsert: ERROR: date/time field value out of range: "1989-09-00 00:00:00" LINE 1: ..., 'HomeSweetSoccer@gmail.com', '4043530607', 'M', '1989-09-0... ^ HINT: Perhaps you need a different "datestyle" setting.
+
+
+en la vara de procesamiento multiple si estamos ceerando y haciendo commits a todas las conexiones correctamente ? 
+
+
+el error de las conexiones me imagino que es cuando falla un query se queda infinito haciendo retry 
+
+
+
+
+hay otro lugar donde last_offset lo ponen a 0 
+
+
+account_service_jetu,external_account_type_player,MariaDB,host=10.12.240.82;user=datalake.dbuser;password=vNV^cz#2W/+[H~WQK?;db=account_service_jetu,true,LISTENING_CHANGES,,updated_at,,MARIADB32.DGW.JETU.CR,2025-10-06 19:24:36.497293,"[""id""]",12522847,PK,true,-1,
+
+player_services,reward_balances,MariaDB,host=10.12.240.82;user=datalake.dbuser;password=vNV^cz#2W/+[H~WQK?;db=account_service_jetu,true,LISTENING_CHANGES,,updated_at,,MARIADB32.DGW.JETU.CR,2025-10-06 19:24:38.721085,"[""id""]",1,PK,true,-1,
+
+
+TODAS LAS CONSULTAS TIENEN QUE SER SEPARADAS NO PUEDEN SER ANIDADAS
+
+
+[ERROR][TRANSFER]CRITICAL ERROR: Bulk upsert failed for chunk 11773 in table account_service_jetu.players: ERROR: date/time field value out of range: "1989-09-00 00:00:00" LINE 1: ..., 'HomeSweetSoccer@gmail.com', '4043530607', 'M', '1989-09-0... ^ HINT: Perhaps you need a different "datestyle" setting.
+[ERROR][TRANSFER]Error in bulk upsert: ERROR: date/time field value out of range: "1989-09-00 00:00:00" LINE 1: ..., 'HomeSweetSoccer@gmail.com', '4043530607', 'M', '1989-09-0... ^ HINT: Perhaps you need a different "datestyle" setting.

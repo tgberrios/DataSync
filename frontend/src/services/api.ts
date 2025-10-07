@@ -537,6 +537,7 @@ export interface LogsResponse {
   filters?: {
     level: string;
     category: string;
+    function?: string;
     search: string;
     startDate: string;
     endDate: string;
@@ -572,11 +573,24 @@ export interface LogStatsResponse {
 }
 
 export const logsApi = {
+  getLevels: async () => {
+    const response = await api.get<string[]>("/logs/levels");
+    return response.data;
+  },
+  getCategories: async () => {
+    const response = await api.get<string[]>("/logs/categories");
+    return response.data;
+  },
+  getFunctions: async () => {
+    const response = await api.get<string[]>("/logs/functions");
+    return response.data;
+  },
   getLogs: async (
     params: {
       lines?: number;
       level?: string;
       category?: string;
+      function?: string;
       search?: string;
       startDate?: string;
       endDate?: string;
@@ -653,7 +667,6 @@ export const logsApi = {
   getErrorLogs: async (
     params: {
       lines?: number;
-      level?: string;
       category?: string;
       search?: string;
       startDate?: string;
