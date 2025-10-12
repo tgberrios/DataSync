@@ -4,6 +4,7 @@
 #include "catalog/catalog_manager.h"
 #include "engines/database_engine.h"
 #include "sync/DatabaseToPostgresSync.h"
+#include "sync/TableProcessorThreadPool.h"
 
 #include <algorithm>
 #include <cctype>
@@ -1464,33 +1465,43 @@ public:
       if (tablesCap > 0 && tables.size() > tablesCap) {
         tables.resize(tablesCap);
       }
-      std::vector<std::thread> tableProcessors;
       size_t maxWorkers = std::max<size_t>(1, SyncConfig::getMaxWorkers());
-      for (auto &table : tables) {
+      TableProcessorThreadPool pool(maxWorkers);
+
+      Logger::info(LogCategory::TRANSFER,
+                   "Created thread pool with " + std::to_string(maxWorkers) +
+                       " workers for " + std::to_string(tables.size()) +
+                       " tables");
+
+      size_t skipped = 0;
+      for (const auto &table : tables) {
         if (table.db_engine != "MSSQL") {
           Logger::warning(LogCategory::TRANSFER,
                           "Skipping non-MSSQL table in parallel transfer: " +
                               table.db_engine + " - " + table.schema_name +
                               "." + table.table_name);
+          skipped++;
           continue;
         }
 
-        // Throttle to maxWorkers concurrent processors
-        while (tableProcessors.size() >= maxWorkers) {
-          if (tableProcessors.front().joinable())
-            tableProcessors.front().join();
-          tableProcessors.erase(tableProcessors.begin());
-        }
-        tableProcessors.emplace_back(
-            &MSSQLToPostgres::processTableParallelWithConnection, this, table);
+        pool.submitTask(
+            table,
+            [this](const DatabaseToPostgresSync::TableInfo &t) {
+              this->processTableParallelWithConnection(t);
+            });
       }
 
-      // Wait for all table processors to complete
-      for (auto &processor : tableProcessors) {
-        if (processor.joinable()) {
-          processor.join();
-        }
-      }
+      Logger::info(LogCategory::TRANSFER,
+                   "Submitted " + std::to_string(tables.size() - skipped) +
+                       " MSSQL tables to thread pool (skipped " +
+                       std::to_string(skipped) + ")");
+
+      pool.waitForCompletion();
+
+      Logger::info(LogCategory::TRANSFER,
+                   "Thread pool completed - Completed: " +
+                       std::to_string(pool.completedTasks()) +
+                       " | Failed: " + std::to_string(pool.failedTasks()));
 
       Logger::info(LogCategory::TRANSFER,
                    "HYBRID PARALLEL MSSQL to PostgreSQL data "
