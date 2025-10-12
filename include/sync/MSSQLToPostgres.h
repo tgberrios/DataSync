@@ -1687,19 +1687,16 @@ public:
         }
       }
 
-      // Clean up
-      closeMSSQLConnection(mssqlConn);
-      shutdownParallelProcessing();
-
-      removeTableProcessingState(tableKey);
-
-      // Update table status to LISTENING_CHANGES after successful parallel
-      // processing
       Logger::info(LogCategory::TRANSFER,
                    "Updating table status to LISTENING_CHANGES for " +
                        tableKey);
       updateStatus(pgConn, table.schema_name, table.table_name,
                    "LISTENING_CHANGES", 0);
+
+      closeMSSQLConnection(mssqlConn);
+      shutdownParallelProcessing();
+
+      removeTableProcessingState(tableKey);
 
       Logger::info(LogCategory::TRANSFER,
                    "Parallel processing completed for table " + tableKey);

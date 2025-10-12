@@ -30,7 +30,7 @@ public:
 private:
   std::string generateSessionId();
   std::string getHostname();
-  void cleanExpiredLocks(pqxx::connection &conn);
+  void cleanExpiredLocks(pqxx::work &txn);
 };
 
 #endif

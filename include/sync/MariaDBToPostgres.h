@@ -2108,13 +2108,6 @@ public:
       // actualiza last_offset/last_processed_pk)
       dataFetcherThread(tableKey, mariadbConn, table, columnNames, columnTypes);
 
-      // Clean up
-      mysql_close(mariadbConn);
-      shutdownParallelProcessing();
-
-      removeTableProcessingState(tableKey);
-
-      // Update final: LISTENING_CHANGES con offset real (recontar destino)
       size_t finalTargetCount = 0;
       try {
         pqxx::work txn(pgConn);
@@ -2137,6 +2130,11 @@ public:
       }
       updateStatus(pgConn, table.schema_name, table.table_name,
                    "LISTENING_CHANGES", finalTargetCount);
+
+      mysql_close(mariadbConn);
+      shutdownParallelProcessing();
+
+      removeTableProcessingState(tableKey);
 
       Logger::info(LogCategory::TRANSFER,
                    "Parallel processing completed for table " +

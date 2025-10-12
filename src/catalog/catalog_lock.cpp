@@ -34,7 +34,7 @@ bool CatalogLock::tryAcquire(int maxWaitSeconds) {
       pqxx::connection conn(connectionString_);
       pqxx::work txn(conn);
 
-      cleanExpiredLocks(conn);
+      cleanExpiredLocks(txn);
 
       auto expiresAt = std::chrono::system_clock::now() +
                        std::chrono::seconds(lockTimeoutSeconds_);
@@ -133,12 +133,10 @@ std::string CatalogLock::getHostname() {
   return "unknown";
 }
 
-void CatalogLock::cleanExpiredLocks(pqxx::connection &conn) {
+void CatalogLock::cleanExpiredLocks(pqxx::work &txn) {
   try {
-    pqxx::work txn(conn);
     auto result = txn.exec("DELETE FROM metadata.catalog_locks "
                            "WHERE expires_at < NOW()");
-    txn.commit();
 
     if (result.affected_rows() > 0) {
       Logger::info(LogCategory::DATABASE, "CatalogLock",
