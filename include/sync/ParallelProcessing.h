@@ -43,6 +43,8 @@ public:
     cv.notify_all();
   }
 
+  void finish() { shutdown_queue(); }
+
   void reset_queue() { shutdown = false; }
 
   void clear() {
@@ -54,6 +56,24 @@ public:
   size_t size() const {
     std::lock_guard<std::mutex> lock(mtx);
     return queue.size();
+  }
+
+  bool empty() const {
+    std::lock_guard<std::mutex> lock(mtx);
+    return queue.empty();
+  }
+
+  bool popBlocking(T &item) {
+    std::unique_lock<std::mutex> lock(mtx);
+    cv.wait(lock, [this] { return !queue.empty() || shutdown; });
+
+    if (queue.empty()) {
+      return false;
+    }
+
+    item = std::move(queue.front());
+    queue.pop();
+    return true;
   }
 };
 
