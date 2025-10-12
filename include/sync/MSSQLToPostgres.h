@@ -1467,11 +1467,12 @@ public:
       }
       size_t maxWorkers = std::max<size_t>(1, SyncConfig::getMaxWorkers());
       TableProcessorThreadPool pool(maxWorkers);
+      pool.enableMonitoring(true);
 
       Logger::info(LogCategory::TRANSFER,
                    "Created thread pool with " + std::to_string(maxWorkers) +
                        " workers for " + std::to_string(tables.size()) +
-                       " tables");
+                       " tables (monitoring enabled)");
 
       size_t skipped = 0;
       for (const auto &table : tables) {

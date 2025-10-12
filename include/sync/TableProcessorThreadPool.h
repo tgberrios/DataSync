@@ -22,8 +22,13 @@ private:
   std::atomic<size_t> completedTasks_{0};
   std::atomic<size_t> failedTasks_{0};
   std::atomic<bool> shutdown_{false};
+  std::atomic<bool> monitoringEnabled_{false};
+  std::thread monitoringThread_;
+  size_t totalTasksSubmitted_{0};
+  std::chrono::steady_clock::time_point startTime_;
 
   void workerThread(size_t workerId);
+  void monitoringThreadFunc();
 
 public:
   explicit TableProcessorThreadPool(size_t numWorkers);
@@ -39,12 +44,15 @@ public:
 
   void waitForCompletion();
   void shutdown();
+  void enableMonitoring(bool enable = true);
 
   size_t activeWorkers() const { return activeWorkers_.load(); }
   size_t completedTasks() const { return completedTasks_.load(); }
   size_t failedTasks() const { return failedTasks_.load(); }
   size_t pendingTasks() const { return tasks_.size(); }
   size_t totalWorkers() const { return workers_.size(); }
+  size_t totalTasksSubmitted() const { return totalTasksSubmitted_; }
+  double getTasksPerSecond() const;
 };
 
 #endif
