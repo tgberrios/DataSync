@@ -22,36 +22,37 @@
 
 ### Headers (LO MÁS CRÍTICO para compilación):
 
-| Archivo | ANTES | DESPUÉS | Reducción |
-|---------|-------|---------|-----------|
-| **MariaDBToPostgres.h** | 3976 | 2910 | **-1066 (-26.8%)** |
-| **MSSQLToPostgres.h** | 3433 | 2555 | **-878 (-25.6%)** |
-| **StreamingData.h** | ~795 | 55 | **-740 (-93.0%)** ⭐ |
-| **DatabaseToPostgresSync.h** | 0 | 130 | +130 (nueva base) |
-| **ParallelProcessing.h** | 88 | 88 | 0 |
-| **TOTAL HEADERS** | **~8204** | **5738** | **-2466 (-30.1%)** |
+| Archivo                      | ANTES     | DESPUÉS  | Reducción            |
+| ---------------------------- | --------- | -------- | -------------------- |
+| **MariaDBToPostgres.h**      | 3976      | 2910     | **-1066 (-26.8%)**   |
+| **MSSQLToPostgres.h**        | 3433      | 2555     | **-878 (-25.6%)**    |
+| **StreamingData.h**          | ~795      | 55       | **-740 (-93.0%)** ⭐ |
+| **DatabaseToPostgresSync.h** | 0         | 130      | +130 (nueva base)    |
+| **ParallelProcessing.h**     | 88        | 88       | 0                    |
+| **TOTAL HEADERS**            | **~8204** | **5738** | **-2466 (-30.1%)**   |
 
 ### Implementaciones (.cpp):
 
-| Archivo | Líneas | Descripción |
-|---------|--------|-------------|
-| DatabaseToPostgresSync.cpp | 808 | Funciones compartidas (17 funciones) |
-| MariaDBToPostgres.cpp | 153 | Específico MariaDB (dataTypeMap, cleanValue) |
-| MSSQLToPostgres.cpp | 139 | Específico MSSQL (dataTypeMap, cleanValue) |
-| StreamingData.cpp | 721 | Threads y lógica principal |
-| **TOTAL .cpp** | **1821** | Nuevo (antes todo en headers) |
+| Archivo                    | Líneas   | Descripción                                  |
+| -------------------------- | -------- | -------------------------------------------- |
+| DatabaseToPostgresSync.cpp | 808      | Funciones compartidas (17 funciones)         |
+| MariaDBToPostgres.cpp      | 153      | Específico MariaDB (dataTypeMap, cleanValue) |
+| MSSQLToPostgres.cpp        | 139      | Específico MSSQL (dataTypeMap, cleanValue)   |
+| StreamingData.cpp          | 721      | Threads y lógica principal                   |
+| **TOTAL .cpp**             | **1821** | Nuevo (antes todo en headers)                |
 
 ### Resumen Global:
 
 ```
 ANTES:  ~8204 líneas (100% en headers)
 DESPUÉS: 7559 líneas (5738 headers + 1821 cpp)
-         
+
 REDUCCIÓN APARENTE: +645 líneas
 REDUCCIÓN REAL EN HEADERS: -2466 líneas (-30%) ⭐⭐⭐
 ```
 
 **NOTA:** El total de líneas aumentó ligeramente porque el código que antes estaba inline en headers ahora está en archivos .cpp separados. Esto es **CORRECTO y DESEABLE** porque:
+
 1. ✅ Headers más pequeños = compilación más rápida
 2. ✅ Cambios en .cpp no fuerzan recompilación de todo
 3. ✅ Mejor organización del código
@@ -63,18 +64,21 @@ REDUCCIÓN REAL EN HEADERS: -2466 líneas (-30%) ⭐⭐⭐
 ### Velocidad de Compilación:
 
 **ANTES:**
+
 - Cambio en MariaDBToPostgres.h → recompila TODO (MariaDB, MSSQL, StreamingData, main)
 - Cambio en MSSQLToPostgres.h → recompila TODO
 - Cambio en StreamingData.h → recompila main
 - **Headers masivos:** 8204 líneas que se procesan en CADA compilación
 
 **DESPUÉS:**
+
 - Cambio en MariaDBToPostgres.cpp → recompila SOLO MariaDBToPostgres.cpp
 - Cambio en MSSQLToPostgres.cpp → recompila SOLO MSSQLToPostgres.cpp
 - Cambio en StreamingData.cpp → recompila SOLO StreamingData.cpp
 - **Headers reducidos:** 5738 líneas (-30%)
 
 **BENEFICIO ESTIMADO:**
+
 - ✅ Primera compilación: ~15-20% más rápida (headers más pequeños)
 - ✅ Recompilaciones: ~60-70% más rápidas (solo .cpp afectados)
 - ✅ Cambios en implementación NO fuerzan recompilación masiva
@@ -103,6 +107,7 @@ src/sync/
 ## ✅ 17 FUNCIONES EN CLASE BASE
 
 ### 1. Parallel Processing Infrastructure (3 funciones):
+
 ```cpp
 ✅ startParallelProcessing()      // Iniciar pipeline paralelo
 ✅ shutdownParallelProcessing()   // Detener pipeline paralelo
@@ -110,6 +115,7 @@ src/sync/
 ```
 
 ### 2. Primary Key Management (6 funciones):
+
 ```cpp
 ✅ getPKStrategyFromCatalog()           // Leer estrategia PK (PK o OFFSET)
 ✅ getPKColumnsFromCatalog()            // Leer columnas PK del catalog
@@ -120,24 +126,28 @@ src/sync/
 ```
 
 ### 3. PostgreSQL Operations (2 funciones):
+
 ```cpp
 ✅ deleteRecordsByPrimaryKey()    // Eliminar registros por PK en PostgreSQL
 ✅ compareAndUpdateRecord()       // Comparar y actualizar registros
 ```
 
 ### 4. Bulk Operations (2 funciones):
+
 ```cpp
 ✅ performBulkInsert()            // INSERT masivo en PostgreSQL
 ✅ performBulkUpsert()            // UPSERT masivo con manejo de errores complejo
 ```
 
 ### 5. Query Builders (2 funciones):
+
 ```cpp
 ✅ buildUpsertQuery()             // Construir query INSERT INTO ... VALUES
 ✅ buildUpsertConflictClause()    // Construir ON CONFLICT ... DO UPDATE SET
 ```
 
 ### 6. Utilities (2 funciones):
+
 ```cpp
 ✅ parseJSONArray()               // Parsear arrays JSON
 ✅ parseLastPK()                  // Parsear último PK (pipe-separated)
@@ -149,7 +159,8 @@ src/sync/
 
 Estas funciones **NO SE PUEDEN consolidar** sin cambios arquitectónicos mayores porque dependen de tipos de conexión específicos:
 
-### MariaDB específico (MYSQL*):
+### MariaDB específico (MYSQL\*):
+
 ```cpp
 ❌ getMariaDBConnection(string) → MYSQL*
 ❌ executeQueryMariaDB(MYSQL*, string)
@@ -159,6 +170,7 @@ Estas funciones **NO SE PUEDEN consolidar** sin cambios arquitectónicos mayores
 ```
 
 ### MSSQL específico (SQLHDBC):
+
 ```cpp
 ❌ getMSSQLConnection(string) → SQLHDBC
 ❌ closeMSSQLConnection(SQLHDBC)
@@ -170,6 +182,7 @@ Estas funciones **NO SE PUEDEN consolidar** sin cambios arquitectónicos mayores
 ```
 
 ### Funciones que usan conexiones específicas:
+
 ```cpp
 ❌ processDeletesByPrimaryKey(...)   // Llama a findDeletedPrimaryKeys con MYSQL*/SQLHDBC
 ❌ processUpdatesByPrimaryKey(...)   // Llama a getPrimaryKeyColumns con MYSQL*/SQLHDBC
@@ -179,6 +192,7 @@ Estas funciones **NO SE PUEDEN consolidar** sin cambios arquitectónicos mayores
 ```
 
 **PARA CONSOLIDAR ESTAS:**
+
 - Crear interfaz `IDatabaseConnection` con métodos virtuales
 - Wrapper classes: `MariaDBConnection`, `MSSQLConnection` implementan la interfaz
 - Refactorizar todas las funciones para usar la interfaz
@@ -189,6 +203,7 @@ Estas funciones **NO SE PUEDEN consolidar** sin cambios arquitectónicos mayores
 ## 💡 BENEFICIOS LOGRADOS
 
 ### ✅ Performance de Compilación:
+
 ```
 Headers: 8204 → 5738 líneas (-30.1%)
 Tiempo de compilación: ~30% más rápido
@@ -196,6 +211,7 @@ Recompilaciones incrementales: ~60-70% más rápidas
 ```
 
 ### ✅ Mantenibilidad:
+
 ```
 17 funciones en 1 solo lugar (antes 2)
 Bugs se arreglan 1 vez (antes 2)
@@ -204,6 +220,7 @@ Código más organizado (.h vs .cpp)
 ```
 
 ### ✅ Escalabilidad:
+
 ```
 Agregar nuevo engine (Oracle, MongoDB):
   ANTES: Copiar 3976+ líneas, modificar todo
@@ -211,6 +228,7 @@ Agregar nuevo engine (Oracle, MongoDB):
 ```
 
 ### ✅ Arquitectura:
+
 ```
 ✅ Herencia limpia (base + derivadas)
 ✅ Separación de interfaces (.h) e implementación (.cpp)
@@ -223,18 +241,18 @@ Agregar nuevo engine (Oracle, MongoDB):
 
 ## 📈 COMPARACIÓN ANTES/DESPUÉS
 
-| Métrica | Antes | Después | Mejora |
-|---------|-------|---------|--------|
-| **Headers totales** | 8204 líneas | 5738 líneas | **-2466 (-30.1%)** ⭐ |
-| MariaDB.h | 3976 | 2910 | -1066 (-26.8%) |
-| MSSQL.h | 3433 | 2555 | -878 (-25.6%) |
-| StreamingData.h | ~795 | 55 | **-740 (-93.0%)** ⭐ |
-| **Funciones duplicadas** | 23 | 7 | -16 (-70%) |
-| **Tiempo compilación** | 100% | ~70% | **-30%** ⭐ |
-| Archivos .cpp | 0 | 4 | +4 (correcta separación) |
-| Compilación | ✅ OK | ✅ OK | Sin regresiones |
-| Testing | ✅ OK | ✅ OK | Sin regresiones |
-| Production Ready | ✅ SÍ | ✅ SÍ | Mejorado |
+| Métrica                  | Antes       | Después     | Mejora                   |
+| ------------------------ | ----------- | ----------- | ------------------------ |
+| **Headers totales**      | 8204 líneas | 5738 líneas | **-2466 (-30.1%)** ⭐    |
+| MariaDB.h                | 3976        | 2910        | -1066 (-26.8%)           |
+| MSSQL.h                  | 3433        | 2555        | -878 (-25.6%)            |
+| StreamingData.h          | ~795        | 55          | **-740 (-93.0%)** ⭐     |
+| **Funciones duplicadas** | 23          | 7           | -16 (-70%)               |
+| **Tiempo compilación**   | 100%        | ~70%        | **-30%** ⭐              |
+| Archivos .cpp            | 0           | 4           | +4 (correcta separación) |
+| Compilación              | ✅ OK       | ✅ OK       | Sin regresiones          |
+| Testing                  | ✅ OK       | ✅ OK       | Sin regresiones          |
+| Production Ready         | ✅ SÍ       | ✅ SÍ       | Mejorado                 |
 
 ---
 
@@ -254,11 +272,13 @@ Agregar nuevo engine (Oracle, MongoDB):
 ### 📋 OPCIONAL (Futuro - Si quieres consolidar las 7 restantes):
 
 **Opción A: Crear interfaz IDatabaseConnection** (Recomendado)
+
 - Tiempo: 1-2 semanas
 - Beneficio: Eliminar las 7 funciones restantes específicas del engine
 - Facilita agregar nuevos engines (Oracle, MongoDB, etc.)
 
 **Opción B: Dejar como está** (También válido)
+
 - Ya eliminaste 70% de duplicación
 - Reducción de 30% en headers
 - Funciones restantes son específicas del engine y funcionan bien
@@ -270,6 +290,7 @@ Agregar nuevo engine (Oracle, MongoDB):
 **ESTADO: PRODUCTION READY (9.2/10)**
 
 **LOGROS:**
+
 - ✅ 30% reducción en headers (crítico para compilación)
 - ✅ 70% de duplicación eliminada
 - ✅ StreamingData ya no es header-only
@@ -281,6 +302,7 @@ Agregar nuevo engine (Oracle, MongoDB):
 ✅ **Merge a main y deploy** - El código está excelente para producción
 
 **Comando para merge:**
+
 ```bash
 git checkout main
 git merge feature/sync-consolidation
@@ -327,4 +349,3 @@ Has consolidado exitosamente el código más problemático del proyecto DataSync
 **Calificación final:** 9.2/10 (antes era 8.7/10)
 
 **¡EXCELENTE TRABAJO!** 🏆✨
-
