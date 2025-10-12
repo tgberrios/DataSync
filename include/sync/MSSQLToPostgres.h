@@ -1510,7 +1510,6 @@ public:
                      table.schema_name + "." + table.table_name);
 
     try {
-      // Create dedicated PostgreSQL connection for this table
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
       if (!pgConn.is_open()) {
         Logger::error(LogCategory::TRANSFER,
@@ -1978,70 +1977,6 @@ public:
     }
   }
 
-  void batchInserterThread(pqxx::connection &pgConn) {
-    Logger::info(LogCategory::TRANSFER, "Batch inserter thread started");
-
-    try {
-      size_t totalProcessed = 0;
-
-      while (parallelProcessingActive.load()) {
-        PreparedBatch batch;
-        if (!preparedBatchQueue.pop(batch, std::chrono::milliseconds(1000))) {
-          continue;
-        }
-
-        if (batch.batchSize == 0) {
-          // End marker received
-          break;
-        }
-
-        // Execute batch insert
-        ProcessedResult result;
-        result.chunkNumber = batch.chunkNumber;
-        result.schemaName = batch.schemaName;
-        result.tableName = batch.tableName;
-        result.success = false;
-
-        try {
-          pqxx::work txn(pgConn);
-          txn.exec("SET statement_timeout = '600s'");
-          txn.exec(batch.batchQuery);
-          txn.commit();
-
-          result.rowsProcessed = batch.batchSize;
-          result.success = true;
-          totalProcessed += batch.batchSize;
-
-          Logger::info(LogCategory::TRANSFER,
-                       "Successfully inserted batch " +
-                           std::to_string(batch.chunkNumber) + " (" +
-                           std::to_string(batch.batchSize) + " rows) for " +
-                           batch.schemaName + "." + batch.tableName);
-
-        } catch (const std::exception &e) {
-          result.errorMessage = e.what();
-          result.rowsProcessed = 0;
-
-          Logger::error(LogCategory::TRANSFER, "batchInserterThread",
-                        "Error inserting batch " +
-                            std::to_string(batch.chunkNumber) + " for " +
-                            batch.schemaName + "." + batch.tableName + ": " +
-                            result.errorMessage);
-        }
-
-        resultQueue.push(std::move(result));
-      }
-
-      Logger::info(LogCategory::TRANSFER,
-                   "Batch inserter thread completed. Total rows processed: " +
-                       std::to_string(totalProcessed));
-
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::TRANSFER, "batchInserterThread",
-                    "Error in batch inserter thread: " + std::string(e.what()));
-    }
-  }
-
   std::string getLastSyncTimeOptimized(pqxx::connection &pgConn,
                                        const std::string &schema_name,
                                        const std::string &table_name,
@@ -2417,7 +2352,6 @@ public:
     }
   }
 
-
 private:
   std::vector<std::string> getPrimaryKeyColumns(SQLHDBC mssqlConn,
                                                 const std::string &schema_name,
@@ -2536,162 +2470,6 @@ private:
 
     return deletedPKs;
   }
-
-
-
-  void performBulkUpsert(pqxx::connection &pgConn,
-                         const std::vector<std::vector<std::string>> &results,
-                         const std::vector<std::string> &columnNames,
-                         const std::vector<std::string> &columnTypes,
-                         const std::string &lowerSchemaName,
-                         const std::string &tableName,
-                         const std::string &sourceSchemaName) {
-    try {
-      // Obtener columnas de primary key para el UPSERT
-      std::vector<std::string> pkColumns =
-          getPrimaryKeyColumnsFromPostgres(pgConn, lowerSchemaName, tableName);
-
-      if (pkColumns.empty()) {
-        // Si no hay PK, usar INSERT simple
-        performBulkInsert(pgConn, results, columnNames, columnTypes,
-                          lowerSchemaName, tableName);
-        return;
-      }
-
-      // Construir query UPSERT
-      std::string upsertQuery =
-          buildUpsertQuery(columnNames, pkColumns, lowerSchemaName, tableName);
-      std::string conflictClause =
-          buildUpsertConflictClause(columnNames, pkColumns);
-
-      pqxx::work txn(pgConn);
-      txn.exec("SET statement_timeout = '600s'");
-
-      // Procesar en batches para evitar queries muy largas
-      const size_t BATCH_SIZE = SyncConfig::getChunkSize();
-      size_t totalProcessed = 0;
-
-      for (size_t batchStart = 0; batchStart < results.size();
-           batchStart += BATCH_SIZE) {
-        size_t batchEnd = std::min(batchStart + BATCH_SIZE, results.size());
-
-        std::string batchQuery = upsertQuery;
-        std::vector<std::string> values;
-
-        for (size_t i = batchStart; i < batchEnd; ++i) {
-          const auto &row = results[i];
-          if (row.size() != columnNames.size())
-            continue;
-
-          std::string rowValues = "(";
-          for (size_t j = 0; j < row.size(); ++j) {
-            if (j > 0)
-              rowValues += ", ";
-
-            if (row[j] == "NULL" || row[j].empty()) {
-              rowValues += "NULL";
-            } else {
-              std::string cleanValue =
-                  cleanValueForPostgres(row[j], columnTypes[j]);
-              rowValues += "'" + escapeSQL(cleanValue) + "'";
-            }
-          }
-          rowValues += ")";
-          values.push_back(rowValues);
-        }
-
-        if (!values.empty()) {
-          batchQuery += values[0];
-          for (size_t i = 1; i < values.size(); ++i) {
-            batchQuery += ", " + values[i];
-          }
-          batchQuery += conflictClause;
-
-          try {
-            txn.exec(batchQuery);
-            totalProcessed += values.size();
-          } catch (const std::exception &e) {
-            std::string errorMsg = e.what();
-
-            // Detectar transacción abortada
-            if (errorMsg.find("current transaction is aborted") !=
-                    std::string::npos ||
-                errorMsg.find("previously aborted") != std::string::npos) {
-              Logger::warning(LogCategory::TRANSFER, "performBulkUpsert",
-                              "Transaction aborted detected, processing batch "
-                              "individually");
-
-              // Procesar registros individualmente con nuevas transacciones
-              for (size_t i = batchStart; i < batchEnd; ++i) {
-                try {
-                  const auto &row = results[i];
-                  if (row.size() != columnNames.size())
-                    continue;
-
-                  std::string singleRowValues = "(";
-                  for (size_t j = 0; j < row.size(); ++j) {
-                    if (j > 0)
-                      singleRowValues += ", ";
-
-                    if (row[j] == "NULL" || row[j].empty()) {
-                      singleRowValues += "NULL";
-                    } else {
-                      std::string cleanValue =
-                          cleanValueForPostgres(row[j], columnTypes[j]);
-                      singleRowValues += "'" + escapeSQL(cleanValue) + "'";
-                    }
-                  }
-                  singleRowValues += ")";
-
-                  // Crear nueva transacción para cada registro
-                  pqxx::work singleTxn(pgConn);
-                  singleTxn.exec("SET statement_timeout = '600s'");
-                  std::string singleQuery =
-                      upsertQuery + singleRowValues + conflictClause;
-                  singleTxn.exec(singleQuery);
-                  singleTxn.commit();
-                  totalProcessed++;
-
-                } catch (const std::exception &singleError) {
-                  Logger::error(
-                      LogCategory::TRANSFER, "performBulkUpsert",
-                      "Skipping problematic record: " +
-                          std::string(singleError.what()).substr(0, 100));
-                }
-              }
-            } else {
-              // Re-lanzar otros errores
-              throw;
-            }
-          }
-        }
-      }
-
-      // Solo hacer commit si la transacción no fue abortada
-      try {
-        txn.commit();
-      } catch (const std::exception &commitError) {
-        if (std::string(commitError.what()).find("previously aborted") !=
-                std::string::npos ||
-            std::string(commitError.what()).find("aborted transaction") !=
-                std::string::npos) {
-          Logger::warning(LogCategory::TRANSFER, "performBulkUpsert",
-                          "Skipping commit for aborted transaction");
-        } else {
-          throw;
-        }
-      }
-
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::TRANSFER, "performBulkUpsert",
-                    "Error in bulk upsert: " + std::string(e.what()));
-      throw;
-    }
-  }
-
-
-
-
 
   std::string extractDatabaseName(const std::string &connectionString) {
     std::istringstream ss(connectionString);

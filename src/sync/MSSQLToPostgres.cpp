@@ -65,8 +65,7 @@ MSSQLToPostgres::cleanValueForPostgres(const std::string &value,
   if (upperType.find("TIMESTAMP") != std::string::npos ||
       upperType.find("DATETIME") != std::string::npos ||
       upperType.find("DATE") != std::string::npos) {
-    if (cleanValue.length() < 10 ||
-        cleanValue.find("-") == std::string::npos ||
+    if (cleanValue.length() < 10 || cleanValue.find("-") == std::string::npos ||
         cleanValue.find("0000") != std::string::npos) {
       isNull = true;
     } else {
@@ -123,8 +122,8 @@ MSSQLToPostgres::cleanValueForPostgres(const std::string &value,
     if (cleanValue == "N" || cleanValue == "0" || cleanValue == "false" ||
         cleanValue == "FALSE") {
       cleanValue = "false";
-    } else if (cleanValue == "Y" || cleanValue == "1" ||
-               cleanValue == "true" || cleanValue == "TRUE") {
+    } else if (cleanValue == "Y" || cleanValue == "1" || cleanValue == "true" ||
+               cleanValue == "TRUE") {
       cleanValue = "true";
     }
   } else if (upperType.find("BIT") != std::string::npos) {
@@ -138,4 +137,3 @@ MSSQLToPostgres::cleanValueForPostgres(const std::string &value,
 
   return cleanValue;
 }
-

@@ -48,7 +48,7 @@ protected:
   static std::mutex metadataUpdateMutex;
 
   virtual std::string cleanValueForPostgres(const std::string &value,
-                                           const std::string &columnType) = 0;
+                                            const std::string &columnType) = 0;
 
 public:
   DatabaseToPostgresSync() = default;
@@ -69,42 +69,45 @@ public:
                                        const std::string &schema_name,
                                        const std::string &table_name);
 
-  std::vector<std::string> getPKColumnsFromCatalog(pqxx::connection &pgConn,
-                                                    const std::string &schema_name,
-                                                    const std::string &table_name);
+  std::vector<std::string>
+  getPKColumnsFromCatalog(pqxx::connection &pgConn,
+                          const std::string &schema_name,
+                          const std::string &table_name);
 
   std::string getLastProcessedPKFromCatalog(pqxx::connection &pgConn,
                                             const std::string &schema_name,
                                             const std::string &table_name);
 
-  std::string getLastPKFromResults(const std::vector<std::vector<std::string>> &results,
-                                   const std::vector<std::string> &pkColumns,
-                                   const std::vector<std::string> &columnNames);
+  std::string
+  getLastPKFromResults(const std::vector<std::vector<std::string>> &results,
+                       const std::vector<std::string> &pkColumns,
+                       const std::vector<std::string> &columnNames);
 
-  size_t deleteRecordsByPrimaryKey(pqxx::connection &pgConn,
-                                   const std::string &lowerSchemaName,
-                                   const std::string &table_name,
-                                   const std::vector<std::vector<std::string>> &deletedPKs,
-                                   const std::vector<std::string> &pkColumns);
+  size_t deleteRecordsByPrimaryKey(
+      pqxx::connection &pgConn, const std::string &lowerSchemaName,
+      const std::string &table_name,
+      const std::vector<std::vector<std::string>> &deletedPKs,
+      const std::vector<std::string> &pkColumns);
 
-  std::vector<std::string> getPrimaryKeyColumnsFromPostgres(pqxx::connection &pgConn,
-                                                            const std::string &schemaName,
-                                                            const std::string &tableName);
+  std::vector<std::string>
+  getPrimaryKeyColumnsFromPostgres(pqxx::connection &pgConn,
+                                   const std::string &schemaName,
+                                   const std::string &tableName);
 
   std::string buildUpsertQuery(const std::vector<std::string> &columnNames,
                                const std::vector<std::string> &pkColumns,
                                const std::string &schemaName,
                                const std::string &tableName);
 
-  std::string buildUpsertConflictClause(const std::vector<std::string> &columnNames,
-                                        const std::vector<std::string> &pkColumns);
+  std::string
+  buildUpsertConflictClause(const std::vector<std::string> &columnNames,
+                            const std::vector<std::string> &pkColumns);
 
-  bool compareAndUpdateRecord(pqxx::connection &pgConn,
-                              const std::string &schemaName,
-                              const std::string &tableName,
-                              const std::vector<std::string> &newRecord,
-                              const std::vector<std::vector<std::string>> &columnNames,
-                              const std::string &whereClause);
+  bool compareAndUpdateRecord(
+      pqxx::connection &pgConn, const std::string &schemaName,
+      const std::string &tableName, const std::vector<std::string> &newRecord,
+      const std::vector<std::vector<std::string>> &columnNames,
+      const std::string &whereClause);
 
   void performBulkInsert(pqxx::connection &pgConn,
                          const std::vector<std::vector<std::string>> &results,
@@ -120,6 +123,8 @@ public:
                          const std::string &lowerSchemaName,
                          const std::string &tableName,
                          const std::string &sourceSchemaName);
+
+  void batchInserterThread(pqxx::connection &pgConn);
 };
 
 #endif
