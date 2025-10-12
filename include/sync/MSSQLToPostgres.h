@@ -4,6 +4,7 @@
 #include "catalog/catalog_manager.h"
 #include "core/Config.h"
 #include "core/logger.h"
+#include "engines/database_engine.h"
 #include "sync/ParallelProcessing.h"
 
 #include <algorithm>
@@ -2737,16 +2738,6 @@ private:
     }
 
     return deletedCount;
-  }
-
-  std::string escapeSQL(const std::string &value) {
-    std::string escaped = value;
-    size_t pos = 0;
-    while ((pos = escaped.find("'", pos)) != std::string::npos) {
-      escaped.replace(pos, 1, "''");
-      pos += 2;
-    }
-    return escaped;
   }
 
   // CURSOR-BASED PAGINATION HELPER FUNCTIONS

@@ -194,6 +194,17 @@ MSSQLEngine::detectPrimaryKey(const std::string &schema,
   if (!conn)
     return pkColumns;
 
+  std::string safeSchema = schema;
+  std::string safeTable = table;
+  safeSchema.erase(
+      std::remove_if(safeSchema.begin(), safeSchema.end(),
+                     [](char c) { return c == '\'' || c == ';' || c == '-'; }),
+      safeSchema.end());
+  safeTable.erase(
+      std::remove_if(safeTable.begin(), safeTable.end(),
+                     [](char c) { return c == '\'' || c == ';' || c == '-'; }),
+      safeTable.end());
+
   std::string query =
       "SELECT c.name AS COLUMN_NAME "
       "FROM sys.columns c "
@@ -204,7 +215,7 @@ MSSQLEngine::detectPrimaryKey(const std::string &schema,
       "INNER JOIN sys.indexes i ON ic.object_id = i.object_id AND "
       "ic.index_id = i.index_id "
       "WHERE s.name = '" +
-      escapeSQL(schema) + "' AND t.name = '" + escapeSQL(table) +
+      safeSchema + "' AND t.name = '" + safeTable +
       "' AND i.is_primary_key = 1 "
       "ORDER BY ic.key_ordinal";
 
@@ -222,6 +233,17 @@ std::string MSSQLEngine::detectTimeColumn(const std::string &schema,
   if (!conn)
     return "";
 
+  std::string safeSchema = schema;
+  std::string safeTable = table;
+  safeSchema.erase(
+      std::remove_if(safeSchema.begin(), safeSchema.end(),
+                     [](char c) { return c == '\'' || c == ';' || c == '-'; }),
+      safeSchema.end());
+  safeTable.erase(
+      std::remove_if(safeTable.begin(), safeTable.end(),
+                     [](char c) { return c == '\'' || c == ';' || c == '-'; }),
+      safeTable.end());
+
   std::string candidates;
   for (size_t i = 0; i < DatabaseDefaults::TIME_COLUMN_COUNT; ++i) {
     if (i > 0)
@@ -235,8 +257,8 @@ std::string MSSQLEngine::detectTimeColumn(const std::string &schema,
                       "INNER JOIN sys.tables t ON c.object_id = t.object_id "
                       "INNER JOIN sys.schemas s ON t.schema_id = s.schema_id "
                       "WHERE s.name = '" +
-                      escapeSQL(schema) + "' AND t.name = '" +
-                      escapeSQL(table) + "' AND c.name IN (" + candidates +
+                      safeSchema + "' AND t.name = '" + safeTable +
+                      "' AND c.name IN (" + candidates +
                       ") ORDER BY CASE c.name ";
 
   for (size_t i = 0; i < DatabaseDefaults::TIME_COLUMN_COUNT; ++i) {
@@ -262,12 +284,23 @@ MSSQLEngine::getColumnCounts(const std::string &schema,
   if (!conn)
     return {0, 0};
 
+  std::string safeSchema = schema;
+  std::string safeTable = table;
+  safeSchema.erase(
+      std::remove_if(safeSchema.begin(), safeSchema.end(),
+                     [](char c) { return c == '\'' || c == ';' || c == '-'; }),
+      safeSchema.end());
+  safeTable.erase(
+      std::remove_if(safeTable.begin(), safeTable.end(),
+                     [](char c) { return c == '\'' || c == ';' || c == '-'; }),
+      safeTable.end());
+
   std::string sourceQuery =
       "SELECT COUNT(*) FROM sys.columns c "
       "INNER JOIN sys.tables t ON c.object_id = t.object_id "
       "INNER JOIN sys.schemas s ON t.schema_id = s.schema_id "
       "WHERE s.name = '" +
-      escapeSQL(schema) + "' AND t.name = '" + escapeSQL(table) + "'";
+      safeSchema + "' AND t.name = '" + safeTable + "'";
 
   auto sourceResults = executeQuery(conn->getDbc(), sourceQuery);
   int sourceCount = 0;

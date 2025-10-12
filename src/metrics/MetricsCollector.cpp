@@ -1,9 +1,10 @@
 #include "metrics/MetricsCollector.h"
+#include "engines/database_engine.h"
+#include "utils/string_utils.h"
+#include "utils/time_utils.h"
 #include <algorithm>
-#include <chrono>
-#include <iomanip>
 #include <numeric>
-#include <sstream>
+#include <unordered_map>
 
 void MetricsCollector::collectAllMetrics() {
 
@@ -185,7 +186,7 @@ void MetricsCollector::collectTransferMetrics() {
         // estimates) In a real scenario, you'd want to track actual start times
         metric.started_at = getEstimatedStartTime(metric.completed_at);
       } else {
-        metric.started_at = getCurrentTimestamp();
+        metric.started_at = TimeUtils::getCurrentTimestamp();
         metric.completed_at = ""; // No completion time available
       }
 
@@ -226,20 +227,26 @@ void MetricsCollector::collectPerformanceMetrics() {
     auto result = txn.exec(performanceQuery);
     txn.commit();
 
+    // Build hash map for O(1) lookup instead of O(n²)
+    std::unordered_map<std::string, pqxx::row> perfMap;
+    for (const auto &row : result) {
+      std::string key =
+          row[0].as<std::string>() + "|" + row[1].as<std::string>();
+      perfMap[key] = row;
+    }
+
+    // Now lookup in O(1) instead of O(n²)
     for (auto &metric : metrics) {
-      for (const auto &row : result) {
-        if (row[0].as<std::string>() == metric.schema_name &&
-            row[1].as<std::string>() == metric.table_name) {
+      std::string key = metric.schema_name + "|" + metric.table_name;
+      auto it = perfMap.find(key);
+      if (it != perfMap.end()) {
+        const auto &row = it->second;
+        long long total_operations = row[2].as<long long>() +
+                                     row[3].as<long long>() +
+                                     row[4].as<long long>();
 
-          long long total_operations = row[2].as<long long>() +
-                                       row[3].as<long long>() +
-                                       row[4].as<long long>();
-
-          metric.io_operations_per_second = static_cast<int>(total_operations);
-          metric.memory_used_mb = row[9].as<long long>() / (1024.0 * 1024.0);
-
-          break;
-        }
+        metric.io_operations_per_second = static_cast<int>(total_operations);
+        metric.memory_used_mb = row[9].as<long long>() / (1024.0 * 1024.0);
       }
     }
 
@@ -270,35 +277,42 @@ void MetricsCollector::collectMetadataMetrics() {
     auto result = txn.exec(metadataQuery);
     txn.commit();
 
-    // Mapear metadatos a nuestras métricas
+    // Build hash map for O(1) lookup instead of O(n²)
+    std::unordered_map<std::string, pqxx::row> metaMap;
+    for (const auto &row : result) {
+      std::string key = row[0].as<std::string>() + "|" +
+                        row[1].as<std::string>() + "|" +
+                        row[2].as<std::string>();
+      metaMap[key] = row;
+    }
+
+    // Now lookup in O(1) instead of O(n²)
     for (auto &metric : metrics) {
-      for (const auto &row : result) {
-        if (row[0].as<std::string>() == metric.schema_name &&
-            row[1].as<std::string>() == metric.table_name &&
-            row[2].as<std::string>() == metric.db_engine) {
+      std::string key =
+          metric.schema_name + "|" + metric.table_name + "|" + metric.db_engine;
+      auto it = metaMap.find(key);
+      if (it != metaMap.end()) {
+        const auto &row = it->second;
 
-          // Determinar tipo de transferencia
-          std::string status = row[3].as<std::string>();
-          if (status == "full_load") {
-            metric.transfer_type = "FULL_LOAD";
-          } else if (status == "incremental") {
-            metric.transfer_type = "INCREMENTAL";
-          } else {
-            metric.transfer_type = "SYNC";
-          }
+        // Determinar tipo de transferencia
+        std::string status = row[3].as<std::string>();
+        if (status == "full_load") {
+          metric.transfer_type = "FULL_LOAD";
+        } else if (status == "incremental") {
+          metric.transfer_type = "INCREMENTAL";
+        } else {
+          metric.transfer_type = "SYNC";
+        }
 
-          // Determinar status
-          bool active = row[4].as<bool>();
-          if (!active) {
-            metric.status = "FAILED";
-            metric.error_message = "Table marked as inactive";
-          } else if (row[5].is_null()) {
-            metric.status = "PENDING";
-          } else {
-            metric.status = "SUCCESS";
-          }
-
-          break;
+        // Determinar status
+        bool active = row[4].as<bool>();
+        if (!active) {
+          metric.status = "FAILED";
+          metric.error_message = "Table marked as inactive";
+        } else if (row[5].is_null()) {
+          metric.status = "PENDING";
+        } else {
+          metric.status = "SUCCESS";
         }
       }
     }
@@ -327,17 +341,24 @@ void MetricsCollector::collectTimestampMetrics() {
     auto result = txn.exec(timestampQuery);
     txn.commit();
 
+    // Build hash map for O(1) lookup instead of O(n²)
+    std::unordered_map<std::string, pqxx::row> timeMap;
+    for (const auto &row : result) {
+      std::string key = row[0].as<std::string>() + "|" +
+                        row[1].as<std::string>() + "|" +
+                        row[2].as<std::string>();
+      timeMap[key] = row;
+    }
+
+    // Now lookup in O(1) instead of O(n²)
     for (auto &metric : metrics) {
-      for (const auto &row : result) {
-        if (row[0].as<std::string>() == metric.schema_name &&
-            row[1].as<std::string>() == metric.table_name &&
-            row[2].as<std::string>() == metric.db_engine) {
-
-          metric.completed_at = row[3].as<std::string>();
-          metric.started_at = metric.completed_at;
-
-          break;
-        }
+      std::string key =
+          metric.schema_name + "|" + metric.table_name + "|" + metric.db_engine;
+      auto it = timeMap.find(key);
+      if (it != timeMap.end()) {
+        const auto &row = it->second;
+        metric.completed_at = row[3].as<std::string>();
+        metric.started_at = metric.completed_at;
       }
     }
 
@@ -442,29 +463,6 @@ void MetricsCollector::generateMetricsReport() {
   }
 }
 
-std::string MetricsCollector::escapeSQL(const std::string &value) {
-  std::string escaped = value;
-  size_t pos = 0;
-  while ((pos = escaped.find("'", pos)) != std::string::npos) {
-    escaped.replace(pos, 1, "''");
-    pos += 2;
-  }
-  return escaped;
-}
-
-std::string MetricsCollector::getCurrentTimestamp() {
-  auto now = std::chrono::system_clock::now();
-  auto time_t = std::chrono::system_clock::to_time_t(now);
-  auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                now.time_since_epoch()) %
-            1000;
-
-  std::stringstream ss;
-  ss << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S");
-  ss << "." << std::setfill('0') << std::setw(3) << ms.count();
-  return ss.str();
-}
-
 std::string
 MetricsCollector::getEstimatedStartTime(const std::string &completedAt) {
   try {
@@ -474,7 +472,7 @@ MetricsCollector::getEstimatedStartTime(const std::string &completedAt) {
     ss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
 
     if (ss.fail()) {
-      return getCurrentTimestamp();
+      return TimeUtils::getCurrentTimestamp();
     }
 
     // Subtract 1 hour for estimation
@@ -488,7 +486,7 @@ MetricsCollector::getEstimatedStartTime(const std::string &completedAt) {
 
     return result.str();
   } catch (const std::exception &e) {
-    return getCurrentTimestamp();
+    return TimeUtils::getCurrentTimestamp();
   }
 }
 
@@ -506,12 +504,8 @@ MetricsCollector::calculateBytesTransferred(const std::string &schema_name,
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
     pqxx::work txn(conn);
 
-    std::string lowerSchema = schema_name;
-    std::transform(lowerSchema.begin(), lowerSchema.end(), lowerSchema.begin(),
-                   ::tolower);
-    std::string lowerTable = table_name;
-    std::transform(lowerTable.begin(), lowerTable.end(), lowerTable.begin(),
-                   ::tolower);
+    std::string lowerSchema = StringUtils::toLower(schema_name);
+    std::string lowerTable = StringUtils::toLower(table_name);
 
     std::string sizeQuery =
         "SELECT COALESCE(pg_total_relation_size(to_regclass('\"" +

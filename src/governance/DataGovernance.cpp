@@ -1,8 +1,8 @@
 #include "governance/DataGovernance.h"
+#include "engines/database_engine.h"
+#include "utils/string_utils.h"
+#include "utils/time_utils.h"
 #include <algorithm>
-#include <chrono>
-#include <iomanip>
-#include <sstream>
 
 void DataGovernance::initialize() {
   try {
@@ -206,7 +206,7 @@ DataGovernance::extractTableMetadata(const std::string &schema_name,
     metadata.integrity_score = calculateIntegrityScore(metadata);
 
     metadata.data_quality_score = calculateDataQualityScore(metadata);
-    metadata.last_analyzed = getCurrentTimestamp();
+    metadata.last_analyzed = TimeUtils::getCurrentTimestamp();
 
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "extractTableMetadata",
@@ -760,29 +760,6 @@ void DataGovernance::generateReport() {
   }
 }
 
-std::string DataGovernance::escapeSQL(const std::string &value) {
-  std::string escaped = value;
-  size_t pos = 0;
-  while ((pos = escaped.find("'", pos)) != std::string::npos) {
-    escaped.replace(pos, 1, "''");
-    pos += 2;
-  }
-  return escaped;
-}
-
-std::string DataGovernance::getCurrentTimestamp() {
-  auto now = std::chrono::system_clock::now();
-  auto time_t = std::chrono::system_clock::to_time_t(now);
-  auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                now.time_since_epoch()) %
-            1000;
-
-  std::stringstream ss;
-  ss << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S");
-  ss << "." << std::setfill('0') << std::setw(3) << ms.count();
-  return ss.str();
-}
-
 double
 DataGovernance::calculateDataQualityScore(const TableMetadata &metadata) {
   double score = 100.0;
@@ -832,10 +809,8 @@ DataGovernance::determineHealthStatus(const TableMetadata &metadata) {
 std::string
 DataGovernance::determineDataCategory(const std::string &table_name,
                                       const std::string &schema_name) {
-  std::string name = table_name;
-  std::string schema = schema_name;
-  std::transform(name.begin(), name.end(), name.begin(), ::tolower);
-  std::transform(schema.begin(), schema.end(), schema.begin(), ::tolower);
+  std::string name = StringUtils::toLower(table_name);
+  std::string schema = StringUtils::toLower(schema_name);
 
   // Use schema context for better classification
   if (schema.find("analytics") != std::string::npos ||
@@ -999,8 +974,7 @@ DataGovernance::determineDataCategory(const std::string &table_name,
 std::string
 DataGovernance::determineBusinessDomain(const std::string &table_name,
                                         const std::string &schema_name) {
-  std::string name = table_name;
-  std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+  std::string name = StringUtils::toLower(table_name);
 
   // CUSTOMER - Customer related data
   if (name.find("user") != std::string::npos ||
@@ -1220,8 +1194,7 @@ DataGovernance::determineBusinessDomain(const std::string &table_name,
 std::string
 DataGovernance::determineSensitivityLevel(const std::string &table_name,
                                           const std::string &schema_name) {
-  std::string name = table_name;
-  std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+  std::string name = StringUtils::toLower(table_name);
 
   // CRITICAL - Highly sensitive data
   if (name.find("password") != std::string::npos ||
@@ -1287,8 +1260,7 @@ DataGovernance::determineSensitivityLevel(const std::string &table_name,
 std::string
 DataGovernance::determineDataClassification(const std::string &table_name,
                                             const std::string &schema_name) {
-  std::string name = table_name;
-  std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+  std::string name = StringUtils::toLower(table_name);
 
   if (name.find("confidential") != std::string::npos ||
       name.find("secret") != std::string::npos ||

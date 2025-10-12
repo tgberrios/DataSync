@@ -146,11 +146,18 @@ MariaDBEngine::detectPrimaryKey(const std::string &schema,
   if (!conn)
     return pkColumns;
 
+  char escapedSchema[schema.length() * 2 + 1];
+  char escapedTable[table.length() * 2 + 1];
+  mysql_real_escape_string(conn->get(), escapedSchema, schema.c_str(),
+                           schema.length());
+  mysql_real_escape_string(conn->get(), escapedTable, table.c_str(),
+                           table.length());
+
   std::string query = "SELECT COLUMN_NAME "
                       "FROM information_schema.KEY_COLUMN_USAGE "
                       "WHERE TABLE_SCHEMA = '" +
-                      escapeSQL(schema) + "' AND TABLE_NAME = '" +
-                      escapeSQL(table) +
+                      std::string(escapedSchema) + "' AND TABLE_NAME = '" +
+                      std::string(escapedTable) +
                       "' AND CONSTRAINT_NAME = 'PRIMARY' "
                       "ORDER BY ORDINAL_POSITION";
 
@@ -168,6 +175,13 @@ std::string MariaDBEngine::detectTimeColumn(const std::string &schema,
   if (!conn)
     return "";
 
+  char escapedSchema[schema.length() * 2 + 1];
+  char escapedTable[table.length() * 2 + 1];
+  mysql_real_escape_string(conn->get(), escapedSchema, schema.c_str(),
+                           schema.length());
+  mysql_real_escape_string(conn->get(), escapedTable, table.c_str(),
+                           table.length());
+
   std::string candidates;
   for (size_t i = 0; i < DatabaseDefaults::TIME_COLUMN_COUNT; ++i) {
     if (i > 0)
@@ -178,9 +192,9 @@ std::string MariaDBEngine::detectTimeColumn(const std::string &schema,
 
   std::string query = "SELECT COLUMN_NAME FROM information_schema.columns "
                       "WHERE table_schema = '" +
-                      escapeSQL(schema) + "' AND table_name = '" +
-                      escapeSQL(table) + "' AND COLUMN_NAME IN (" + candidates +
-                      ") ORDER BY FIELD(COLUMN_NAME, ";
+                      std::string(escapedSchema) + "' AND table_name = '" +
+                      std::string(escapedTable) + "' AND COLUMN_NAME IN (" +
+                      candidates + ") ORDER BY FIELD(COLUMN_NAME, ";
 
   for (size_t i = 0; i < DatabaseDefaults::TIME_COLUMN_COUNT; ++i) {
     if (i > 0)
@@ -205,10 +219,18 @@ MariaDBEngine::getColumnCounts(const std::string &schema,
   if (!conn)
     return {0, 0};
 
+  char escapedSchema[schema.length() * 2 + 1];
+  char escapedTable[table.length() * 2 + 1];
+  mysql_real_escape_string(conn->get(), escapedSchema, schema.c_str(),
+                           schema.length());
+  mysql_real_escape_string(conn->get(), escapedTable, table.c_str(),
+                           table.length());
+
   std::string sourceQuery = "SELECT COUNT(*) FROM information_schema.columns "
                             "WHERE table_schema = '" +
-                            escapeSQL(schema) + "' AND table_name = '" +
-                            escapeSQL(table) + "'";
+                            std::string(escapedSchema) +
+                            "' AND table_name = '" + std::string(escapedTable) +
+                            "'";
 
   auto sourceResults = executeQuery(conn->get(), sourceQuery);
   int sourceCount = 0;

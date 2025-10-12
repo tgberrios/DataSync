@@ -1,11 +1,12 @@
 #ifndef MARIADBTOPOSTGRES_H
 #define MARIADBTOPOSTGRES_H
 
-#include "core/Config.h"
-#include "sync/ParallelProcessing.h"
 #include "catalog/catalog_manager.h"
-#include "third_party/json.hpp"
+#include "core/Config.h"
 #include "core/logger.h"
+#include "engines/database_engine.h"
+#include "sync/ParallelProcessing.h"
+#include "third_party/json.hpp"
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -2993,19 +2994,6 @@ private:
     }
 
     return deletedCount;
-  }
-
-  std::string escapeSQL(const std::string &value) {
-    if (value.empty()) {
-      return "";
-    }
-    std::string escaped = value;
-    size_t pos = 0;
-    while ((pos = escaped.find("'", pos)) != std::string::npos) {
-      escaped.replace(pos, 1, "''");
-      pos += 2;
-    }
-    return escaped;
   }
 
   // Connection string parsing is no longer needed with direct connections
