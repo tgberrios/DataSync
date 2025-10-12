@@ -927,37 +927,52 @@ void DDLExporter::exportMSSQLConstraints(SQLHDBC conn,
   }
 }
 
+void DDLExporter::saveDDLToFile(
+    const std::string &cluster, const std::string &engine,
+    const std::string &database, const std::string &schema,
+    const std::string &objectName, const std::string &ddlContent,
+    const std::string &subfolder, const std::string &fileSuffix,
+    bool appendMode, bool includeHeader) {
+  try {
+    std::filesystem::path filePath =
+        std::filesystem::path(exportPath) / sanitizeFileName(cluster) /
+        sanitizeFileName(engine) / sanitizeFileName(database) /
+        sanitizeFileName(schema) / subfolder /
+        (sanitizeFileName(objectName) + fileSuffix);
+
+    std::filesystem::create_directories(filePath.parent_path());
+
+    std::ios_base::openmode mode = appendMode ? std::ios::app : std::ios::out;
+    std::ofstream file(filePath, mode);
+
+    if (file.is_open()) {
+      if (includeHeader && !appendMode) {
+        file << "-- " << subfolder << " DDL for " << schema << "." << objectName
+             << "\n"
+             << "-- Engine: " << engine << "\n"
+             << "-- Database: " << database << "\n"
+             << "-- Generated: " << std::time(nullptr) << "\n\n";
+      }
+      file << ddlContent << "\n";
+      file.close();
+    } else {
+      Logger::error(LogCategory::DDL_EXPORT, "saveDDLToFile",
+                    "Failed to open file: " + filePath.string());
+    }
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::DDL_EXPORT, "saveDDLToFile",
+                  "Error saving DDL: " + std::string(e.what()));
+  }
+}
+
 void DDLExporter::saveTableDDL(const std::string &cluster,
                                const std::string &engine,
                                const std::string &database,
                                const std::string &schema,
                                const std::string &table_name,
                                const std::string &ddl) {
-  try {
-    std::filesystem::path filePath =
-        std::filesystem::path(exportPath) / sanitizeFileName(cluster) /
-        sanitizeFileName(engine) / sanitizeFileName(database) /
-        sanitizeFileName(schema) / "tables" /
-        (sanitizeFileName(table_name) + ".sql");
-
-    std::filesystem::create_directories(filePath.parent_path());
-
-    std::ofstream file(filePath);
-    if (file.is_open()) {
-      file << "-- Table DDL for " << schema << "." << table_name << "\n"
-           << "-- Engine: " << engine << "\n"
-           << "-- Database: " << database << "\n"
-           << "-- Generated: " << std::time(nullptr) << "\n\n"
-           << ddl << "\n";
-      file.close();
-    } else {
-      Logger::error(LogCategory::DDL_EXPORT, "saveTableDDL",
-                    "Failed to open file: " + filePath.string());
-    }
-  } catch (const std::exception &e) {
-    Logger::error(LogCategory::DDL_EXPORT, "saveTableDDL",
-                  "Error saving table DDL: " + std::string(e.what()));
-  }
+  saveDDLToFile(cluster, engine, database, schema, table_name, ddl, "tables",
+                ".sql", false, true);
 }
 
 void DDLExporter::saveIndexDDL(const std::string &cluster,
@@ -966,24 +981,8 @@ void DDLExporter::saveIndexDDL(const std::string &cluster,
                                const std::string &schema,
                                const std::string &table_name,
                                const std::string &index_ddl) {
-  try {
-    std::filesystem::path filePath =
-        std::filesystem::path(exportPath) / sanitizeFileName(cluster) /
-        sanitizeFileName(engine) / sanitizeFileName(database) /
-        sanitizeFileName(schema) / "indexes" /
-        (sanitizeFileName(table_name) + "_indexes.sql");
-
-    std::filesystem::create_directories(filePath.parent_path());
-
-    std::ofstream file(filePath, std::ios::app);
-    if (file.is_open()) {
-      file << index_ddl << "\n";
-      file.close();
-    }
-  } catch (const std::exception &e) {
-    Logger::error(LogCategory::DDL_EXPORT, "saveIndexDDL",
-                  "Error saving index DDL: " + std::string(e.what()));
-  }
+  saveDDLToFile(cluster, engine, database, schema, table_name, index_ddl,
+                "indexes", "_indexes.sql", true, false);
 }
 
 void DDLExporter::saveConstraintDDL(const std::string &cluster,
@@ -992,24 +991,8 @@ void DDLExporter::saveConstraintDDL(const std::string &cluster,
                                     const std::string &schema,
                                     const std::string &table_name,
                                     const std::string &constraint_ddl) {
-  try {
-    std::filesystem::path filePath =
-        std::filesystem::path(exportPath) / sanitizeFileName(cluster) /
-        sanitizeFileName(engine) / sanitizeFileName(database) /
-        sanitizeFileName(schema) / "constraints" /
-        (sanitizeFileName(table_name) + "_constraints.sql");
-
-    std::filesystem::create_directories(filePath.parent_path());
-
-    std::ofstream file(filePath, std::ios::app);
-    if (file.is_open()) {
-      file << constraint_ddl << "\n";
-      file.close();
-    }
-  } catch (const std::exception &e) {
-    Logger::error(LogCategory::DDL_EXPORT, "saveConstraintDDL",
-                  "Error saving constraint DDL: " + std::string(e.what()));
-  }
+  saveDDLToFile(cluster, engine, database, schema, table_name, constraint_ddl,
+                "constraints", "_constraints.sql", true, false);
 }
 
 void DDLExporter::saveFunctionDDL(const std::string &cluster,
@@ -1018,28 +1001,8 @@ void DDLExporter::saveFunctionDDL(const std::string &cluster,
                                   const std::string &schema,
                                   const std::string &function_name,
                                   const std::string &function_ddl) {
-  try {
-    std::filesystem::path filePath =
-        std::filesystem::path(exportPath) / sanitizeFileName(cluster) /
-        sanitizeFileName(engine) / sanitizeFileName(database) /
-        sanitizeFileName(schema) / "functions" /
-        (sanitizeFileName(function_name) + ".sql");
-
-    std::filesystem::create_directories(filePath.parent_path());
-
-    std::ofstream file(filePath);
-    if (file.is_open()) {
-      file << "-- Function DDL for " << schema << "." << function_name << "\n"
-           << "-- Engine: " << engine << "\n"
-           << "-- Database: " << database << "\n"
-           << "-- Generated: " << std::time(nullptr) << "\n\n"
-           << function_ddl << "\n";
-      file.close();
-    }
-  } catch (const std::exception &e) {
-    Logger::error(LogCategory::DDL_EXPORT, "saveFunctionDDL",
-                  "Error saving function DDL: " + std::string(e.what()));
-  }
+  saveDDLToFile(cluster, engine, database, schema, function_name, function_ddl,
+                "functions", ".sql", false, true);
 }
 
 std::string DDLExporter::getConnectionString(const SchemaInfo &schema) {
@@ -1047,16 +1010,14 @@ std::string DDLExporter::getConnectionString(const SchemaInfo &schema) {
 }
 
 std::string DDLExporter::sanitizeFileName(const std::string &name) {
+  static const std::string invalidChars = " /\\:*?\"<>|";
   std::string sanitized = name;
-  std::replace(sanitized.begin(), sanitized.end(), ' ', '_');
-  std::replace(sanitized.begin(), sanitized.end(), '/', '_');
-  std::replace(sanitized.begin(), sanitized.end(), '\\', '_');
-  std::replace(sanitized.begin(), sanitized.end(), ':', '_');
-  std::replace(sanitized.begin(), sanitized.end(), '*', '_');
-  std::replace(sanitized.begin(), sanitized.end(), '?', '_');
-  std::replace(sanitized.begin(), sanitized.end(), '"', '_');
-  std::replace(sanitized.begin(), sanitized.end(), '<', '_');
-  std::replace(sanitized.begin(), sanitized.end(), '>', '_');
-  std::replace(sanitized.begin(), sanitized.end(), '|', '_');
+
+  for (char &c : sanitized) {
+    if (invalidChars.find(c) != std::string::npos) {
+      c = '_';
+    }
+  }
+
   return sanitized;
 }

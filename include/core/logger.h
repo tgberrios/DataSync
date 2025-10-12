@@ -1,16 +1,16 @@
 #ifndef LOGGER_H
 #define LOGGER_H
 
+#include "core/database_log_writer.h"
+#include "core/file_log_writer.h"
 #include <chrono>
-#include <filesystem>
-#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <memory>
 #include <mutex>
-#include <pqxx/pqxx>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 
 enum class LogLevel {
   DEBUG = 0,
@@ -37,26 +37,35 @@ enum class LogCategory {
 
 class Logger {
 private:
-  static std::ofstream logFile;
-  static std::ofstream errorLogFile;
+  static std::unique_ptr<FileLogWriter> fileWriter_;
+  static std::unique_ptr<FileLogWriter> errorWriter_;
+  static std::unique_ptr<DatabaseLogWriter> dbWriter_;
   static std::mutex logMutex;
-  static std::string logFileName;
-  static std::string errorLogFileName;
   static size_t messageCount;
   static const size_t MAX_MESSAGES_BEFORE_FLUSH = 100;
-  static const size_t MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-  static const int MAX_BACKUP_FILES = 5;
 
-  // Debug configuration
   static LogLevel currentLogLevel;
   static bool showTimestamps;
   static bool showThreadId;
   static bool showFileLine;
   static std::mutex configMutex;
 
-  static std::unique_ptr<pqxx::connection> dbConn;
-  static bool dbLoggingEnabled;
-  static bool dbStatementPrepared;
+  static const std::unordered_map<std::string, LogCategory> categoryMap;
+  static const std::unordered_map<std::string, LogLevel> levelMap;
+
+  static std::string formatLogMessage(const std::string &timestamp,
+                                      const std::string &levelStr,
+                                      const std::string &categoryStr,
+                                      const std::string &function,
+                                      const std::string &message) {
+    std::ostringstream oss;
+    oss << "[" << timestamp << "] [" << levelStr << "] [" << categoryStr << "]";
+    if (!function.empty()) {
+      oss << " [" << function << "]";
+    }
+    oss << " " << message;
+    return oss.str();
+  }
 
   static std::string getCurrentTimestamp() {
     auto now = std::chrono::system_clock::now();
@@ -120,66 +129,8 @@ private:
   }
 
   static LogCategory stringToCategory(const std::string &categoryStr) {
-    if (categoryStr == "SYSTEM")
-      return LogCategory::SYSTEM;
-    if (categoryStr == "DATABASE")
-      return LogCategory::DATABASE;
-    if (categoryStr == "TRANSFER")
-      return LogCategory::TRANSFER;
-    if (categoryStr == "CONFIG")
-      return LogCategory::CONFIG;
-    if (categoryStr == "VALIDATION")
-      return LogCategory::VALIDATION;
-    if (categoryStr == "MAINTENANCE")
-      return LogCategory::MAINTENANCE;
-    if (categoryStr == "MONITORING")
-      return LogCategory::MONITORING;
-    if (categoryStr == "DDL_EXPORT")
-      return LogCategory::DDL_EXPORT;
-    if (categoryStr == "METRICS")
-      return LogCategory::METRICS;
-    if (categoryStr == "GOVERNANCE")
-      return LogCategory::GOVERNANCE;
-    if (categoryStr == "QUALITY")
-      return LogCategory::QUALITY;
-    return LogCategory::UNKNOWN;
-  }
-
-  static void rotateLogFile() {
-    if (logFile.is_open()) {
-      logFile.close();
-    }
-
-    // Rotar archivos existentes
-    for (int i = MAX_BACKUP_FILES - 1; i > 0; --i) {
-      std::string oldFile = logFileName + "." + std::to_string(i);
-      std::string newFile = logFileName + "." + std::to_string(i + 1);
-
-      if (std::filesystem::exists(oldFile)) {
-        if (i == MAX_BACKUP_FILES - 1) {
-          std::filesystem::remove(oldFile);
-        } else {
-          std::filesystem::rename(oldFile, newFile);
-        }
-      }
-    }
-
-    // Mover archivo actual a .1
-    if (std::filesystem::exists(logFileName)) {
-      std::filesystem::rename(logFileName, logFileName + ".1");
-    }
-
-    // Abrir nuevo archivo
-    logFile.open(logFileName, std::ios::app);
-  }
-
-  static void checkFileSize() {
-    if (std::filesystem::exists(logFileName)) {
-      auto fileSize = std::filesystem::file_size(logFileName);
-      if (fileSize >= MAX_FILE_SIZE) {
-        rotateLogFile();
-      }
-    }
+    auto it = categoryMap.find(categoryStr);
+    return (it != categoryMap.end()) ? it->second : LogCategory::UNKNOWN;
   }
 
   static void writeLog(LogLevel level, LogCategory category,
@@ -187,65 +138,39 @@ private:
                        const std::string &message) {
     std::lock_guard<std::mutex> lock(logMutex);
 
-    // Check if this log level should be written
     if (level < currentLogLevel) {
       return;
     }
 
     std::string levelStr = getLevelString(level);
     std::string categoryStr = getCategoryString(category);
+    std::string timestamp = getCurrentTimestamp();
 
-    if (dbLoggingEnabled && dbConn) {
-      try {
-        if (!dbStatementPrepared) {
-          pqxx::work w(*dbConn);
-          w.conn().prepare("log_insert",
-                           "INSERT INTO metadata.logs (ts, level, category, "
-                           "function, message) VALUES (NOW(), $1, $2, $3, $4)");
-          w.commit();
-          dbStatementPrepared = true;
-        }
-        pqxx::work txn(*dbConn);
-        txn.exec_prepared("log_insert", levelStr, categoryStr, function,
-                          message);
-        txn.commit();
-      } catch (const std::exception &) {
-        dbLoggingEnabled = false;
-        if (logFile.is_open()) {
-          std::string timestamp = getCurrentTimestamp();
-          logFile << "[" << timestamp << "] [" << levelStr << "] ["
-                  << categoryStr << "]";
-          if (!function.empty()) {
-            logFile << " [" << function << "]";
-          }
-          logFile << " " << message << std::endl;
+    if (dbWriter_ && dbWriter_->isEnabled()) {
+      if (!dbWriter_->writeParsed(levelStr, categoryStr, function, message)) {
+        if (fileWriter_ && fileWriter_->isOpen()) {
+          fileWriter_->write(formatLogMessage(timestamp, levelStr, categoryStr,
+                                              function, message));
         }
       }
     } else {
-      if (logFile.is_open()) {
-        std::string timestamp = getCurrentTimestamp();
-        logFile << "[" << timestamp << "] [" << levelStr << "] [" << categoryStr
-                << "]";
-        if (!function.empty()) {
-          logFile << " [" << function << "]";
-        }
-        logFile << " " << message << std::endl;
+      if (fileWriter_ && fileWriter_->isOpen()) {
+        fileWriter_->write(formatLogMessage(timestamp, levelStr, categoryStr,
+                                            function, message));
       }
+    }
+
+    messageCount++;
+    if (messageCount >= MAX_MESSAGES_BEFORE_FLUSH) {
+      if (fileWriter_)
+        fileWriter_->flush();
+      messageCount = 0;
     }
   }
 
   static LogLevel stringToLogLevel(const std::string &levelStr) {
-    if (levelStr == "DEBUG")
-      return LogLevel::DEBUG;
-    if (levelStr == "INFO")
-      return LogLevel::INFO;
-    if (levelStr == "WARN" || levelStr == "WARNING")
-      return LogLevel::WARNING;
-    if (levelStr == "ERROR")
-      return LogLevel::ERROR;
-    if (levelStr == "FATAL" || levelStr == "CRITICAL")
-      return LogLevel::CRITICAL;
-    return LogLevel::INFO; // Default
+    auto it = levelMap.find(levelStr);
+    return (it != levelMap.end()) ? it->second : LogLevel::INFO;
   }
 
 public:
@@ -253,18 +178,21 @@ public:
 
   static void shutdown() {
     std::lock_guard<std::mutex> lock(logMutex);
-    if (logFile.is_open()) {
-      logFile.flush();
-      logFile.close();
+    if (fileWriter_) {
+      fileWriter_->flush();
+      fileWriter_->close();
     }
-    if (errorLogFile.is_open()) {
-      errorLogFile.flush();
-      errorLogFile.close();
+    if (errorWriter_) {
+      errorWriter_->flush();
+      errorWriter_->close();
+    }
+    if (dbWriter_) {
+      dbWriter_->close();
     }
     messageCount = 0;
-    dbStatementPrepared = false;
-    dbLoggingEnabled = false;
-    dbConn.reset();
+    fileWriter_.reset();
+    errorWriter_.reset();
+    dbWriter_.reset();
   }
 
   // Convenience methods with categories

@@ -9,18 +9,29 @@
 #include <pqxx/pqxx>
 #include <string>
 
-class CatalogCleaner {
+class ICatalogCleaner {
+public:
+  virtual ~ICatalogCleaner() = default;
+
+  virtual void cleanNonExistentPostgresTables() = 0;
+  virtual void cleanNonExistentMariaDBTables() = 0;
+  virtual void cleanNonExistentMSSQLTables() = 0;
+  virtual void cleanOrphanedTables() = 0;
+  virtual void cleanOldLogs(int retentionHours) = 0;
+};
+
+class CatalogCleaner : public ICatalogCleaner {
   std::string metadataConnStr_;
-  std::unique_ptr<MetadataRepository> repo_;
+  std::unique_ptr<IMetadataRepository> repo_;
 
 public:
   explicit CatalogCleaner(std::string metadataConnStr);
 
-  void cleanNonExistentPostgresTables();
-  void cleanNonExistentMariaDBTables();
-  void cleanNonExistentMSSQLTables();
-  void cleanOrphanedTables();
-  void cleanOldLogs(int retentionHours);
+  void cleanNonExistentPostgresTables() override;
+  void cleanNonExistentMariaDBTables() override;
+  void cleanNonExistentMSSQLTables() override;
+  void cleanOrphanedTables() override;
+  void cleanOldLogs(int retentionHours) override;
 
 private:
   bool tableExistsInPostgres(const std::string &schema,

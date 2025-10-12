@@ -256,3 +256,34 @@ int MetadataRepository::cleanInvalidOffsets() {
     return 0;
   }
 }
+
+std::unordered_map<std::string, int64_t>
+MetadataRepository::getTableSizesBatch() {
+  std::unordered_map<std::string, int64_t> sizes;
+  try {
+    auto conn = getConnection();
+    pqxx::work txn(conn);
+
+    auto result =
+        txn.exec("SELECT n.nspname as schema_name, c.relname as table_name, "
+                 "COALESCE(c.reltuples::bigint, 0) as row_count "
+                 "FROM pg_class c "
+                 "JOIN pg_namespace n ON c.relnamespace = n.oid "
+                 "WHERE c.relkind = 'r' AND n.nspname NOT IN ('pg_catalog', "
+                 "'information_schema', 'pg_toast')");
+
+    for (const auto &row : result) {
+      std::string schema = row[0].as<std::string>();
+      std::string table = row[1].as<std::string>();
+      int64_t size = row[2].as<int64_t>();
+      std::string key = schema + "|" + table;
+      sizes[key] = size;
+    }
+
+    txn.commit();
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::DATABASE, "MetadataRepository",
+                  "Error getting table sizes batch: " + std::string(e.what()));
+  }
+  return sizes;
+}

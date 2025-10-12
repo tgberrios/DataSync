@@ -1,6 +1,8 @@
 #include "catalog/catalog_manager.h"
+#include "catalog/catalog_lock.h"
 #include "core/Config.h"
 #include "core/logger.h"
+#include "utils/string_utils.h"
 #include <algorithm>
 
 CatalogManager::CatalogManager(std::string metadataConnStr)
@@ -8,7 +10,21 @@ CatalogManager::CatalogManager(std::string metadataConnStr)
       repo_(std::make_unique<MetadataRepository>(metadataConnStr_)),
       cleaner_(std::make_unique<CatalogCleaner>(metadataConnStr_)) {}
 
+CatalogManager::CatalogManager(std::string metadataConnStr,
+                               std::unique_ptr<IMetadataRepository> repo,
+                               std::unique_ptr<ICatalogCleaner> cleaner)
+    : metadataConnStr_(std::move(metadataConnStr)), repo_(std::move(repo)),
+      cleaner_(std::move(cleaner)) {}
+
 void CatalogManager::cleanCatalog() {
+  CatalogLock lock(metadataConnStr_, "catalog_clean", 300);
+  if (!lock.tryAcquire(30)) {
+    Logger::warning(LogCategory::DATABASE, "CatalogManager",
+                    "Could not acquire lock for catalog cleaning - another "
+                    "instance may be running");
+    return;
+  }
+
   try {
     cleaner_->cleanNonExistentPostgresTables();
     cleaner_->cleanNonExistentMariaDBTables();
@@ -103,12 +119,8 @@ int64_t CatalogManager::getTableSize(const std::string &schema,
     pqxx::connection conn(metadataConnStr_);
     pqxx::work txn(conn);
 
-    std::string lowerSchema = schema;
-    std::transform(lowerSchema.begin(), lowerSchema.end(), lowerSchema.begin(),
-                   ::tolower);
-    std::string lowerTable = table;
-    std::transform(lowerTable.begin(), lowerTable.end(), lowerTable.begin(),
-                   ::tolower);
+    std::string lowerSchema = StringUtils::toLower(schema);
+    std::string lowerTable = StringUtils::toLower(table);
 
     auto result =
         txn.exec_params("SELECT COALESCE(reltuples::bigint, 0) FROM pg_class "
@@ -127,8 +139,18 @@ int64_t CatalogManager::getTableSize(const std::string &schema,
 }
 
 void CatalogManager::syncCatalog(const std::string &dbEngine) {
+  std::string lockName = "catalog_sync_" + dbEngine;
+  CatalogLock lock(metadataConnStr_, lockName, 600);
+  if (!lock.tryAcquire(30)) {
+    Logger::warning(LogCategory::DATABASE, "CatalogManager",
+                    "Could not acquire lock for catalog sync (" + dbEngine +
+                        ") - another instance may be running");
+    return;
+  }
+
   try {
     auto connStrings = repo_->getConnectionStrings(dbEngine);
+    auto tableSizes = repo_->getTableSizesBatch();
 
     for (const auto &connStr : connStrings) {
       std::unique_ptr<IDatabaseEngine> engine;
@@ -149,7 +171,12 @@ void CatalogManager::syncCatalog(const std::string &dbEngine) {
         auto timeColumn = engine->detectTimeColumn(table.schema, table.table);
         auto pkColumns = engine->detectPrimaryKey(table.schema, table.table);
         bool hasPK = !pkColumns.empty();
-        int64_t tableSize = getTableSize(table.schema, table.table);
+
+        std::string lowerSchema = StringUtils::toLower(table.schema);
+        std::string lowerTable = StringUtils::toLower(table.table);
+        std::string key = lowerSchema + "|" + lowerTable;
+        int64_t tableSize =
+            (tableSizes.find(key) != tableSizes.end()) ? tableSizes[key] : 0;
 
         repo_->insertOrUpdateTable(table, timeColumn, pkColumns, hasPK,
                                    tableSize, dbEngine);
