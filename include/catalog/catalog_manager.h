@@ -13,14 +13,18 @@
 
 class CatalogManager {
   std::string metadataConnStr_;
-  std::unique_ptr<MetadataRepository> repo_;
-  std::unique_ptr<CatalogCleaner> cleaner_;
+  std::unique_ptr<IMetadataRepository> repo_;
+  std::unique_ptr<ICatalogCleaner> cleaner_;
 
 public:
   CatalogManager()
       : CatalogManager(DatabaseConfig::getPostgresConnectionString()) {}
 
   explicit CatalogManager(std::string metadataConnStr);
+
+  CatalogManager(std::string metadataConnStr,
+                 std::unique_ptr<IMetadataRepository> repo,
+                 std::unique_ptr<ICatalogCleaner> cleaner);
 
   void cleanCatalog();
   void deactivateNoDataTables();

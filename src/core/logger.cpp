@@ -2,16 +2,11 @@
 #include "core/Config.h"
 #include <algorithm>
 
-// Definición de variables estáticas
-std::ofstream Logger::logFile;
-std::ofstream Logger::errorLogFile;
+std::unique_ptr<FileLogWriter> Logger::fileWriter_;
+std::unique_ptr<FileLogWriter> Logger::errorWriter_;
+std::unique_ptr<DatabaseLogWriter> Logger::dbWriter_;
 std::mutex Logger::logMutex;
-std::string Logger::logFileName = "DataSync.log";
-std::string Logger::errorLogFileName = "DataSyncErrors.log";
 size_t Logger::messageCount = 0;
-std::unique_ptr<pqxx::connection> Logger::dbConn;
-bool Logger::dbLoggingEnabled = false;
-bool Logger::dbStatementPrepared = false;
 
 // Debug configuration variables
 LogLevel Logger::currentLogLevel = LogLevel::INFO;
@@ -19,6 +14,25 @@ bool Logger::showTimestamps = true;
 bool Logger::showThreadId = false;
 bool Logger::showFileLine = false;
 std::mutex Logger::configMutex;
+
+const std::unordered_map<std::string, LogCategory> Logger::categoryMap = {
+    {"SYSTEM", LogCategory::SYSTEM},
+    {"DATABASE", LogCategory::DATABASE},
+    {"TRANSFER", LogCategory::TRANSFER},
+    {"CONFIG", LogCategory::CONFIG},
+    {"VALIDATION", LogCategory::VALIDATION},
+    {"MAINTENANCE", LogCategory::MAINTENANCE},
+    {"MONITORING", LogCategory::MONITORING},
+    {"DDL_EXPORT", LogCategory::DDL_EXPORT},
+    {"METRICS", LogCategory::METRICS},
+    {"GOVERNANCE", LogCategory::GOVERNANCE},
+    {"QUALITY", LogCategory::QUALITY}};
+
+const std::unordered_map<std::string, LogLevel> Logger::levelMap = {
+    {"DEBUG", LogLevel::DEBUG},      {"INFO", LogLevel::INFO},
+    {"WARN", LogLevel::WARNING},     {"WARNING", LogLevel::WARNING},
+    {"ERROR", LogLevel::ERROR},      {"FATAL", LogLevel::CRITICAL},
+    {"CRITICAL", LogLevel::CRITICAL}};
 
 void Logger::loadDebugConfig() {
   std::lock_guard<std::mutex> lock(configMutex);
@@ -99,9 +113,9 @@ void Logger::setDefaultConfig() {
   showThreadId = false;
   showFileLine = false;
 
-  if (logFile.is_open()) {
-    logFile << "-- Using default debug configuration (database unavailable)"
-            << std::endl;
+  if (fileWriter_ && fileWriter_->isOpen()) {
+    fileWriter_->write(
+        "-- Using default debug configuration (database unavailable)");
   }
 }
 
@@ -136,31 +150,23 @@ LogLevel Logger::getCurrentLogLevel() {
 
 void Logger::refreshConfig() { loadDebugConfig(); }
 
-// Update the initialize function to load debug config
 void Logger::initialize(const std::string &fileName) {
   std::lock_guard<std::mutex> lock(logMutex);
 
   messageCount = 0;
-  logFileName = fileName;
+  fileWriter_ = std::make_unique<FileLogWriter>(fileName);
 
-  if (!logFile.is_open()) {
-    logFile.open(logFileName, std::ios::app);
-  }
+  std::string errorFileName =
+      fileName.substr(0, fileName.find_last_of('.')) + "Errors.log";
+  errorWriter_ = std::make_unique<FileLogWriter>(errorFileName);
 
   loadDebugConfig();
 
   try {
     std::string connStr = DatabaseConfig::getPostgresConnectionString();
     if (!connStr.empty()) {
-      dbConn = std::make_unique<pqxx::connection>(connStr);
-      if (dbConn && dbConn->is_open()) {
-        dbLoggingEnabled = true;
-        dbStatementPrepared = false;
-      }
+      dbWriter_ = std::make_unique<DatabaseLogWriter>(connStr);
     }
   } catch (const std::exception &) {
-    dbLoggingEnabled = false;
-    dbStatementPrepared = false;
-    dbConn.reset();
   }
 }

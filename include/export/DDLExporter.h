@@ -85,6 +85,14 @@ private:
   std::string getConnectionString(const SchemaInfo &schema);
   std::string sanitizeFileName(const std::string &name);
 
+  void saveDDLToFile(const std::string &cluster, const std::string &engine,
+                     const std::string &database, const std::string &schema,
+                     const std::string &objectName,
+                     const std::string &ddlContent,
+                     const std::string &subfolder,
+                     const std::string &fileSuffix, bool appendMode,
+                     bool includeHeader);
+
   std::vector<SchemaInfo> schemas;
   std::string exportPath = "DDL_EXPORT";
 };
