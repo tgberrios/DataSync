@@ -107,8 +107,7 @@ MariaDBToPostgres::cleanValueForPostgres(const std::string &value,
   if (upperType.find("TIMESTAMP") != std::string::npos ||
       upperType.find("DATETIME") != std::string::npos ||
       upperType.find("DATE") != std::string::npos) {
-    if (cleanValue.length() < 10 ||
-        cleanValue.find("-") == std::string::npos ||
+    if (cleanValue.length() < 10 || cleanValue.find("-") == std::string::npos ||
         cleanValue.find("0000") != std::string::npos) {
       isNull = true;
     } else {
@@ -152,4 +151,3 @@ MariaDBToPostgres::cleanValueForPostgres(const std::string &value,
 
   return cleanValue;
 }
-
