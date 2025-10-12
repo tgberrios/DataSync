@@ -1,0 +1,29 @@
+#ifndef CONNECTION_UTILS_H
+#define CONNECTION_UTILS_H
+
+#include "core/Config.h"
+#include <optional>
+#include <sstream>
+#include <string>
+#include <string_view>
+
+struct ConnectionParams {
+  std::string host;
+  std::string user;
+  std::string password;
+  std::string db;
+  std::string port;
+
+  ConnectionParams()
+      : port(std::to_string(DatabaseDefaults::DEFAULT_MYSQL_PORT)) {}
+};
+
+class ConnectionStringParser {
+public:
+  static std::optional<ConnectionParams> parse(std::string_view connStr);
+
+private:
+  static std::string trim(const std::string &str);
+};
+
+#endif
