@@ -2,8 +2,6 @@
 #include "core/Config.h"
 #include <algorithm>
 
-std::unique_ptr<FileLogWriter> Logger::fileWriter_;
-std::unique_ptr<FileLogWriter> Logger::errorWriter_;
 std::unique_ptr<DatabaseLogWriter> Logger::dbWriter_;
 std::mutex Logger::logMutex;
 size_t Logger::messageCount = 0;
@@ -112,11 +110,6 @@ void Logger::setDefaultConfig() {
   showTimestamps = true;
   showThreadId = false;
   showFileLine = false;
-
-  if (fileWriter_ && fileWriter_->isOpen()) {
-    fileWriter_->write(
-        "-- Using default debug configuration (database unavailable)");
-  }
 }
 
 void Logger::setLogLevel(LogLevel level) {
@@ -154,11 +147,6 @@ void Logger::initialize(const std::string &fileName) {
   std::lock_guard<std::mutex> lock(logMutex);
 
   messageCount = 0;
-  fileWriter_ = std::make_unique<FileLogWriter>(fileName);
-
-  std::string errorFileName =
-      fileName.substr(0, fileName.find_last_of('.')) + "Errors.log";
-  errorWriter_ = std::make_unique<FileLogWriter>(errorFileName);
 
   loadDebugConfig();
 

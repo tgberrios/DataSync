@@ -2,7 +2,6 @@
 #define LOGGER_H
 
 #include "core/database_log_writer.h"
-#include "core/file_log_writer.h"
 #include <chrono>
 #include <iomanip>
 #include <iostream>
@@ -37,8 +36,6 @@ enum class LogCategory {
 
 class Logger {
 private:
-  static std::unique_ptr<FileLogWriter> fileWriter_;
-  static std::unique_ptr<FileLogWriter> errorWriter_;
   static std::unique_ptr<DatabaseLogWriter> dbWriter_;
   static std::mutex logMutex;
   static size_t messageCount;
@@ -147,24 +144,7 @@ private:
     std::string timestamp = getCurrentTimestamp();
 
     if (dbWriter_ && dbWriter_->isEnabled()) {
-      if (!dbWriter_->writeParsed(levelStr, categoryStr, function, message)) {
-        if (fileWriter_ && fileWriter_->isOpen()) {
-          fileWriter_->write(formatLogMessage(timestamp, levelStr, categoryStr,
-                                              function, message));
-        }
-      }
-    } else {
-      if (fileWriter_ && fileWriter_->isOpen()) {
-        fileWriter_->write(formatLogMessage(timestamp, levelStr, categoryStr,
-                                            function, message));
-      }
-    }
-
-    messageCount++;
-    if (messageCount >= MAX_MESSAGES_BEFORE_FLUSH) {
-      if (fileWriter_)
-        fileWriter_->flush();
-      messageCount = 0;
+      dbWriter_->writeParsed(levelStr, categoryStr, function, message);
     }
   }
 
@@ -178,20 +158,9 @@ public:
 
   static void shutdown() {
     std::lock_guard<std::mutex> lock(logMutex);
-    if (fileWriter_) {
-      fileWriter_->flush();
-      fileWriter_->close();
-    }
-    if (errorWriter_) {
-      errorWriter_->flush();
-      errorWriter_->close();
-    }
     if (dbWriter_) {
       dbWriter_->close();
     }
-    messageCount = 0;
-    fileWriter_.reset();
-    errorWriter_.reset();
     dbWriter_.reset();
   }
 
