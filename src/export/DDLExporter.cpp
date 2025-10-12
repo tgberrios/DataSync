@@ -1,4 +1,8 @@
 #include "export/DDLExporter.h"
+#include "engines/database_engine.h"
+#include "engines/mariadb_engine.h"
+#include "engines/mssql_engine.h"
+#include "utils/connection_utils.h"
 #include <algorithm>
 #include <chrono>
 #include <fstream>
@@ -169,85 +173,19 @@ void DDLExporter::createSchemaFolder(const std::string &cluster,
 
 void DDLExporter::exportMariaDBDDL(const SchemaInfo &schema) {
   try {
-    const unsigned int timeout_seconds = 30;
     std::string connStr = getConnectionString(schema);
 
-    // Parse MariaDB connection string
-    std::string host, user, password, db, port;
-    std::istringstream ss(connStr);
-    std::string token;
-    while (std::getline(ss, token, ';')) {
-      auto pos = token.find('=');
-      if (pos == std::string::npos)
-        continue;
-      std::string key = token.substr(0, pos);
-      std::string value = token.substr(pos + 1);
-
-      // Trim whitespace from key and value
-      key.erase(0, key.find_first_not_of(" \t\r\n"));
-      key.erase(key.find_last_not_of(" \t\r\n") + 1);
-      value.erase(0, value.find_first_not_of(" \t\r\n"));
-      value.erase(value.find_last_not_of(" \t\r\n") + 1);
-
-      if (key == "host")
-        host = value;
-      else if (key == "user")
-        user = value;
-      else if (key == "password")
-        password = value;
-      else if (key == "db")
-        db = value;
-      else if (key == "port")
-        port = value;
-    }
-
-    // Validate connection parameters
-    if (host.empty() || user.empty() || db.empty()) {
+    auto params = ConnectionStringParser::parse(connStr);
+    if (!params) {
       Logger::error(LogCategory::DDL_EXPORT, "exportMariaDBDDL",
-                    "MariaDB connection parameters are incomplete");
+                    "Failed to parse MariaDB connection string");
       return;
     }
 
-    // Connect to MariaDB using MySQL library
-    MYSQL *conn = mysql_init(nullptr);
-    if (!conn) {
+    MySQLConnection conn(*params);
+    if (!conn.isValid()) {
       Logger::error(LogCategory::DDL_EXPORT, "exportMariaDBDDL",
-                    "mysql_init() failed");
-      return;
-    }
-
-    // Set connection timeout
-    mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT,
-                  (const char *)&timeout_seconds);
-    mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, (const char *)&timeout_seconds);
-    mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT,
-                  (const char *)&timeout_seconds);
-
-    unsigned int portNum = 3306;
-    if (!port.empty()) {
-      try {
-        portNum = std::stoul(port);
-        if (portNum == 0 || portNum > 65535) {
-          Logger::error(LogCategory::DDL_EXPORT, "exportMariaDBDDL",
-                        "Invalid port number: " + port);
-          mysql_close(conn);
-          return;
-        }
-      } catch (const std::exception &e) {
-        Logger::error(LogCategory::DDL_EXPORT, "exportMariaDBDDL",
-                      "Invalid port format: " + port + " - " +
-                          std::string(e.what()));
-        mysql_close(conn);
-        return;
-      }
-    }
-
-    if (mysql_real_connect(conn, host.c_str(), user.c_str(), password.c_str(),
-                           db.c_str(), portNum, nullptr, 0) == nullptr) {
-      Logger::error(LogCategory::DDL_EXPORT, "exportMariaDBDDL",
-                    "MariaDB connection failed: " +
-                        std::string(mysql_error(conn)));
-      mysql_close(conn);
+                    "MariaDB connection failed");
       return;
     }
 
@@ -258,19 +196,17 @@ void DDLExporter::exportMariaDBDDL(const SchemaInfo &schema) {
         "' "
         "AND table_type = 'BASE TABLE';";
 
-    if (mysql_query(conn, tablesQuery.c_str())) {
+    if (mysql_query(conn.get(), tablesQuery.c_str())) {
       Logger::error(LogCategory::DDL_EXPORT, "exportMariaDBDDL",
-                    "Query failed: " + std::string(mysql_error(conn)));
-      mysql_close(conn);
+                    "Query failed: " + std::string(mysql_error(conn.get())));
       return;
     }
 
-    MYSQL_RES *tablesResult = mysql_store_result(conn);
+    MYSQL_RES *tablesResult = mysql_store_result(conn.get());
     if (!tablesResult) {
       Logger::error(LogCategory::DDL_EXPORT, "exportMariaDBDDL",
                     "mysql_store_result() failed: " +
-                        std::string(mysql_error(conn)));
-      mysql_close(conn);
+                        std::string(mysql_error(conn.get())));
       return;
     }
 
@@ -282,14 +218,14 @@ void DDLExporter::exportMariaDBDDL(const SchemaInfo &schema) {
                                      escapeSQL(schema.schema_name) + "`.`" +
                                      escapeSQL(tableName) + "`;";
 
-      if (mysql_query(conn, createTableQuery.c_str())) {
+      if (mysql_query(conn.get(), createTableQuery.c_str())) {
         Logger::error(LogCategory::DDL_EXPORT, "exportMariaDBDDL",
                       "SHOW CREATE TABLE failed: " +
-                          std::string(mysql_error(conn)));
+                          std::string(mysql_error(conn.get())));
         continue;
       }
 
-      MYSQL_RES *createResult = mysql_store_result(conn);
+      MYSQL_RES *createResult = mysql_store_result(conn.get());
       if (createResult && mysql_num_rows(createResult) > 0) {
         MYSQL_ROW createRow = mysql_fetch_row(createResult);
         if (createRow && createRow[1]) {
@@ -305,13 +241,14 @@ void DDLExporter::exportMariaDBDDL(const SchemaInfo &schema) {
                                  escapeSQL(schema.schema_name) + "`.`" +
                                  escapeSQL(tableName) + "`;";
 
-      if (mysql_query(conn, indexesQuery.c_str())) {
+      if (mysql_query(conn.get(), indexesQuery.c_str())) {
         Logger::error(LogCategory::DDL_EXPORT, "exportMariaDBDDL",
-                      "SHOW INDEX failed: " + std::string(mysql_error(conn)));
+                      "SHOW INDEX failed: " +
+                          std::string(mysql_error(conn.get())));
         continue;
       }
 
-      MYSQL_RES *indexesResult = mysql_store_result(conn);
+      MYSQL_RES *indexesResult = mysql_store_result(conn.get());
       if (indexesResult) {
         MYSQL_ROW indexRow;
         while ((indexRow = mysql_fetch_row(indexesResult))) {
@@ -339,24 +276,22 @@ void DDLExporter::exportMariaDBDDL(const SchemaInfo &schema) {
     mysql_free_result(tablesResult);
 
     // Export Views
-    exportMariaDBViews(conn, schema);
+    exportMariaDBViews(conn.get(), schema);
 
     // Export Stored Procedures
-    exportMariaDBProcedures(conn, schema);
+    exportMariaDBProcedures(conn.get(), schema);
 
     // Export Functions
-    exportMariaDBFunctions(conn, schema);
+    exportMariaDBFunctions(conn.get(), schema);
 
     // Export Triggers
-    exportMariaDBTriggers(conn, schema);
+    exportMariaDBTriggers(conn.get(), schema);
 
     // Export Constraints
-    exportMariaDBConstraints(conn, schema);
+    exportMariaDBConstraints(conn.get(), schema);
 
     // Export Events
-    exportMariaDBEvents(conn, schema);
-
-    mysql_close(conn);
+    exportMariaDBEvents(conn.get(), schema);
 
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DDL_EXPORT, "FUNCTION_NAME",
@@ -697,162 +632,33 @@ void DDLExporter::exportMSSQLDDL(const SchemaInfo &schema) {
   try {
     std::string connStr = getConnectionString(schema);
 
-    // Validate connection string is not empty
     if (connStr.empty()) {
+      Logger::error(LogCategory::DDL_EXPORT, "exportMSSQLDDL",
+                    "MSSQL connection string is empty");
       return;
     }
 
-    // Parse MSSQL connection string
-    std::string server, database, username, password, port;
-    std::istringstream ss(connStr);
-    std::string token;
-    while (std::getline(ss, token, ';')) {
-      auto pos = token.find('=');
-      if (pos == std::string::npos)
-        continue;
-      std::string key = token.substr(0, pos);
-      std::string value = token.substr(pos + 1);
-
-      // Trim whitespace
-      key.erase(0, key.find_first_not_of(" \t\r\n"));
-      key.erase(key.find_last_not_of(" \t\r\n") + 1);
-      value.erase(0, value.find_first_not_of(" \t\r\n"));
-      value.erase(value.find_last_not_of(" \t\r\n") + 1);
-
-      if (key == "server" || key == "SERVER")
-        server = value;
-      else if (key == "database" || key == "DATABASE")
-        database = value;
-      else if (key == "username" || key == "UID")
-        username = value;
-      else if (key == "password" || key == "PWD")
-        password = value;
-      else if (key == "port" || key == "PORT")
-        port = value;
-    }
-
-    // Validate connection parameters
-    if (server.empty()) {
+    ODBCConnection conn(connStr);
+    if (!conn.isValid()) {
+      Logger::error(LogCategory::DDL_EXPORT, "exportMSSQLDDL",
+                    "MSSQL connection failed");
       return;
     }
 
-    if (database.empty()) {
-      database = schema.schema_name;
-    }
-
-    if (port.empty()) {
-      port = "1433";
-    } else {
-      try {
-        int portNum = std::stoi(port);
-        if (portNum <= 0 || portNum > 65535) {
-          Logger::error(LogCategory::DDL_EXPORT, "exportMariaDBDDL",
-                        "Invalid port number: " + port);
-          return;
-        }
-      } catch (const std::exception &e) {
-        Logger::error(LogCategory::DDL_EXPORT, "exportMariaDBDDL",
-                      "Invalid port format: " + port + " - " + e.what());
-        return;
-      }
-    }
-
-    // Get MSSQL connection string from configuration
-    std::string odbcConnStr = getConnectionString(schema);
-
-    // Initialize ODBC
-    SQLHENV env;
-    SQLHDBC conn;
-    SQLRETURN ret;
-
-    ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env);
-    if (ret != SQL_SUCCESS) {
-      Logger::error(LogCategory::DDL_EXPORT, "exportMariaDBDDL",
-                    "Failed to allocate ODBC environment");
-      return;
-    }
-
-    ret =
-        SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION, (SQLPOINTER)SQL_OV_ODBC3, 0);
-    if (ret != SQL_SUCCESS) {
-      Logger::error(LogCategory::DDL_EXPORT, "exportMariaDBDDL",
-                    "Failed to set ODBC version");
-      SQLFreeHandle(SQL_HANDLE_ENV, env);
-      return;
-    }
-
-    ret = SQLAllocHandle(SQL_HANDLE_DBC, env, &conn);
-    if (ret != SQL_SUCCESS) {
-      Logger::error(LogCategory::DDL_EXPORT, "exportMariaDBDDL",
-                    "Failed to allocate ODBC connection");
-      SQLFreeHandle(SQL_HANDLE_ENV, env);
-      return;
-    }
-
-    // Set connection timeout
-    SQLSetConnectAttr(conn, SQL_ATTR_CONNECTION_TIMEOUT, (SQLPOINTER)30, 0);
-    SQLSetConnectAttr(conn, SQL_ATTR_LOGIN_TIMEOUT, (SQLPOINTER)30, 0);
-
-    ret = SQLDriverConnect(conn, nullptr, (SQLCHAR *)odbcConnStr.c_str(),
-                           SQL_NTS, nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT);
-    if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
-      SQLCHAR sqlstate[SQL_SQLSTATE_SIZE + 1];
-      SQLCHAR message[SQL_MAX_MESSAGE_LENGTH + 1];
-      SQLSMALLINT i = 1;
-      SQLINTEGER native_error;
-      SQLSMALLINT msg_len;
-      std::string error_details;
-
-      while (SQLGetDiagRec(SQL_HANDLE_DBC, conn, i++, sqlstate, &native_error,
-                           message, sizeof(message), &msg_len) == SQL_SUCCESS) {
-        error_details += "SQLSTATE: " + std::string((char *)sqlstate) +
-                         ", Native Error: " + std::to_string(native_error) +
-                         ", Message: " + std::string((char *)message) + "\n";
-      }
-
-      Logger::error(LogCategory::DDL_EXPORT, "exportMariaDBDDL",
-                    "Failed to connect to MSSQL server. Connection string: " +
-                        odbcConnStr + "\nDetailed errors:\n" + error_details);
-      SQLFreeHandle(SQL_HANDLE_DBC, conn);
-      SQLFreeHandle(SQL_HANDLE_ENV, env);
-      return;
-    }
-
-    // Test the connection with a simple query
-    SQLHSTMT testStmt;
-    ret = SQLAllocHandle(SQL_HANDLE_STMT, conn, &testStmt);
-    if (ret == SQL_SUCCESS) {
-      ret = SQLExecDirect(testStmt, (SQLCHAR *)"SELECT 1", SQL_NTS);
-      if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
-        Logger::error(LogCategory::DDL_EXPORT, "exportMariaDBDDL",
-                      "Connection test failed");
-        SQLFreeHandle(SQL_HANDLE_STMT, testStmt);
-        SQLFreeHandle(SQL_HANDLE_DBC, conn);
-        SQLFreeHandle(SQL_HANDLE_ENV, env);
-        return;
-      }
-      SQLFreeHandle(SQL_HANDLE_STMT, testStmt);
-    }
-
-    // Export Tables (already implemented in existing code)
     // Export Views
-    exportMSSQLViews(conn, schema);
+    exportMSSQLViews(conn.getDbc(), schema);
 
     // Export Procedures
-    exportMSSQLProcedures(conn, schema);
+    exportMSSQLProcedures(conn.getDbc(), schema);
 
     // Export Functions
-    exportMSSQLFunctions(conn, schema);
+    exportMSSQLFunctions(conn.getDbc(), schema);
 
     // Export Triggers
-    exportMSSQLTriggers(conn, schema);
+    exportMSSQLTriggers(conn.getDbc(), schema);
 
     // Export Constraints
-    exportMSSQLConstraints(conn, schema);
-
-    SQLDisconnect(conn);
-    SQLFreeHandle(SQL_HANDLE_DBC, conn);
-    SQLFreeHandle(SQL_HANDLE_ENV, env);
+    exportMSSQLConstraints(conn.getDbc(), schema);
 
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DDL_EXPORT, "exportMSSQLDDL",
@@ -1128,60 +934,25 @@ void DDLExporter::saveTableDDL(const std::string &cluster,
                                const std::string &table_name,
                                const std::string &ddl) {
   try {
-    std::string filePath = exportPath + "/" + sanitizeFileName(cluster) + "/" +
-                           sanitizeFileName(engine) + "/" +
-                           sanitizeFileName(database) + "/" +
-                           sanitizeFileName(schema) + "/tables/" +
-                           sanitizeFileName(table_name) + ".sql";
+    std::filesystem::path filePath =
+        std::filesystem::path(exportPath) / sanitizeFileName(cluster) /
+        sanitizeFileName(engine) / sanitizeFileName(database) /
+        sanitizeFileName(schema) / "tables" /
+        (sanitizeFileName(table_name) + ".sql");
 
-    // Validate file path length
-    if (filePath.length() > 260) {
-      Logger::error(LogCategory::DDL_EXPORT, "exportMariaDBDDL",
-                    "File path too long: " + filePath);
-      return;
-    }
-
-    // Check if parent directory exists and is writable
-    std::filesystem::path parentPath =
-        std::filesystem::path(filePath).parent_path();
-    if (!std::filesystem::exists(parentPath)) {
-      try {
-        std::filesystem::create_directories(parentPath);
-      } catch (const std::filesystem::filesystem_error &e) {
-        Logger::error(LogCategory::DDL_EXPORT, "exportMariaDBDDL",
-                      "Failed to create directory: " + parentPath.string() +
-                          " - " + e.what());
-        return;
-      }
-    }
-
-    // Check available disk space
-    std::error_code ec;
-    auto space = std::filesystem::space(parentPath, ec);
-    if (!ec && space.available < 1024 * 1024) { // Less than 1MB available
-    }
+    std::filesystem::create_directories(filePath.parent_path());
 
     std::ofstream file(filePath);
     if (file.is_open()) {
-      file << "-- Table DDL for " << schema << "." << table_name << std::endl;
-      file << "-- Engine: " << engine << std::endl;
-      file << "-- Database: " << database << std::endl;
-      file << "-- Generated: " << std::time(nullptr) << std::endl;
-      file << std::endl;
-      file << ddl << std::endl;
-
-      if (file.good()) {
-        file.close();
-      } else {
-        Logger::error(LogCategory::DDL_EXPORT, "exportMariaDBDDL",
-                      "Error writing to file: " + filePath);
-        file.close();
-        // Try to remove the partial file
-        std::filesystem::remove(filePath);
-      }
+      file << "-- Table DDL for " << schema << "." << table_name << "\n"
+           << "-- Engine: " << engine << "\n"
+           << "-- Database: " << database << "\n"
+           << "-- Generated: " << std::time(nullptr) << "\n\n"
+           << ddl << "\n";
+      file.close();
     } else {
-      Logger::error(LogCategory::DDL_EXPORT, "exportMariaDBDDL",
-                    "Failed to open file for writing: " + filePath);
+      Logger::error(LogCategory::DDL_EXPORT, "saveTableDDL",
+                    "Failed to open file: " + filePath.string());
     }
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DDL_EXPORT, "saveTableDDL",
@@ -1196,23 +967,18 @@ void DDLExporter::saveIndexDDL(const std::string &cluster,
                                const std::string &table_name,
                                const std::string &index_ddl) {
   try {
-    std::string filePath = exportPath + "/" + sanitizeFileName(cluster) + "/" +
-                           sanitizeFileName(engine) + "/" +
-                           sanitizeFileName(database) + "/" +
-                           sanitizeFileName(schema) + "/indexes/" +
-                           sanitizeFileName(table_name) + "_indexes.sql";
+    std::filesystem::path filePath =
+        std::filesystem::path(exportPath) / sanitizeFileName(cluster) /
+        sanitizeFileName(engine) / sanitizeFileName(database) /
+        sanitizeFileName(schema) / "indexes" /
+        (sanitizeFileName(table_name) + "_indexes.sql");
 
-    // Create directory if it doesn't exist
-    std::filesystem::create_directories(
-        std::filesystem::path(filePath).parent_path());
+    std::filesystem::create_directories(filePath.parent_path());
 
     std::ofstream file(filePath, std::ios::app);
     if (file.is_open()) {
-      file << index_ddl << std::endl;
+      file << index_ddl << "\n";
       file.close();
-
-      // Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter", "Saved index DDL:
-      // " + filePath);
     }
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DDL_EXPORT, "saveIndexDDL",
@@ -1227,23 +993,18 @@ void DDLExporter::saveConstraintDDL(const std::string &cluster,
                                     const std::string &table_name,
                                     const std::string &constraint_ddl) {
   try {
-    std::string filePath = exportPath + "/" + sanitizeFileName(cluster) + "/" +
-                           sanitizeFileName(engine) + "/" +
-                           sanitizeFileName(database) + "/" +
-                           sanitizeFileName(schema) + "/constraints/" +
-                           sanitizeFileName(table_name) + "_constraints.sql";
+    std::filesystem::path filePath =
+        std::filesystem::path(exportPath) / sanitizeFileName(cluster) /
+        sanitizeFileName(engine) / sanitizeFileName(database) /
+        sanitizeFileName(schema) / "constraints" /
+        (sanitizeFileName(table_name) + "_constraints.sql");
 
-    // Create directory if it doesn't exist
-    std::filesystem::create_directories(
-        std::filesystem::path(filePath).parent_path());
+    std::filesystem::create_directories(filePath.parent_path());
 
     std::ofstream file(filePath, std::ios::app);
     if (file.is_open()) {
-      file << constraint_ddl << std::endl;
+      file << constraint_ddl << "\n";
       file.close();
-
-      // Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter", "Saved constraint
-      // DDL: " + filePath);
     }
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DDL_EXPORT, "saveConstraintDDL",
@@ -1258,29 +1019,22 @@ void DDLExporter::saveFunctionDDL(const std::string &cluster,
                                   const std::string &function_name,
                                   const std::string &function_ddl) {
   try {
-    std::string filePath = exportPath + "/" + sanitizeFileName(cluster) + "/" +
-                           sanitizeFileName(engine) + "/" +
-                           sanitizeFileName(database) + "/" +
-                           sanitizeFileName(schema) + "/functions/" +
-                           sanitizeFileName(function_name) + ".sql";
+    std::filesystem::path filePath =
+        std::filesystem::path(exportPath) / sanitizeFileName(cluster) /
+        sanitizeFileName(engine) / sanitizeFileName(database) /
+        sanitizeFileName(schema) / "functions" /
+        (sanitizeFileName(function_name) + ".sql");
 
-    // Create directory if it doesn't exist
-    std::filesystem::create_directories(
-        std::filesystem::path(filePath).parent_path());
+    std::filesystem::create_directories(filePath.parent_path());
 
     std::ofstream file(filePath);
     if (file.is_open()) {
-      file << "-- Function DDL for " << schema << "." << function_name
-           << std::endl;
-      file << "-- Engine: " << engine << std::endl;
-      file << "-- Database: " << database << std::endl;
-      file << "-- Generated: " << std::time(nullptr) << std::endl;
-      file << std::endl;
-      file << function_ddl << std::endl;
+      file << "-- Function DDL for " << schema << "." << function_name << "\n"
+           << "-- Engine: " << engine << "\n"
+           << "-- Database: " << database << "\n"
+           << "-- Generated: " << std::time(nullptr) << "\n\n"
+           << function_ddl << "\n";
       file.close();
-
-      // Logger::debug(LogCategory::DDL_EXPORT, "DDLExporter", "Saved function
-      // DDL: " + filePath);
     }
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DDL_EXPORT, "saveFunctionDDL",
@@ -1290,16 +1044,6 @@ void DDLExporter::saveFunctionDDL(const std::string &cluster,
 
 std::string DDLExporter::getConnectionString(const SchemaInfo &schema) {
   return schema.connection_string;
-}
-
-std::string DDLExporter::escapeSQL(const std::string &value) {
-  std::string escaped = value;
-  size_t pos = 0;
-  while ((pos = escaped.find("'", pos)) != std::string::npos) {
-    escaped.replace(pos, 1, "''");
-    pos += 2;
-  }
-  return escaped;
 }
 
 std::string DDLExporter::sanitizeFileName(const std::string &name) {

@@ -1,4 +1,5 @@
 #include "governance/DataQuality.h"
+#include "utils/string_utils.h"
 #include <algorithm>
 
 std::string cleanSchemaNameForPostgres(const std::string &schemaName) {
@@ -30,8 +31,7 @@ std::string cleanSchemaNameForPostgres(const std::string &schemaName) {
   }
 
   // Lowercase for PostgreSQL identifier standardization
-  std::transform(cleaned.begin(), cleaned.end(), cleaned.begin(), ::tolower);
-  return cleaned;
+  return StringUtils::toLower(cleaned);
 }
 
 bool DataQuality::validateTable(pqxx::connection &conn,
@@ -247,8 +247,8 @@ bool DataQuality::checkNullCounts(pqxx::connection &conn,
     metrics.total_rows =
         totalResult[0][0].is_null() ? 0 : totalResult[0][0].as<size_t>();
 
-    // Calculate NULL count more efficiently by checking each column
-    // individually
+    // Calculate NULL count efficiently using FILTER clause (1 query instead of
+    // N+1)
     metrics.null_count = 0;
 
     // Get column list
@@ -258,17 +258,29 @@ bool DataQuality::checkNullCounts(pqxx::connection &conn,
                  txn.quote(cleanSchema) +
                  " AND table_name = " + txn.quote(metrics.table_name));
 
-    for (const auto &colRow : columnsResult) {
-      std::string columnName = colRow[0].as<std::string>();
+    if (columnsResult.size() > 0) {
+      // Build single query with FILTER clauses for all columns
+      std::string nullQuery = "SELECT ";
+      bool first = true;
+      for (const auto &colRow : columnsResult) {
+        std::string columnName = colRow[0].as<std::string>();
+        if (!first)
+          nullQuery += ", ";
+        nullQuery += "COUNT(*) FILTER (WHERE \"" + columnName + "\" IS NULL)";
+        first = false;
+      }
+      nullQuery +=
+          " FROM \"" + cleanSchema + "\".\"" + metrics.table_name + "\"";
 
       try {
-        // Count NULL values in this specific column
-        auto nullResult = txn.exec("SELECT COUNT(*) FROM \"" + cleanSchema +
-                                   "\".\"" + metrics.table_name +
-                                   "\" WHERE \"" + columnName + "\" IS NULL");
-
-        size_t columnNulls = nullResult[0][0].as<size_t>();
-        metrics.null_count += columnNulls;
+        auto nullResult = txn.exec(nullQuery);
+        if (!nullResult.empty()) {
+          for (size_t i = 0; i < nullResult[0].size(); ++i) {
+            if (!nullResult[0][i].is_null()) {
+              metrics.null_count += nullResult[0][i].as<size_t>();
+            }
+          }
+        }
       } catch (const std::exception &e) {
         Logger::error(LogCategory::QUALITY, "checkNullCounts",
                       "Error checking column nulls: " + std::string(e.what()));

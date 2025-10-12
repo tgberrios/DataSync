@@ -94,8 +94,6 @@ private:
   void storeMetadata(const TableMetadata &metadata);
   void updateExistingMetadata(const TableMetadata &metadata);
 
-  std::string escapeSQL(const std::string &value);
-  std::string getCurrentTimestamp();
   double calculateDataQualityScore(const TableMetadata &metadata);
   std::string determineAccessFrequency(int query_count);
   std::string determineHealthStatus(const TableMetadata &metadata);

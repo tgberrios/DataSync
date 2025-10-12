@@ -4,7 +4,7 @@
 #include "engines/mariadb_engine.h"
 #include "engines/mssql_engine.h"
 #include "utils/connection_utils.h"
-#include <algorithm>
+#include "utils/string_utils.h"
 #include <pqxx/pqxx>
 
 std::string ClusterNameResolver::resolve(const std::string &connectionString,
@@ -51,8 +51,7 @@ ClusterNameResolver::resolveMariaDB(const std::string &connectionString) {
 
     mysql_free_result(res);
 
-    std::transform(name.begin(), name.end(), name.begin(), ::toupper);
-    return name;
+    return StringUtils::toUpper(name);
   } catch (...) {
     return "";
   }
@@ -108,8 +107,7 @@ ClusterNameResolver::resolveMSSQL(const std::string &connectionString) {
     }
 
     SQLFreeHandle(SQL_HANDLE_STMT, stmt);
-    std::transform(name.begin(), name.end(), name.begin(), ::toupper);
-    return name;
+    return StringUtils::toUpper(name);
   } catch (...) {
     return "";
   }
@@ -117,58 +115,17 @@ ClusterNameResolver::resolveMSSQL(const std::string &connectionString) {
 
 std::string
 ClusterNameResolver::resolvePostgreSQL(const std::string &connectionString) {
-  try {
-    pqxx::connection conn(connectionString);
-    if (!conn.is_open())
-      return "";
-
-    pqxx::work txn(conn);
-    auto result = txn.exec("SELECT current_setting('cluster_name', true)");
-    std::string name;
-
-    if (!result.empty() && !result[0][0].is_null())
-      name = result[0][0].as<std::string>();
-
-    if (name.empty()) {
-      auto result2 = txn.exec("SELECT inet_server_addr()::text");
-      if (!result2.empty() && !result2[0][0].is_null())
-        name = result2[0][0].as<std::string>();
-    }
-
-    txn.commit();
-    std::transform(name.begin(), name.end(), name.begin(), ::toupper);
-    return name;
-  } catch (...) {
+  auto params = ConnectionStringParser::parse(connectionString);
+  if (!params)
     return "";
-  }
+  return getClusterNameFromHostname(params->host);
 }
 
 std::string
 ClusterNameResolver::extractHostname(const std::string &connectionString,
                                      const std::string &dbEngine) {
-  std::istringstream ss(connectionString);
-  std::string token;
-
-  while (std::getline(ss, token, ';')) {
-    auto pos = token.find('=');
-    if (pos == std::string::npos)
-      continue;
-
-    std::string key = token.substr(0, pos);
-    std::string value = token.substr(pos + 1);
-
-    key.erase(0, key.find_first_not_of(" \t\r\n"));
-    key.erase(key.find_last_not_of(" \t\r\n") + 1);
-    value.erase(0, value.find_first_not_of(" \t\r\n"));
-    value.erase(value.find_last_not_of(" \t\r\n") + 1);
-
-    if ((dbEngine == "MariaDB" && key == "host") ||
-        (dbEngine == "MSSQL" && key == "SERVER") ||
-        (dbEngine == "PostgreSQL" && key == "host")) {
-      return value;
-    }
-  }
-  return "";
+  auto params = ConnectionStringParser::parse(connectionString);
+  return params ? params->host : "";
 }
 
 std::string
@@ -176,8 +133,7 @@ ClusterNameResolver::getClusterNameFromHostname(const std::string &hostname) {
   if (hostname.empty())
     return "";
 
-  std::string lower = hostname;
-  std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+  std::string lower = StringUtils::toLower(hostname);
 
   if (lower.find("prod") != std::string::npos ||
       lower.find("production") != std::string::npos)
@@ -201,19 +157,13 @@ ClusterNameResolver::getClusterNameFromHostname(const std::string &hostname) {
 
   if (lower.find("cluster") != std::string::npos) {
     size_t pos = lower.find("cluster");
-    std::string part = lower.substr(pos);
-    std::transform(part.begin(), part.end(), part.begin(), ::toupper);
-    return part;
+    return StringUtils::toUpper(lower.substr(pos));
   }
 
   if (lower.find("db-") != std::string::npos) {
     size_t pos = lower.find("db-");
-    std::string part = lower.substr(pos);
-    std::transform(part.begin(), part.end(), part.begin(), ::toupper);
-    return part;
+    return StringUtils::toUpper(lower.substr(pos));
   }
 
-  std::string upper = hostname;
-  std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
-  return upper;
+  return StringUtils::toUpper(hostname);
 }

@@ -83,7 +83,6 @@ private:
                        const std::string &function_ddl);
 
   std::string getConnectionString(const SchemaInfo &schema);
-  std::string escapeSQL(const std::string &value);
   std::string sanitizeFileName(const std::string &name);
 
   std::vector<SchemaInfo> schemas;

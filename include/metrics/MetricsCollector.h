@@ -44,8 +44,6 @@ private:
   void saveMetricsToDatabase();
   void generateMetricsReport();
 
-  std::string escapeSQL(const std::string &value);
-  std::string getCurrentTimestamp();
   std::string getEstimatedStartTime(const std::string &completedAt);
   double calculateTransferRate(long long records, int duration_ms);
   long long calculateBytesTransferred(const std::string &schema_name,
