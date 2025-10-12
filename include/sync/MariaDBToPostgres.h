@@ -1723,11 +1723,10 @@ public:
           continue;
         }
 
-        pool.submitTask(
-            table,
-            [this](const DatabaseToPostgresSync::TableInfo &t) {
-              this->processTableParallelWithConnection(t);
-            });
+        pool.submitTask(table,
+                        [this](const DatabaseToPostgresSync::TableInfo &t) {
+                          this->processTableParallelWithConnection(t);
+                        });
       }
 
       Logger::info(LogCategory::TRANSFER,
@@ -1775,13 +1774,15 @@ public:
   }
 
   void processTableParallel(const TableInfo &table, pqxx::connection &pgConn) {
+    std::string tableKey = table.schema_name + "." + table.table_name;
+
     Logger::info(LogCategory::TRANSFER,
-                 "Starting parallel processing for table " + table.schema_name +
-                     "." + table.table_name);
+                 "Starting parallel processing for table " + tableKey);
 
     try {
-      // Initialize parallel processing for this table
       startParallelProcessing();
+
+      setTableProcessingState(tableKey, true);
 
       MYSQL *mariadbConn = getMariaDBConnection(table.connection_string);
       if (!mariadbConn) {
@@ -2105,11 +2106,13 @@ public:
 
       // 5) Transferencia: usar dataFetcherThread (hace INSERT/UPSERT y
       // actualiza last_offset/last_processed_pk)
-      dataFetcherThread(mariadbConn, table, columnNames, columnTypes);
+      dataFetcherThread(tableKey, mariadbConn, table, columnNames, columnTypes);
 
       // Clean up
       mysql_close(mariadbConn);
       shutdownParallelProcessing();
+
+      removeTableProcessingState(tableKey);
 
       // Update final: LISTENING_CHANGES con offset real (recontar destino)
       size_t finalTargetCount = 0;
@@ -2147,7 +2150,8 @@ public:
     }
   }
 
-  void dataFetcherThread(MYSQL *mariadbConn, const TableInfo &table,
+  void dataFetcherThread(const std::string &tableKey, MYSQL *mariadbConn,
+                         const TableInfo &table,
                          const std::vector<std::string> &columnNames,
                          const std::vector<std::string> &columnTypes) {
 
@@ -2172,7 +2176,7 @@ public:
                        (lastProcessedPK.empty() ? "empty" : lastProcessedPK));
 
       bool hasMoreData = true;
-      while (hasMoreData && parallelProcessingActive.load()) {
+      while (hasMoreData) {
         chunkNumber++;
 
         // Build select query
@@ -2401,7 +2405,7 @@ public:
                            const std::vector<std::string> &columnTypes) {
 
     try {
-      while (parallelProcessingActive.load()) {
+      while (true) {
         DataChunk chunk;
         if (!rawDataQueue.pop(chunk, std::chrono::milliseconds(1000))) {
           continue;

@@ -5,12 +5,6 @@
 std::mutex DatabaseToPostgresSync::metadataUpdateMutex;
 
 void DatabaseToPostgresSync::startParallelProcessing() {
-  if (parallelProcessingActive.load()) {
-    shutdownParallelProcessing();
-  }
-
-  parallelProcessingActive.store(true);
-
   rawDataQueue.clear();
   preparedBatchQueue.clear();
   resultQueue.clear();
@@ -23,12 +17,6 @@ void DatabaseToPostgresSync::startParallelProcessing() {
 }
 
 void DatabaseToPostgresSync::shutdownParallelProcessing() {
-  if (!parallelProcessingActive.load()) {
-    return;
-  }
-
-  parallelProcessingActive.store(false);
-
   rawDataQueue.shutdown_queue();
   preparedBatchQueue.shutdown_queue();
   resultQueue.shutdown_queue();
@@ -522,7 +510,7 @@ void DatabaseToPostgresSync::batchInserterThread(pqxx::connection &pgConn) {
   try {
     size_t totalProcessed = 0;
 
-    while (parallelProcessingActive.load()) {
+    while (true) {
       PreparedBatch batch;
       if (!preparedBatchQueue.pop(batch, std::chrono::milliseconds(1000))) {
         continue;
