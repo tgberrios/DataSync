@@ -1,75 +1,7 @@
-================================================================================
-📋 TAREAS PENDIENTES - DataSync Project
-================================================================================
+logger no deberia crear los archivos locales de DataSync.log y DAtaSyncErrors.log 
 
-🔴 TAREAS URGENTES DEL USUARIO:
-================================
-1. Añadir columna 'notes' VARCHAR a catalog (DDL)
-   - Quitar la columna de candidate_columns
-   - Mostrar notes en el catalog (frontend)
-================================================================================
+mi build.sh creo que podria ser mas agradable visualmente
 
-✅ OPTIMIZACIONES COMPLETADAS:
-================================
+ademas de tener governance rules podriamos tener data quality rules
 
-🟢 CONSOLIDACIÓN SYNC (100% COMPLETADA):
------------------------------------------
-📊 Ver: CONSOLIDATION_FINAL_REPORT.md
-✅ 17/23 funciones movidas a DatabaseToPostgresSync (74%)
-✅ Headers reducidos: -2466 líneas (-30.1%)
-✅ StreamingData separado: 795 → 55 líneas header (-93%)
-✅ Compilación: 30% más rápida
-✅ Status: MERGED TO MAIN
-
-🟢 THREAD POOL OPTIMIZATION (100% COMPLETADA):
------------------------------------------------
-📊 Ver: PARALLEL_FINAL_REPORT.md
-
-LOGROS:
-✅ Fase 1: Core Components (ThreadSafeQueue, Pool) - COMPLETADA
-✅ Fase 2: Connection Pooling - OMITIDA (no necesaria)
-✅ Fase 3: Integration (MariaDB + MSSQL) - COMPLETADA
-✅ Fase 4: Production Testing (58 tablas) - COMPLETADA
-✅ Fase 5: Monitoring Dashboard - COMPLETADA
-
-RESULTADOS COMPROBADOS:
-✅ 8 workers concurrentes funcionando
-✅ 58 tablas MariaDB procesadas (100% éxito)
-✅ Monitoring cada 10s con métricas completas
-✅ Mejora esperada: 50-70% más rápido
-✅ Zero thread overhead
-✅ 100% worker utilization
-
-MONITORING EN PRODUCCIÓN:
-═══ ThreadPool Monitor ═══
-• Active: 4/4
-• Completed: 16/30
-• Failed: 0
-• Pending: 10
-• Speed: 1 tbl/s
-
-ARCHIVOS CREADOS:
-- include/sync/TableProcessorThreadPool.h
-- src/sync/TableProcessorThreadPool.cpp
-- PARALLEL_OPTIMIZATION_ANALYSIS.md
-- PARALLEL_OPTIMIZATION_COMPLETE.md
-- PARALLEL_FINAL_REPORT.md
-
-Status: ✅ MERGED TO MAIN
-
-================================================================================
-
-📊 CALIFICACIÓN DEL PROYECTO:
-==============================
-Seguridad:       10/10 ✅
-Performance:     10/10 ✅ (+30% compilación, +50-70% ejecución)
-Arquitectura:    9.5/10 ✅ (SOLID + Herencia + Thread Pool)
-Mantenibilidad:  9.5/10 ✅
-Compilación:     9.5/10 ✅ (30% más rápida)
-Testing:         10/10 ✅ (Exhaustivo)
-Documentación:   10/10 ✅ (5 docs técnicos)
-Monitoring:      10/10 ✅ (Tiempo real)
-
-OVERALL: 9.5/10 ⭐⭐⭐
-
-================================================================================
+extrae todos los DDL de metadata dado que esos son ya los oficiales
