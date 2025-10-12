@@ -9,48 +9,52 @@
    - Mostrar notes en el catalog (frontend)
 ================================================================================
 
-🔴 PRIORIDAD CRÍTICA - Sync/MariaDB + MSSQL (Consolidación Masiva):
-====================================================================
-📊 ANÁLISIS COMPLETO: Ver SYNC_CONSOLIDATION_ANALYSIS.md
+🟢 CONSOLIDACIÓN SYNC COMPLETADA (70%):
+========================================
+📊 RESUMEN COMPLETO: Ver CONSOLIDATION_SUMMARY.md
 
-INVENTARIO:
-- MariaDBToPostgres.h: 3976 líneas (38 funciones)
-- MSSQLToPostgres.h: 3433 líneas (39 funciones)
-- TOTAL: 7409 líneas
+LOGROS:
+✅ 16/23 funciones movidas a DatabaseToPostgresSync (70%)
+✅ Reducción total: -714 líneas (-9.6%)
+✅ Reducción headers: -1943 líneas (-26.2%) ⭐⭐
+✅ MariaDB.h: 3976 → 2910 (-1066, -26.8%)
+✅ MSSQL.h: 3433 → 2555 (-878, -25.6%)
+✅ Compilación: Exitosa
+✅ Testing: Funcional
+✅ Static members movidos a .cpp
 
-DUPLICACIÓN IDENTIFICADA:
-🟢 100% IDÉNTICO: 23 funciones (~1800 líneas) ← PRIORIDAD ALTA
-   compareAndUpdateRecord, deleteRecordsByPrimaryKey, performBulkInsert,
-   buildUpsertQuery, buildUpsertConflictClause, getPKStrategyFromCatalog,
-   parseJSONArray, updateLastProcessedPK, startParallelProcessing, etc.
+FUNCIONES MOVIDAS A CLASE BASE:
+- Parallel processing: start/shutdown, batchInserterThread
+- PK management: parse*, update*, get*FromCatalog, getLastPKFromResults
+- PostgreSQL ops: deleteRecordsByPrimaryKey, getPrimaryKeyColumnsFromPostgres
+- Bulk ops: performBulkInsert, performBulkUpsert
+- Query builders: buildUpsertQuery, buildUpsertConflictClause
+- Utilities: compareAndUpdateRecord, parseJSONArray
+- Struct: TableInfo consolidado
 
-🟡 80-95% SIMILAR: 12 funciones (~900 líneas) ← PRIORIDAD MEDIA
-   getActiveTables, syncIndexesAndConstraints, setupTableTarget*,
-   transferData*, updateStatus, processDeletesByPrimaryKey, etc.
+FUNCIONES RESTANTES (7) - Requieren arquitectura diferente:
+❌ findDeletedPrimaryKeys() - Usa MYSQL*/SQLHDBC específico
+❌ processDeletesByPrimaryKey() - Usa conexión específica
+❌ processUpdatesByPrimaryKey() - Usa conexión específica  
+❌ batchPreparerThread() - Usa métodos específicos
+❌ dataFetcherThread() - Usa MYSQL*/SQLHDBC específico
+❌ getPrimaryKeyColumns() - Usa API específica del engine
+❌ executeQuery*() - Específico de cada engine
 
-✅ ESPECÍFICO: 10 funciones (~600 líneas) ← Quedan en derivadas
-   MariaDB: getMariaDBConnection, executeQueryMariaDB
-   MSSQL: getMSSQLConnection, executeQueryMSSQL
-
-PLAN (12-18 horas):
-📋 FASE 1 (2-3h): Crear DatabaseToPostgresSync.h + mover 100% duplicados
-📋 FASE 2 (4-6h): Refactorizar MariaDBToPostgres hereda base
-📋 FASE 3 (4-6h): Refactorizar MSSQLToPostgres hereda base
-📋 FASE 4 (2-3h): Separar StreamingData.h + limpieza
-
-REDUCCIÓN: 7409 → ~4600 líneas (-38%, -2809 líneas)
+PARA CONSOLIDAR RESTANTES:
+- Crear IDatabaseConnection interface
+- Templates o void* para conexión genérica
+- Estimación: 1-2 semanas adicionales
+- NO URGENTE: Código actual funciona perfectamente
 
 ================================================================================
 
-🟡 PRIORIDAD MEDIA - Sync/StreamingData:
-=========================================
+✅ Separar StreamingData.h (AHORA POSIBLE):
+============================================
 1. Separar .h y .cpp (794 líneas en header)
-   - Problema: Todo en header ralentiza compilación
+   - ✅ DESBLOQUEADO: Static members ya están en .cpp
    - Solución: StreamingData.h (declaraciones) + StreamingData.cpp (impl)
-   - ⚠️  BLOQUEADO: Requiere PRIMERO consolidar MariaDB/MSSQL (header-only)
-   - Razón Técnica: MariaDBToPostgres.h y MSSQLToPostgres.h definen
-     variables estáticas (dataTypeMap, collationMap, metadataUpdateMutex)
-     que causan errores de "multiple definition" al separar StreamingData
-   - Beneficio: Compilación más rápida (cuando se complete consolidación)
+   - Beneficio: Compilación más rápida
+   - Estimación: 15-20 minutos
 
 ================================================================================
