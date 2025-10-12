@@ -57,6 +57,7 @@ add_executable(DataSync
     src/sync/DatabaseToPostgresSync.cpp
     src/sync/MariaDBToPostgres.cpp
     src/sync/MSSQLToPostgres.cpp
+    src/sync/StreamingData.cpp
 )
 
 # Configurar para que el ejecutable se genere en el directorio raíz
