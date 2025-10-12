@@ -1,0 +1,295 @@
+{
+  "data_categories": {
+    "schema_patterns": [
+      {
+        "patterns": ["analytics", "reports", "metrics", "logs"],
+        "category": "ANALYTICAL"
+      },
+      {
+        "patterns": ["master", "reference", "lookup"],
+        "category": "REFERENCE"
+      },
+      {
+        "patterns": ["transaction", "operational", "business"],
+        "category": "TRANSACTIONAL"
+      },
+      {
+        "patterns": ["sport", "betting", "bookmaker"],
+        "category": "SPORTS"
+      }
+    ],
+    "table_patterns": [
+      {
+        "patterns": [
+          "log",
+          "audit",
+          "history",
+          "archive",
+          "metrics",
+          "analytics",
+          "stats"
+        ],
+        "category": "ANALYTICAL"
+      },
+      {
+        "patterns": [
+          "ref",
+          "lookup",
+          "config",
+          "master",
+          "dictionary",
+          "catalog"
+        ],
+        "category": "REFERENCE"
+      },
+      {
+        "patterns": [
+          "customer",
+          "product",
+          "supplier",
+          "location",
+          "employee",
+          "user"
+        ],
+        "category": "MASTER_DATA"
+      },
+      {
+        "patterns": [
+          "session",
+          "workflow",
+          "process",
+          "state",
+          "status",
+          "queue"
+        ],
+        "category": "OPERATIONAL"
+      },
+      {
+        "patterns": [
+          "schedule",
+          "event",
+          "appointment",
+          "deadline",
+          "calendar"
+        ],
+        "category": "TEMPORAL"
+      },
+      {
+        "patterns": [
+          "coordinate",
+          "address",
+          "region",
+          "zone",
+          "location",
+          "geo"
+        ],
+        "category": "GEOSPATIAL"
+      },
+      {
+        "patterns": [
+          "account",
+          "budget",
+          "forecast",
+          "report",
+          "invoice",
+          "payment"
+        ],
+        "category": "FINANCIAL"
+      },
+      {
+        "patterns": ["gdpr", "sox", "pci", "regulation", "compliance"],
+        "category": "COMPLIANCE"
+      },
+      {
+        "patterns": [
+          "system",
+          "infrastructure",
+          "monitoring",
+          "alert",
+          "error"
+        ],
+        "category": "TECHNICAL"
+      },
+      {
+        "patterns": [
+          "sport",
+          "bet",
+          "betting",
+          "odds",
+          "match",
+          "game",
+          "team",
+          "player",
+          "league",
+          "tournament",
+          "championship",
+          "season",
+          "fixture",
+          "result",
+          "score",
+          "statistic",
+          "performance",
+          "ranking",
+          "standings",
+          "bookmaker",
+          "bookie",
+          "stake",
+          "wager",
+          "payout",
+          "winner",
+          "loser",
+          "draw",
+          "handicap",
+          "spread",
+          "over_under",
+          "live_bet",
+          "in_play",
+          "pre_match",
+          "outcome",
+          "event",
+          "competition",
+          "sportbook",
+          "sportsbook"
+        ],
+        "category": "SPORTS"
+      }
+    ],
+    "default": "TRANSACTIONAL"
+  },
+  "business_domains": {
+    "patterns": [
+      {
+        "keywords": ["user", "customer", "client", "profile", "preference"],
+        "domain": "CUSTOMER"
+      },
+      {
+        "keywords": [
+          "order",
+          "sale",
+          "transaction",
+          "deal",
+          "opportunity",
+          "quote"
+        ],
+        "domain": "SALES"
+      },
+      {
+        "keywords": ["campaign", "lead", "segment", "promotion", "marketing"],
+        "domain": "MARKETING"
+      },
+      {
+        "keywords": ["employee", "hr", "payroll", "benefit", "recruitment"],
+        "domain": "HR"
+      },
+      {
+        "keywords": ["product", "inventory", "stock", "warehouse", "catalog"],
+        "domain": "PRODUCT"
+      },
+      {
+        "keywords": ["finance", "accounting", "invoice", "payment", "budget"],
+        "domain": "FINANCE"
+      },
+      {
+        "keywords": ["support", "ticket", "issue", "complaint", "resolution"],
+        "domain": "SUPPORT"
+      },
+      {
+        "keywords": [
+          "shipment",
+          "delivery",
+          "logistics",
+          "tracking",
+          "carrier"
+        ],
+        "domain": "LOGISTICS"
+      },
+      {
+        "keywords": [
+          "sport",
+          "bet",
+          "betting",
+          "odds",
+          "match",
+          "game",
+          "team",
+          "player",
+          "tournament",
+          "bookmaker",
+          "stake",
+          "wager"
+        ],
+        "domain": "SPORTS"
+      }
+    ],
+    "default": "GENERAL"
+  },
+  "sensitivity_levels": {
+    "patterns": [
+      {
+        "keywords": [
+          "password",
+          "ssn",
+          "credit_card",
+          "financial",
+          "medical",
+          "health",
+          "salary",
+          "confidential"
+        ],
+        "level": "HIGHLY_SENSITIVE"
+      },
+      {
+        "keywords": [
+          "email",
+          "phone",
+          "address",
+          "name",
+          "personal",
+          "gdpr",
+          "pii"
+        ],
+        "level": "SENSITIVE"
+      },
+      {
+        "keywords": ["product", "price", "inventory", "internal", "business"],
+        "level": "INTERNAL"
+      }
+    ],
+    "default": "PUBLIC"
+  },
+  "data_classifications": {
+    "patterns": [
+      {
+        "keywords": [
+          "password",
+          "ssn",
+          "credit_card",
+          "bank_account",
+          "medical_record"
+        ],
+        "classification": "RESTRICTED"
+      },
+      {
+        "keywords": [
+          "financial",
+          "salary",
+          "revenue",
+          "confidential",
+          "proprietary"
+        ],
+        "classification": "CONFIDENTIAL"
+      },
+      {
+        "keywords": [
+          "internal",
+          "employee",
+          "customer",
+          "business",
+          "operational"
+        ],
+        "classification": "INTERNAL"
+      }
+    ],
+    "default": "PUBLIC"
+  }
+}

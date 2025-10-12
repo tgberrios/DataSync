@@ -42,6 +42,7 @@ add_executable(DataSync
     src/core/database_log_writer.cpp
     src/governance/DataGovernance.cpp
     src/governance/DataQuality.cpp
+    src/governance/data_classifier.cpp
     src/export/DDLExporter.cpp
     src/metrics/MetricsCollector.cpp
     src/utils/connection_utils.cpp

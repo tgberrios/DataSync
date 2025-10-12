@@ -65,6 +65,8 @@ private:
   // Helper functions
   void calculateQualityScore(QualityMetrics &metrics);
   std::string determineValidationStatus(const QualityMetrics &metrics);
+  bool tableExists(pqxx::work &txn, const std::string &schema,
+                   const std::string &table);
 };
 
 #endif // DATAQUALITY_H

@@ -67,6 +67,32 @@ inline bool containsIgnoreCase(std::string_view haystack,
   return it != haystack.end();
 }
 
+inline std::string sanitizeForSQL(const std::string &input) {
+  std::string cleaned = input;
+
+  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), ';'),
+                cleaned.end());
+  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '\''),
+                cleaned.end());
+  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '"'),
+                cleaned.end());
+  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '\n'),
+                cleaned.end());
+  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '\r'),
+                cleaned.end());
+  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '\t'),
+                cleaned.end());
+
+  cleaned = trim(cleaned);
+
+  if (cleaned.empty()) {
+    throw std::invalid_argument(
+        "Input is empty or contains only invalid characters: " + input);
+  }
+
+  return toLower(cleaned);
+}
+
 } // namespace StringUtils
 
 #endif

@@ -4,6 +4,7 @@
 #include "core/Config.h"
 #include "core/logger.h"
 #include "engines/database_engine.h"
+#include "utils/connection_utils.h"
 #include <memory>
 #include <sql.h>
 #include <sqlext.h>

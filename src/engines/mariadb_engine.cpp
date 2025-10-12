@@ -77,7 +77,12 @@ void MariaDBEngine::setConnectionTimeouts(MYSQL *conn) {
       ", net_write_timeout = " + std::to_string(timeout) +
       ", innodb_lock_wait_timeout = " + std::to_string(timeout) +
       ", lock_wait_timeout = " + std::to_string(timeout);
-  mysql_query(conn, query.c_str());
+
+  if (mysql_query(conn, query.c_str())) {
+    Logger::warning(LogCategory::DATABASE, "MariaDBEngine",
+                    "Failed to set connection timeouts: " +
+                        std::string(mysql_error(conn)));
+  }
 }
 
 std::vector<std::vector<std::string>>

@@ -148,18 +148,8 @@ MSSQLEngine::executeQuery(SQLHDBC dbc, const std::string &query) {
 
 std::string
 MSSQLEngine::extractDatabaseName(const std::string &connectionString) {
-  std::istringstream ss(connectionString);
-  std::string token;
-  while (std::getline(ss, token, ';')) {
-    auto pos = token.find('=');
-    if (pos == std::string::npos)
-      continue;
-    std::string key = token.substr(0, pos);
-    std::string value = token.substr(pos + 1);
-    if (key == "DATABASE")
-      return value;
-  }
-  return "master";
+  auto params = ConnectionStringParser::parse(connectionString);
+  return params ? params->db : "master";
 }
 
 std::vector<CatalogTableInfo> MSSQLEngine::discoverTables() {

@@ -2,38 +2,6 @@
 #include "utils/string_utils.h"
 #include <algorithm>
 
-std::string cleanSchemaNameForPostgres(const std::string &schemaName) {
-  std::string cleaned = schemaName;
-
-  // Only remove truly problematic characters for SQL injection
-  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), ';'),
-                cleaned.end());
-  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '\''),
-                cleaned.end());
-  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '"'),
-                cleaned.end());
-  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '\n'),
-                cleaned.end());
-  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '\r'),
-                cleaned.end());
-  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '\t'),
-                cleaned.end());
-
-  // Trim leading/trailing whitespace
-  cleaned.erase(0, cleaned.find_first_not_of(" \t"));
-  cleaned.erase(cleaned.find_last_not_of(" \t") + 1);
-
-  // If empty after cleaning, throw error instead of using default
-  if (cleaned.empty()) {
-    throw std::invalid_argument(
-        "Schema name is empty or contains only invalid characters: " +
-        schemaName);
-  }
-
-  // Lowercase for PostgreSQL identifier standardization
-  return StringUtils::toLower(cleaned);
-}
-
 bool DataQuality::validateTable(pqxx::connection &conn,
                                 const std::string &schema,
                                 const std::string &table,
@@ -66,10 +34,8 @@ bool DataQuality::validateTable(pqxx::connection &conn,
 
   try {
     QualityMetrics metrics;
-    std::string lowerSchema = cleanSchemaNameForPostgres(schema);
-    std::string lowerTable = table;
-    std::transform(lowerTable.begin(), lowerTable.end(), lowerTable.begin(),
-                   ::tolower);
+    std::string lowerSchema = StringUtils::sanitizeForSQL(schema);
+    std::string lowerTable = StringUtils::toLower(table);
     metrics.schema_name = lowerSchema;
     metrics.table_name = lowerTable;
     metrics.source_db_engine = engine;
@@ -94,14 +60,21 @@ bool DataQuality::validateTable(pqxx::connection &conn,
   }
 }
 
+bool DataQuality::tableExists(pqxx::work &txn, const std::string &schema,
+                              const std::string &table) {
+  auto result =
+      txn.exec("SELECT COUNT(*) FROM information_schema.tables "
+               "WHERE table_schema = " +
+               txn.quote(schema) + " AND table_name = " + txn.quote(table));
+  return result[0][0].as<int>() > 0;
+}
+
 DataQuality::QualityMetrics
 DataQuality::collectMetrics(pqxx::connection &conn, const std::string &schema,
                             const std::string &table) {
   QualityMetrics metrics;
-  std::string lowerSchema = cleanSchemaNameForPostgres(schema);
-  std::string lowerTable = table;
-  std::transform(lowerTable.begin(), lowerTable.end(), lowerTable.begin(),
-                 ::tolower);
+  std::string lowerSchema = StringUtils::sanitizeForSQL(schema);
+  std::string lowerTable = StringUtils::toLower(table);
   metrics.schema_name = lowerSchema;
   metrics.table_name = lowerTable;
 
@@ -162,7 +135,8 @@ bool DataQuality::checkDataTypes(pqxx::connection &conn,
       std::string type = row[1].as<std::string>();
 
       // Check for type-specific issues with improved performance
-      std::string cleanSchema = cleanSchemaNameForPostgres(metrics.schema_name);
+      std::string cleanSchema =
+          StringUtils::sanitizeForSQL(metrics.schema_name);
 
       // Use sampling for large tables to improve performance
       std::string typeQuery;
@@ -227,14 +201,9 @@ bool DataQuality::checkNullCounts(pqxx::connection &conn,
     pqxx::work txn(conn);
 
     // Check if table exists first
-    std::string cleanSchema = cleanSchemaNameForPostgres(metrics.schema_name);
-    auto tableExists =
-        txn.exec("SELECT COUNT(*) FROM information_schema.tables "
-                 "WHERE table_schema = " +
-                 txn.quote(cleanSchema) +
-                 " AND table_name = " + txn.quote(metrics.table_name));
+    std::string cleanSchema = StringUtils::sanitizeForSQL(metrics.schema_name);
 
-    if (tableExists[0][0].as<int>() == 0) {
+    if (!tableExists(txn, cleanSchema, metrics.table_name)) {
       metrics.total_rows = 0;
       metrics.null_count = 0;
       txn.commit();
@@ -302,14 +271,9 @@ bool DataQuality::checkDuplicates(pqxx::connection &conn,
     pqxx::work txn(conn);
 
     // Check if table exists first
-    std::string cleanSchema = cleanSchemaNameForPostgres(metrics.schema_name);
-    auto tableExists =
-        txn.exec("SELECT COUNT(*) FROM information_schema.tables "
-                 "WHERE table_schema = " +
-                 txn.quote(cleanSchema) +
-                 " AND table_name = " + txn.quote(metrics.table_name));
+    std::string cleanSchema = StringUtils::sanitizeForSQL(metrics.schema_name);
 
-    if (tableExists[0][0].as<int>() == 0) {
+    if (!tableExists(txn, cleanSchema, metrics.table_name)) {
       metrics.duplicate_count = 0;
       txn.commit();
       return true;

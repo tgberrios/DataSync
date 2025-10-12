@@ -3,7 +3,9 @@
 
 #include "core/Config.h"
 #include "core/logger.h"
+#include "governance/data_classifier.h"
 #include <map>
+#include <memory>
 #include <pqxx/pqxx>
 #include <string>
 #include <vector>
@@ -61,7 +63,7 @@ struct TableMetadata {
 
 class DataGovernance {
 public:
-  DataGovernance() = default;
+  DataGovernance();
   ~DataGovernance() = default;
 
   void initialize();
@@ -69,6 +71,7 @@ public:
   void generateReport();
 
 private:
+  std::unique_ptr<DataClassifier> classifier_;
   void createGovernanceTable();
   std::vector<TableMetadata> discoverTables();
   TableMetadata extractTableMetadata(const std::string &schema_name,
