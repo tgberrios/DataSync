@@ -6,6 +6,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include_directories(
     ./include
+    ./include/catalog
+    ./include/engines
+    ./include/sync
+    ./include/utils
+    ./include/core
+    ./include/governance
+    ./include/export
+    ./include/metrics
+    ./include/third_party
     /usr/local/include
     /usr/include/mariadb
     /usr/include/mariadb/mysql
@@ -24,13 +33,21 @@ link_directories(
 )
 
 add_executable(DataSync 
-    src/main.cpp 
-    src/Config.cpp 
-    src/logger.cpp 
-    src/DataGovernance.cpp 
-    src/DDLExporter.cpp 
-    src/MetricsCollector.cpp 
-    src/DataQuality.cpp
+    src/main.cpp
+    src/core/Config.cpp
+    src/core/logger.cpp
+    src/governance/DataGovernance.cpp
+    src/governance/DataQuality.cpp
+    src/export/DDLExporter.cpp
+    src/metrics/MetricsCollector.cpp
+    src/utils/connection_utils.cpp
+    src/utils/cluster_name_resolver.cpp
+    src/engines/mariadb_engine.cpp
+    src/engines/mssql_engine.cpp
+    src/engines/postgres_engine.cpp
+    src/catalog/metadata_repository.cpp
+    src/catalog/catalog_cleaner.cpp
+    src/catalog/catalog_manager.cpp
 )
 
 # Configurar para que el ejecutable se genere en el directorio raíz
@@ -50,5 +67,33 @@ target_link_libraries(DataSync
     odbc
     mongoc-1.0
     bson-1.0
+    stdc++fs
+)
+
+add_executable(test_catalog
+    tests/catalog/test_catalog.cpp
+    src/core/Config.cpp
+    src/core/logger.cpp
+    src/utils/connection_utils.cpp
+    src/utils/cluster_name_resolver.cpp
+    src/engines/mariadb_engine.cpp
+    src/engines/mssql_engine.cpp
+    src/engines/postgres_engine.cpp
+    src/catalog/metadata_repository.cpp
+    src/catalog/catalog_cleaner.cpp
+    src/catalog/catalog_manager.cpp
+)
+
+set_target_properties(test_catalog PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
+target_link_libraries(test_catalog
+    mariadb
+    mysqlclient
+    pqxx
+    pq
+    pthread
+    odbc
     stdc++fs
 )

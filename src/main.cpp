@@ -1,5 +1,5 @@
-#include "Config.h"
-#include "StreamingData.h"
+#include "core/Config.h"
+#include "sync/StreamingData.h"
 #include <iostream>
 
 int main() {
