@@ -58,11 +58,36 @@ add_executable(DataSync
     src/sync/MariaDBToPostgres.cpp
     src/sync/MSSQLToPostgres.cpp
     src/sync/StreamingData.cpp
+    src/sync/TableProcessorThreadPool.cpp
 )
 
 # Configurar para que el ejecutable se genere en el directorio raíz
 set_target_properties(DataSync PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
+# Test ThreadPool
+add_executable(test_threadpool
+    test_threadpool_simple.cpp
+    src/core/Config.cpp
+    src/core/database_config.cpp
+    src/core/sync_config.cpp
+    src/core/logger.cpp
+    src/core/file_log_writer.cpp
+    src/core/database_log_writer.cpp
+    src/sync/TableProcessorThreadPool.cpp
+)
+
+set_target_properties(test_threadpool PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
+target_link_libraries(test_threadpool
+    mysqlclient
+    odbc
+    pqxx
+    pq
+    pthread
 )
 
 # Add JSON library
