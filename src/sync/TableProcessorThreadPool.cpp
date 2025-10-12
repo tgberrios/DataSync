@@ -8,6 +8,8 @@ TableProcessorThreadPool::TableProcessorThreadPool(size_t numWorkers) {
                         std::to_string(numWorkers));
   }
 
+  startTime_ = std::chrono::steady_clock::now();
+
   workers_.reserve(numWorkers);
   for (size_t i = 0; i < numWorkers; ++i) {
     workers_.emplace_back(&TableProcessorThreadPool::workerThread, this, i);
@@ -76,6 +78,7 @@ void TableProcessorThreadPool::submitTask(
   }
 
   tasks_.push(TableTask{table, std::move(processor)});
+  totalTasksSubmitted_++;
 }
 
 void TableProcessorThreadPool::waitForCompletion() {
@@ -104,6 +107,11 @@ void TableProcessorThreadPool::shutdown() {
   Logger::info(LogCategory::TRANSFER, "TableProcessorThreadPool",
                "Shutting down thread pool...");
 
+  monitoringEnabled_ = false;
+  if (monitoringThread_.joinable()) {
+    monitoringThread_.join();
+  }
+
   tasks_.finish();
 
   for (auto &worker : workers_) {
@@ -114,5 +122,62 @@ void TableProcessorThreadPool::shutdown() {
 
   Logger::info(LogCategory::TRANSFER, "TableProcessorThreadPool",
                "Thread pool shut down successfully");
+}
+
+void TableProcessorThreadPool::enableMonitoring(bool enable) {
+  if (enable && !monitoringEnabled_.load()) {
+    monitoringEnabled_ = true;
+    monitoringThread_ =
+        std::thread(&TableProcessorThreadPool::monitoringThreadFunc, this);
+    Logger::info(LogCategory::TRANSFER, "TableProcessorThreadPool",
+                 "Monitoring enabled - reporting every 10 seconds");
+  } else if (!enable && monitoringEnabled_.load()) {
+    monitoringEnabled_ = false;
+    if (monitoringThread_.joinable()) {
+      monitoringThread_.join();
+    }
+    Logger::info(LogCategory::TRANSFER, "TableProcessorThreadPool",
+                 "Monitoring disabled");
+  }
+}
+
+void TableProcessorThreadPool::monitoringThreadFunc() {
+  std::this_thread::sleep_for(std::chrono::seconds(5));
+
+  while (monitoringEnabled_.load() && !shutdown_.load()) {
+    size_t active = activeWorkers_.load();
+    size_t completed = completedTasks_.load();
+    size_t failed = failedTasks_.load();
+    size_t pending = tasks_.size();
+    size_t total = totalWorkers();
+    double speed = getTasksPerSecond();
+
+    if (completed > 0 || active > 0) {
+      Logger::info(LogCategory::TRANSFER,
+                   "═══ ThreadPool Monitor ═══ Active: " +
+                       std::to_string(active) + "/" + std::to_string(total) +
+                       " | Completed: " + std::to_string(completed) + "/" +
+                       std::to_string(totalTasksSubmitted_) +
+                       " | Failed: " + std::to_string(failed) +
+                       " | Pending: " + std::to_string(pending) +
+                       " | Speed: " + std::to_string(static_cast<int>(speed)) +
+                       " tbl/s");
+    }
+
+    std::this_thread::sleep_for(std::chrono::seconds(10));
+  }
+}
+
+double TableProcessorThreadPool::getTasksPerSecond() const {
+  auto now = std::chrono::steady_clock::now();
+  auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now -
+                                                                   startTime_)
+                     .count();
+
+  if (elapsed == 0)
+    return 0.0;
+
+  return static_cast<double>(completedTasks_.load()) /
+         static_cast<double>(elapsed);
 }
 
