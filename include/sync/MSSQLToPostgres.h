@@ -2,47 +2,26 @@
 #define MSSQLTOPOSTGRES_H
 
 #include "catalog/catalog_manager.h"
-#include "core/Config.h"
-#include "core/logger.h"
 #include "engines/database_engine.h"
-#include "sync/ParallelProcessing.h"
+#include "sync/DatabaseToPostgresSync.h"
 
 #include <algorithm>
-#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <iostream>
-#include <mutex>
 #include <pqxx/pqxx>
 #include <set>
 #include <sql.h>
 #include <sqlext.h>
 #include <sstream>
 #include <string>
-#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 using namespace ParallelProcessing;
 
-class MSSQLToPostgres {
-private:
-  // Parallel processing infrastructure
-  std::atomic<bool> parallelProcessingActive{false};
-  std::vector<std::thread> parallelThreads;
-
-  // Thread-safe queues
-  ThreadSafeQueue<DataChunk> rawDataQueue;
-  ThreadSafeQueue<PreparedBatch> preparedBatchQueue;
-  ThreadSafeQueue<ProcessedResult> resultQueue;
-
-  // Configuration for parallel processing
-  static constexpr size_t MAX_QUEUE_SIZE = 10;
-  static constexpr size_t MAX_BATCH_PREPARERS = 4;
-  static constexpr size_t MAX_BATCH_INSERTERS = 4;
-  static constexpr size_t BATCH_PREPARATION_TIMEOUT_MS = 5000;
-
+class MSSQLToPostgres : public DatabaseToPostgresSync {
 public:
   MSSQLToPostgres() = default;
   ~MSSQLToPostgres() { shutdownParallelProcessing(); }
@@ -50,21 +29,8 @@ public:
   static std::unordered_map<std::string, std::string> dataTypeMap;
   static std::unordered_map<std::string, std::string> collationMap;
 
-  struct TableInfo {
-    std::string schema_name;
-    std::string table_name;
-    std::string cluster_name;
-    std::string db_engine;
-    std::string connection_string;
-    std::string last_sync_time;
-    std::string last_sync_column;
-    std::string status;
-    std::string last_offset;
-    std::string last_processed_pk;
-    std::string pk_strategy;
-    std::string pk_columns;
-    bool has_pk;
-  };
+  std::string cleanValueForPostgres(const std::string &value,
+                                    const std::string &columnType) override;
 
   SQLHDBC getMSSQLConnection(const std::string &connectionString) {
     // Validate connection string
@@ -1728,50 +1694,6 @@ public:
     }
   }
 
-  void startParallelProcessing() {
-    if (parallelProcessingActive.load()) {
-      shutdownParallelProcessing();
-    }
-
-    parallelProcessingActive.store(true);
-
-    // Clear and reset queues
-    rawDataQueue.clear();
-    preparedBatchQueue.clear();
-    resultQueue.clear();
-
-    // Reset shutdown flags
-    rawDataQueue.reset_queue();
-    preparedBatchQueue.reset_queue();
-    resultQueue.reset_queue();
-
-    Logger::info(LogCategory::TRANSFER, "Parallel processing started");
-  }
-
-  void shutdownParallelProcessing() {
-    if (!parallelProcessingActive.load()) {
-      return;
-    }
-
-    parallelProcessingActive.store(false);
-
-    // Shutdown queues
-    rawDataQueue.shutdown_queue();
-    preparedBatchQueue.shutdown_queue();
-    resultQueue.shutdown_queue();
-
-    // Wait for all threads to complete
-    for (auto &thread : parallelThreads) {
-      if (thread.joinable()) {
-        thread.join();
-      }
-    }
-    parallelThreads.clear();
-
-    Logger::info(LogCategory::TRANSFER,
-                 "Parallel processing shutdown completed");
-  }
-
   void dataFetcherThread(SQLHDBC mssqlConn, const TableInfo &table,
                          const std::vector<std::string> &columnNames,
                          const std::vector<std::string> &columnTypes) {
@@ -2495,79 +2417,6 @@ public:
     }
   }
 
-  bool compareAndUpdateRecord(
-      pqxx::connection &pgConn, const std::string &schemaName,
-      const std::string &tableName, const std::vector<std::string> &newRecord,
-      const std::vector<std::vector<std::string>> &columnNames,
-      const std::string &whereClause) {
-    try {
-      // Obtener el registro actual de PostgreSQL
-      std::string lowerTableName = tableName;
-      std::transform(lowerTableName.begin(), lowerTableName.end(),
-                     lowerTableName.begin(), ::tolower);
-      std::string selectQuery = "SELECT * FROM \"" + schemaName + "\".\"" +
-                                lowerTableName + "\" WHERE " + whereClause;
-
-      pqxx::work txn(pgConn);
-      auto result = txn.exec(selectQuery);
-      txn.commit();
-
-      if (result.empty()) {
-        return false; // No existe el registro
-      }
-
-      const auto &currentRow = result[0];
-
-      // Comparar cada columna (excepto primary keys)
-      std::vector<std::string> updateFields;
-      bool hasChanges = false;
-
-      for (size_t i = 0; i < columnNames.size(); ++i) {
-        std::string columnName = columnNames[i][0];
-        std::transform(columnName.begin(), columnName.end(), columnName.begin(),
-                       ::tolower);
-        std::string newValue = newRecord[i];
-
-        // Obtener valor actual de PostgreSQL
-        std::string currentValue =
-            currentRow[i].is_null() ? "" : currentRow[i].as<std::string>();
-
-        // Comparar valores (normalizar para comparación)
-        if (currentValue != newValue) {
-          updateFields.push_back(
-              "\"" + columnName + "\" = " +
-              (newValue.empty() ? "NULL" : "'" + escapeSQL(newValue) + "'"));
-          hasChanges = true;
-        }
-      }
-
-      if (hasChanges) {
-        // Ejecutar UPDATE
-        std::string updateQuery =
-            "UPDATE \"" + schemaName + "\".\"" + lowerTableName + "\" SET ";
-        for (size_t i = 0; i < updateFields.size(); ++i) {
-          if (i > 0)
-            updateQuery += ", ";
-          updateQuery += updateFields[i];
-        }
-        updateQuery += " WHERE " + whereClause;
-
-        pqxx::work updateTxn(pgConn);
-        updateTxn.exec(updateQuery);
-        updateTxn.commit();
-
-        return true;
-      }
-
-      return false; // No había cambios
-
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::TRANSFER, "compareAndUpdateRecord",
-                    "Error comparing/updating record: " +
-                        std::string(e.what()));
-      return false;
-    }
-  }
 
 private:
   std::vector<std::string> getPrimaryKeyColumns(SQLHDBC mssqlConn,
@@ -2688,211 +2537,7 @@ private:
     return deletedPKs;
   }
 
-  size_t deleteRecordsByPrimaryKey(
-      pqxx::connection &pgConn, const std::string &lowerSchemaName,
-      const std::string &table_name,
-      const std::vector<std::vector<std::string>> &deletedPKs,
-      const std::vector<std::string> &pkColumns) {
 
-    if (deletedPKs.empty() || pkColumns.empty()) {
-      return 0;
-    }
-
-    size_t deletedCount = 0;
-
-    try {
-      pqxx::work txn(pgConn);
-
-      // Construir query DELETE
-      std::string deleteQuery = "DELETE FROM \"" + lowerSchemaName + "\".\"" +
-                                table_name + "\" WHERE (";
-
-      for (size_t i = 0; i < deletedPKs.size(); ++i) {
-        if (i > 0)
-          deleteQuery += " OR ";
-        deleteQuery += "(";
-        for (size_t j = 0; j < pkColumns.size(); ++j) {
-          if (j > 0)
-            deleteQuery += " AND ";
-          std::string value = deletedPKs[i][j];
-          if (value == "NULL") {
-            deleteQuery += "\"" + pkColumns[j] + "\" IS NULL";
-          } else {
-            deleteQuery +=
-                "\"" + pkColumns[j] + "\" = '" + escapeSQL(value) + "'";
-          }
-        }
-        deleteQuery += ")";
-      }
-      deleteQuery += ");";
-
-      // Ejecutar DELETE
-      auto result = txn.exec(deleteQuery);
-      deletedCount = result.affected_rows();
-
-      txn.commit();
-
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::TRANSFER, "deleteRecordsByPrimaryKey",
-                    "Error deleting records: " + std::string(e.what()));
-    }
-
-    return deletedCount;
-  }
-
-  // CURSOR-BASED PAGINATION HELPER FUNCTIONS
-  std::string getPKStrategyFromCatalog(pqxx::connection &pgConn,
-                                       const std::string &schema_name,
-                                       const std::string &table_name) {
-    try {
-      pqxx::work txn(pgConn);
-      auto result = txn.exec(
-          "SELECT pk_strategy FROM metadata.catalog WHERE schema_name='" +
-          escapeSQL(schema_name) + "' AND table_name='" +
-          escapeSQL(table_name) + "';");
-      txn.commit();
-
-      if (!result.empty() && !result[0][0].is_null()) {
-        return result[0][0].as<std::string>();
-      }
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::TRANSFER, "getPKStrategyFromCatalog",
-                    "Error getting PK strategy: " + std::string(e.what()));
-    }
-    return "OFFSET";
-  }
-
-  std::vector<std::string>
-  getPKColumnsFromCatalog(pqxx::connection &pgConn,
-                          const std::string &schema_name,
-                          const std::string &table_name) {
-    try {
-      pqxx::work txn(pgConn);
-      auto result = txn.exec(
-          "SELECT pk_columns FROM metadata.catalog WHERE schema_name='" +
-          escapeSQL(schema_name) + "' AND table_name='" +
-          escapeSQL(table_name) + "';");
-      txn.commit();
-
-      if (!result.empty() && !result[0][0].is_null()) {
-        std::string pkColumnsJson = result[0][0].as<std::string>();
-        return parseJSONArray(pkColumnsJson);
-      }
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::TRANSFER, "getPKColumnsFromCatalog",
-                    "Error getting PK columns: " + std::string(e.what()));
-    }
-    return {};
-  }
-
-  std::string getLastProcessedPKFromCatalog(pqxx::connection &pgConn,
-                                            const std::string &schema_name,
-                                            const std::string &table_name) {
-    try {
-      pqxx::work txn(pgConn);
-      auto result = txn.exec(
-          "SELECT last_processed_pk FROM metadata.catalog WHERE schema_name='" +
-          escapeSQL(schema_name) + "' AND table_name='" +
-          escapeSQL(table_name) + "';");
-      txn.commit();
-
-      if (!result.empty() && !result[0][0].is_null()) {
-        return result[0][0].as<std::string>();
-      }
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::TRANSFER, "getLastProcessedPKFromCatalog",
-                    "Error getting last processed PK: " +
-                        std::string(e.what()));
-    }
-    return "";
-  }
-
-  std::vector<std::string> parseJSONArray(const std::string &jsonArray) {
-    std::vector<std::string> result;
-    if (jsonArray.empty() || jsonArray == "[]")
-      return result;
-
-    std::string content = jsonArray;
-    if (content.front() == '[')
-      content = content.substr(1);
-    if (content.back() == ']')
-      content = content.substr(0, content.length() - 1);
-
-    std::istringstream ss(content);
-    std::string item;
-    while (std::getline(ss, item, ',')) {
-      item = item.substr(item.find_first_not_of(" \t\""));
-      item = item.substr(0, item.find_last_not_of(" \t\"") + 1);
-      if (!item.empty()) {
-        result.push_back(item);
-      }
-    }
-    return result;
-  }
-
-  void updateLastProcessedPK(pqxx::connection &pgConn,
-                             const std::string &schema_name,
-                             const std::string &table_name,
-                             const std::string &lastPK) {
-    try {
-      pqxx::work txn(pgConn);
-      txn.exec("UPDATE metadata.catalog SET last_processed_pk='" +
-               escapeSQL(lastPK) + "' WHERE schema_name='" +
-               escapeSQL(schema_name) + "' AND table_name='" +
-               escapeSQL(table_name) + "';");
-      txn.commit();
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::TRANSFER, "updateLastProcessedPK",
-                    "Error updating last processed PK: " +
-                        std::string(e.what()));
-    }
-  }
-
-  std::string
-  getLastPKFromResults(const std::vector<std::vector<std::string>> &results,
-                       const std::vector<std::string> &pkColumns,
-                       const std::vector<std::string> &columnNames) {
-    if (results.empty())
-      return "";
-
-    const auto &lastRow = results.back();
-    std::string lastPK;
-
-    for (size_t i = 0; i < pkColumns.size(); ++i) {
-      if (i > 0)
-        lastPK += "|";
-
-      // Find the index of this PK column in the results
-      size_t pkIndex = 0;
-      for (size_t j = 0; j < columnNames.size(); ++j) {
-        if (columnNames[j] == pkColumns[i]) {
-          pkIndex = j;
-          break;
-        }
-      }
-
-      if (pkIndex < lastRow.size()) {
-        lastPK += lastRow[pkIndex];
-      }
-    }
-
-    return lastPK;
-  }
-
-  std::vector<std::string> parseLastPK(const std::string &lastPK) {
-    std::vector<std::string> result;
-    if (lastPK.empty())
-      return result;
-
-    std::istringstream ss(lastPK);
-    std::string item;
-    while (std::getline(ss, item, '|')) {
-      if (!item.empty()) {
-        result.push_back(item);
-      }
-    }
-    return result;
-  }
 
   void performBulkUpsert(pqxx::connection &pgConn,
                          const std::vector<std::vector<std::string>> &results,
@@ -3044,272 +2689,9 @@ private:
     }
   }
 
-  void performBulkInsert(pqxx::connection &pgConn,
-                         const std::vector<std::vector<std::string>> &results,
-                         const std::vector<std::string> &columnNames,
-                         const std::vector<std::string> &columnTypes,
-                         const std::string &lowerSchemaName,
-                         const std::string &tableName) {
-    try {
-      std::string lowerTableName = tableName;
-      std::transform(lowerTableName.begin(), lowerTableName.end(),
-                     lowerTableName.begin(), ::tolower);
-      std::string insertQuery = "INSERT INTO \"" + lowerSchemaName + "\".\"" +
-                                lowerTableName + "\" (";
 
-      // Construir lista de columnas
-      for (size_t i = 0; i < columnNames.size(); ++i) {
-        if (i > 0)
-          insertQuery += ", ";
-        std::string col = columnNames[i];
-        std::transform(col.begin(), col.end(), col.begin(), ::tolower);
-        insertQuery += "\"" + col + "\"";
-      }
-      insertQuery += ") VALUES ";
 
-      pqxx::work txn(pgConn);
-      txn.exec("SET statement_timeout = '600s'");
 
-      // Procesar en batches
-      const size_t BATCH_SIZE = SyncConfig::getChunkSize();
-      size_t totalProcessed = 0;
-
-      for (size_t batchStart = 0; batchStart < results.size();
-           batchStart += BATCH_SIZE) {
-        size_t batchEnd = std::min(batchStart + BATCH_SIZE, results.size());
-
-        std::string batchQuery = insertQuery;
-        std::vector<std::string> values;
-
-        for (size_t i = batchStart; i < batchEnd; ++i) {
-          const auto &row = results[i];
-          if (row.size() != columnNames.size())
-            continue;
-
-          std::string rowValues = "(";
-          for (size_t j = 0; j < row.size(); ++j) {
-            if (j > 0)
-              rowValues += ", ";
-
-            if (row[j] == "NULL" || row[j].empty()) {
-              rowValues += "NULL";
-            } else {
-              std::string cleanValue =
-                  cleanValueForPostgres(row[j], columnTypes[j]);
-              rowValues += "'" + escapeSQL(cleanValue) + "'";
-            }
-          }
-          rowValues += ")";
-          values.push_back(rowValues);
-        }
-
-        if (!values.empty()) {
-          batchQuery += values[0];
-          for (size_t i = 1; i < values.size(); ++i) {
-            batchQuery += ", " + values[i];
-          }
-          batchQuery += ";";
-
-          txn.exec(batchQuery);
-          totalProcessed += values.size();
-        }
-      }
-
-      txn.commit();
-
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::TRANSFER, "performBulkInsert",
-                    "Error in bulk insert: " + std::string(e.what()));
-      throw;
-    }
-  }
-
-  std::vector<std::string>
-  getPrimaryKeyColumnsFromPostgres(pqxx::connection &pgConn,
-                                   const std::string &schemaName,
-                                   const std::string &tableName) {
-    std::vector<std::string> pkColumns;
-
-    try {
-      pqxx::work txn(pgConn);
-      std::string query = "SELECT kcu.column_name "
-                          "FROM information_schema.table_constraints tc "
-                          "JOIN information_schema.key_column_usage kcu "
-                          "ON tc.constraint_name = kcu.constraint_name "
-                          "AND tc.table_schema = kcu.table_schema "
-                          "WHERE tc.constraint_type = 'PRIMARY KEY' "
-                          "AND tc.table_schema = '" +
-                          schemaName +
-                          "' "
-                          "AND tc.table_name = '" +
-                          tableName +
-                          "' "
-                          "ORDER BY kcu.ordinal_position;";
-
-      auto results = txn.exec(query);
-      txn.commit();
-
-      for (const auto &row : results) {
-        if (!row[0].is_null()) {
-          std::string colName = row[0].as<std::string>();
-          std::transform(colName.begin(), colName.end(), colName.begin(),
-                         ::tolower);
-          pkColumns.push_back(colName);
-        }
-      }
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::TRANSFER, "getPrimaryKeyColumnsFromPostgres",
-                    "Error getting PK columns: " + std::string(e.what()));
-    }
-
-    return pkColumns;
-  }
-
-  std::string buildUpsertQuery(const std::vector<std::string> &columnNames,
-                               const std::vector<std::string> &pkColumns,
-                               const std::string &schemaName,
-                               const std::string &tableName) {
-    std::string query =
-        "INSERT INTO \"" + schemaName + "\".\"" + tableName + "\" (";
-
-    // Lista de columnas
-    for (size_t i = 0; i < columnNames.size(); ++i) {
-      if (i > 0)
-        query += ", ";
-      query += "\"" + columnNames[i] + "\"";
-    }
-    query += ") VALUES ";
-
-    return query;
-  }
-
-  std::string
-  buildUpsertConflictClause(const std::vector<std::string> &columnNames,
-                            const std::vector<std::string> &pkColumns) {
-    std::string conflictClause = " ON CONFLICT (";
-
-    for (size_t i = 0; i < pkColumns.size(); ++i) {
-      if (i > 0)
-        conflictClause += ", ";
-      conflictClause += "\"" + pkColumns[i] + "\"";
-    }
-    conflictClause += ") DO UPDATE SET ";
-
-    // Construir SET clause para UPDATE
-    for (size_t i = 0; i < columnNames.size(); ++i) {
-      if (i > 0)
-        conflictClause += ", ";
-      conflictClause +=
-          "\"" + columnNames[i] + "\" = EXCLUDED.\"" + columnNames[i] + "\"";
-    }
-
-    return conflictClause;
-  }
-
-  std::string cleanValueForPostgres(const std::string &value,
-                                    const std::string &columnType) {
-    std::string cleanValue = value;
-    std::string upperType = columnType;
-    std::transform(upperType.begin(), upperType.end(), upperType.begin(),
-                   ::toupper);
-
-    // Detectar valores NULL de MSSQL - SIMPLIFICADO
-    bool isNull =
-        (cleanValue.empty() || cleanValue == "NULL" || cleanValue == "null" ||
-         cleanValue == "\\N" || cleanValue == "\\0" || cleanValue == "0" ||
-         cleanValue.find("0000-") != std::string::npos ||
-         cleanValue.find("1900-01-01") != std::string::npos ||
-         cleanValue.find("1970-01-01") != std::string::npos);
-
-    // Limpiar caracteres de control y caracteres problemáticos
-    for (char &c : cleanValue) {
-      if (static_cast<unsigned char>(c) > 127 || c < 32) {
-        isNull = true;
-        break;
-      }
-    }
-
-    // Para fechas, cualquier valor que no sea una fecha válida = NULL
-    if (upperType.find("TIMESTAMP") != std::string::npos ||
-        upperType.find("DATETIME") != std::string::npos ||
-        upperType.find("DATE") != std::string::npos) {
-      if (cleanValue.length() < 10 ||
-          cleanValue.find("-") == std::string::npos ||
-          cleanValue.find("0000") != std::string::npos) {
-        isNull = true;
-      } else {
-        // Validación específica para fechas inválidas como "1989-09-00"
-        if (cleanValue.find("-00") != std::string::npos ||
-            cleanValue.find("-00 ") != std::string::npos ||
-            cleanValue.find(" 00:00:00") != std::string::npos) {
-          Logger::warning(
-              LogCategory::TRANSFER, "cleanValueForPostgres",
-              "Invalid date detected (contains -00), converting to NULL: " +
-                  cleanValue);
-          isNull = true;
-        }
-      }
-    }
-
-    // Si es NULL, generar valor por defecto en lugar de NULL
-    if (isNull) {
-      if (upperType.find("INTEGER") != std::string::npos ||
-          upperType.find("BIGINT") != std::string::npos ||
-          upperType.find("SMALLINT") != std::string::npos) {
-        return "0"; // Valor por defecto para enteros
-      } else if (upperType.find("REAL") != std::string::npos ||
-                 upperType.find("FLOAT") != std::string::npos ||
-                 upperType.find("DOUBLE") != std::string::npos ||
-                 upperType.find("NUMERIC") != std::string::npos) {
-        return "0.0"; // Valor por defecto para números decimales
-      } else if (upperType.find("VARCHAR") != std::string::npos ||
-                 upperType.find("TEXT") != std::string::npos ||
-                 upperType.find("CHAR") != std::string::npos) {
-        return "DEFAULT"; // Valor por defecto para texto
-      } else if (upperType.find("TIMESTAMP") != std::string::npos ||
-                 upperType.find("DATETIME") != std::string::npos) {
-        return "1970-01-01 00:00:00"; // Valor por defecto para fechas
-      } else if (upperType.find("DATE") != std::string::npos) {
-        return "1970-01-01"; // Valor por defecto para fechas
-      } else if (upperType.find("TIME") != std::string::npos) {
-        return "00:00:00"; // Valor por defecto para tiempo
-      } else if (upperType.find("BOOLEAN") != std::string::npos ||
-                 upperType.find("BOOL") != std::string::npos) {
-        return "false"; // Valor por defecto para booleanos
-      } else {
-        return "DEFAULT"; // Valor por defecto genérico
-      }
-    }
-
-    // Limpiar caracteres de control restantes
-    cleanValue.erase(std::remove_if(cleanValue.begin(), cleanValue.end(),
-                                    [](unsigned char c) {
-                                      return c < 32 && c != 9 && c != 10 &&
-                                             c != 13;
-                                    }),
-                     cleanValue.end());
-
-    // Manejar tipos específicos
-    if (upperType.find("BOOLEAN") != std::string::npos ||
-        upperType.find("BOOL") != std::string::npos) {
-      if (cleanValue == "N" || cleanValue == "0" || cleanValue == "false" ||
-          cleanValue == "FALSE") {
-        cleanValue = "false";
-      } else if (cleanValue == "Y" || cleanValue == "1" ||
-                 cleanValue == "true" || cleanValue == "TRUE") {
-        cleanValue = "true";
-      }
-    } else if (upperType.find("BIT") != std::string::npos) {
-      if (cleanValue == "0" || cleanValue == "false" || cleanValue == "FALSE") {
-        cleanValue = "false";
-      } else if (cleanValue == "1" || cleanValue == "true" ||
-                 cleanValue == "TRUE") {
-        cleanValue = "true";
-      }
-    }
-
-    return cleanValue;
-  }
 
   std::string extractDatabaseName(const std::string &connectionString) {
     std::istringstream ss(connectionString);
@@ -3391,43 +2773,5 @@ private:
     return results;
   }
 };
-
-// Definición de variables estáticas
-std::unordered_map<std::string, std::string> MSSQLToPostgres::dataTypeMap = {
-    {"int", "INTEGER"},
-    {"bigint", "BIGINT"},
-    {"smallint", "SMALLINT"},
-    {"tinyint", "SMALLINT"},
-    {"bit", "BOOLEAN"},
-    {"decimal", "NUMERIC"},
-    {"numeric", "NUMERIC"},
-    {"float", "REAL"},
-    {"real", "REAL"},
-    {"money", "NUMERIC(19,4)"},
-    {"smallmoney", "NUMERIC(10,4)"},
-    {"varchar", "VARCHAR"},
-    {"nvarchar", "VARCHAR"},
-    {"char", "CHAR"},
-    {"nchar", "CHAR"},
-    {"text", "TEXT"},
-    {"ntext", "TEXT"},
-    {"datetime", "TIMESTAMP"},
-    {"datetime2", "TIMESTAMP"},
-    {"smalldatetime", "TIMESTAMP"},
-    {"date", "DATE"},
-    {"time", "TIME"},
-    {"datetimeoffset", "TIMESTAMP WITH TIME ZONE"},
-    {"uniqueidentifier", "UUID"},
-    {"varbinary", "BYTEA"},
-    {"image", "BYTEA"},
-    {"binary", "BYTEA"},
-    {"xml", "TEXT"},
-    {"sql_variant", "TEXT"}};
-
-std::unordered_map<std::string, std::string> MSSQLToPostgres::collationMap = {
-    {"SQL_Latin1_General_CP1_CI_AS", "en_US.utf8"},
-    {"Latin1_General_CI_AS", "en_US.utf8"},
-    {"SQL_Latin1_General_CP1_CS_AS", "C"},
-    {"Latin1_General_CS_AS", "C"}};
 
 #endif

@@ -556,114 +556,9 @@ private:
           continue;
         }
 
-        // Validate MariaDB tables
-        try {
-          Logger::info(LogCategory::MONITORING,
-                       "Starting MariaDB table validation");
-          pqxx::work txn(*pgConn);
-          auto mariaTables = txn.exec(
-              "SELECT schema_name, table_name FROM metadata.catalog WHERE "
-              "db_engine = 'MariaDB' AND status = 'LISTENING_CHANGES'");
-          txn.commit();
-
-          // Removed table count log to reduce noise
-
-          for (const auto &row : mariaTables) {
-            try {
-              std::string schema = row[0].as<std::string>();
-              std::string table = row[1].as<std::string>();
-              Logger::info(LogCategory::MONITORING,
-                           "Validating MariaDB table: " + schema + "." + table);
-              dataQuality.validateTable(*pgConn, schema, table, "MariaDB");
-            } catch (const std::exception &e) {
-              Logger::error(LogCategory::MONITORING, "qualityThread",
-                            "ERROR validating MariaDB table " +
-                                row[0].as<std::string>() + "." +
-                                row[1].as<std::string>() + ": " +
-                                std::string(e.what()));
-            }
-          }
-          Logger::info(LogCategory::MONITORING,
-                       "MariaDB table validation completed");
-        } catch (const std::exception &e) {
-          Logger::error(LogCategory::MONITORING, "qualityThread",
-                        "CRITICAL ERROR in MariaDB table validation: " +
-                            std::string(e.what()) +
-                            " - MariaDB data quality checks failed");
-        }
-
-        // Validate MSSQL tables
-        try {
-          Logger::info(LogCategory::MONITORING,
-                       "Starting MSSQL table validation");
-          pqxx::work txn(*pgConn);
-          auto mssqlTables = txn.exec(
-              "SELECT schema_name, table_name FROM metadata.catalog "
-              "WHERE db_engine = 'MSSQL' AND status = 'LISTENING_CHANGES'");
-          txn.commit();
-
-          // Removed table count log to reduce noise
-
-          for (const auto &row : mssqlTables) {
-            try {
-              std::string schema = row[0].as<std::string>();
-              std::string table = row[1].as<std::string>();
-              Logger::info(LogCategory::MONITORING,
-                           "Validating MSSQL table: " + schema + "." + table);
-              dataQuality.validateTable(*pgConn, schema, table, "MSSQL");
-            } catch (const std::exception &e) {
-              Logger::error(LogCategory::MONITORING, "qualityThread",
-                            "ERROR validating MSSQL table " +
-                                row[0].as<std::string>() + "." +
-                                row[1].as<std::string>() + ": " +
-                                std::string(e.what()));
-            }
-          }
-          Logger::info(LogCategory::MONITORING,
-                       "MSSQL table validation completed");
-        } catch (const std::exception &e) {
-          Logger::error(LogCategory::MONITORING, "qualityThread",
-                        "CRITICAL ERROR in MSSQL table validation: " +
-                            std::string(e.what()) +
-                            " - MSSQL data quality checks failed");
-        }
-
-        // Validate PostgreSQL tables
-        try {
-          Logger::info(LogCategory::MONITORING,
-                       "Starting PostgreSQL table validation");
-          pqxx::work txn(*pgConn);
-          auto pgTables = txn.exec(
-              "SELECT schema_name, table_name FROM metadata.catalog WHERE "
-              "db_engine = 'PostgreSQL' AND status IN ('LISTENING_CHANGES')");
-          txn.commit();
-
-          // Removed table count log to reduce noise
-
-          for (const auto &row : pgTables) {
-            try {
-              std::string schema = row[0].as<std::string>();
-              std::string table = row[1].as<std::string>();
-              Logger::info(LogCategory::MONITORING,
-                           "Validating PostgreSQL table: " + schema + "." +
-                               table);
-              dataQuality.validateTable(*pgConn, schema, table, "PostgreSQL");
-            } catch (const std::exception &e) {
-              Logger::error(LogCategory::MONITORING, "qualityThread",
-                            "ERROR validating PostgreSQL table " +
-                                row[0].as<std::string>() + "." +
-                                row[1].as<std::string>() + ": " +
-                                std::string(e.what()));
-            }
-          }
-          Logger::info(LogCategory::MONITORING,
-                       "PostgreSQL table validation completed");
-        } catch (const std::exception &e) {
-          Logger::error(LogCategory::MONITORING, "qualityThread",
-                        "CRITICAL ERROR in PostgreSQL table validation: " +
-                            std::string(e.what()) +
-                            " - PostgreSQL data quality checks failed");
-        }
+        validateTablesForEngine(*pgConn, "MariaDB");
+        validateTablesForEngine(*pgConn, "MSSQL");
+        validateTablesForEngine(*pgConn, "PostgreSQL");
 
         Logger::info(LogCategory::MONITORING,
                      "Data quality validation cycle completed successfully");
@@ -856,6 +751,44 @@ private:
           std::chrono::seconds(SyncConfig::getSyncInterval()));
     }
     Logger::info(LogCategory::MONITORING, "Monitoring thread stopped");
+  }
+
+  void validateTablesForEngine(pqxx::connection &pgConn,
+                               const std::string &dbEngine) {
+    try {
+      Logger::info(LogCategory::MONITORING,
+                   "Starting " + dbEngine + " table validation");
+      pqxx::work txn(pgConn);
+      auto tables =
+          txn.exec("SELECT schema_name, table_name FROM metadata.catalog WHERE "
+                   "db_engine = '" +
+                   dbEngine + "' AND status = 'LISTENING_CHANGES'");
+      txn.commit();
+
+      for (const auto &row : tables) {
+        try {
+          std::string schema = row[0].as<std::string>();
+          std::string table = row[1].as<std::string>();
+          Logger::info(LogCategory::MONITORING, "Validating " + dbEngine +
+                                                    " table: " + schema + "." +
+                                                    table);
+          dataQuality.validateTable(pgConn, schema, table, dbEngine);
+        } catch (const std::exception &e) {
+          Logger::error(LogCategory::MONITORING, "validateTablesForEngine",
+                        "ERROR validating " + dbEngine + " table " +
+                            row[0].as<std::string>() + "." +
+                            row[1].as<std::string>() + ": " +
+                            std::string(e.what()));
+        }
+      }
+      Logger::info(LogCategory::MONITORING,
+                   dbEngine + " table validation completed");
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::MONITORING, "validateTablesForEngine",
+                    "CRITICAL ERROR in " + dbEngine +
+                        " table validation: " + std::string(e.what()) + " - " +
+                        dbEngine + " data quality checks failed");
+    }
   }
 };
 

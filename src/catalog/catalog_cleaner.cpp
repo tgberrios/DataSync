@@ -44,15 +44,27 @@ void CatalogCleaner::cleanNonExistentPostgresTables() {
         txn.exec("SELECT schema_name, table_name FROM metadata.catalog "
                  "WHERE db_engine = 'PostgreSQL'");
 
+    size_t totalTables = results.size();
+    size_t deletedCount = 0;
+    Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                 "Checking " + std::to_string(totalTables) +
+                     " PostgreSQL tables for existence");
+
     for (const auto &row : results) {
       std::string schema = row[0].as<std::string>();
       std::string table = row[1].as<std::string>();
 
       if (!tableExistsInPostgres(schema, table)) {
         repo_->deleteTable(schema, table, "PostgreSQL");
+        deletedCount++;
       }
     }
     txn.commit();
+
+    Logger::info(
+        LogCategory::DATABASE, "CatalogCleaner",
+        "PostgreSQL cleanup completed: " + std::to_string(deletedCount) +
+            " non-existent tables removed");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "CatalogCleaner",
                   "Error cleaning PostgreSQL tables: " + std::string(e.what()));
@@ -62,6 +74,11 @@ void CatalogCleaner::cleanNonExistentPostgresTables() {
 void CatalogCleaner::cleanNonExistentMariaDBTables() {
   try {
     auto connStrings = repo_->getConnectionStrings("MariaDB");
+    size_t totalDeleted = 0;
+
+    Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                 "Checking " + std::to_string(connStrings.size()) +
+                     " MariaDB connection(s) for non-existent tables");
 
     for (const auto &connStr : connStrings) {
       MariaDBEngine engine(connStr);
@@ -77,9 +94,14 @@ void CatalogCleaner::cleanNonExistentMariaDBTables() {
         if (existingSet.find({entry.schema, entry.table}) ==
             existingSet.end()) {
           repo_->deleteTable(entry.schema, entry.table, "MariaDB", connStr);
+          totalDeleted++;
         }
       }
     }
+
+    Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                 "MariaDB cleanup completed: " + std::to_string(totalDeleted) +
+                     " non-existent tables removed");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "CatalogCleaner",
                   "Error cleaning MariaDB tables: " + std::string(e.what()));
@@ -89,6 +111,11 @@ void CatalogCleaner::cleanNonExistentMariaDBTables() {
 void CatalogCleaner::cleanNonExistentMSSQLTables() {
   try {
     auto connStrings = repo_->getConnectionStrings("MSSQL");
+    size_t totalDeleted = 0;
+
+    Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                 "Checking " + std::to_string(connStrings.size()) +
+                     " MSSQL connection(s) for non-existent tables");
 
     for (const auto &connStr : connStrings) {
       MSSQLEngine engine(connStr);
@@ -104,9 +131,14 @@ void CatalogCleaner::cleanNonExistentMSSQLTables() {
         if (existingSet.find({entry.schema, entry.table}) ==
             existingSet.end()) {
           repo_->deleteTable(entry.schema, entry.table, "MSSQL", connStr);
+          totalDeleted++;
         }
       }
     }
+
+    Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                 "MSSQL cleanup completed: " + std::to_string(totalDeleted) +
+                     " non-existent tables removed");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "CatalogCleaner",
                   "Error cleaning MSSQL tables: " + std::string(e.what()));
@@ -118,17 +150,33 @@ void CatalogCleaner::cleanOrphanedTables() {
     pqxx::connection conn(metadataConnStr_);
     pqxx::work txn(conn);
 
-    txn.exec("DELETE FROM metadata.catalog "
-             "WHERE connection_string IS NULL OR connection_string = ''");
+    Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                 "Cleaning orphaned catalog entries");
 
-    txn.exec("DELETE FROM metadata.catalog "
-             "WHERE db_engine NOT IN ('PostgreSQL', 'MariaDB', 'MSSQL')");
+    auto result1 =
+        txn.exec("DELETE FROM metadata.catalog "
+                 "WHERE connection_string IS NULL OR connection_string = ''");
+    size_t deleted1 = result1.affected_rows();
 
-    txn.exec("DELETE FROM metadata.catalog "
-             "WHERE schema_name IS NULL OR schema_name = '' "
-             "OR table_name IS NULL OR table_name = ''");
+    auto result2 =
+        txn.exec("DELETE FROM metadata.catalog "
+                 "WHERE db_engine NOT IN ('PostgreSQL', 'MariaDB', 'MSSQL')");
+    size_t deleted2 = result2.affected_rows();
+
+    auto result3 = txn.exec("DELETE FROM metadata.catalog "
+                            "WHERE schema_name IS NULL OR schema_name = '' "
+                            "OR table_name IS NULL OR table_name = ''");
+    size_t deleted3 = result3.affected_rows();
 
     txn.commit();
+
+    size_t totalDeleted = deleted1 + deleted2 + deleted3;
+    Logger::info(
+        LogCategory::DATABASE, "CatalogCleaner",
+        "Orphaned tables cleanup completed: " + std::to_string(totalDeleted) +
+            " entries removed (empty_conn=" + std::to_string(deleted1) +
+            ", invalid_engine=" + std::to_string(deleted2) +
+            ", invalid_names=" + std::to_string(deleted3) + ")");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "CatalogCleaner",
                   "Error cleaning orphaned tables: " + std::string(e.what()));
