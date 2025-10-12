@@ -72,10 +72,11 @@ TestResult runTest(const std::string &name, std::function<void()> testFunc) {
 }
 
 int main() {
+  DatabaseConfig::loadFromFile("config.json");
+
   Logger::initialize("test_catalog.log");
 
-  std::string connStr = "host=localhost dbname=DataLake user=tomy.berrios "
-                        "password=Yucaquemada1 port=5432";
+  std::string connStr = DatabaseConfig::getPostgresConnectionString();
 
   printHeader("CATALOG MANAGER - EXHAUSTIVE TEST SUITE");
   std::cout << "Connection: " << connStr << "\n";

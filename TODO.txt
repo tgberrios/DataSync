@@ -44,3 +44,1381 @@ Es decir, que la función transferDataMSSQLToPostgres() solo redirija a transfer
 
 
 TALVEZ PONERLE AL BANNER YA ABAJITO COMO RUNNING Y ASI
+
+================================================================================
+🔧 MEJORAS TÉCNICAS SUGERIDAS - CATALOG MANAGER
+================================================================================
+
+📋 PRIORIDAD ALTA (Aplicar AHORA):
+-----------------------------------
+1. ✅ Crear DatabaseEngineFactory para eliminar if-else repetitivos
+   - Ubicación: include/engines/database_engine_factory.h
+   - Beneficio: OCP, DRY, agregar nuevos motores sin modificar CatalogManager
+   - Líneas afectadas: catalog_manager.cpp líneas 79-88, 136-141
+
+2. ✅ Mover queries directos a MetadataRepository
+   - updateClusterNames(): líneas 38-43 → repo_->getTablesWithoutClusterName()
+   - validateSchemaConsistency(): líneas 62-69 → repo_->getActiveTables()
+   - getTableSize(): líneas 103-118 → repo_->getTableSize()
+   - Beneficio: SRP, mejor testabilidad, menor acoplamiento
+
+3. ✅ Loguear o remover variables no usadas
+   - deactivateNoDataTables(): líneas 28-29 (noDataCount, skipCount)
+   - Beneficio: Claridad del código, mejor observabilidad
+
+4. ✅ Remover includes de implementaciones concretas
+   - Cambiar includes de mariadb_engine.h, mssql_engine.h, postgres_engine.h
+   - Solo incluir engines/database_engine.h (interface)
+   - Usar forward declarations si es necesario
+   - Beneficio: Menor acoplamiento, compilación más rápida
+
+📋 PRIORIDAD MEDIA (Aplicar DESPUÉS):
+--------------------------------------
+5. 🔄 Batch getTableSize() para eficiencia
+   - Crear MetadataRepository::getTableSizesBatch()
+   - Cambiar N queries individuales por 1 query batch
+   - Beneficio: Performance (crítico con >100 tablas)
+
+6. 🧪 Agregar interfaces para mejor testabilidad
+   - IMetadataRepository interface
+   - ICatalogCleaner interface
+   - Beneficio: Unit testing sin BD real
+
+7. 🔒 Manejo de concurrencia
+   - Agregar locks/semáforos si múltiples instancias
+   - Considerar tabla de "catalog_locks" en metadata
+   - Beneficio: Evitar race conditions
+
+8. 📊 Agregar métricas de observabilidad
+   - Tiempo de ejecución por operación
+   - Tablas procesadas/fallidas
+   - Enviar a MetricsCollector
+   - Beneficio: Monitoreo en producción
+
+📋 PRIORIDAD BAJA (Nice to have):
+----------------------------------
+9. 📝 Hacer cleanCatalog() transaccional (evaluar necesidad)
+10. ♻️ Extraer transformación a lowercase a utilidad
+11. 📈 Agregar progress reporting para operaciones largas
+
+================================================================================
+
+================================================================================
+🔧 MEJORAS TÉCNICAS SUGERIDAS - CORE (Config.h + logger.h)
+================================================================================
+
+📋 Config.h - PRIORIDAD CRÍTICA:
+---------------------------------
+✅ 1. SEGURIDAD: Eliminar password hardcodeado [COMPLETADO]
+   - ✅ Password NO está hardcodeado en código
+   - ✅ Se carga desde config.json (excluido de git)
+   - ✅ Soporta variables de entorno como fallback
+   - ✅ Método setForTesting() disponible para tests
+
+✅ 2. Cargar configuración desde archivo [COMPLETADO]
+   - ✅ DatabaseConfig::loadFromFile("config.json") implementado
+   - ✅ Usa librería json.hpp
+   - ✅ Permite diferentes configs por ambiente
+   - ✅ Se llama en main.cpp al inicio
+
+✅ 3. Hacer variables privadas con getters [COMPLETADO]
+   - ✅ Variables privadas con underscore
+   - ✅ Getters const implementados
+   - ✅ Encapsulación correcta
+   - ✅ Cambio de struct a class
+
+🟡 4. Separar configuraciones en archivos distintos
+   - database_config.h (DatabaseConfig)
+   - sync_config.h (SyncConfig)
+   - database_defaults.h (DatabaseDefaults)
+   - Beneficio: SRP, ISP, compilación más rápida
+
+🟡 5. Agregar validación en SyncConfig setters
+   - Validar rangos (MIN/MAX para chunk_size, workers, etc.)
+   - Prevenir valores inválidos
+   - Beneficio: Robustez
+
+✅ 6. Remover include innecesario [COMPLETADO]
+   - ✅ Config.cpp NO incluye logger.h innecesariamente
+
+📋 logger.h - PRIORIDAD ALTA:
+-----------------------------
+🔴 1. Dividir God Object en clases especializadas
+   - ILogWriter (interface)
+   - FileLogWriter (archivo)
+   - DatabaseLogWriter (BD)
+   - LogRotator (rotación)
+   - LogFormatter (formateo)
+   - LogLevelConverter / LogCategoryConverter (conversiones)
+   - Beneficio: SRP, testabilidad, mantenibilidad
+
+🔴 2. Eliminar código duplicado en writeLog()
+   - Formateo de log está duplicado en 2 lugares
+   - Extraer a método formatLogMessage()
+   - Líneas: 214-222 y 225-233
+   - Beneficio: DRY, mantenibilidad
+
+🟡 3. Usar mapas para conversiones en lugar de if-chains
+   - stringToCategory(): 11 if statements → std::unordered_map
+   - stringToLogLevel(): 7 if statements → std::unordered_map
+   - Beneficio: O(1) vs O(n), más mantenible
+
+🟡 4. Simplificar API pública
+   - De 35+ métodos a ~8 métodos con parámetros opcionales
+   - Usar defaults para function y category
+   - Beneficio: ISP, API más clara
+
+🟡 5. Crear interfaz ILogger para testabilidad
+   - Permitir mockear en unit tests
+   - Inyectar dependencias
+   - Beneficio: Testeable sin filesystem/BD real
+
+🟢 6. Considerar usar librería de logging existente
+   - spdlog (header-only, rápido, thread-safe)
+   - Beneficio: Probado en batalla, menos código propio
+
+================================================================================
+
+================================================================================
+🔧 MEJORAS TÉCNICAS SUGERIDAS - EXPORT (DDLExporter.h) - 1318 líneas
+================================================================================
+
+📊 ESTADO ACTUAL: 🔴 RIESGOSO (3.5/10)
+- 27% código duplicado (~361 líneas)
+- Memory leaks potenciales (6 early returns sin RAII)
+- SQL Injection vulnerable (usa escapeSQL)
+- Métodos >500 líneas
+- No reutiliza MySQLConnection, ODBCConnection, ConnectionStringParser
+========================================
+
+📋 PRIORIDAD CRÍTICA (Fix URGENTE - Esta Semana):
+-------------------------------------------------
+🔴 1. MEMORY LEAKS: Usar MySQLConnection RAII
+   - Archivo: DDLExporter.cpp líneas 212-252 (exportMariaDBDDL)
+   - Problema: 6 early returns con mysql_close manual - prone a leaks
+   - Solución: Usar MySQLConnection wrapper ya existente
+   - Beneficio: Exception-safe, no leaks, ~40 líneas menos
+
+🔴 2. RESOURCE LEAKS: Usar ODBCConnection RAII
+   - Archivo: DDLExporter.cpp líneas 764-800+ (exportMSSQLDDL)
+   - Problema: Gestión manual de SQLHENV y SQLHDBC handles
+   - Solución: Usar ODBCConnection wrapper ya existente
+   - Beneficio: Exception-safe, no leaks, ~80 líneas menos
+
+🔴 3. DUPLICACIÓN: Usar ConnectionStringParser
+   - Archivo: DDLExporter.cpp
+     - exportMariaDBDDL: líneas 176-202 (26 líneas)
+     - exportMSSQLDDL: líneas 706-732 (26 líneas)
+   - Problema: Parseo manual duplicado 2 veces
+   - Solución: auto params = ConnectionStringParser::parse(connStr);
+   - Beneficio: DRY, ~52 líneas eliminadas
+
+🔴 4. DUPLICACIÓN: Eliminar escapeSQL() duplicado
+   - Archivo: DDLExporter.cpp líneas 1295-1303
+   - Problema: EXACTAMENTE IGUAL al de database_engine.h
+   - Solución: Eliminar de DDLExporter, usar el de database_engine.h
+   - Beneficio: DRY, ~9 líneas eliminadas
+
+🔴 5. SQL INJECTION: Queries vulnerables
+   - Archivos: DDLExporter.cpp múltiples lugares (líneas 257, 440, 457, 458, etc.)
+   - Problema: Usa escapeSQL() que NO es suficiente
+   - Solución: Usar mysql_real_escape_string() para MariaDB
+   - Impacto: VULNERABILIDAD DE SEGURIDAD
+
+📋 PRIORIDAD ALTA (Esta Semana):
+--------------------------------
+🟡 6. DUPLICACIÓN: Consolidar funciones save*DDL()
+   - Archivos: DDLExporter.cpp
+     - saveTableDDL: líneas 1130-1190
+     - saveIndexDDL: líneas 1192-1221
+     - saveConstraintDDL: líneas 1223-1252
+     - saveFunctionDDL: líneas 1254-1289
+   - Problema: 4 funciones con 85% código duplicado (~180 líneas)
+   - Solución: Crear saveDDL() genérica con parámetro subfolder
+   - Beneficio: DRY, ~140 líneas eliminadas
+
+🟡 7. SRP VIOLATION: Query directo en getSchemasFromCatalog()
+   - Archivo: DDLExporter.cpp líneas 61-92
+   - Problema: Query directo sin usar MetadataRepository
+   - Solución: repo->getActiveSchemas()
+   - Beneficio: SRP, reutilización, testabilidad
+
+🟡 8. DUPLICACIÓN: Eliminar funciones create*Folder()
+   - Archivos: DDLExporter.cpp líneas 115-168 (4 funciones casi idénticas)
+   - Problema: createClusterFolder, createEngineFolder, createDatabaseFolder, createSchemaFolder
+   - Solución: Usar std::filesystem::path con operator/ 
+   - Beneficio: 4 funciones → 1, ~60 líneas eliminadas
+
+🟡 9. Variables no usadas en exportAllDDL()
+   - Archivo: DDLExporter.cpp líneas 17-18, 36-37, 40-42
+   - Variables: successCount, errorCount, duration (calculadas pero no logueadas)
+   - Solución: Loguear al final del proceso
+   - Beneficio: Mejor observabilidad
+
+🟡 10. MÉTODOS GIGANTES: Dividir exportMariaDBDDL()
+   - Archivo: DDLExporter.cpp líneas 170-359 (~190 líneas)
+   - Problema: Método hace demasiadas cosas
+   - Solución: Dividir en exportMariaDBTables(), exportMariaDBIndexes(), etc.
+   - Beneficio: KISS, legibilidad, testabilidad
+
+🟡 11. MÉTODOS GIGANTES: Dividir exportMSSQLDDL()
+   - Archivo: DDLExporter.cpp líneas 696-1100+ (~400+ líneas)
+   - Problema: Método hace demasiadas cosas
+   - Solución: Dividir en métodos especializados
+   - Beneficio: KISS, legibilidad
+
+📋 PRIORIDAD MEDIA:
+-------------------
+🟢 12. PERFORMANCE: Optimizar sanitizeFileName()
+   - Archivo: DDLExporter.cpp líneas 1305-1318
+   - Problema: 10 iteraciones sobre string (10 × O(n))
+   - Solución: 1 iteración con find de invalidChars
+   - Beneficio: ~10x más rápido
+
+🟢 13. Crear interfaces para testabilidad
+   - ISchemaExporter, IFileWriter interfaces
+   - Permitir mocking en tests
+   - Beneficio: Testeable sin BD/filesystem real
+
+🟢 14. Extraer construcción de paths a helper
+   - buildExportPath() reutilizable
+   - Elimina concatenación manual repetida
+   - Beneficio: DRY, menos errores
+
+🟢 15. Remover struct ODBCHandles no usado
+   - Archivo: DDLExporter.h líneas 11-14
+   - Declarado pero nunca usado
+   - Beneficio: Código más limpio
+
+📋 REFACTORING PROFUNDO (Futuro):
+----------------------------------
+🟢 16. Dividir DDLExporter en clases especializadas
+   - DDLExporter (orquestador)
+   - MariaDBDDLExtractor (extrae DDL MariaDB)
+   - MSSQLDDLExtractor (extrae DDL MSSQL)
+   - DDLFileWriter (escribe archivos)
+   - Beneficio: SRP, OCP, testabilidad
+
+🟢 17. Usar Strategy pattern para exportadores
+   - Registrar exportadores por motor de BD
+   - Extensible sin modificar DDLExporter
+   - Beneficio: OCP
+
+✅ LO QUE SÍ ESTÁ BIEN (No tocar):
+----------------------------------
+✅ Delegación a export*Views/Procedures/Functions (estructura clara)
+✅ Sanitización de filenames (previene path traversal)
+✅ Manejo de errores con try-catch
+✅ Logging de errores consistente
+✅ Uso de std::filesystem (moderno)
+
+📊 ESTADÍSTICAS DE DUPLICACIÓN:
+-------------------------------
+- Parseo connection strings: ~52 líneas (4%)
+- escapeSQL duplicado: ~9 líneas (0.7%)
+- Gestión MySQL manual: ~40 líneas (3%)
+- Gestión ODBC manual: ~80 líneas (6%)
+- Funciones save*: ~180 líneas (14%)
+TOTAL DUPLICADO: ~361 líneas (27% del archivo)
+
+REDUCCIÓN POTENCIAL: 1318 → ~950 líneas (-28%)
+
+================================================================================
+
+================================================================================
+🔧 MEJORAS TÉCNICAS SUGERIDAS - GOVERNANCE (DataGovernance + DataQuality) - 2178 líneas
+================================================================================
+
+📊 ESTADO ACTUAL:
+- DataGovernance: 🔴 RIESGOSO (2.8/10) - God Object, if-chains gigantes
+- DataQuality: 🟡 MEJORABLE (5.6/10) - N+1 query problem crítico
+========================================
+
+📋 PRIORIDAD CRÍTICA (Fix URGENTE - Esta Semana):
+-------------------------------------------------
+🔴 1. PERFORMANCE CRÍTICO: N+1 Query Problem en checkNullCounts()
+   - Archivo: DataQuality.cpp líneas 224-285
+   - Problema: Hace 1 query por columna (N+1 queries donde N = columnas)
+   - Tabla con 50 columnas = 51 queries (1 + 50)
+   - Solución: Usar COUNT(*) FILTER (WHERE col IS NULL) en 1 query
+   - Beneficio: N+1 queries → 1 query, ~50x más rápido
+   - IMPACTO: CRÍTICO para performance
+
+🔴 2. DUPLICACIÓN: escapeSQL() - TERCERA VEZ
+   - Archivo: DataGovernance.cpp líneas 763-771
+   - Ya existe en: database_engine.h, DDLExporter.cpp
+   - Problema: VIOLACIÓN GRAVE de DRY - misma función 3 veces
+   - Solución: Eliminar de DataGovernance, usar de database_engine.h
+   - Beneficio: DRY, ~9 líneas eliminadas
+
+🔴 3. DUPLICACIÓN: getCurrentTimestamp() - SEGUNDA VEZ
+   - Archivo: DataGovernance.cpp líneas 773-784
+   - Ya existe en: Logger::getCurrentTimestamp()
+   - Problema: DUPLICACIÓN - lógica idéntica
+   - Solución: Usar Logger::getCurrentTimestamp() o mover a utils/
+   - Beneficio: DRY, ~12 líneas eliminadas
+
+🔴 4. SQL INJECTION: Queries con escapeSQL
+   - Archivo: DataGovernance.cpp líneas 178-181, 236-237, 244-245, etc.
+   - Problema: Usa escapeSQL() vulnerable en ~10 lugares
+   - Solución: Usar prepared statements con exec_params() o txn.quote()
+   - Impacto: VULNERABILIDAD DE SEGURIDAD
+
+🔴 5. IF-CHAINS MONSTRUOSOS: determine*() functions - 388 LÍNEAS
+   - Archivos: DataGovernance.cpp
+     - determineDataCategory: líneas 833-981 (148 líneas!)
+     - determineBusinessDomain: líneas 1000-1100 (~100 líneas)
+     - determineSensitivityLevel: líneas 1100-1180 (~80 líneas)
+     - determineDataClassification: líneas 1180-1240 (~60 líneas)
+   - Problema: 120+ if-chains con .find(), lógica hardcoded, viola OCP
+   - Solución: Externalizar a governance_rules.json + DataClassifier
+   - Beneficio: 388 líneas → ~50 líneas, configurable, extensible, testeable
+
+📋 PRIORIDAD ALTA (Esta Semana):
+--------------------------------
+🟡 6. DUPLICACIÓN: Transformación a lowercase (6 veces)
+   - Archivos: DataGovernance.cpp (5 veces), DataQuality.cpp (1+ veces)
+   - Código: std::transform(str.begin(), str.end(), str.begin(), ::tolower);
+   - Solución: Crear utils/string_utils.h con función toLower()
+   - Beneficio: DRY, ~30 líneas eliminadas
+
+🟡 7. DUPLICACIÓN: Validación tabla exists (4 veces)
+   - Archivo: DataQuality.cpp en checkNullCounts, checkDuplicates, checkConstraints
+   - Código: Query a information_schema.tables repetida
+   - Solución: Función helper tableExists(txn, schema, table)
+   - Beneficio: DRY, ~40 líneas eliminadas
+
+🟡 8. SIN INYECCIÓN: 7 conexiones directas en DataGovernance
+   - Líneas: 19, 113, 165, storeMetadata, updateExistingMetadata, generateReport
+   - Código: pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
+   - Solución: Aceptar conexión como parámetro o usar MetadataRepository
+   - Beneficio: Testabilidad, SRP
+
+🟡 9. FUNCIONES TRIVIALES: 7 calculate*Score() de 1-2 líneas
+   - Archivo: DataGovernance.cpp líneas 1391-1420
+   - Problema: calculateCompletenessScore, calculateAccuracyScore, etc. (7 funciones)
+   - Cada una: return 100.0 - (metadata.campo * factor);
+   - Solución: 1 función con struct QualityWeights configurable
+   - Beneficio: 7 funciones → 1, factores configurables
+
+🟡 10. STRUCT GRANDE: TableMetadata con 60 campos
+   - Archivo: DataGovernance.h líneas 11-60
+   - Problema: Mezcla 5 concerns diferentes (basic, quality, classification, governance, usage)
+   - Solución: Dividir en sub-structs: BasicMetadata, QualityScores, Classification, etc.
+   - Beneficio: SRP, más fácil de construir/validar
+
+🟡 11. cleanSchemaNameForPostgres función global
+   - Archivo: DataQuality.cpp líneas 4-35
+   - Problema: Función global (namespace pollution), llamada 6 veces
+   - Solución: Mover a utils/string_utils.h como método de clase
+   - Beneficio: Mejor organización
+
+📋 PRIORIDAD MEDIA:
+-------------------
+🟢 12. Externalizar configuración de pesos/factores
+   - Factores 0.1, 0.5, 0.3, etc. hardcoded
+   - Crear governance_config.json con QualityWeights
+   - Beneficio: Configuración flexible sin recompilar
+
+🟢 13. Usar MetadataRepository para queries
+   - getSchemasFromCatalog hace query directo
+   - Debería usar MetadataRepository existente
+   - Beneficio: DRY, SRP
+
+🟢 14. Consolidar queries a information_schema
+   - Múltiples queries similares con pequeñas variaciones
+   - Extraer a funciones helper
+   - Beneficio: DRY
+
+🟢 15. Agregar interfaces para testabilidad
+   - ITableAnalyzer, IDataClassifier interfaces
+   - Permitir mocking
+   - Beneficio: Unit testing sin BD real
+
+🟢 16. Optimizar checkDuplicates similar a checkNullCounts
+   - Probablemente tiene mismo N+1 problem
+   - Revisar y optimizar
+   - Beneficio: Performance
+
+📋 REFACTORING PROFUNDO (Futuro):
+----------------------------------
+🟢 17. Dividir DataGovernance en clases especializadas
+   - TableDiscoverer, StructureAnalyzer, QualityAnalyzer, etc.
+   - Cada clase una responsabilidad
+   - Beneficio: SRP, testabilidad, mantenibilidad
+
+🟢 18. Implementar DataClassifier con reglas externas
+   - Cargar keywords desde governance_rules.json
+   - Sistema de scoring por coincidencias
+   - Extensible sin modificar código
+   - Beneficio: OCP, configurabilidad
+
+✅ LO QUE SÍ ESTÁ BIEN (No tocar):
+----------------------------------
+✅ DataQuality acepta conexión inyectada (buen diseño)
+✅ Manejo de errores con try-catch consistente
+✅ Logging de errores detallado
+✅ Uso de prepared statements en algunos lugares (txn.quote)
+✅ Validación de parámetros de entrada
+✅ QualityMetrics struct bien diseñado (tamaño razonable)
+
+📊 ESTADÍSTICAS CLAVE:
+----------------------
+DataGovernance:
+- Líneas totales: 1548
+- If-chains de clasificación: 388 líneas (25%)
+- Código duplicado: ~50 líneas
+- Funciones determine*: 5 funciones, 388 líneas total
+- Funciones calculate*Score: 7 funciones triviales
+- Conexiones directas: 7 ocurrencias
+
+DataQuality:
+- Líneas totales: 630
+- N+1 queries: checkNullCounts (probablemente también checkDuplicates)
+- cleanSchemaNameForPostgres: 6 llamadas
+- Validación tabla exists: 4 duplicaciones
+
+REDUCCIÓN POTENCIAL DataGovernance: 1548 → ~1000 líneas (-35%)
+REDUCCIÓN POTENCIAL DataQuality: 630 → ~580 líneas (-8%)
+
+================================================================================
+
+================================================================================
+🔧 MEJORAS TÉCNICAS SUGERIDAS - METRICS (MetricsCollector) - 591 líneas
+================================================================================
+
+📊 ESTADO ACTUAL: 🟡 ACEPTABLE CON MEJORAS (5.8/10)
+- escapeSQL duplicado CUARTA VEZ
+- getCurrentTimestamp duplicado TERCERA VEZ
+- Nested loops O(n²) en 3 métodos - no escala con muchas tablas
+- 8 conexiones directas - overhead innecesario
+========================================
+
+📋 PRIORIDAD CRÍTICA (Fix URGENTE - Esta Semana):
+-------------------------------------------------
+🔴 1. DUPLICACIÓN: escapeSQL() - CUARTA VEZ
+   - Archivo: MetricsCollector.cpp líneas 445-453
+   - Ya existe en: database_engine.h, DDLExporter.cpp, DataGovernance.cpp
+   - Problema: VIOLACIÓN EXTREMA de DRY - misma función 4 veces
+   - Solución: Eliminar de MetricsCollector, usar de database_engine.h
+   - Beneficio: DRY, ~9 líneas eliminadas
+
+🔴 2. DUPLICACIÓN: getCurrentTimestamp() - TERCERA VEZ
+   - Archivo: MetricsCollector.cpp líneas 455-466
+   - Ya existe en: Logger::getCurrentTimestamp(), DataGovernance::getCurrentTimestamp()
+   - Problema: DUPLICACIÓN - lógica idéntica 3 veces
+   - Solución: Eliminar de MetricsCollector, usar Logger::getCurrentTimestamp()
+   - Beneficio: DRY, ~12 líneas eliminadas
+
+🔴 3. PERFORMANCE CRÍTICO: Nested loops O(n²) - 3 MÉTODOS
+   - Archivos: MetricsCollector.cpp
+     - collectPerformanceMetrics: líneas 229-244 (O(n × m))
+     - collectMetadataMetrics: líneas 274-304 (O(n × m))
+     - collectTimestampMetrics: líneas 330-342 (O(n × m))
+   - Problema: Nested loops con comparación de strings
+   - 100 tablas × 100 resultados = 10,000 comparaciones innecesarias
+   - Solución: Usar std::unordered_map para O(1) lookup
+   - Beneficio: O(n²) → O(n), ~100x más rápido con 100 tablas
+   - IMPACTO: CRÍTICO para escalabilidad
+
+📋 PRIORIDAD ALTA (Esta Semana):
+--------------------------------
+🟡 4. CONEXIONES SIN INYECCIÓN: 8 conexiones directas
+   - Líneas: 27, 84, 204, 255, 315, 353, 398, 506
+   - Código: pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
+   - Problema: 8 conexiones diferentes cuando podría ser 1
+   - Solución: Pasar 1 conexión como parámetro a todos los métodos
+   - Beneficio: Performance, testabilidad, posibilidad de transacción
+
+🟡 5. DUPLICACIÓN: Mapeo de status/transfer_type (2 veces)
+   - Archivos: MetricsCollector.cpp
+     - collectTransferMetrics: líneas 153-179
+     - collectMetadataMetrics: líneas 282-298
+   - Problema: Lógica de mapeo duplicada con variaciones
+   - Solución: Crear StatusMapper helper class
+   - Beneficio: DRY, ~30 líneas eliminadas
+
+🟡 6. Variables calculadas NO USADAS en generateMetricsReport()
+   - Archivo: MetricsCollector.cpp líneas 419-435
+   - Variables: totalTables, successfulTransfers, failedTransfers, pendingTransfers,
+     totalRecords, totalBytes, avgMemoryUsed, totalIOOperations, successRate, totalMB
+   - Problema: 10 variables calculadas pero ninguna se usa/loguea/retorna
+   - Solución: Loguear todas las estadísticas al final
+   - Beneficio: Mejor observabilidad, justifica el cálculo
+
+🟡 7. SQL INJECTION: En calculateBytesTransferred()
+   - Archivo: MetricsCollector.cpp líneas 517-519
+   - Problema: Usa escapeSQL() vulnerable
+   - Solución: Usar exec_params con prepared statement
+   - Beneficio: Seguridad
+
+🟡 8. DUPLICACIÓN: Transformación lowercase (2 veces más)
+   - Archivo: MetricsCollector.cpp líneas 509-514
+   - Ya duplicado en: DataGovernance (5 veces), DataQuality (1+ veces)
+   - Solución: Usar toLower() de utils/string_utils.h (cuando se cree)
+   - Beneficio: DRY
+
+📋 PRIORIDAD MEDIA:
+-------------------
+🟢 9. Dividir métodos largos
+   - collectTransferMetrics: ~120 líneas
+   - Solución: Dividir en fetchData() + processData()
+   - Beneficio: KISS, legibilidad
+
+🟢 10. Crear interface IMetricsCollector
+   - Permitir mocking en tests
+   - Beneficio: Testeable sin BD real
+
+🟢 11. Considerar usar batch processing
+   - saveMetricsToDatabase hace 1 query por métrica
+   - Podría usar COPY o VALUES bulk insert
+   - Beneficio: Performance con muchas tablas
+
+🟢 12. Remover empty else block
+   - Línea 437-438 (else vacío)
+   - Beneficio: Código más limpio
+
+✅ LO QUE SÍ ESTÁ BIEN (No tocar):
+----------------------------------
+✅ Usa prepared statements en saveMetricsToDatabase (exec_params) - SEGURO
+✅ Validación de datos (null checks, empty checks, rangos negativos)
+✅ Uso de FILTER clause en SQL (moderno, eficiente)
+✅ Uso de UPSERT con ON CONFLICT (idempotente)
+✅ Struct TransferMetrics bien diseñado (29 campos razonables)
+✅ API pública simple (2 métodos principales)
+✅ Manejo de errores con try-catch consistente
+✅ Logging de errores detallado
+✅ Reserve memory para vector (optimización)
+✅ LEFT JOINs correctos para métricas opcionales
+
+📊 ESTADÍSTICAS CLAVE:
+----------------------
+- Líneas totales: 591
+- escapeSQL duplicado: CUARTA VEZ (~9 líneas)
+- getCurrentTimestamp duplicado: TERCERA VEZ (~12 líneas)
+- Nested loops O(n²): 3 ocurrencias
+- Mapeo status duplicado: 2 veces (~30 líneas)
+- Conexiones directas: 8 ocurrencias
+- Variables no usadas: 10 en generateMetricsReport
+- Transformación lowercase: 2 veces
+
+REDUCCIÓN POTENCIAL: 591 → ~540 líneas (-9%)
+PERO GANANCIA PRINCIPAL: ~100x más rápido con optimización de nested loops
+
+================================================================================
+
+================================================================================
+🔧 MEJORAS TÉCNICAS SUGERIDAS - UTILS (connection_utils + cluster_name_resolver) - 310 líneas
+================================================================================
+
+📊 ESTADO ACTUAL: ✅ EXCELENTE (9.0/10)
+- connection_utils: ✅ EXCELENTE (9.8/10) - Diseño perfecto, código moderno
+- cluster_name_resolver: ✅ MUY BUENO (8.1/10) - Bien diseñado, mejoras menores
+- NO HAY PROBLEMAS CRÍTICOS - Esta es una de las mejores carpetas del proyecto
+========================================
+
+📋 PRIORIDAD ALTA (Cuando se tenga tiempo):
+-------------------------------------------
+🟡 1. CREAR string_utils.h para eliminar transformaciones duplicadas
+   - Crear: include/utils/string_utils.h
+   - Funciones: toUpper(), toLower(), trim()
+   - Beneficio: Reutilizable en TODO el proyecto
+   - Lugares que lo usarían:
+     - cluster_name_resolver.cpp: 7 veces
+     - DataGovernance.cpp: 5 veces
+     - DataQuality.cpp: 1+ veces
+     - MetricsCollector.cpp: 2 veces
+     - catalog_manager.cpp: varias veces
+     TOTAL: ~20+ lugares en el proyecto
+
+🟡 2. Simplificar extractHostname() reutilizando ConnectionStringParser
+   - Archivo: cluster_name_resolver.cpp líneas 147-172 (25 líneas)
+   - Problema: Duplica parsing que ya existe en ConnectionStringParser
+   - Solución: auto params = ConnectionStringParser::parse(connStr); return params->host;
+   - Beneficio: DRY, ~22 líneas eliminadas
+
+🟡 3. Simplificar resolvePostgreSQL según TODO.txt
+   - Archivo: cluster_name_resolver.cpp líneas 119-144
+   - TODO dice: "quitar current_setting('cluster_name') e inet_server_addr()"
+   - Problema: Query a BD innecesario, usa fallback de todos modos
+   - Solución: Usar getClusterNameFromHostname(params->host) directamente
+   - Beneficio: Más simple, sin query, consistente
+
+📋 PRIORIDAD BAJA (Opcional):
+-----------------------------
+🟢 4. Hacer getClusterNameFromHostname() configurable
+   - Archivo: cluster_name_resolver.cpp líneas 175-219 (45 líneas)
+   - Problema: Lógica hardcoded - agregar ambiente requiere modificar código
+   - Solución: Usar std::unordered_map con keywords por ambiente
+   - Beneficio: OCP, más fácil agregar entornos
+   - Trade-off: Complejidad adicional para beneficio menor
+
+🟢 5. Usar string_view en trim() para evitar copias
+   - Archivo: connection_utils.cpp líneas 36-42
+   - Micro-optimización: usar string_view en lugar de string
+   - Beneficio: Evita copia (ganancia mínima)
+
+✅ LO QUE SÍ ESTÁ BIEN (No tocar - PERFECTO):
+---------------------------------------------
+✅ ConnectionStringParser - DISEÑO EXCELENTE
+   ✅ Usa std::optional<T> para manejo de errores - moderno C++17
+   ✅ Usa std::string_view - eficiente, sin copias innecesarias
+   ✅ Helper privado trim() - encapsulación correcta
+   ✅ Validación clara - retorna nullopt si faltan parámetros
+   ✅ Maneja múltiples formatos - host/SERVER, db/DATABASE
+   ✅ Sin excepciones innecesarias - retorna optional
+   ✅ REUTILIZADO en engines - elimina duplicación masiva
+
+✅ ClusterNameResolver - DISEÑO MUY BUENO
+   ✅ Usa MySQLConnection RAII wrapper - sin memory leaks
+   ✅ Usa ODBCConnection RAII wrapper - sin resource leaks
+   ✅ Usa ConnectionStringParser - DRY, reutiliza componente
+   ✅ Exception-safe - catch-all en métodos críticos
+   ✅ Métodos estáticos - fáciles de testear
+   ✅ Fallback logic - robusto si query falla
+   ✅ Sin SQL injection - no hace queries peligrosas
+
+📊 ESTADÍSTICAS CLAVE:
+----------------------
+- Líneas totales: 310
+- Código duplicado: ~25 líneas (parsing en extractHostname)
+- Transformaciones upper/lower: 7 veces
+- TODO pendiente: Simplificar resolvePostgreSQL
+- Problemas críticos: 0
+- Problemas importantes: 0
+- Mejoras menores: 3
+
+REDUCCIÓN POTENCIAL: 310 → ~283 líneas (-9%)
+
+CALIFICACIÓN GLOBAL: ✅ 9.0/10 - EXCELENTE
+Esta carpeta NO requiere refactoring. Solo mejoras menores opcionales.
+
+================================================================================
+
+================================================================================
+🔧 MEJORAS TÉCNICAS SUGERIDAS - SYNC (MariaDBToPostgres.h) - 3989 LÍNEAS
+================================================================================
+
+📊 ESTADO ACTUAL: 🔴🔴 EXTREMADAMENTE RIESGOSO (2.2/10)
+- HEADER-ONLY con 3989 líneas (debería ser .h + .cpp)
+- MEGA GOD OBJECT con 25+ responsabilidades diferentes
+- escapeSQL() QUINTA VEZ (duplicado de nuevo)
+- 52+ SQL Injection vulnerabilities
+- No usa MySQLConnection, ConnectionStringParser, MetadataRepository
+- ~486 líneas duplicadas (12% del archivo)
+- Métodos de 900 líneas
+========================================
+
+📋 PRIORIDAD CRÍTICA - ARQUITECTÓNICA (URGENTE):
+------------------------------------------------
+🔴 1. HEADER-ONLY DE 4000 LÍNEAS - Separar .h y .cpp
+   - Archivo: MariaDBToPostgres.h (3989 líneas)
+   - Problema: TODO está en header - cada #include recompila 4000 líneas
+   - Tiempo compilación EXTREMO
+   - Solución:
+     - include/sync/MariaDBToPostgres.h (~200 líneas - solo declaraciones)
+     - src/sync/MariaDBToPostgres.cpp (~3800 líneas - implementaciones)
+   - Beneficio: Compilación ~20x más rápida
+   - IMPACTO: CRÍTICO para desarrollo
+
+🔴 2. MEGA GOD OBJECT - 25+ responsabilidades
+   - Una sola clase hace: parseo, conexiones, queries, transformación,
+     bulk insert, threading, status updates, PK management, etc.
+   - Problema: Viola SRP GRAVEMENTE, imposible mantener/testear
+   - Solución: Dividir en clases especializadas:
+     - MariaDBToPostgres (orquestador)
+     - MariaDBConnectionManager (conexiones - usa MySQLConnection RAII)
+     - MariaDBTableSetup (setup tablas)
+     - MariaDBDataFetcher (queries origen)
+     - DataTransformer (cleanValueForPostgres, mapeo tipos)
+     - PostgreSQLBulkWriter (bulk upsert/insert)
+     - SyncStatusManager (metadata - usa MetadataRepository)
+     - ParallelSyncCoordinator (threads)
+   - Beneficio: SRP, OCP, testabilidad, mantenibilidad
+
+🔴 3. DUPLICACIÓN: escapeSQL() - QUINTA VEZ (52+ usos)
+   - Archivo: MariaDBToPostgres.h líneas 2998-3009
+   - Ya existe en: database_engine.h, DDLExporter.cpp, DataGovernance.cpp, MetricsCollector.cpp
+   - Usado 52+ veces solo en este archivo
+   - Problema: VIOLACIÓN EXTREMA de DRY - misma función 5 veces
+   - Solución: Eliminar, usar de database_engine.h
+   - Beneficio: DRY, ~12 líneas eliminadas
+
+🔴 4. SQL INJECTION MASIVO: 52+ vulnerabilities
+   - Archivo: MariaDBToPostgres.h múltiples líneas
+   - Ejemplos: 250-253, 368-370, 647, 662-663, 740, 835, 1077-1078, 1208-1209,
+     1270-1271, 1362-1363, 1400-1402, 1476, 1631-1633, 2053-2055, 2063-2065,
+     2201-2203, 2348-2349, 2500-2502, 2648, 2737-2739, 2807-2808, 2911, 2977,
+     3116, 3182, 3254, 3372, 3735-3738, 3910, y más...
+   - Problema: 52+ usos de escapeSQL() vulnerable
+   - Solución: Usar prepared statements (exec_params) donde sea posible
+   - IMPACTO: VULNERABILIDAD DE SEGURIDAD MASIVA
+
+🔴 5. NO USA MySQLConnection RAII - Memory leaks potenciales
+   - Archivo: MariaDBToPostgres.h
+   - getMariaDBConnection retorna MYSQL* raw (línea 66-173)
+   - 8+ mysql_close manual: líneas 142, 152, 300, 500, 1048, 1157, 1764, 2107, 2227
+   - Problema: Si exception entre get y close → MEMORY LEAK
+   - Solución: Usar MySQLConnection wrapper ya existente
+   - Beneficio: Exception-safe, sin leaks, ~50 líneas menos
+
+📋 PRIORIDAD CRÍTICA - DUPLICACIÓN (Esta Semana):
+-------------------------------------------------
+🔴 6. DUPLICACIÓN: Parseo connection string
+   - Archivo: MariaDBToPostgres.h líneas 74-98 (getMariaDBConnection)
+   - Ya existe: ConnectionStringParser::parse()
+   - Problema: Duplica lógica completa de parsing (~25 líneas)
+   - Solución: auto params = ConnectionStringParser::parse(connStr);
+   - Beneficio: DRY, ~25 líneas eliminadas
+
+🔴 7. DUPLICACIÓN: Transformación toLower (25+ veces)
+   - Archivo: MariaDBToPostgres.h
+   - Líneas: 258-260, 269-272, 383-388, 410-412, 517-519, 553-555, 626-628,
+     669-671, 744-746, 804-806, 947-948, 984-986, y ~15 más...
+   - Problema: std::transform(..., ::tolower) repetido 25+ veces
+   - Solución: Usar toLower() de utils/string_utils.h (cuando se cree)
+   - Beneficio: DRY, ~50 líneas eliminadas
+
+🔴 8. DUPLICACIÓN: Lambda sorting (3 veces idénticas)
+   - Archivo: MariaDBToPostgres.h
+   - Líneas: 327-344 (setupTable), 899-916 (transferOld), 1806-1823 (transferParallel)
+   - Problema: Lambda EXACTAMENTE IGUAL 3 veces (18 líneas × 3 = 54 líneas)
+   - Solución: Extraer a función/constexpr comparator reutilizable
+   - Beneficio: DRY, ~36 líneas eliminadas
+
+🔴 9. DUPLICACIÓN: Construcción de VALUES clause (5 veces)
+   - Archivo: MariaDBToPostgres.h
+   - Líneas: 3103-3122 (performBulkUpsert), 3359-3377 (performBulkInsert),
+     2635-2653 (batchPreparer), 3169-3186 (error handling), 3241-3258 (binary error)
+   - Problema: Construcción idéntica 5 veces (19 líneas × 5 = 95 líneas)
+   - Solución: Extraer a función buildValueClause()
+   - Beneficio: DRY, ~76 líneas eliminadas
+
+🔴 10. DUPLICACIÓN: Setup de tabla lógica (2 veces)
+   - Archivo: MariaDBToPostgres.h
+   - Líneas: 365-501 (setupTableTarget), 1912-1970 (processTableParallel)
+   - Problema: Obtener columnas + mapear tipos duplicado (~100 líneas × 2)
+   - Solución: Extraer a método getTableSchema() reutilizable
+   - Beneficio: DRY, ~100 líneas eliminadas
+
+📋 PRIORIDAD CRÍTICA - MÉTODOS GIGANTES:
+----------------------------------------
+🔴 11. MÉTODO GIGANTE: transferDataMariaDBToPostgresOld() - 900 LÍNEAS
+   - Archivo: MariaDBToPostgres.h líneas 877-1779
+   - Problema: UN método con 900 líneas - complejidad extrema
+   - Imposible de mantener, testear, entender
+   - Solución: Dividir en 10-15 métodos más pequeños
+   - Beneficio: KISS, legibilidad, testabilidad
+
+🔴 12. MÉTODO GIGANTE: processTableParallel() - 371 LÍNEAS
+   - Archivo: MariaDBToPostgres.h líneas 1893-2264
+   - Problema: Método muy largo y complejo
+   - Solución: Dividir en métodos focalizados
+   - Beneficio: KISS, legibilidad
+
+📋 PRIORIDAD ALTA:
+------------------
+🟡 13. Usar MetadataRepository en lugar de queries directos
+   - Múltiples queries a metadata.catalog
+   - getPKStrategyFromCatalog, getPKColumnsFromCatalog, getLastProcessedPKFromCatalog
+   - Solución: Usar MetadataRepository existente
+   - Beneficio: DRY, SRP
+
+🟡 14. Extraer validación de parámetros duplicada
+   - Validación de empty strings repetida 10+ veces
+   - Solución: Helper validateTableParams()
+   - Beneficio: DRY
+
+🟡 15. Consolidar lógica de mapeo de tipos
+   - Código de mapeo VARCHAR/tipos duplicado en múltiples lugares
+   - Líneas: 428-454, 1321-1349, 1946-1967
+   - Solución: Extraer a TypeMapper class
+   - Beneficio: DRY, ~150 líneas consolidadas
+
+🟡 16. struct TableInfo renombrar
+   - Nombre genérico que colisiona con otros TableInfo
+   - Solución: Renombrar a SyncTableInfo o MariaDBSyncTable
+   - Beneficio: Claridad, evita confusión
+
+📋 PRIORIDAD MEDIA:
+-------------------
+🟢 17. Extraer construcción de queries
+   - buildUpsertQuery, buildUpsertConflictClause podrían estar en QueryBuilder
+   - Beneficio: SRP, reutilizable
+
+🟢 18. Usar connection pooling
+   - Crear/destruir conexión en cada llamada
+   - Solución: Pool de conexiones reutilizables
+   - Beneficio: Performance significativa
+
+🟢 19. Comentarios DEBUG y código comentado
+   - Múltiples std::cerr comentados
+   - Bloques de código comentado (líneas 2545-2552)
+   - Solución: Eliminar código muerto
+   - Beneficio: Limpieza
+
+📊 ESTADÍSTICAS CLAVE:
+----------------------
+- Líneas totales: 3989 (HEADER-ONLY!)
+- Responsabilidades: 25+
+- Métodos gigantes: transferDataMariaDBToPostgresOld (900 líneas)
+- Código duplicado estimado: ~486 líneas (12%)
+- escapeSQL duplicado: QUINTA VEZ, 52+ usos
+- toLower duplicado: 25+ veces
+- Lambda sorting: 3 veces idénticas (54 líneas)
+- Construcción VALUES: 5 veces (95 líneas)
+- Setup tabla: 2 veces (200 líneas)
+- Parseo connection string: 1 vez (25 líneas)
+- mysql_close manual: 8 ocurrencias
+- SQL Injection: 52+ lugares
+- Transformación case: 29+ veces (toUpper/toLower)
+
+REDUCCIÓN POTENCIAL: 3989 → ~3300 líneas (-17%)
+PERO REAL BENEFICIO: Separar .h/.cpp + dividir en clases
+  → MariaDBToPostgres.h: ~200 líneas
+  → MariaDBToPostgres.cpp + helpers: ~1500 líneas (dividido en múltiples archivos)
+  TOTAL: ~1700 líneas vs 3989 (-57%)
+
+CALIFICACIÓN: 🔴 2.2/10 - EXTREMADAMENTE RIESGOSO
+REQUIERE REFACTORING ARQUITECTÓNICO URGENTE
+
+================================================================================
+
+================================================================================
+🔧 MEJORAS TÉCNICAS SUGERIDAS - SYNC (MSSQLToPostgres.h) - 3442 LÍNEAS
+================================================================================
+
+📊 ESTADO ACTUAL: 🔴🔴 EXTREMADAMENTE RIESGOSO (2.0/10)
+- HEADER-ONLY con 3442 líneas (debería ser .h + .cpp)
+- MEGA GOD OBJECT con 20+ responsabilidades
+- escapeSQL() SEXTA VEZ (duplicado de nuevo)
+- 45+ SQL Injection vulnerabilities
+- 70-80% código DUPLICADO con MariaDBToPostgres.h (~2500 líneas!)
+- No usa ODBCConnection RAII - resource leaks garantizados
+========================================
+
+📋 PRIORIDAD CRÍTICA - DUPLICACIÓN ENTRE ARCHIVOS:
+--------------------------------------------------
+🔴🔴 1. DUPLICACIÓN MASIVA: 70-80% código idéntico con MariaDBToPostgres.h
+   - Archivos: MSSQLToPostgres.h (3442 líneas) + MariaDBToPostgres.h (3989 líneas)
+   - Código duplicado estimado: ~2500 líneas (70-80% de overlap)
+   - Ejemplos de código IDÉNTICO:
+     - struct TableInfo: 100% idéntico
+     - Lambda sorting: 100% idéntico (18 líneas)
+     - getActiveTables(): 95% idéntico (50 líneas)
+     - buildUpsertQuery(): 90% idéntico (22 líneas)
+     - buildUpsertConflictClause(): 95% idéntico (20 líneas)
+     - cleanValueForPostgres(): 85% similar (200 vs 103 líneas)
+     - Lógica TRUNCATE/RESET: 95% idéntica
+     - Lógica PK management: 95% idéntica
+     - Parallel processing: 80% idéntico
+   - Solución: Crear clase base DatabaseToPostgresSync con código común
+     - DatabaseToPostgresSync (clase abstracta base) ~2000 líneas
+     - MariaDBToPostgres hereda, solo específico MariaDB ~800 líneas
+     - MSSQLToPostgres hereda, solo específico MSSQL ~700 líneas
+   - Beneficio: Elimina ~2500 líneas duplicadas, bugs se arreglan 1 vez
+   - IMPACTO: CRÍTICO - esta es la duplicación más grande del proyecto
+
+🔴 2. HEADER-ONLY DE 3442 LÍNEAS - Separar .h y .cpp
+   - Archivo: MSSQLToPostgres.h (3442 líneas)
+   - Problema: TODO en header - compilación extremadamente lenta
+   - Solución: Dividir en .h (declaraciones) + .cpp (implementaciones)
+   - Beneficio: Compilación ~20x más rápida
+   - Nota: Hacer DESPUÉS de consolidar con MariaDB para no duplicar trabajo
+
+🔴 3. DUPLICACIÓN: escapeSQL() - SEXTA VEZ (45+ usos)
+   - Archivo: MSSQLToPostgres.h líneas 2742-2750
+   - Ya existe 5 veces: database_engine.h, DDLExporter, DataGovernance, MetricsCollector, MariaDBToPostgres
+   - Usado 45+ veces en este archivo
+   - Problema: VIOLACIÓN EXTREMA de DRY - misma función 6 veces en proyecto
+   - Solución: Consolidar en utils/sql_utils.h (1 sola definición)
+   - Beneficio: DRY
+
+🔴 4. NO USA ODBCConnection RAII - Resource leaks GARANTIZADOS
+   - Archivo: MSSQLToPostgres.h líneas 68-198 (getMSSQLConnection)
+   - Problema: 
+     - Retorna SQLHDBC raw pointer
+     - closeMSSQLConnection NO se llama (0 ocurrencias encontradas!)
+     - SQLHENV no se libera nunca
+     - RESOURCE LEAKS CONFIRMADOS
+   - Solución: Usar ODBCConnection wrapper ya existente
+   - Beneficio: Sin leaks, exception-safe, ~130 líneas menos
+   - IMPACTO: CRÍTICO - leaks acumulativos en producción
+
+🔴 5. DUPLICACIÓN: extractDatabaseName() - YA EXISTE en mssql_engine.cpp
+   - Archivo: MSSQLToPostgres.h líneas 3323-3337
+   - Ya existe IDÉNTICO en: mssql_engine.cpp líneas 143-163
+   - Problema: Función duplicada exactamente igual
+   - Solución: Usar extractDatabaseName de mssql_engine o ConnectionStringParser
+   - Beneficio: DRY, ~15 líneas eliminadas
+
+📋 PRIORIDAD CRÍTICA - ARQUITECTÓNICA:
+--------------------------------------
+🔴 6. DUPLICACIÓN: Parseo connection string
+   - Archivo: MSSQLToPostgres.h líneas 77-100 (getMSSQLConnection)
+   - Ya existe: ConnectionStringParser::parse()
+   - Problema: Duplica parsing (~24 líneas)
+   - Solución: Reutilizar ConnectionStringParser
+   - Beneficio: DRY, ~24 líneas eliminadas
+
+🔴 7. SQL INJECTION MASIVO: 45+ vulnerabilities
+   - Archivo: MSSQLToPostgres.h múltiples líneas
+   - Ejemplos: 291-292, 876-877, 935-936, 2759-2761, y más...
+   - Problema: 45+ usos de escapeSQL() vulnerable
+   - Solución: Migrar a prepared statements donde sea posible
+   - IMPACTO: VULNERABILIDAD DE SEGURIDAD MASIVA
+
+🔴 8. TRANSFORMACIÓN toLower DUPLICADA 20+ veces
+   - Archivo: MSSQLToPostgres.h
+   - Similar a MariaDBToPostgres (25+ veces)
+   - Solución: Usar toLower() de utils/string_utils.h
+   - Beneficio: DRY, ~40 líneas eliminadas
+
+📋 RECOMENDACIONES DE CONSOLIDACIÓN:
+------------------------------------
+✅ ESTRATEGIA: Consolidar MariaDB + MSSQL en arquitectura común
+
+Opción A - Herencia (Recomendado):
+┌─────────────────────────────────────┐
+│ DatabaseToPostgresSync (Base)       │
+│ - struct TableInfo                  │
+│ - getActiveTables()                 │
+│ - updateStatus()                    │
+│ - cleanValueForPostgres()           │
+│ - buildUpsertQuery()                │
+│ - buildUpsertConflictClause()       │
+│ - Parallel processing infrastructure│
+│ - TRUNCATE/RESET logic              │
+│ - PK management                     │
+│ (~2000 líneas comunes)              │
+└─────────────────────────────────────┘
+          ▲                    ▲
+          │                    │
+┌─────────┴────────┐  ┌────────┴─────────┐
+│ MariaDBToPostgres│  │ MSSQLToPostgres  │
+│ (~800 líneas)    │  │ (~700 líneas)    │
+│ - MySQL specific │  │ - ODBC specific  │
+└──────────────────┘  └──────────────────┘
+
+Opción B - Composition:
+┌────────────────────────────────────┐
+│ SyncOrchestrator                   │
+│ - TableSyncManager                 │
+│ - BulkDataWriter (común)           │
+│ - StatusManager (común)            │
+│ - Engines polimórficos             │
+└────────────────────────────────────┘
+
+Beneficios de consolidación:
+- Elimina ~2500 líneas de código duplicado
+- Bug fixes se aplican a ambos motores automáticamente
+- Agregar nuevo motor (Oracle, MongoDB) es fácil
+- Testing se hace 1 vez, no 2
+
+📊 ESTADÍSTICAS CLAVE:
+----------------------
+- Líneas totales: 3442 (HEADER-ONLY!)
+- Responsabilidades: 20+
+- Código duplicado con MariaDBToPostgres: ~2500 líneas (70-80%)
+- Código duplicado interno: ~200 líneas
+- escapeSQL: SEXTA VEZ, 45+ usos
+- toLower: 20+ veces
+- extractDatabaseName: duplicado de mssql_engine.cpp
+- SQL Injection: 45+ lugares
+- Resource leaks: closeMSSQLConnection nunca llamado (ODBC handles leaked)
+
+DUPLICACIÓN ENTRE MariaDB + MSSQL:
+- struct TableInfo: 14 líneas × 2 = 28 líneas
+- Lambda sorting: 18 líneas × 2 = 36 líneas
+- getActiveTables: 50 líneas × 2 = 100 líneas
+- cleanValueForPostgres: ~150 líneas promedio × 2 = 300 líneas
+- buildUpsert*: 50 líneas × 2 = 100 líneas
+- Parallel infrastructure: ~500 líneas × 2 = 1000 líneas
+- Lógica TRUNCATE/RESET: ~200 líneas × 2 = 400 líneas
+- PK management: ~200 líneas × 2 = 400 líneas
+- Otros helpers: ~250 líneas × 2 = 500 líneas
+TOTAL DUPLICADO: ~2864 líneas entre ambos archivos
+
+REDUCCIÓN POTENCIAL:
+MariaDBToPostgres: 3989 líneas
+MSSQLToPostgres: 3442 líneas
+TOTAL ACTUAL: 7431 líneas
+
+CON REFACTORING:
+DatabaseToPostgresSync (base): ~2000 líneas
+MariaDBToPostgres (específico): ~800 líneas
+MSSQLToPostgres (específico): ~700 líneas
+TOTAL REFACTORIZADO: ~3500 líneas
+
+AHORRO: 7431 - 3500 = 3931 líneas (-53%)
+
+CALIFICACIÓN: 🔴 2.0/10 - EXTREMADAMENTE RIESGOSO
+REQUIERE CONSOLIDACIÓN URGENTE CON MariaDBToPostgres
+
+================================================================================
+
+================================================================================
+🔧 MEJORAS TÉCNICAS SUGERIDAS - SYNC (ParallelProcessing.h + StreamingData.h) - 949 líneas
+================================================================================
+
+📊 ESTADO ACTUAL:
+- ParallelProcessing.h: ✅ EXCELENTE (9.7/10) - NO requiere cambios
+- StreamingData.h: 🟢 BUENO (7.4/10) - Header-only, duplicación menor
+========================================
+
+📋 ParallelProcessing.h (88 líneas) - ANÁLISIS:
+-----------------------------------------------
+✅ EXCELENTE (9.7/10) - NO REQUIERE CAMBIOS
+
+✅ LO QUE SÍ ESTÁ BIEN (PERFECTO):
+----------------------------------
+✅ ThreadSafeQueue<T> correctamente implementado
+   ✅ Thread-safety: mutex + condition_variable + atomic
+   ✅ Move semantics: evita copias innecesarias
+   ✅ RAII locks: lock_guard, unique_lock
+   ✅ Timeout configurable en pop()
+   ✅ Shutdown graceful con atomic flag + notify_all
+   ✅ Template genérico reutilizable
+   ✅ Código limpio y simple (88 líneas)
+   
+✅ Structs bien diseñados (DataChunk, PreparedBatch, ProcessedResult)
+   ✅ Nombres descriptivos
+   ✅ Tamaño razonable (~5 campos cada uno)
+
+🟢 MEJORAS MENORES (Opcional):
+   - Namespace ParallelProcessing podría estar anidado
+   - Structs podrían tener constructores explícitos
+
+VEREDICTO: ✅ NO TOCAR - Excelente implementación
+
+================================================================================
+
+📋 StreamingData.h (861 líneas) - ANÁLISIS:
+-------------------------------------------
+📊 ESTADO: 🟢 BUENO (7.4/10) - Orquestador bien diseñado con mejoras menores
+
+📋 PRIORIDAD CRÍTICA:
+---------------------
+🔴 1. HEADER-ONLY DE 861 LÍNEAS - Separar .h y .cpp
+   - Archivo: StreamingData.h (861 líneas)
+   - Problema: Todo en header, ralentiza compilación
+   - Solución:
+     - include/sync/StreamingData.h (~100 líneas - declaraciones)
+     - src/sync/StreamingData.cpp (~761 líneas - implementaciones)
+   - Beneficio: Compilación más rápida
+
+📋 PRIORIDAD ALTA:
+------------------
+🟡 2. DUPLICACIÓN: Validación de tablas por engine (3 veces)
+   - Archivo: StreamingData.h
+   - qualityThread líneas 559-593 (MariaDB)
+   - qualityThread líneas 595-629 (MSSQL)
+   - qualityThread líneas 631-666 (PostgreSQL)
+   - Problema: Código EXACTAMENTE IGUAL 3 veces (~35 líneas × 3 = 105 líneas)
+   - Solo cambia el nombre del engine
+   - Solución: Extraer a validateTablesForEngine(conn, dbEngine)
+   - Beneficio: DRY, 105 líneas → 15 líneas
+
+🟡 3. DUPLICACIÓN: Configuración de timeouts (2 veces)
+   - Archivo: StreamingData.h
+   - qualityThread líneas 547-548
+   - monitoringThread líneas 807-808
+   - Problema: Código duplicado
+   - Solución: Extraer a setConnectionTimeouts(conn)
+   - Beneficio: DRY, ~4 líneas → función reutilizable
+
+🟡 4. DUPLICACIÓN: Patrón de threads transfer (2 threads similares)
+   - Archivo: StreamingData.h
+   - mariaTransferThread: líneas 459-490
+   - mssqlTransferThread: líneas 492-522
+   - Problema: 95% código idéntico, solo cambian nombres
+   - Solución: Template method genericTransferThread()
+   - Beneficio: DRY, ~60 líneas → ~10 líneas
+
+📋 PRIORIDAD MEDIA:
+-------------------
+🟢 5. Validación de config repetitiva (patrón similar 4 veces)
+   - Archivo: StreamingData.h líneas 175-242 (loadConfigFromDatabase)
+   - chunk_size, sync_interval, max_workers, max_tables_per_cycle
+   - Problema: Patrón duplicado 4 veces (~17 líneas × 4 = 68 líneas)
+   - Solución: Usar map de validators con min/max/getter/setter
+   - Beneficio: DRY, ~68 líneas → ~20 líneas, más mantenible
+
+🟢 6. Empty else blocks
+   - Líneas 187, 204 (validación de ranges)
+   - Solución: Remover else vacíos
+   - Beneficio: Código más limpio
+
+✅ LO QUE SÍ ESTÁ BIEN:
+-----------------------
+✅ Arquitectura multi-threaded bien diseñada
+   ✅ 7 threads especializados con responsabilidades claras
+   ✅ Shutdown graceful de todos los threads
+   ✅ Manejo de excepciones en cada thread
+
+✅ Usa RAII para conexiones (unique_ptr)
+   ✅ pgConn.reset() explícito después de uso
+   ✅ Cleanup automático si hay exception
+
+✅ Composición de objetos (no herencia)
+   ✅ MariaDBToPostgres mariaToPg
+   ✅ MSSQLToPostgres mssqlToPg
+   ✅ CatalogManager catalogManager
+   ✅ DataQuality dataQuality
+
+✅ API pública simple
+   ✅ initialize(), run(), shutdown()
+   ✅ Fácil de usar
+
+✅ Validación de parámetros consistente
+   ✅ Verifica empty strings
+   ✅ Verifica rangos de valores
+   ✅ Logging detallado de errores
+
+✅ Carga dinámica de configuración desde BD
+   ✅ Permite ajustar sin reiniciar (parcialmente)
+
+📊 ESTADÍSTICAS CLAVE:
+----------------------
+StreamingData.h:
+- Líneas totales: 861 (header-only)
+- Threads gestionados: 7
+- Código duplicado: ~170 líneas (validación tablas + threads)
+- Validación config repetitiva: ~68 líneas
+- Responsabilidades: Orquestación del sistema completo
+
+ParallelProcessing.h:
+- Líneas totales: 88
+- Código duplicado: 0
+- Calidad: EXCELENTE
+
+REDUCCIÓN POTENCIAL StreamingData.h: 861 → ~690 líneas (-20%)
+
+CALIFICACIÓN GLOBAL SYNC/:
+- ParallelProcessing.h: ✅ 9.7/10 - EXCELENTE
+- StreamingData.h: 🟢 7.4/10 - BUENO
+- MariaDBToPostgres.h: 🔴 2.2/10 - CRÍTICO
+- MSSQLToPostgres.h: 🔴 2.0/10 - CRÍTICO
+
+CALIFICACIÓN PROMEDIO: 🟡 5.3/10 - Muy desbalanceado
+
+TOTAL LÍNEAS CARPETA SYNC: 8379 líneas
+REDUCCIÓN POTENCIAL CON CONSOLIDACIÓN: ~4400 líneas (-52%)
+
+================================================================================
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                   📊 RESUMEN EJECUTIVO GLOBAL DEL PROYECTO                   ║
+║                         Análisis SOLID + KISS + DRY Completo                 ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+📁 PROYECTO ANALIZADO: DataSync C++ (11 módulos, ~10,000 líneas)
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 📊 TABLA COMPARATIVA: CALIDAD POR MÓDULO                                    │
+├──────────────────┬────────┬─────────┬─────┬──────────┬──────────┬──────────┤
+│ Módulo           │ Líneas │ SOLID   │ DRY │ Security │ Calif.   │ Estado   │
+├──────────────────┼────────┼─────────┼─────┼──────────┼──────────┼──────────┤
+│ utils/           │    310 │ ✅ 9/10  │ ✅10│ ✅ 10/10  │ ✅ 9.0/10 │ EXCELENTE│
+│ engines/         │   ~800 │ ✅ 9/10  │ ✅9 │ 🟡 5/10  │ 🟢 8.0/10 │ MUY BUENO│
+│ catalog/         │   ~600 │ 🟡 7/10  │ ✅9 │ ✅ 9/10  │ 🟢 7.7/10 │ BUENO    │
+│ StreamingData    │    861 │ 🟡 7/10  │ 🟡6 │ ✅ 8/10  │ 🟢 7.4/10 │ BUENO    │
+│ metrics/         │    591 │ 🟡 6/10  │ 🔴3 │ ✅ 8/10  │ 🟡 5.8/10 │ MEJORABLE│
+│ core/            │   ~250 │ 🟡 5/10  │ 🟡6 │ 🔴 3/10  │ 🟡 4.7/10 │ RIESGOSO │
+│ export/          │   1318 │ 🔴 3/10  │ 🔴4 │ 🔴 4/10  │ 🔴 3.5/10 │ RIESGOSO │
+│ governance/      │   2178 │ 🔴 3/10  │ 🔴4 │ 🔴 4/10  │ 🔴 3.4/10 │ RIESGOSO │
+│ MariaDB sync     │   3989 │ 🔴 2/10  │ 🔴2 │ 🔴 3/10  │ 🔴 2.2/10 │ CRÍTICO  │
+│ MSSQL sync       │   3442 │ 🔴 2/10  │ 🔴2 │ 🔴 3/10  │ 🔴 2.0/10 │ CRÍTICO  │
+├──────────────────┴────────┴─────────┴─────┴──────────┴──────────┴──────────┤
+│ PROMEDIO PROYECTO:                                      🟡 6.0/10           │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+🎯 PROBLEMAS CRÍTICOS ENCONTRADOS (TOP 10):
+============================================
+
+🔴 1. DUPLICACIÓN MASIVA: MariaDB + MSSQL sync
+   - 70-80% código duplicado (~2864 líneas)
+   - Ahorro potencial: 3931 líneas (-53%)
+   - IMPACTO: Bugs duplicados, mantenimiento 2x
+
+🔴 2. escapeSQL() DUPLICADO 6 VECES en el proyecto
+   - database_engine.h, DDLExporter, DataGovernance, MetricsCollector, 
+     MariaDBToPostgres, MSSQLToPostgres
+   - Usado 200+ veces en total
+   - VULNERABLE a SQL Injection
+   - IMPACTO: Seguridad crítica
+
+🔴 3. getCurrentTimestamp() DUPLICADO 3 VECES
+   - Logger, DataGovernance, MetricsCollector
+   - Lógica idéntica ~12 líneas × 3 = 36 líneas
+   - IMPACTO: Violación DRY
+
+🔴 4. Transformación toLower/toUpper DUPLICADA 60+ VECES
+   - cluster_name_resolver: 7 veces
+   - DataGovernance: 5 veces
+   - DataQuality: 1+ veces
+   - MetricsCollector: 2 veces
+   - catalog_manager: varias veces
+   - MariaDBToPostgres: 25+ veces
+   - MSSQLToPostgres: 20+ veces
+   - TOTAL: ~60+ duplicaciones
+   - IMPACTO: Código verboso, ~120 líneas duplicadas
+
+🔴 5. Parseo de Connection Strings DUPLICADO 5+ VECES
+   - DDLExporter: 2 lugares (MariaDB + MSSQL)
+   - cluster_name_resolver: 1 lugar (extractHostname)
+   - MariaDBToPostgres: 1 lugar
+   - MSSQLToPostgres: 1 lugar
+   - Ya existe ConnectionStringParser ✅
+   - IMPACTO: ~125 líneas duplicadas
+
+🔴 6. Password HARDCODEADO en Config.cpp
+   - Config.cpp línea 8: "Yucaquemada1"
+   - VULNERABILIDAD DE SEGURIDAD CRÍTICA
+   - Commiteado al repositorio Git
+   - IMPACTO: Credenciales expuestas
+
+🔴 7. IF-CHAINS MONSTRUOSOS: 388 líneas de clasificación
+   - DataGovernance: determineDataCategory (148 líneas)
+   - DataGovernance: determineBusinessDomain (100 líneas)
+   - DataGovernance: determineSensitivity (80 líneas)
+   - DataGovernance: determineClassification (60 líneas)
+   - Lógica hardcoded, no configurable
+   - IMPACTO: Viola OCP, no escalable
+
+🔴 8. N+1 Query Problem - 2 lugares
+   - DataQuality::checkNullCounts: 1 query por columna
+   - MetricsCollector: nested loops O(n²) en 3 métodos
+   - Tabla con 50 columnas = 51 queries
+   - IMPACTO: Performance crítico
+
+🔴 9. Memory/Resource Leaks Potenciales
+   - DDLExporter: 6 early returns con mysql_close manual
+   - MariaDBToPostgres: 8 mysql_close manuales
+   - MSSQLToPostgres: ODBC handles nunca liberados (closeMSSQLConnection no se llama!)
+   - IMPACTO: Leaks acumulativos en producción
+
+🔴 10. HEADER-ONLY files gigantes (4 archivos)
+   - MariaDBToPostgres.h: 3989 líneas
+   - MSSQLToPostgres.h: 3442 líneas
+   - StreamingData.h: 861 líneas
+   - DDLExporter incluye lógica en header indirectamente
+   - IMPACTO: Compilación extremadamente lenta
+
+📊 ESTADÍSTICAS GLOBALES DEL PROYECTO:
+======================================
+Total líneas analizadas: ~13,339
+Código duplicado identificado: ~4,500 líneas (34%)
+SQL Injection vulnerabilities: 200+ lugares
+Memory/Resource leaks: 15+ lugares
+Métodos >500 líneas: 3
+Métodos >100 líneas: 20+
+Funciones triviales innecesarias: 10+
+
+🎯 REDUCCIÓN POTENCIAL TOTAL:
+==============================
+ANTES:  ~13,339 líneas
+DESPUÉS: ~7,500 líneas (aplicando todas las mejoras)
+AHORRO: ~5,839 líneas (-44%)
+
+BENEFICIOS ADICIONALES:
+- Compilación ~10-20x más rápida
+- Sin SQL Injection (migrar a prepared statements)
+- Sin memory/resource leaks (RAII everywhere)
+- Sin password hardcodeado (variables de entorno)
+- Performance ~50-100x mejor (fix N+1, nested loops)
+- Testeable (inyección de dependencias, interfaces)
+
+🏆 MÓDULOS DESTACADOS (Para usar como referencia):
+===================================================
+✅ utils/ (9.0/10) - EXCELENTE diseño, RAII, std::optional, DRY
+✅ ParallelProcessing.h (9.7/10) - Thread-safety perfecto
+✅ engines/ (8.0/10) - Buen uso de interfaces y RAII
+
+🔴 MÓDULOS QUE REQUIEREN ATENCIÓN URGENTE:
+===========================================
+🔴 sync/MariaDB + MSSQL (2.1/10) - Consolidación crítica necesaria
+🔴 governance/ (3.4/10) - God Object, if-chains, N+1 queries
+🔴 export/ (3.5/10) - God Object, duplicación, memory leaks
+🔴 core/Config (4.7/10) - Password hardcodeado, sin cargar de archivo
+
+================================================================================
+
+================================================================================
+🔧 MEJORAS TÉCNICAS SUGERIDAS - ENGINES (database_engine.h + engines/)
+================================================================================
+
+📋 PRIORIDAD CRÍTICA (Seguridad - Fix URGENTE):
+-----------------------------------------------
+🔴 1. SQL INJECTION en MariaDB engine
+   - Archivos: mariadb_engine.cpp líneas 152-153, 181-182, 210-211
+   - Problema: Usa escapeSQL() que NO es suficiente para prevenir SQL injection
+   - Solución A: Usar mysql_real_escape_string() (mínimo viable)
+   - Solución B: Migrar a MySQL Connector/C++ con prepared statements (mejor)
+   - Métodos afectados: detectPrimaryKey, detectTimeColumn, getColumnCounts
+   - Impacto: VULNERABILIDAD DE SEGURIDAD
+
+🔴 2. SQL INJECTION en MSSQL engine
+   - Archivos: mssql_engine.cpp líneas 207, 238-239, 270
+   - Problema: Usa escapeSQL() que NO es suficiente
+   - Solución: Usar ODBC prepared statements (SQLPrepare + SQLBindParameter)
+   - ODBC ya soporta prepared statements nativamente
+   - Métodos afectados: detectPrimaryKey, detectTimeColumn, getColumnCounts
+   - Impacto: VULNERABILIDAD DE SEGURIDAD
+
+🔴 3. Deprecar o eliminar función escapeSQL()
+   - Archivo: database_engine.h líneas 48-56
+   - Problema: Solo escapa ', no protege contra \, ", ;, --, /*, binary injection
+   - Solución: Marcar como [[deprecated]] y forzar uso de prepared statements
+   - Ejemplo vulnerable: admin' OR '1'='1; admin\'; DROP TABLE users; --
+   - Beneficio: Prevenir uso inseguro
+
+✅ NOTA: PostgreSQL engine YA USA prepared statements correctamente (NO vulnerable)
+
+📋 PRIORIDAD ALTA:
+------------------
+🟡 4. Extraer utilities a archivo separado
+   - Archivo: database_engine.h contiene determinePKStrategy, columnsToJSON, escapeSQL
+   - Problema: Utilities no son parte de la interface, violan SRP
+   - Solución: Crear engines/database_utils.h para utilities
+   - Beneficio: SRP, interface más limpia
+
+🟡 5. Reutilizar ConnectionStringParser en extractDatabaseName()
+   - Archivo: mssql_engine.cpp líneas 143-163
+   - Problema: Duplica lógica de parsing de connection strings
+   - Solución: Usar ConnectionStringParser::parse() existente
+   - Beneficio: DRY, menos código duplicado
+
+🟡 6. Validar timeout setting en MariaDB
+   - Archivo: mariadb_engine.cpp línea 80
+   - Problema: mysql_query() no valida return code
+   - Solución: Verificar resultado y loguear warnings si falla
+   - Beneficio: Mejor observabilidad de fallos
+
+📋 PRIORIDAD MEDIA:
+-------------------
+🟢 7. Considerar migrar MariaDB a library moderna
+   - MySQL C API es legacy, considerar MySQL Connector/C++
+   - Beneficio: Prepared statements nativos, API más moderna, más seguro
+   - Trade-off: Dependencia adicional
+
+🟢 8. Agregar retry logic en createConnection()
+   - Para todos los engines
+   - 3 retries con backoff exponencial
+   - Beneficio: Resiliencia ante fallos temporales de red
+
+🟢 9. Agregar connection pooling
+   - Reutilizar conexiones en lugar de crear nuevas
+   - Beneficio: Performance significativamente mejor
+   - Trade-off: Complejidad adicional
+
+✅ LO QUE SÍ ESTÁ BIEN (No tocar):
+----------------------------------
+✅ RAII wrappers (MySQLConnection, ODBCConnection) - PERFECTOS
+✅ Rule of 5 correctamente implementado - No memory leaks posibles
+✅ Move semantics - Eficiente
+✅ Interfaces bien diseñadas (IDatabaseEngine) - Polimorfismo correcto
+✅ PostgreSQL engine usa prepared statements - SEGURO
+✅ Manejo de NULL en resultados - Correcto
+
+================================================================================

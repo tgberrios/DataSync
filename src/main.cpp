@@ -4,11 +4,14 @@
 
 int main() {
   try {
-    // Initialize logger with error handling
+    DatabaseConfig::loadFromFile("config.json");
+
     Logger::initialize();
     Logger::info(LogCategory::SYSTEM, "main", "DataSync started");
-
-    Logger::info(LogCategory::SYSTEM, "main", "Using hardcoded configuration");
+    Logger::info(LogCategory::SYSTEM, "main",
+                 "Configuration loaded from config.json (DB: " +
+                     DatabaseConfig::getPostgresDB() + "@" +
+                     DatabaseConfig::getPostgresHost() + ")");
 
     std::cout << "\n";
     std::cout << "██████╗  █████╗ ████████╗ █████╗ ███████╗██╗   ██╗███╗   ██╗ "
