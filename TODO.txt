@@ -8,3 +8,182 @@
    - Quitar la columna de candidate_columns
    - Mostrar notes en el catalog (frontend)
 ================================================================================
+
+🚀 OPTIMIZACIÓN DE PARALELISMO (NUEVO - Branch: feature/parallel-optimization):
+================================================================================
+📊 ANÁLISIS COMPLETO: Ver PARALLEL_OPTIMIZATION_ANALYSIS.md
+
+OBJETIVO:
+=========
+Implementar Thread Pool + Connection Pool para mejorar 50-70% el tiempo
+de sincronización de tablas.
+
+PROBLEMA ACTUAL:
+================
+⚠️  Crea y destruye threads para CADA tabla (overhead)
+⚠️  Workers quedan idle esperando al thread más lento
+⚠️  Crea conexiones PostgreSQL por cada thread (overhead)
+⚠️  No hay reutilización de recursos
+
+SOLUCIÓN:
+=========
+✅ Thread Pool con workers permanentes (4-8 workers fijos)
+✅ Connection Pool de PostgreSQL (reutilizable)
+✅ Task Queue thread-safe para tablas pendientes
+✅ 100% utilización de CPU (workers siempre trabajando)
+
+BENEFICIOS ESPERADOS:
+=====================
+⚡ 100 tablas pequeñas: 50s → 15s (-70%)
+⚡ 1000 tablas mixtas: 15min → 5min (-67%)
+⚡ Thread overhead: ~500ms → 0ms (-100%)
+⚡ Connection overhead: ~20s → 0s (-100%)
+⚡ Workers idle time: ~2min → 0s (-100%)
+
+PLAN DE IMPLEMENTACIÓN (7-10 horas):
+=====================================
+
+📋 FASE 1 (2-3h): Core Components
+----------------------------------
+   [ ] 1.1 Crear ThreadSafeQueue<Task> template genérico
+           Archivo: include/sync/ThreadSafeQueue.h
+           - push(Task) con lock
+           - pop(Task&) blocking con condition_variable
+           - finish() para señalar fin
+           - size() thread-safe
+   
+   [ ] 1.2 Crear TableProcessorThreadPool
+           Archivo: include/sync/TableProcessorThreadPool.h
+           - Constructor crea N workers (threads fijos)
+           - submitTask(TableTask) añade a queue
+           - waitForCompletion() espera a todos
+           - Métricas: activeWorkers(), completedTasks()
+   
+   [ ] 1.3 Testing unitario
+           Archivo: tests/sync/test_thread_pool.cpp
+           - Test queue push/pop concurrente
+           - Test pool con 4 workers
+           - Test completion signal
+
+📋 FASE 2 (1-2h): Connection Pooling
+-------------------------------------
+   [ ] 2.1 Crear PostgreSQLConnectionPool
+           Archivo: include/sync/ConnectionPool.h
+           - Constructor crea N conexiones pre-conectadas
+           - acquire() bloquea hasta obtener conexión
+           - release(conn) devuelve conexión al pool
+           - RAII wrapper: ScopedConnection auto-release
+   
+   [ ] 2.2 Testing con múltiples conexiones
+           Archivo: tests/sync/test_connection_pool.cpp
+           - Test adquirir/liberar 100 veces
+           - Test concurrencia (4 threads simultáneos)
+
+📋 FASE 3 (2-3h): Integration
+------------------------------
+   [ ] 3.1 Refactorizar transferDataMariaDBToPostgresParallel()
+           Archivo: include/sync/MariaDBToPostgres.h
+           Cambios:
+           - Eliminar loop con tableProcessors.emplace_back()
+           - Crear TableProcessorThreadPool(numWorkers)
+           - Crear PostgreSQLConnectionPool(numWorkers)
+           - Loop: pool.submitTask() para cada tabla
+           - pool.waitForCompletion()
+   
+   [ ] 3.2 Refactorizar transferDataMSSQLToPostgresParallel()
+           Archivo: include/sync/MSSQLToPostgres.h
+           - Mismos cambios que MariaDB
+   
+   [ ] 3.3 Testing funcional completo
+           - Probar con 10 tablas pequeñas
+           - Probar con 3 tablas grandes
+           - Verificar que todas se procesan correctamente
+
+📋 FASE 4 (1h): Monitoring & Metrics
+-------------------------------------
+   [ ] 4.1 Añadir logs de progreso cada 10s
+           - "ThreadPool: Active 3/4 | Completed 45/100 | Pending 55"
+           - "ConnectionPool: Available 2/4 | In-use 2/4"
+   
+   [ ] 4.2 Dashboard en StreamingData
+           - Mostrar estado del pool en cada ciclo
+           - Tiempo total de ciclo
+           - Tablas/segundo promedio
+
+📋 FASE 5 (1-2h): Testing & Validation
+---------------------------------------
+   [ ] 5.1 Testing de stress
+           - 100 tablas pequeñas (benchmark)
+           - 1000 tablas (si disponible)
+           - Comparar tiempos ANTES vs DESPUÉS
+   
+   [ ] 5.2 Memory leak check
+           - Verificar con valgrind o sanitizers
+           - Ejecutar por 1 hora, verificar memoria estable
+   
+   [ ] 5.3 Graceful shutdown
+           - Ctrl+C debe terminar workers limpiamente
+           - No dejar threads zombies
+
+CONFIGURACIÓN RECOMENDADA:
+==========================
+En config.json:
+{
+  "sync": {
+    "max_workers": 4,              ← Para CPU con 4-8 cores
+    "connection_pool_size": 4,     ← Mismo que workers
+    "max_tables_per_cycle": 1000
+  }
+}
+
+Para servidores potentes (16+ cores):
+{
+  "sync": {
+    "max_workers": 8,
+    "connection_pool_size": 8,
+    "max_tables_per_cycle": 10000
+  }
+}
+
+ARCHIVOS A CREAR:
+=================
+include/sync/
+├── ThreadSafeQueue.h          (nuevo - template genérico)
+├── TableProcessorThreadPool.h (nuevo - thread pool)
+├── ConnectionPool.h           (nuevo - connection pool)
+
+src/sync/
+├── TableProcessorThreadPool.cpp (nuevo - implementación)
+├── ConnectionPool.cpp           (nuevo - implementación)
+
+tests/sync/
+├── test_thread_pool.cpp       (nuevo - unit tests)
+├── test_connection_pool.cpp   (nuevo - unit tests)
+
+ARCHIVOS A MODIFICAR:
+=====================
+include/sync/MariaDBToPostgres.h
+- Método: transferDataMariaDBToPostgresParallel()
+- Cambio: usar ThreadPool en lugar de loop manual
+
+include/sync/MSSQLToPostgres.h
+- Método: transferDataMSSQLToPostgresParallel()
+- Cambio: usar ThreadPool en lugar de loop manual
+
+CMakeLists.txt
+- Añadir TableProcessorThreadPool.cpp
+- Añadir ConnectionPool.cpp
+
+PROGRESO:
+=========
+[ ] Fase 1: Core Components (0/3)
+[ ] Fase 2: Connection Pooling (0/2)
+[ ] Fase 3: Integration (0/3)
+[ ] Fase 4: Monitoring (0/2)
+[ ] Fase 5: Testing (0/3)
+
+TOTAL: 0/13 tareas completadas
+
+ESTADO: ⏸️  ESPERANDO APROBACIÓN DEL USUARIO
+
+================================================================================
