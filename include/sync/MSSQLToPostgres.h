@@ -1485,11 +1485,10 @@ public:
           continue;
         }
 
-        pool.submitTask(
-            table,
-            [this](const DatabaseToPostgresSync::TableInfo &t) {
-              this->processTableParallelWithConnection(t);
-            });
+        pool.submitTask(table,
+                        [this](const DatabaseToPostgresSync::TableInfo &t) {
+                          this->processTableParallelWithConnection(t);
+                        });
       }
 
       Logger::info(LogCategory::TRANSFER,
@@ -1541,13 +1540,15 @@ public:
   }
 
   void processTableParallel(const TableInfo &table, pqxx::connection &pgConn) {
+    std::string tableKey = table.schema_name + "." + table.table_name;
+
     Logger::info(LogCategory::TRANSFER,
-                 "Starting parallel processing for table " + table.schema_name +
-                     "." + table.table_name);
+                 "Starting parallel processing for table " + tableKey);
 
     try {
-      // Initialize parallel processing for this table
       startParallelProcessing();
+
+      setTableProcessingState(tableKey, true);
 
       SQLHDBC mssqlConn = getMSSQLConnection(table.connection_string);
       if (!mssqlConn) {
@@ -1634,7 +1635,8 @@ public:
 
       // Start parallel data processing
       std::thread dataFetcher(&MSSQLToPostgres::dataFetcherThread, this,
-                              mssqlConn, table, columnNames, columnTypes);
+                              tableKey, mssqlConn, table, columnNames,
+                              columnTypes);
 
       // Start batch preparers
       std::vector<std::thread> batchPreparers;
@@ -1655,10 +1657,14 @@ public:
         dataFetcher.join();
       }
 
-      // Signal end of data to preparers
-      DataChunk lastChunk;
-      lastChunk.isLastChunk = true;
-      rawDataQueue.push(std::move(lastChunk));
+      setTableProcessingState(tableKey, false);
+
+      // Signal end of data to ALL preparers (one signal per preparer)
+      for (size_t i = 0; i < MAX_BATCH_PREPARERS; ++i) {
+        DataChunk lastChunk;
+        lastChunk.isLastChunk = true;
+        rawDataQueue.push(std::move(lastChunk));
+      }
 
       // Wait for all batch preparers to complete
       for (auto &preparer : batchPreparers) {
@@ -1670,7 +1676,7 @@ public:
       // Signal end of batches to inserters
       for (size_t i = 0; i < MAX_BATCH_INSERTERS; ++i) {
         PreparedBatch lastBatch;
-        lastBatch.batchSize = 0; // Signal to stop
+        lastBatch.batchSize = 0;
         preparedBatchQueue.push(std::move(lastBatch));
       }
 
@@ -1685,32 +1691,34 @@ public:
       closeMSSQLConnection(mssqlConn);
       shutdownParallelProcessing();
 
+      removeTableProcessingState(tableKey);
+
       // Update table status to LISTENING_CHANGES after successful parallel
       // processing
       Logger::info(LogCategory::TRANSFER,
                    "Updating table status to LISTENING_CHANGES for " +
-                       table.schema_name + "." + table.table_name);
+                       tableKey);
       updateStatus(pgConn, table.schema_name, table.table_name,
                    "LISTENING_CHANGES", 0);
 
       Logger::info(LogCategory::TRANSFER,
-                   "Parallel processing completed for table " +
-                       table.schema_name + "." + table.table_name);
+                   "Parallel processing completed for table " + tableKey);
 
     } catch (const std::exception &e) {
       Logger::error(LogCategory::TRANSFER, "processTableParallel",
                     "Error in parallel table processing: " +
                         std::string(e.what()));
+      removeTableProcessingState(tableKey);
       shutdownParallelProcessing();
     }
   }
 
-  void dataFetcherThread(SQLHDBC mssqlConn, const TableInfo &table,
+  void dataFetcherThread(const std::string &tableKey, SQLHDBC mssqlConn,
+                         const TableInfo &table,
                          const std::vector<std::string> &columnNames,
                          const std::vector<std::string> &columnTypes) {
-    Logger::info(LogCategory::TRANSFER, "Data fetcher thread started for " +
-                                            table.schema_name + "." +
-                                            table.table_name);
+    Logger::info(LogCategory::TRANSFER,
+                 "Data fetcher thread started for " + tableKey);
 
     try {
       size_t chunkNumber = 0;
@@ -1726,14 +1734,7 @@ public:
       std::string lastProcessedPK = getLastProcessedPKFromCatalog(
           pgConn, table.schema_name, table.table_name);
 
-      Logger::info(
-          LogCategory::TRANSFER,
-          "PK Strategy Debug for " + table.schema_name + "." +
-              table.table_name + ": pkStrategy=" + pkStrategy +
-              ", pkColumns.size()=" + std::to_string(pkColumns.size()) +
-              ", lastProcessedPK='" + lastProcessedPK + "'");
-
-      while (parallelProcessingActive.load()) {
+      while (isTableProcessingActive(tableKey)) {
         chunkNumber++;
 
         // Build select query
@@ -1794,16 +1795,12 @@ public:
 
         // Push to queue (with timeout to prevent blocking)
         auto start = std::chrono::steady_clock::now();
-        while (parallelProcessingActive.load() &&
+        while (isTableProcessingActive(tableKey) &&
                std::chrono::duration_cast<std::chrono::milliseconds>(
                    std::chrono::steady_clock::now() - start)
                        .count() < 5000) {
           if (rawDataQueue.size() < MAX_QUEUE_SIZE) {
             rawDataQueue.push(std::move(chunk));
-            Logger::info(LogCategory::TRANSFER,
-                         "Pushed chunk " + std::to_string(chunkNumber) +
-                             " with " + std::to_string(results.size()) +
-                             " rows to queue");
             break;
           }
           std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -1893,7 +1890,7 @@ public:
     Logger::info(LogCategory::TRANSFER, "Batch preparer thread started");
 
     try {
-      while (parallelProcessingActive.load()) {
+      while (true) {
         DataChunk chunk;
         if (!rawDataQueue.pop(chunk, std::chrono::milliseconds(1000))) {
           continue;

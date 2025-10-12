@@ -10,6 +10,7 @@
 #include <pqxx/pqxx>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 using json = nlohmann::json;
@@ -34,7 +35,9 @@ public:
   };
 
 protected:
-  std::atomic<bool> parallelProcessingActive{false};
+  std::unordered_map<std::string, std::atomic<bool>> tableProcessingStates_;
+  std::mutex tableStatesMutex_;
+
   std::vector<std::thread> parallelThreads;
   ThreadSafeQueue<DataChunk> rawDataQueue;
   ThreadSafeQueue<PreparedBatch> preparedBatchQueue;
@@ -49,6 +52,22 @@ protected:
 
   virtual std::string cleanValueForPostgres(const std::string &value,
                                             const std::string &columnType) = 0;
+
+  bool isTableProcessingActive(const std::string &tableKey) {
+    std::lock_guard<std::mutex> lock(tableStatesMutex_);
+    auto it = tableProcessingStates_.find(tableKey);
+    return (it != tableProcessingStates_.end() && it->second.load());
+  }
+
+  void setTableProcessingState(const std::string &tableKey, bool active) {
+    std::lock_guard<std::mutex> lock(tableStatesMutex_);
+    tableProcessingStates_[tableKey].store(active);
+  }
+
+  void removeTableProcessingState(const std::string &tableKey) {
+    std::lock_guard<std::mutex> lock(tableStatesMutex_);
+    tableProcessingStates_.erase(tableKey);
+  }
 
 public:
   DatabaseToPostgresSync() = default;
