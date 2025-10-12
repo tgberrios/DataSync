@@ -1,7 +1,0 @@
-logger no deberia crear los archivos locales de DataSync.log y DAtaSyncErrors.log 
-
-mi build.sh creo que podria ser mas agradable visualmente
-
-ademas de tener governance rules podriamos tener data quality rules
-
-extrae todos los DDL de metadata dado que esos son ya los oficiales y actualizarlos en el @Setup.sql
