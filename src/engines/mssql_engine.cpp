@@ -1,6 +1,8 @@
 #include "engines/mssql_engine.h"
 #include <algorithm>
+#include <chrono>
 #include <pqxx/pqxx>
+#include <thread>
 
 ODBCConnection::ODBCConnection(const std::string &connectionString) {
   SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env_);
@@ -93,10 +95,34 @@ MSSQLEngine::MSSQLEngine(std::string connectionString)
     : connectionString_(std::move(connectionString)) {}
 
 std::unique_ptr<ODBCConnection> MSSQLEngine::createConnection() {
-  auto conn = std::make_unique<ODBCConnection>(connectionString_);
-  if (!conn->isValid())
-    return nullptr;
-  return conn;
+  const int MAX_RETRIES = 3;
+  const int INITIAL_BACKOFF_MS = 100;
+
+  for (int attempt = 1; attempt <= MAX_RETRIES; ++attempt) {
+    auto conn = std::make_unique<ODBCConnection>(connectionString_);
+    if (conn->isValid()) {
+      if (attempt > 1) {
+        Logger::info(LogCategory::DATABASE, "MSSQLEngine",
+                     "Connection successful on attempt " +
+                         std::to_string(attempt));
+      }
+      return conn;
+    }
+
+    if (attempt < MAX_RETRIES) {
+      int backoffMs = INITIAL_BACKOFF_MS * (1 << (attempt - 1));
+      Logger::warning(LogCategory::DATABASE, "MSSQLEngine",
+                      "Connection attempt " + std::to_string(attempt) +
+                          " failed, retrying in " + std::to_string(backoffMs) +
+                          "ms...");
+      std::this_thread::sleep_for(std::chrono::milliseconds(backoffMs));
+    }
+  }
+
+  Logger::error(LogCategory::DATABASE, "MSSQLEngine",
+                "Failed to connect after " + std::to_string(MAX_RETRIES) +
+                    " attempts");
+  return nullptr;
 }
 
 std::vector<std::vector<std::string>>

@@ -54,6 +54,9 @@ add_executable(DataSync
     src/catalog/catalog_cleaner.cpp
     src/catalog/catalog_manager.cpp
     src/catalog/catalog_lock.cpp
+    src/sync/DatabaseToPostgresSync.cpp
+    src/sync/MariaDBToPostgres.cpp
+    src/sync/MSSQLToPostgres.cpp
 )
 
 # Configurar para que el ejecutable se genere en el directorio raíz

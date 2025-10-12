@@ -11,68 +11,46 @@
 
 🔴 PRIORIDAD CRÍTICA - Sync/MariaDB + MSSQL (Consolidación Masiva):
 ====================================================================
-ESTADO: 🔴 EXTREMADAMENTE RIESGOSO - 70-80% código duplicado
+📊 ANÁLISIS COMPLETO: Ver SYNC_CONSOLIDATION_ANALYSIS.md
 
-DUPLICACIÓN MASIVA: ~2500 líneas duplicadas entre archivos
-- MariaDBToPostgres.h: 3976 líneas
-- MSSQLToPostgres.h: 3433 líneas
+INVENTARIO:
+- MariaDBToPostgres.h: 3976 líneas (38 funciones)
+- MSSQLToPostgres.h: 3433 líneas (39 funciones)
 - TOTAL: 7409 líneas
-- DUPLICADO: ~2500 líneas (70-80% overlap)
 
-Código IDÉNTICO entre ambos:
-- struct TableInfo: 100% idéntico
-- Lambda sorting: 100% idéntico
-- getActiveTables(): 95% idéntico
-- buildUpsertQuery(): 90% idéntico
-- cleanValueForPostgres(): 85% similar
-- Parallel processing infrastructure: 80% idéntico
-- Lógica TRUNCATE/RESET: 95% idéntica
-- PK management: 95% idéntico
+DUPLICACIÓN IDENTIFICADA:
+🟢 100% IDÉNTICO: 23 funciones (~1800 líneas) ← PRIORIDAD ALTA
+   compareAndUpdateRecord, deleteRecordsByPrimaryKey, performBulkInsert,
+   buildUpsertQuery, buildUpsertConflictClause, getPKStrategyFromCatalog,
+   parseJSONArray, updateLastProcessedPK, startParallelProcessing, etc.
 
-SOLUCIÓN RECOMENDADA:
-Crear clase base DatabaseToPostgresSync (~2000 líneas comunes)
-├─ MariaDBToPostgres (hereda, ~800 líneas específicas MySQL)
-└─ MSSQLToPostgres (hereda, ~700 líneas específicas ODBC)
+🟡 80-95% SIMILAR: 12 funciones (~900 líneas) ← PRIORIDAD MEDIA
+   getActiveTables, syncIndexesAndConstraints, setupTableTarget*,
+   transferData*, updateStatus, processDeletesByPrimaryKey, etc.
 
-BENEFICIOS:
-- Elimina ~2500 líneas duplicadas
-- Bugs se arreglan 1 vez, no 2
-- Agregar nuevo motor (Oracle, MongoDB) es fácil
-- Testing se hace 1 vez
+✅ ESPECÍFICO: 10 funciones (~600 líneas) ← Quedan en derivadas
+   MariaDB: getMariaDBConnection, executeQueryMariaDB
+   MSSQL: getMSSQLConnection, executeQueryMSSQL
 
-REDUCCIÓN POTENCIAL: 7409 → ~3500 líneas (-53%)
+PLAN (12-18 horas):
+📋 FASE 1 (2-3h): Crear DatabaseToPostgresSync.h + mover 100% duplicados
+📋 FASE 2 (4-6h): Refactorizar MariaDBToPostgres hereda base
+📋 FASE 3 (4-6h): Refactorizar MSSQLToPostgres hereda base
+📋 FASE 4 (2-3h): Separar StreamingData.h + limpieza
 
-ESTIMACIÓN: 2-3 semanas de trabajo
+REDUCCIÓN: 7409 → ~4600 líneas (-38%, -2809 líneas)
 
 ================================================================================
 
 🟡 PRIORIDAD MEDIA - Sync/StreamingData:
 =========================================
-1. Separar .h y .cpp (861 líneas en header)
+1. Separar .h y .cpp (794 líneas en header)
    - Problema: Todo en header ralentiza compilación
    - Solución: StreamingData.h (declaraciones) + StreamingData.cpp (impl)
-   - Nota: Requiere separar MariaDB/MSSQL primero
-   - Beneficio: Compilación más rápida
-
-2. DUPLICACIÓN: Validación de tablas por engine (3 veces)
-   - qualityThread: MariaDB, MSSQL, PostgreSQL
-   - Código EXACTAMENTE IGUAL 3 veces (~105 líneas)
-   - Solución: Extraer a validateTablesForEngine(conn, dbEngine)
-   - Beneficio: 105 líneas → 15 líneas
-
-3. DUPLICACIÓN: Configuración de timeouts (2 veces)
-   - Solución: Extraer a setConnectionTimeouts(conn)
-   - Beneficio: DRY
+   - ⚠️  BLOQUEADO: Requiere PRIMERO consolidar MariaDB/MSSQL (header-only)
+   - Razón Técnica: MariaDBToPostgres.h y MSSQLToPostgres.h definen
+     variables estáticas (dataTypeMap, collationMap, metadataUpdateMutex)
+     que causan errores de "multiple definition" al separar StreamingData
+   - Beneficio: Compilación más rápida (cuando se complete consolidación)
 
 ================================================================================
-
-🟢 PRIORIDAD BAJA:
-==================
-Catalog:
-- Hacer cleanCatalog() transaccional (evaluar necesidad)
-- Agregar progress reporting para operaciones largas
-
-Engines:
-- Considerar migrar MariaDB a MySQL Connector/C++ (prepared statements nativos)
-- Agregar retry logic en createConnection() (3 retries con backoff)
-- Agregar connection pooling

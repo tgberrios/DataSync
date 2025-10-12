@@ -1,6 +1,8 @@
 #include "engines/mariadb_engine.h"
 #include <algorithm>
+#include <chrono>
 #include <pqxx/pqxx>
+#include <thread>
 
 MySQLConnection::MySQLConnection(const ConnectionParams &params) {
   conn_ = mysql_init(nullptr);
@@ -60,12 +62,35 @@ std::unique_ptr<MySQLConnection> MariaDBEngine::createConnection() {
     return nullptr;
   }
 
-  auto conn = std::make_unique<MySQLConnection>(*params);
-  if (!conn->isValid())
-    return nullptr;
+  const int MAX_RETRIES = 3;
+  const int INITIAL_BACKOFF_MS = 100;
 
-  setConnectionTimeouts(conn->get());
-  return conn;
+  for (int attempt = 1; attempt <= MAX_RETRIES; ++attempt) {
+    auto conn = std::make_unique<MySQLConnection>(*params);
+    if (conn->isValid()) {
+      setConnectionTimeouts(conn->get());
+      if (attempt > 1) {
+        Logger::info(LogCategory::DATABASE, "MariaDBEngine",
+                     "Connection successful on attempt " +
+                         std::to_string(attempt));
+      }
+      return conn;
+    }
+
+    if (attempt < MAX_RETRIES) {
+      int backoffMs = INITIAL_BACKOFF_MS * (1 << (attempt - 1));
+      Logger::warning(LogCategory::DATABASE, "MariaDBEngine",
+                      "Connection attempt " + std::to_string(attempt) +
+                          " failed, retrying in " + std::to_string(backoffMs) +
+                          "ms...");
+      std::this_thread::sleep_for(std::chrono::milliseconds(backoffMs));
+    }
+  }
+
+  Logger::error(LogCategory::DATABASE, "MariaDBEngine",
+                "Failed to connect after " + std::to_string(MAX_RETRIES) +
+                    " attempts");
+  return nullptr;
 }
 
 void MariaDBEngine::setConnectionTimeouts(MYSQL *conn) {
