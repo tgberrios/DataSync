@@ -1,0 +1,11 @@
+mover las rules a carpetas de rules
+expandir las rules
+talvez quitar last_offset si no lo ocupo ?  
+extraer nuevamente los DDL de las tablas
+actualizar un poco el frontend ? 
+
+
+ORACLE
+MONGO
+OTROS MOTORES
+
