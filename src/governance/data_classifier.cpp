@@ -4,7 +4,7 @@
 #include <fstream>
 
 DataClassifier::DataClassifier() : loaded_(false) {
-  loadRules("governance_rules.json");
+  loadRules("/rules/governance_rules.json");
 }
 
 DataClassifier::DataClassifier(const std::string &rulesPath) : loaded_(false) {
