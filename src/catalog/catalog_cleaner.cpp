@@ -8,6 +8,8 @@ CatalogCleaner::CatalogCleaner(std::string metadataConnStr)
     : metadataConnStr_(std::move(metadataConnStr)),
       repo_(std::make_unique<MetadataRepository>(metadataConnStr_)) {}
 
+// TODO: Document better this function
+// TODO: This function should be in helpers
 bool CatalogCleaner::tableExistsInPostgres(const std::string &schema,
                                            const std::string &table) {
   try {
@@ -140,6 +142,7 @@ void CatalogCleaner::cleanNonExistentMariaDBTables() {
 
 void CatalogCleaner::cleanNonExistentMSSQLTables() {
   try {
+    // Obtain all MSSQL connection strings from the repository
     auto connStrings = repo_->getConnectionStrings("MSSQL");
     size_t totalDeleted = 0;
 
@@ -147,6 +150,7 @@ void CatalogCleaner::cleanNonExistentMSSQLTables() {
                  "Checking " + std::to_string(connStrings.size()) +
                      " MSSQL connection(s) for non-existent tables");
 
+    // Connect to each MSSQL source to check existence
     for (const auto &connStr : connStrings) {
       MSSQLEngine engine(connStr);
       auto existingTables = engine.discoverTables();
@@ -156,11 +160,18 @@ void CatalogCleaner::cleanNonExistentMSSQLTables() {
         existingSet.insert({table.schema, table.table});
       }
 
+      // Now check catalog entries against existing tables
       auto catalogEntries = repo_->getCatalogEntries("MSSQL", connStr);
       for (const auto &entry : catalogEntries) {
         if (existingSet.find({entry.schema, entry.table}) ==
             existingSet.end()) {
           repo_->deleteTable(entry.schema, entry.table, "MSSQL", connStr);
+          // Drop Table on Target (Postgres)
+          pqxx::connection conn(metadataConnStr_);
+          pqxx::work txn(conn);
+          std::string target_full_table =
+              txn.quote_name(entry.schema + "_" + entry.table);
+          txn.exec("DROP TABLE IF EXISTS " + target_full_table);
           totalDeleted++;
         }
       }
@@ -177,8 +188,6 @@ void CatalogCleaner::cleanNonExistentMSSQLTables() {
 
 /*
 This function clean in catalog any unsupported or orphaned table entries
-TODO: Document better the criteria for orphaned tables
-TODO: Optimize the deletions to use batch deletes instead of one by one.
 */
 void CatalogCleaner::cleanOrphanedTables() {
   try {
@@ -226,9 +235,6 @@ void CatalogCleaner::cleanOrphanedTables() {
 /*
 Probably the simplest of all, this function clean old logs from metadata.logs
 table
-TODO: Make the retentionHours configurable from Config
-TODO: Document better the function
-TODO: Optimize the logs
 */
 
 void CatalogCleaner::cleanOldLogs(int retentionHours) {
@@ -236,9 +242,11 @@ void CatalogCleaner::cleanOldLogs(int retentionHours) {
     pqxx::connection conn(metadataConnStr_);
     pqxx::work txn(conn);
 
+    // Check how many logs are there before deletion.
     auto countBefore = txn.exec("SELECT COUNT(*) FROM metadata.logs");
     int logsBefore = countBefore[0][0].as<int>();
 
+    // If no logs, nothing to do.
     if (logsBefore == 0) {
       Logger::info(LogCategory::MAINTENANCE, "cleanOldLogs",
                    "No logs found in metadata.logs table");
@@ -246,6 +254,7 @@ void CatalogCleaner::cleanOldLogs(int retentionHours) {
       return;
     }
 
+    // Delete old logs
     auto result = txn.exec_params("DELETE FROM metadata.logs WHERE ts < NOW() "
                                   "- make_interval(hours => $1)",
                                   retentionHours);
