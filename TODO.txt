@@ -19,12 +19,7 @@ en los governance cada cuanto saca las snapshots ?
 
 
 
-
-5.5. Implementar MaintenanceManager.cpp
-     [MAINTENANCE - Detección y ejecución de mantenimiento]
-     [ARCHIVO: src/governance/MaintenanceManager.cpp]
-     [PRIORIDAD: Media - Mejora performance]
-
+esto creo que ya lo captura del de governance de mssql
 5.6. Implementar MSSQLStoredProcedureMonitor.cpp
      [MONITORING - Monitoreo de stored procedures MSSQL]
      [ARCHIVO: src/governance/MSSQLStoredProcedureMonitor.cpp]
@@ -120,3 +115,5 @@ NOTAS:
 poner bonitos con las tres fases los include porque esos no los emos tramitado 
 
 un catalog de tablas con sus columnas como full metadata de las tablas
+
+de maintance metrics talvez todos esos threeshold podrian venir de config

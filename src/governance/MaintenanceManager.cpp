@@ -1,6 +1,7 @@
 #include "governance/MaintenanceManager.h"
 #include "core/logger.h"
 #include "core/database_config.h"
+#include "core/database_defaults.h"
 #include "catalog/metadata_repository.h"
 #include "engines/mariadb_engine.h"
 #include "engines/mssql_engine.h"
@@ -12,6 +13,8 @@
 #include <iomanip>
 #include <cmath>
 #include <ctime>
+#include <sql.h>
+#include <sqlext.h>
 
 MaintenanceManager::MaintenanceManager(const std::string &metadataConnectionString)
     : metadataConnectionString_(metadataConnectionString) {
@@ -64,13 +67,27 @@ void MaintenanceManager::detectMaintenanceNeeds() {
     MetadataRepository repo(metadataConnectionString_);
 
     std::vector<std::string> pgConnections = repo.getConnectionStrings("PostgreSQL");
-    for (const auto &connStr : pgConnections) {
-      if (!connStr.empty()) {
+    if (pgConnections.empty()) {
+      std::string dataLakeConnStr = DatabaseConfig::getPostgresConnectionString();
+      if (!dataLakeConnStr.empty()) {
+        Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
+                     "No PostgreSQL sources in catalog, detecting maintenance for DataLake");
         try {
-          detectPostgreSQLMaintenance(connStr);
+          detectPostgreSQLMaintenance(dataLakeConnStr);
         } catch (const std::exception &e) {
           Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
-                        "Error detecting PostgreSQL maintenance: " + std::string(e.what()));
+                        "Error detecting DataLake PostgreSQL maintenance: " + std::string(e.what()));
+        }
+      }
+    } else {
+      for (const auto &connStr : pgConnections) {
+        if (!connStr.empty()) {
+          try {
+            detectPostgreSQLMaintenance(connStr);
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
+                          "Error detecting PostgreSQL maintenance: " + std::string(e.what()));
+          }
         }
       }
     }
@@ -165,6 +182,12 @@ void MaintenanceManager::detectVacuumNeeds(pqxx::connection &conn, const std::st
       task.object_type = "TABLE";
       task.auto_execute = true;
       task.enabled = true;
+      
+      auto params = ConnectionStringParser::parse(connStr);
+      if (params) {
+        task.server_name = params->host;
+        task.database_name = params->db;
+      }
 
       MaintenanceMetrics metrics;
       metrics.dead_tuples = row[2].as<long long>();
@@ -222,6 +245,12 @@ void MaintenanceManager::detectAnalyzeNeeds(pqxx::connection &conn, const std::s
       task.status = "PENDING";
       task.next_maintenance_date = calculateNextMaintenanceDate("ANALYZE");
       task.thresholds = thresholds;
+      
+      auto params = ConnectionStringParser::parse(connStr);
+      if (params) {
+        task.server_name = params->host;
+        task.database_name = params->db;
+      }
 
       storeTask(task);
     }
@@ -285,6 +314,12 @@ void MaintenanceManager::detectReindexNeeds(pqxx::connection &conn, const std::s
           task.status = "PENDING";
           task.next_maintenance_date = calculateNextMaintenanceDate("REINDEX");
           task.thresholds = thresholds;
+          
+          auto params = ConnectionStringParser::parse(connStr);
+          if (params) {
+            task.server_name = params->host;
+            task.database_name = params->db;
+          }
 
           storeTask(task);
         }
@@ -378,6 +413,12 @@ void MaintenanceManager::detectOptimizeNeeds(MYSQL *conn, const std::string &con
       task.status = "PENDING";
       task.next_maintenance_date = calculateNextMaintenanceDate("OPTIMIZE TABLE");
       task.thresholds = thresholds;
+      
+      auto params = ConnectionStringParser::parse(connStr);
+      if (params) {
+        task.server_name = params->host;
+        task.database_name = params->db;
+      }
 
       storeTask(task);
     }
@@ -431,6 +472,12 @@ void MaintenanceManager::detectAnalyzeTableNeeds(MYSQL *conn, const std::string 
       task.status = "PENDING";
       task.next_maintenance_date = calculateNextMaintenanceDate("ANALYZE TABLE");
       task.thresholds = thresholds;
+      
+      auto params = ConnectionStringParser::parse(connStr);
+      if (params) {
+        task.server_name = params->host;
+        task.database_name = params->db;
+      }
 
       storeTask(task);
     }
@@ -461,16 +508,238 @@ void MaintenanceManager::detectMSSQLMaintenance(const std::string &connStr) {
 }
 
 void MaintenanceManager::detectUpdateStatisticsNeeds(SQLHDBC conn, const std::string &connStr) {
-  // Implementation for MSSQL UPDATE STATISTICS detection
-  // Similar pattern to other detection methods
+  try {
+    auto thresholds = getThresholds("mssql", "update_statistics");
+    int daysSinceUpdate = thresholds.value("days_since_last_update", 1);
+
+    std::string query = R"(
+      SELECT 
+        OBJECT_SCHEMA_NAME(s.object_id) AS schema_name,
+        OBJECT_NAME(s.object_id) AS table_name,
+        s.name AS stats_name
+      FROM sys.stats s
+      WHERE OBJECTPROPERTY(s.object_id, 'IsUserTable') = 1
+        AND (
+          STATS_DATE(s.object_id, s.stats_id) IS NULL
+          OR STATS_DATE(s.object_id, s.stats_id) < DATEADD(day, -)" + std::to_string(daysSinceUpdate) + R"(, GETDATE())
+        )
+    )";
+
+    std::vector<std::vector<std::string>> results;
+    SQLHSTMT stmt;
+    SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, conn, &stmt);
+    if (ret != SQL_SUCCESS) return;
+
+    ret = SQLExecDirect(stmt, (SQLCHAR *)query.c_str(), SQL_NTS);
+    if (ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) {
+      SQLSMALLINT numCols;
+      SQLNumResultCols(stmt, &numCols);
+      char buffer[1024];
+      SQLLEN len;
+
+      while (SQLFetch(stmt) == SQL_SUCCESS) {
+        std::vector<std::string> row;
+        for (SQLSMALLINT i = 1; i <= numCols; i++) {
+          if (SQLGetData(stmt, i, SQL_C_CHAR, buffer, sizeof(buffer), &len) == SQL_SUCCESS) {
+            row.push_back((len > 0 && len < 1024) ? std::string(buffer, len) : "");
+          } else {
+            row.push_back("");
+          }
+        }
+        results.push_back(row);
+      }
+    }
+    SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+
+    auto params = ConnectionStringParser::parse(connStr);
+    std::string serverName = params ? params->host : "UNKNOWN";
+    std::string databaseName = params ? params->db : "master";
+
+    for (const auto &row : results) {
+      if (row.size() >= 3) {
+        MaintenanceTask task;
+        task.maintenance_type = "UPDATE STATISTICS";
+        task.db_engine = "MSSQL";
+        task.connection_string = connStr;
+        task.schema_name = row[0];
+        task.object_name = row[1];
+        task.object_type = "TABLE";
+        task.auto_execute = true;
+        task.enabled = true;
+        task.priority = 5;
+        task.status = "PENDING";
+        task.next_maintenance_date = calculateNextMaintenanceDate("UPDATE STATISTICS");
+        task.thresholds = thresholds;
+        task.server_name = serverName;
+        task.database_name = databaseName;
+
+        storeTask(task);
+      }
+    }
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
+                  "Error detecting UPDATE STATISTICS needs: " + std::string(e.what()));
+  }
 }
 
 void MaintenanceManager::detectRebuildIndexNeeds(SQLHDBC conn, const std::string &connStr) {
-  // Implementation for MSSQL REBUILD INDEX detection
+  try {
+    auto thresholds = getThresholds("mssql", "rebuild_index");
+    double fragmentationThreshold = thresholds.value("fragmentation_threshold", 30.0);
+
+    std::string query = R"(
+      SELECT 
+        OBJECT_SCHEMA_NAME(ips.object_id) AS schema_name,
+        OBJECT_NAME(ips.object_id) AS table_name,
+        i.name AS index_name,
+        ips.avg_fragmentation_in_percent,
+        ips.page_count
+      FROM sys.dm_db_index_physical_stats(DB_ID(), NULL, NULL, NULL, 'LIMITED') ips
+      INNER JOIN sys.indexes i ON ips.object_id = i.object_id AND ips.index_id = i.index_id
+      WHERE ips.index_id > 0
+        AND ips.avg_fragmentation_in_percent > )" + std::to_string(fragmentationThreshold) + R"(
+        AND ips.page_count > 100
+    )";
+
+    std::vector<std::vector<std::string>> results;
+    SQLHSTMT stmt;
+    SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, conn, &stmt);
+    if (ret != SQL_SUCCESS) return;
+
+    ret = SQLExecDirect(stmt, (SQLCHAR *)query.c_str(), SQL_NTS);
+    if (ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) {
+      SQLSMALLINT numCols;
+      SQLNumResultCols(stmt, &numCols);
+      char buffer[1024];
+      SQLLEN len;
+
+      while (SQLFetch(stmt) == SQL_SUCCESS) {
+        std::vector<std::string> row;
+        for (SQLSMALLINT i = 1; i <= numCols; i++) {
+          if (SQLGetData(stmt, i, SQL_C_CHAR, buffer, sizeof(buffer), &len) == SQL_SUCCESS) {
+            row.push_back((len > 0 && len < 1024) ? std::string(buffer, len) : "");
+          } else {
+            row.push_back("");
+          }
+        }
+        results.push_back(row);
+      }
+    }
+    SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+
+    auto params = ConnectionStringParser::parse(connStr);
+    std::string serverName = params ? params->host : "UNKNOWN";
+    std::string databaseName = params ? params->db : "master";
+
+    for (const auto &row : results) {
+      if (row.size() >= 5) {
+        double fragmentation = 0.0;
+        try {
+          if (!row[3].empty()) fragmentation = std::stod(row[3]);
+        } catch (...) {
+        }
+
+        MaintenanceTask task;
+        task.maintenance_type = "REBUILD INDEX";
+        task.db_engine = "MSSQL";
+        task.connection_string = connStr;
+        task.schema_name = row[0];
+        task.object_name = row[2];
+        task.object_type = "INDEX";
+        task.auto_execute = true;
+        task.enabled = true;
+        task.priority = fragmentation > 50 ? 8 : 6;
+        task.status = "PENDING";
+        task.next_maintenance_date = calculateNextMaintenanceDate("REBUILD INDEX");
+        task.thresholds = thresholds;
+        task.server_name = serverName;
+        task.database_name = databaseName;
+
+        storeTask(task);
+      }
+    }
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
+                  "Error detecting REBUILD INDEX needs: " + std::string(e.what()));
+  }
 }
 
 void MaintenanceManager::detectReorganizeIndexNeeds(SQLHDBC conn, const std::string &connStr) {
-  // Implementation for MSSQL REORGANIZE INDEX detection
+  try {
+    auto thresholds = getThresholds("mssql", "reorganize_index");
+    double fragmentationMin = thresholds.value("fragmentation_min", 10.0);
+    double fragmentationMax = thresholds.value("fragmentation_max", 30.0);
+
+    std::string query = R"(
+      SELECT 
+        OBJECT_SCHEMA_NAME(ips.object_id) AS schema_name,
+        OBJECT_NAME(ips.object_id) AS table_name,
+        i.name AS index_name,
+        ips.avg_fragmentation_in_percent,
+        ips.page_count
+      FROM sys.dm_db_index_physical_stats(DB_ID(), NULL, NULL, NULL, 'LIMITED') ips
+      INNER JOIN sys.indexes i ON ips.object_id = i.object_id AND ips.index_id = i.index_id
+      WHERE ips.index_id > 0
+        AND ips.avg_fragmentation_in_percent >= )" + std::to_string(fragmentationMin) + R"(
+        AND ips.avg_fragmentation_in_percent < )" + std::to_string(fragmentationMax) + R"(
+        AND ips.page_count > 100
+    )";
+
+    std::vector<std::vector<std::string>> results;
+    SQLHSTMT stmt;
+    SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, conn, &stmt);
+    if (ret != SQL_SUCCESS) return;
+
+    ret = SQLExecDirect(stmt, (SQLCHAR *)query.c_str(), SQL_NTS);
+    if (ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) {
+      SQLSMALLINT numCols;
+      SQLNumResultCols(stmt, &numCols);
+      char buffer[1024];
+      SQLLEN len;
+
+      while (SQLFetch(stmt) == SQL_SUCCESS) {
+        std::vector<std::string> row;
+        for (SQLSMALLINT i = 1; i <= numCols; i++) {
+          if (SQLGetData(stmt, i, SQL_C_CHAR, buffer, sizeof(buffer), &len) == SQL_SUCCESS) {
+            row.push_back((len > 0 && len < 1024) ? std::string(buffer, len) : "");
+          } else {
+            row.push_back("");
+          }
+        }
+        results.push_back(row);
+      }
+    }
+    SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+
+    auto params = ConnectionStringParser::parse(connStr);
+    std::string serverName = params ? params->host : "UNKNOWN";
+    std::string databaseName = params ? params->db : "master";
+
+    for (const auto &row : results) {
+      if (row.size() >= 5) {
+        MaintenanceTask task;
+        task.maintenance_type = "REORGANIZE INDEX";
+        task.db_engine = "MSSQL";
+        task.connection_string = connStr;
+        task.schema_name = row[0];
+        task.object_name = row[2];
+        task.object_type = "INDEX";
+        task.auto_execute = true;
+        task.enabled = true;
+        task.priority = 5;
+        task.status = "PENDING";
+        task.next_maintenance_date = calculateNextMaintenanceDate("REORGANIZE INDEX");
+        task.thresholds = thresholds;
+        task.server_name = serverName;
+        task.database_name = databaseName;
+
+        storeTask(task);
+      }
+    }
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
+                  "Error detecting REORGANIZE INDEX needs: " + std::string(e.what()));
+  }
 }
 
 void MaintenanceManager::executeMaintenance() {
@@ -711,9 +980,10 @@ void MaintenanceManager::storeTask(const MaintenanceTask &task) {
     std::string query = R"(
       INSERT INTO metadata.maintenance_control (
         maintenance_type, db_engine, connection_string, schema_name, object_name,
-        object_type, auto_execute, enabled, priority, status, next_maintenance_date, thresholds
+        object_type, auto_execute, enabled, priority, status, next_maintenance_date, thresholds,
+        server_name, database_name
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
       )
       ON CONFLICT (db_engine, maintenance_type, schema_name, object_name, object_type)
       DO UPDATE SET
@@ -740,7 +1010,9 @@ void MaintenanceManager::storeTask(const MaintenanceTask &task) {
       task.priority,
       task.status,
       nextDateStr,
-      task.thresholds.dump()
+      task.thresholds.dump(),
+      task.server_name.empty() ? nullptr : task.server_name.c_str(),
+      task.database_name.empty() ? nullptr : task.database_name.c_str()
     );
     txn.commit();
   } catch (const std::exception &e) {

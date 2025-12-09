@@ -39,6 +39,8 @@ struct MaintenanceTask {
   double index_size_after_mb = 0.0;
   double table_size_before_mb = 0.0;
   double table_size_after_mb = 0.0;
+  std::string server_name;
+  std::string database_name;
 };
 
 struct MaintenanceMetrics {

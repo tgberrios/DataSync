@@ -265,8 +265,7 @@ void DataGovernanceMSSQL::queryIndexUsageStats() {
                         "ius.user_seeks, "
                         "ius.user_scans, "
                         "ius.user_lookups, "
-                        "ius.user_updates, "
-                        "ius.leaf_insert_count "
+                        "ius.user_updates "
                         "FROM sys.dm_db_index_usage_stats ius "
                         "INNER JOIN sys.indexes i ON ius.object_id = i.object_id AND ius.index_id = i.index_id "
                         "WHERE ius.database_id = DB_ID();";
@@ -274,7 +273,7 @@ void DataGovernanceMSSQL::queryIndexUsageStats() {
     auto results = executeQueryMSSQL(conn.getDbc(), query);
 
     for (const auto &row : results) {
-      if (row.size() >= 9) {
+      if (row.size() >= 8) {
         std::string schemaName = row[0];
         std::string tableName = row[1];
         std::string indexName = row[2];
@@ -294,7 +293,7 @@ void DataGovernanceMSSQL::queryIndexUsageStats() {
               if (!row[5].empty()) data.user_scans = std::stoll(row[5]);
               if (!row[6].empty()) data.user_lookups = std::stoll(row[6]);
               if (!row[7].empty()) data.user_updates = std::stoll(row[7]);
-              if (!row[8].empty()) data.leaf_inserts = std::stoll(row[8]);
+              data.leaf_inserts = 0;
             } catch (const std::exception &e) {
               Logger::warning(LogCategory::GOVERNANCE, "DataGovernanceMSSQL",
                               "Error parsing index usage stats: " + std::string(e.what()));

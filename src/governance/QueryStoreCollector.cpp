@@ -83,8 +83,8 @@ void QueryStoreCollector::queryPgStatStatements(pqxx::connection &conn) {
         pss.local_blks_written,
         pss.temp_blks_read,
         pss.temp_blks_written,
-        pss.blk_read_time,
-        pss.blk_write_time,
+        COALESCE(pss.shared_blk_read_time, 0) + COALESCE(pss.local_blk_read_time, 0) + COALESCE(pss.temp_blk_read_time, 0) as blk_read_time,
+        COALESCE(pss.shared_blk_write_time, 0) + COALESCE(pss.local_blk_write_time, 0) as blk_write_time,
         pss.wal_records,
         pss.wal_fpi,
         pss.wal_bytes
