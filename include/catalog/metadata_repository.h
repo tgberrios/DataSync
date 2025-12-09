@@ -40,11 +40,15 @@ public:
                                  const std::string &dbEngine) = 0;
   virtual void deleteTable(const std::string &schema, const std::string &table,
                            const std::string &dbEngine,
-                           const std::string &connectionString = "") = 0;
+                           const std::string &connectionString = "",
+                           bool dropTargetTable = false) = 0;
+  virtual int reactivateTablesWithData() = 0;
   virtual int deactivateNoDataTables() = 0;
-  virtual int markInactiveTablesAsSkip() = 0;
+  virtual int markInactiveTablesAsSkip(bool truncateTarget = false) = 0;
   virtual int resetTable(const std::string &schema, const std::string &table,
                          const std::string &dbEngine) = 0;
+  [[deprecated(
+      "This function will be removed when last_offset logic is eliminated")]]
   virtual int cleanInvalidOffsets() = 0;
   virtual std::unordered_map<std::string, int64_t> getTableSizesBatch() = 0;
 };
@@ -70,11 +74,15 @@ public:
                          const std::string &dbEngine) override;
   void deleteTable(const std::string &schema, const std::string &table,
                    const std::string &dbEngine,
-                   const std::string &connectionString = "") override;
+                   const std::string &connectionString = "",
+                   bool dropTargetTable = false) override;
+  int reactivateTablesWithData() override;
   int deactivateNoDataTables() override;
-  int markInactiveTablesAsSkip() override;
+  int markInactiveTablesAsSkip(bool truncateTarget = false) override;
   int resetTable(const std::string &schema, const std::string &table,
                  const std::string &dbEngine) override;
+  [[deprecated(
+      "This function will be removed when last_offset logic is eliminated")]]
   int cleanInvalidOffsets() override;
   std::unordered_map<std::string, int64_t> getTableSizesBatch() override;
 

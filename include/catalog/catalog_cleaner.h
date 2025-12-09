@@ -32,10 +32,6 @@ public:
   void cleanNonExistentMSSQLTables() override;
   void cleanOrphanedTables() override;
   void cleanOldLogs(int retentionHours) override;
-
-private:
-  bool tableExistsInPostgres(const std::string &schema,
-                             const std::string &table);
 };
 
 #endif

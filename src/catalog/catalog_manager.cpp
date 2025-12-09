@@ -16,8 +16,11 @@ CatalogManager::CatalogManager(std::string metadataConnStr,
     : metadataConnStr_(std::move(metadataConnStr)), repo_(std::move(repo)),
       cleaner_(std::move(cleaner)) {}
 
+// This will prevent multiple instances trying to clean the same row at
+// catalog at the same time. Lock is held for 30 seconds and then try to
+// acquire another 30 seconds. If lock cannot be acquired, just skip cleaning.
 void CatalogManager::cleanCatalog() {
-  CatalogLock lock(metadataConnStr_, "catalog_clean", 300);
+  CatalogLock lock(metadataConnStr_, "catalog_clean", 30);
   if (!lock.tryAcquire(30)) {
     Logger::warning(LogCategory::DATABASE, "CatalogManager",
                     "Could not acquire lock for catalog cleaning - another "
@@ -39,20 +42,34 @@ void CatalogManager::cleanCatalog() {
   }
 }
 
+// This will deactivate tables that don't have data for a certain period.
+// Before attempting to deactivate, it reactivates tables that have data again
+// to prevent deactivating tables that have received data. Tables without data
+// are marked as inactive, and inactive tables are marked to be skipped.
+// Recommended execution frequency: Every 24 hours. The data threshold period
+// is determined by the table's status field - tables with 'NO_DATA' status
+// are considered to have no data and will be deactivated.
 void CatalogManager::deactivateNoDataTables() {
   try {
+    repo_->reactivateTablesWithData();
     int noDataCount = repo_->deactivateNoDataTables();
     int skipCount = repo_->markInactiveTablesAsSkip();
+    Logger::info(LogCategory::DATABASE, "CatalogManager",
+                 "Deactivated " + std::to_string(noDataCount) +
+                     " tables with no data, marked " +
+                     std::to_string(skipCount) + " inactive tables as SKIP");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "CatalogManager",
                   "Error deactivating tables: " + std::string(e.what()));
   }
 }
 
+// This will update the cluster names for active tables recently added.
 void CatalogManager::updateClusterNames() {
   try {
     pqxx::connection conn(metadataConnStr_);
     pqxx::work txn(conn);
+
     auto results = txn.exec(
         "SELECT DISTINCT connection_string, db_engine FROM metadata.catalog "
         "WHERE (cluster_name IS NULL OR cluster_name = '') AND active = true");
@@ -73,10 +90,14 @@ void CatalogManager::updateClusterNames() {
   }
 }
 
+// This will validate that the schema in the source database matches the schema
+// in the metadata catalog. If there is a mismatch, the table will be reset to
+// trigger a full reload.
 void CatalogManager::validateSchemaConsistency() {
   try {
     pqxx::connection conn(metadataConnStr_);
     pqxx::work txn(conn);
+
     auto results = txn.exec(
         "SELECT schema_name, table_name, db_engine, connection_string "
         "FROM metadata.catalog "
@@ -113,24 +134,103 @@ void CatalogManager::validateSchemaConsistency() {
   }
 }
 
+// Get the estimated size (number of rows) of a table from the source database.
+// This function queries the metadata catalog to get the connection string and
+// database engine, then connects to the source database to retrieve the table
+// size. For MariaDB it uses information_schema.tables.table_rows, for MSSQL
+// and PostgreSQL it delegates to the respective engine's getTableSize method.
+// Returns 0 if the table is not found or if there's an error connecting.
 int64_t CatalogManager::getTableSize(const std::string &schema,
                                      const std::string &table) {
+  if (schema.empty() || table.empty()) {
+    Logger::error(LogCategory::DATABASE, "CatalogManager",
+                  "Invalid input: schema and table must not be empty");
+    return 0;
+  }
+
   try {
     pqxx::connection conn(metadataConnStr_);
     pqxx::work txn(conn);
-
     std::string lowerSchema = StringUtils::toLower(schema);
     std::string lowerTable = StringUtils::toLower(table);
+    auto result = txn.exec_params(
+        "SELECT connection_string, db_engine FROM metadata.catalog "
+        "WHERE schema_name = $1 AND table_name = $2 "
+        "AND active = true LIMIT 1",
+        lowerSchema, lowerTable);
 
-    auto result =
-        txn.exec_params("SELECT COALESCE(reltuples::bigint, 0) FROM pg_class "
-                        "WHERE relname = $1 AND relnamespace = "
-                        "(SELECT oid FROM pg_namespace WHERE nspname = $2)",
-                        lowerTable, lowerSchema);
     txn.commit();
 
-    if (!result.empty() && !result[0][0].is_null())
-      return result[0][0].as<int64_t>();
+    if (result.empty()) {
+      return 0;
+    }
+
+    std::string connStr = result[0][0].as<std::string>();
+    std::string db_engine = result[0][1].as<std::string>();
+
+    if (db_engine == "MariaDB") {
+      auto params = ConnectionStringParser::parse(connStr);
+      if (!params) {
+        Logger::error(LogCategory::DATABASE, "CatalogManager",
+                      "Invalid MariaDB connection string");
+        return 0;
+      }
+
+      auto mariadbConn = std::make_unique<MySQLConnection>(*params);
+      if (!mariadbConn->isValid()) {
+        Logger::error(LogCategory::DATABASE, "CatalogManager",
+                      "Failed to connect to MariaDB");
+        return 0;
+      }
+
+      MYSQL *mysqlConn = mariadbConn->get();
+      char escapedSchema[schema.length() * 2 + 1];
+      char escapedTable[table.length() * 2 + 1];
+      mysql_real_escape_string(mysqlConn, escapedSchema, schema.c_str(),
+                               schema.length());
+      mysql_real_escape_string(mysqlConn, escapedTable, table.c_str(),
+                               table.length());
+
+      std::string query = "SELECT table_rows FROM information_schema.tables "
+                          "WHERE table_schema = '" +
+                          std::string(escapedSchema) + "' AND table_name = '" +
+                          std::string(escapedTable) + "'";
+
+      if (mysql_query(mysqlConn, query.c_str())) {
+        Logger::error(LogCategory::DATABASE, "CatalogManager",
+                      "Query failed: " + std::string(mysql_error(mysqlConn)));
+        return 0;
+      }
+
+      MYSQL_RES *res = mysql_store_result(mysqlConn);
+      if (!res) {
+        if (mysql_field_count(mysqlConn) > 0) {
+          Logger::error(LogCategory::DATABASE, "CatalogManager",
+                        "Result fetch failed: " +
+                            std::string(mysql_error(mysqlConn)));
+        }
+        return 0;
+      }
+
+      MYSQL_ROW row = mysql_fetch_row(res);
+      if (row && row[0] && row[0] != "NULL") {
+        try {
+          int64_t size = std::stoll(row[0]);
+          mysql_free_result(res);
+          return size;
+        } catch (...) {
+          mysql_free_result(res);
+          return 0;
+        }
+      }
+      mysql_free_result(res);
+    } else if (db_engine == "MSSQL") {
+      MSSQLEngine engine(connStr);
+      return engine.getTableSize(schema, table);
+    } else if (db_engine == "PostgreSQL") {
+      PostgreSQLEngine engine(connStr);
+      return engine.getTableSize(schema, table);
+    }
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "CatalogManager",
                   "Error getting table size: " + std::string(e.what()));
@@ -138,9 +238,15 @@ int64_t CatalogManager::getTableSize(const std::string &schema,
   return 0;
 }
 
+// Master function to sync the catalog from different database engines to
+// PostgreSQL. This function discovers all tables from the source database
+// engine and inserts or updates them in the metadata catalog. It uses a lock
+// mechanism to prevent multiple instances from syncing the same catalog
+// simultaneously. Lock is held for 60 seconds and tries to acquire for
+// 30 seconds. If lock cannot be acquired, the sync is skipped.
 void CatalogManager::syncCatalog(const std::string &dbEngine) {
   std::string lockName = "catalog_sync_" + dbEngine;
-  CatalogLock lock(metadataConnStr_, lockName, 600);
+  CatalogLock lock(metadataConnStr_, lockName, 60);
   if (!lock.tryAcquire(30)) {
     Logger::warning(LogCategory::DATABASE, "CatalogManager",
                     "Could not acquire lock for catalog sync (" + dbEngine +
@@ -165,7 +271,15 @@ void CatalogManager::syncCatalog(const std::string &dbEngine) {
       if (!engine)
         continue;
 
-      auto tables = engine->discoverTables();
+      std::vector<CatalogTableInfo> tables;
+      try {
+        tables = engine->discoverTables();
+      } catch (const std::exception &e) {
+        Logger::error(LogCategory::DATABASE, "CatalogManager",
+                      "Error discovering tables for connection: " +
+                          std::string(e.what()));
+        continue;
+      }
 
       for (const auto &table : tables) {
         auto timeColumn = engine->detectTimeColumn(table.schema, table.table);
@@ -182,7 +296,6 @@ void CatalogManager::syncCatalog(const std::string &dbEngine) {
                                    tableSize, dbEngine);
       }
     }
-
     updateClusterNames();
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "CatalogManager",
@@ -190,10 +303,16 @@ void CatalogManager::syncCatalog(const std::string &dbEngine) {
   }
 }
 
+// Sync catalog from MariaDB to PostgreSQL. This is a convenience wrapper
+// that calls syncCatalog with "MariaDB" as the database engine parameter.
 void CatalogManager::syncCatalogMariaDBToPostgres() { syncCatalog("MariaDB"); }
 
+// Sync catalog from MSSQL to PostgreSQL. This is a convenience wrapper
+// that calls syncCatalog with "MSSQL" as the database engine parameter.
 void CatalogManager::syncCatalogMSSQLToPostgres() { syncCatalog("MSSQL"); }
 
+// Sync catalog from PostgreSQL to PostgreSQL. This is a convenience wrapper
+// that calls syncCatalog with "PostgreSQL" as the database engine parameter.
 void CatalogManager::syncCatalogPostgresToPostgres() {
   syncCatalog("PostgreSQL");
 }

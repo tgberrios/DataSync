@@ -7,12 +7,22 @@
 #include <thread>
 #include <unistd.h>
 
+// Constructor for CatalogLock. Initializes the lock with a connection string,
+// lock name, and timeout duration. Automatically generates a unique session ID
+// for this lock instance. The lock starts in a non-acquired state and must be
+// explicitly acquired using tryAcquire(). The lockTimeoutSeconds parameter
+// determines how long the lock will be held once acquired before expiring.
 CatalogLock::CatalogLock(std::string connectionString, std::string lockName,
                          int lockTimeoutSeconds)
     : connectionString_(std::move(connectionString)),
       lockName_(std::move(lockName)), sessionId_(generateSessionId()),
       acquired_(false), lockTimeoutSeconds_(lockTimeoutSeconds) {}
 
+// Destructor for CatalogLock. Automatically releases the lock if it was
+// acquired and not previously released. This ensures that locks are always
+// cleaned up even if release() is not explicitly called, preventing lock leaks.
+// Errors during release in the destructor are logged but do not throw
+// exceptions.
 CatalogLock::~CatalogLock() {
   if (acquired_) {
     try {
@@ -25,6 +35,19 @@ CatalogLock::~CatalogLock() {
   }
 }
 
+// Attempts to acquire the lock with a maximum wait time. This function uses
+// a database-backed locking mechanism stored in metadata.catalog_locks table.
+// It first cleans expired locks, then attempts to insert a new lock entry.
+// If the lock is already held by another instance, it retries every 500ms
+// until either the lock is acquired or maxWaitSeconds is reached. The lock
+// expires after lockTimeoutSeconds from the time of acquisition. Returns true
+// if the lock was successfully acquired, false if the maximum wait time was
+// exceeded or an error occurred. If the lock cannot be acquired within
+// maxWaitSeconds, the function returns false and logs a warning. If the lock
+// is acquired but the operation fails, the destructor automatically releases
+// the lock to prevent lock leaks. If the operation is successful, the lock
+// should be explicitly released using release() or it will be automatically
+// released when the CatalogLock object is destroyed.
 bool CatalogLock::tryAcquire(int maxWaitSeconds) {
   auto startTime = std::chrono::steady_clock::now();
   std::string hostname = getHostname();
@@ -90,6 +113,11 @@ bool CatalogLock::tryAcquire(int maxWaitSeconds) {
   }
 }
 
+// Releases the lock if it was previously acquired. This function removes the
+// lock entry from the database using both the lock name and session ID to
+// ensure only the owning instance can release its own lock. If the lock was
+// not acquired, the function returns immediately without performing any
+// operations. Throws an exception if an error occurs during release.
 void CatalogLock::release() {
   if (!acquired_) {
     return;
@@ -114,6 +142,12 @@ void CatalogLock::release() {
   }
 }
 
+// Generates a unique session ID for this lock instance using a
+// cryptographically secure random number generator. The session ID is a
+// hexadecimal string that uniquely identifies this lock instance, allowing
+// multiple locks with the same name to be distinguished and ensuring only the
+// owning instance can release its lock. This prevents accidental lock releases
+// by other processes.
 std::string CatalogLock::generateSessionId() {
   std::random_device rd;
   std::mt19937_64 gen(rd());
@@ -125,6 +159,10 @@ std::string CatalogLock::generateSessionId() {
   return oss.str();
 }
 
+// Retrieves the hostname of the current machine using the system gethostname()
+// function. This hostname is stored with the lock entry to identify which
+// machine/instance acquired the lock, which is useful for debugging and
+// monitoring. Returns "unknown" if the hostname cannot be retrieved.
 std::string CatalogLock::getHostname() {
   char hostname[256];
   if (gethostname(hostname, sizeof(hostname)) == 0) {
@@ -133,6 +171,13 @@ std::string CatalogLock::getHostname() {
   return "unknown";
 }
 
+// Cleans expired locks from the metadata.catalog_locks table. This function
+// removes all lock entries where the expires_at timestamp is in the past.
+// It is called automatically before attempting to acquire a lock to ensure
+// stale locks don't prevent new lock acquisitions. Errors during cleanup are
+// logged as warnings but do not prevent the lock acquisition process from
+// continuing. The function logs the number of expired locks cleaned if any
+// were found.
 void CatalogLock::cleanExpiredLocks(pqxx::work &txn) {
   try {
     auto result = txn.exec("DELETE FROM metadata.catalog_locks "
