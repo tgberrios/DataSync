@@ -1,27 +1,28 @@
 #include "governance/LineageExtractorMSSQL.h"
-#include "core/logger.h"
 #include "core/database_config.h"
 #include "core/database_defaults.h"
+#include "core/logger.h"
 #include "engines/mssql_engine.h"
 #include "utils/connection_utils.h"
-#include <pqxx/pqxx>
 #include <algorithm>
-#include <sstream>
+#include <cstring>
 #include <iomanip>
+#include <pqxx/pqxx>
 #include <sql.h>
 #include <sqlext.h>
-#include <cstring>
+#include <sstream>
 
-LineageExtractorMSSQL::LineageExtractorMSSQL(const std::string &connectionString)
+LineageExtractorMSSQL::LineageExtractorMSSQL(
+    const std::string &connectionString)
     : connectionString_(connectionString) {
   serverName_ = extractServerName(connectionString);
   databaseName_ = extractDatabaseName(connectionString);
 }
 
-LineageExtractorMSSQL::~LineageExtractorMSSQL() {
-}
+LineageExtractorMSSQL::~LineageExtractorMSSQL() {}
 
-std::string LineageExtractorMSSQL::extractServerName(const std::string &connectionString) {
+std::string
+LineageExtractorMSSQL::extractServerName(const std::string &connectionString) {
   auto params = ConnectionStringParser::parse(connectionString);
   if (params) {
     return params->host;
@@ -29,7 +30,8 @@ std::string LineageExtractorMSSQL::extractServerName(const std::string &connecti
   return "UNKNOWN";
 }
 
-std::string LineageExtractorMSSQL::extractDatabaseName(const std::string &connectionString) {
+std::string LineageExtractorMSSQL::extractDatabaseName(
+    const std::string &connectionString) {
   auto params = ConnectionStringParser::parse(connectionString);
   if (params) {
     return params->db;
@@ -69,11 +71,12 @@ LineageExtractorMSSQL::executeQuery(SQLHDBC conn, const std::string &query) {
     SQLINTEGER nativeError;
     SQLSMALLINT msgLen;
 
-    if (SQLGetDiagRec(SQL_HANDLE_STMT, stmt, 1, sqlState, &nativeError, errorMsg,
-                      sizeof(errorMsg), &msgLen) == SQL_SUCCESS) {
-      Logger::error(LogCategory::GOVERNANCE, "LineageExtractorMSSQL",
-                    "SQLExecDirect failed - SQLState: " + std::string((char *)sqlState) +
-                        ", Error: " + std::string((char *)errorMsg));
+    if (SQLGetDiagRec(SQL_HANDLE_STMT, stmt, 1, sqlState, &nativeError,
+                      errorMsg, sizeof(errorMsg), &msgLen) == SQL_SUCCESS) {
+      Logger::error(
+          LogCategory::GOVERNANCE, "LineageExtractorMSSQL",
+          "SQLExecDirect failed - SQLState: " + std::string((char *)sqlState) +
+              ", Error: " + std::string((char *)errorMsg));
     }
     SQLFreeHandle(SQL_HANDLE_STMT, stmt);
     return results;
@@ -108,14 +111,10 @@ LineageExtractorMSSQL::executeQuery(SQLHDBC conn, const std::string &query) {
 
 std::string LineageExtractorMSSQL::generateEdgeKey(const LineageEdge &edge) {
   std::stringstream ss;
-  ss << edge.server_name << "|"
-     << edge.database_name << "|"
-     << edge.schema_name << "|"
-     << edge.object_name << "|"
-     << edge.object_type << "|"
+  ss << edge.server_name << "|" << edge.database_name << "|" << edge.schema_name
+     << "|" << edge.object_name << "|" << edge.object_type << "|"
      << (edge.column_name.empty() ? "" : edge.column_name) << "|"
-     << edge.target_object_name << "|"
-     << edge.target_object_type << "|"
+     << edge.target_object_name << "|" << edge.target_object_type << "|"
      << (edge.target_column_name.empty() ? "" : edge.target_column_name) << "|"
      << edge.relationship_type;
   return ss.str();
@@ -123,7 +122,8 @@ std::string LineageExtractorMSSQL::generateEdgeKey(const LineageEdge &edge) {
 
 void LineageExtractorMSSQL::extractLineage() {
   Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMSSQL",
-               "Starting lineage extraction for " + serverName_ + "/" + databaseName_);
+               "Starting lineage extraction for " + serverName_ + "/" +
+                   databaseName_);
 
   lineageEdges_.clear();
 
@@ -144,7 +144,8 @@ void LineageExtractorMSSQL::extractLineage() {
     extractSqlExpressionDependencies();
 
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMSSQL",
-                 "Lineage extraction completed. Found " + std::to_string(lineageEdges_.size()) + " dependencies");
+                 "Lineage extraction completed. Found " +
+                     std::to_string(lineageEdges_.size()) + " dependencies");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "LineageExtractorMSSQL",
                   "Error extracting lineage: " + std::string(e.what()));
@@ -199,10 +200,12 @@ void LineageExtractorMSSQL::extractForeignKeyDependencies() {
     }
 
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMSSQL",
-                 "Extracted " + std::to_string(results.size()) + " foreign key dependencies");
+                 "Extracted " + std::to_string(results.size()) +
+                     " foreign key dependencies");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "LineageExtractorMSSQL",
-                  "Error extracting foreign key dependencies: " + std::string(e.what()));
+                  "Error extracting foreign key dependencies: " +
+                      std::string(e.what()));
   }
 }
 
@@ -253,10 +256,12 @@ void LineageExtractorMSSQL::extractTableDependencies() {
     }
 
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMSSQL",
-                 "Extracted " + std::to_string(results.size()) + " table dependencies");
+                 "Extracted " + std::to_string(results.size()) +
+                     " table dependencies");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "LineageExtractorMSSQL",
-                  "Error extracting table dependencies: " + std::string(e.what()));
+                  "Error extracting table dependencies: " +
+                      std::string(e.what()));
   }
 }
 
@@ -305,10 +310,12 @@ void LineageExtractorMSSQL::extractStoredProcedureDependencies() {
     }
 
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMSSQL",
-                 "Extracted " + std::to_string(results.size()) + " stored procedure dependencies");
+                 "Extracted " + std::to_string(results.size()) +
+                     " stored procedure dependencies");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "LineageExtractorMSSQL",
-                  "Error extracting stored procedure dependencies: " + std::string(e.what()));
+                  "Error extracting stored procedure dependencies: " +
+                      std::string(e.what()));
   }
 }
 
@@ -357,10 +364,12 @@ void LineageExtractorMSSQL::extractViewDependencies() {
     }
 
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMSSQL",
-                 "Extracted " + std::to_string(results.size()) + " view dependencies");
+                 "Extracted " + std::to_string(results.size()) +
+                     " view dependencies");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "LineageExtractorMSSQL",
-                  "Error extracting view dependencies: " + std::string(e.what()));
+                  "Error extracting view dependencies: " +
+                      std::string(e.what()));
   }
 }
 
@@ -427,10 +436,12 @@ void LineageExtractorMSSQL::extractSqlExpressionDependencies() {
     }
 
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMSSQL",
-                 "Extracted " + std::to_string(results.size()) + " SQL expression dependencies");
+                 "Extracted " + std::to_string(results.size()) +
+                     " SQL expression dependencies");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "LineageExtractorMSSQL",
-                  "Error extracting SQL expression dependencies: " + std::string(e.what()));
+                  "Error extracting SQL expression dependencies: " +
+                      std::string(e.what()));
   }
 }
 
@@ -468,24 +479,20 @@ void LineageExtractorMSSQL::storeLineage() {
             avg_physical_reads = COALESCE(EXCLUDED.avg_physical_reads, mssql_lineage.avg_physical_reads)
         )";
 
-        txn.exec_params(query,
-          edge.edge_key,
-          edge.server_name,
-          edge.instance_name.empty() ? nullptr : edge.instance_name.c_str(),
-          edge.database_name,
-          edge.schema_name,
-          edge.object_name,
-          edge.object_type,
-          edge.column_name.empty() ? nullptr : edge.column_name.c_str(),
-          edge.target_object_name,
-          edge.target_object_type,
-          edge.target_column_name.empty() ? nullptr : edge.target_column_name.c_str(),
-          edge.relationship_type,
-          edge.definition_text.empty() ? nullptr : edge.definition_text.c_str(),
-          edge.dependency_level,
-          edge.discovery_method,
-          edge.confidence_score
-        );
+        txn.exec_params(
+            query, edge.edge_key, edge.server_name,
+            edge.instance_name.empty() ? nullptr : edge.instance_name.c_str(),
+            edge.database_name, edge.schema_name, edge.object_name,
+            edge.object_type,
+            edge.column_name.empty() ? nullptr : edge.column_name.c_str(),
+            edge.target_object_name, edge.target_object_type,
+            edge.target_column_name.empty() ? nullptr
+                                            : edge.target_column_name.c_str(),
+            edge.relationship_type,
+            edge.definition_text.empty() ? nullptr
+                                         : edge.definition_text.c_str(),
+            edge.dependency_level, edge.discovery_method,
+            edge.confidence_score);
         stored++;
       } catch (const std::exception &e) {
         Logger::warning(LogCategory::GOVERNANCE, "LineageExtractorMSSQL",

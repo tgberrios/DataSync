@@ -1,6 +1,7 @@
 #include "governance/DataGovernance.h"
 #include "governance/DataGovernanceMSSQL.h"
 #include "governance/DataGovernanceMariaDB.h"
+#include "governance/LineageExtractorMSSQL.h"
 #include "catalog/metadata_repository.h"
 #include "core/database_config.h"
 #include "engines/database_engine.h"
@@ -131,23 +132,37 @@ void DataGovernance::runDiscovery() {
     try {
       MetadataRepository repo(DatabaseConfig::getPostgresConnectionString());
       
-      std::vector<std::string> mssqlConnections = repo.getConnectionStrings("MSSQL");
-      for (const auto &connStr : mssqlConnections) {
-        if (!connStr.empty()) {
-          try {
-            Logger::info(LogCategory::GOVERNANCE, "runDiscovery",
-                         "Collecting MSSQL governance data for connection");
-            DataGovernanceMSSQL mssqlGov(connStr);
-            mssqlGov.collectGovernanceData();
-            mssqlGov.storeGovernanceData();
-            mssqlGov.generateReport();
-          } catch (const std::exception &e) {
-            Logger::error(LogCategory::GOVERNANCE, "runDiscovery",
-                          "Error collecting MSSQL governance data: " +
-                              std::string(e.what()));
+          std::vector<std::string> mssqlConnections = repo.getConnectionStrings("MSSQL");
+          for (const auto &connStr : mssqlConnections) {
+            if (!connStr.empty()) {
+              try {
+                Logger::info(LogCategory::GOVERNANCE, "runDiscovery",
+                             "Collecting MSSQL governance data for connection");
+                DataGovernanceMSSQL mssqlGov(connStr);
+                mssqlGov.collectGovernanceData();
+                mssqlGov.storeGovernanceData();
+                mssqlGov.generateReport();
+              } catch (const std::exception &e) {
+                Logger::error(LogCategory::GOVERNANCE, "runDiscovery",
+                              "Error collecting MSSQL governance data: " +
+                                  std::string(e.what()));
+              }
+
+              try {
+                Logger::info(LogCategory::GOVERNANCE, "runDiscovery",
+                             "Extracting MSSQL lineage for connection");
+                LineageExtractorMSSQL lineageExtractor(connStr);
+                lineageExtractor.extractLineage();
+                lineageExtractor.storeLineage();
+                Logger::info(LogCategory::GOVERNANCE, "runDiscovery",
+                             "MSSQL lineage extraction completed");
+              } catch (const std::exception &e) {
+                Logger::error(LogCategory::GOVERNANCE, "runDiscovery",
+                              "Error extracting MSSQL lineage: " +
+                                  std::string(e.what()));
+              }
+            }
           }
-        }
-      }
 
       std::vector<std::string> mariadbConnections = repo.getConnectionStrings("MariaDB");
       for (const auto &connStr : mariadbConnections) {
