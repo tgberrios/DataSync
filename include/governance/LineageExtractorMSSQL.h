@@ -1,9 +1,9 @@
 #ifndef LINEAGE_EXTRACTOR_MSSQL_H
 #define LINEAGE_EXTRACTOR_MSSQL_H
 
+#include <sql.h>
 #include <string>
 #include <vector>
-#include <sql.h>
 
 struct LineageEdge {
   std::string edge_key;
@@ -48,9 +48,10 @@ private:
   std::string extractServerName(const std::string &connectionString);
   std::string extractDatabaseName(const std::string &connectionString);
   std::string escapeSQL(const std::string &str);
-  std::vector<std::vector<std::string>> executeQuery(SQLHDBC conn, const std::string &query);
+  std::vector<std::vector<std::string>> executeQuery(SQLHDBC conn,
+                                                     const std::string &query);
   std::string generateEdgeKey(const LineageEdge &edge);
-  
+
   void extractTableDependencies();
   void extractStoredProcedureDependencies();
   void extractViewDependencies();
