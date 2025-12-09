@@ -4,6 +4,11 @@
 #include <pqxx/pqxx>
 #include <thread>
 
+// Constructor for ODBCConnection. Initializes an ODBC connection to a SQL
+// Server database using the provided connection string. Allocates environment
+// and connection handles, sets ODBC version to 3, and attempts to connect.
+// If any step fails, logs an error, cleans up allocated handles, and sets
+// valid_ to false. The connection must be checked with isValid() before use.
 ODBCConnection::ODBCConnection(const std::string &connectionString) {
   SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env_);
   if (!SQL_SUCCEEDED(ret)) {
@@ -53,6 +58,9 @@ ODBCConnection::ODBCConnection(const std::string &connectionString) {
   valid_ = true;
 }
 
+// Destructor for ODBCConnection. Disconnects from the database and frees all
+// allocated ODBC handles (connection and environment). Safe to call even if
+// the connection was never established or is already closed.
 ODBCConnection::~ODBCConnection() {
   if (dbc_ != SQL_NULL_HANDLE) {
     SQLDisconnect(dbc_);
@@ -63,6 +71,11 @@ ODBCConnection::~ODBCConnection() {
   }
 }
 
+// Move constructor for ODBCConnection. Transfers ownership of ODBC handles
+// (environment and connection) from the source object. The source object's
+// handles are set to SQL_NULL_HANDLE and valid_ is set to false to prevent
+// double-free. This allows efficient transfer of connection objects without
+// copying.
 ODBCConnection::ODBCConnection(ODBCConnection &&other) noexcept
     : env_(other.env_), dbc_(other.dbc_), valid_(other.valid_) {
   other.env_ = SQL_NULL_HANDLE;
@@ -91,9 +104,17 @@ ODBCConnection &ODBCConnection::operator=(ODBCConnection &&other) noexcept {
   return *this;
 }
 
+// Constructor for MSSQLEngine. Stores the connection string for later use when
+// creating database connections. The connection string should be in ODBC
+// format (e.g., "DRIVER={ODBC Driver 17 for SQL Server};SERVER=...;DATABASE=...;UID=...;PWD=...").
 MSSQLEngine::MSSQLEngine(std::string connectionString)
     : connectionString_(std::move(connectionString)) {}
 
+// Creates a new ODBC connection with retry logic. Attempts to establish a
+// connection up to MAX_RETRIES times with exponential backoff (100ms, 200ms,
+// 400ms). On successful connection, returns a unique_ptr to the connection.
+// If all attempts fail, returns nullptr. This function is thread-safe and can
+// be called multiple times to create independent connections.
 std::unique_ptr<ODBCConnection> MSSQLEngine::createConnection() {
   const int MAX_RETRIES = 3;
   const int INITIAL_BACKOFF_MS = 100;
@@ -125,6 +146,13 @@ std::unique_ptr<ODBCConnection> MSSQLEngine::createConnection() {
   return nullptr;
 }
 
+// Executes a SQL query on the provided ODBC connection and returns the
+// results as a vector of rows, where each row is a vector of strings. Handles
+// NULL values by converting them to the string "NULL". If the query fails or
+// the connection handle is invalid, returns an empty vector and logs an
+// error. This function stores the entire result set in memory, so it should
+// not be used for very large result sets. The caller is responsible for
+// ensuring the connection handle is valid.
 std::vector<std::vector<std::string>>
 MSSQLEngine::executeQuery(SQLHDBC dbc, const std::string &query) {
   std::vector<std::vector<std::string>> results;
@@ -172,12 +200,24 @@ MSSQLEngine::executeQuery(SQLHDBC dbc, const std::string &query) {
   return results;
 }
 
+// Extracts the database name from a connection string. Parses the connection
+// string and returns the database name, or "master" if parsing fails or no
+// database is specified. This function is used internally but may not be
+// actively used in the current codebase.
+[[deprecated("This function is not used in the codebase and may be removed in a future version")]]
 std::string
 MSSQLEngine::extractDatabaseName(const std::string &connectionString) {
   auto params = ConnectionStringParser::parse(connectionString);
   return params ? params->db : "master";
 }
 
+// Discovers all user tables in the SQL Server database. Queries sys.tables and
+// sys.schemas to find all user tables, excluding system schemas
+// (INFORMATION_SCHEMA, sys, guest) and system tables (spt_%, MS%, sp_%, fn_%,
+// xp_%, dt_%). Returns a vector of CatalogTableInfo objects containing schema
+// name, table name, and the connection string. If connection fails, returns
+// an empty vector. This function is used during catalog synchronization to
+// identify tables that should be synced.
 std::vector<CatalogTableInfo> MSSQLEngine::discoverTables() {
   std::vector<CatalogTableInfo> tables;
   auto conn = createConnection();
@@ -202,13 +242,31 @@ std::vector<CatalogTableInfo> MSSQLEngine::discoverTables() {
   return tables;
 }
 
+// Detects the primary key columns for a given table. Queries sys.columns,
+// sys.tables, sys.schemas, sys.index_columns, and sys.indexes to find all
+// columns that are part of the PRIMARY KEY constraint, ordered by their key
+// ordinal position. Sanitizes schema and table names by removing potentially
+// dangerous characters (single quotes, semicolons, hyphens) to prevent SQL
+// injection. Returns a vector of column names in the order they appear in the
+// primary key. If no primary key exists or connection fails, returns an empty
+// vector. If schema or table is empty, the behavior is undefined.
 std::vector<std::string>
 MSSQLEngine::detectPrimaryKey(const std::string &schema,
                               const std::string &table) {
+  if (schema.empty() || table.empty()) {
+    Logger::error(LogCategory::DATABASE, "MSSQLEngine",
+                  "detectPrimaryKey: schema and table must not be empty");
+    return {};
+  }
+
   std::vector<std::string> pkColumns;
   auto conn = createConnection();
-  if (!conn)
+  if (!conn) {
+    Logger::error(LogCategory::DATABASE, "MSSQLEngine",
+                  "detectPrimaryKey: Failed to connect for " + schema + "." +
+                      table);
     return pkColumns;
+  }
 
   std::string safeSchema = schema;
   std::string safeTable = table;
@@ -243,11 +301,28 @@ MSSQLEngine::detectPrimaryKey(const std::string &schema,
   return pkColumns;
 }
 
+// Detects a time-based column (e.g., updated_at, created_at) in the specified
+// table. Searches for columns matching TIME_COLUMN_CANDIDATES in sys.columns,
+// ordered by preference using a CASE statement. Sanitizes schema and table
+// names to prevent SQL injection. Returns the first matching column name, or
+// an empty string if no time column is found or connection fails. This column
+// is used for incremental sync strategies. If schema or table is empty, the
+// behavior is undefined.
 std::string MSSQLEngine::detectTimeColumn(const std::string &schema,
                                           const std::string &table) {
-  auto conn = createConnection();
-  if (!conn)
+  if (schema.empty() || table.empty()) {
+    Logger::error(LogCategory::DATABASE, "MSSQLEngine",
+                  "detectTimeColumn: schema and table must not be empty");
     return "";
+  }
+
+  auto conn = createConnection();
+  if (!conn) {
+    Logger::error(LogCategory::DATABASE, "MSSQLEngine",
+                  "detectTimeColumn: Failed to connect for " + schema + "." +
+                      table);
+    return "";
+  }
 
   std::string safeSchema = schema;
   std::string safeTable = table;
@@ -292,13 +367,32 @@ std::string MSSQLEngine::detectTimeColumn(const std::string &schema,
   return "";
 }
 
+// Gets the column count for a table in both the source SQL Server database and
+// the target PostgreSQL database. Queries sys.columns in SQL Server and
+// information_schema.columns in PostgreSQL, and returns a pair where first is
+// the source count and second is the target count. This is used to detect
+// schema mismatches between source and target. Schema and table names are
+// sanitized for SQL Server queries and converted to lowercase for PostgreSQL
+// queries. If connection fails or query fails, returns {0, 0} for source and
+// {sourceCount, 0} for target respectively. If schema or table is empty, the
+// behavior is undefined.
 std::pair<int, int>
 MSSQLEngine::getColumnCounts(const std::string &schema,
                              const std::string &table,
                              const std::string &targetConnStr) {
-  auto conn = createConnection();
-  if (!conn)
+  if (schema.empty() || table.empty()) {
+    Logger::error(LogCategory::DATABASE, "MSSQLEngine",
+                  "getColumnCounts: schema and table must not be empty");
     return {0, 0};
+  }
+
+  auto conn = createConnection();
+  if (!conn) {
+    Logger::error(LogCategory::DATABASE, "MSSQLEngine",
+                  "getColumnCounts: Failed to connect for " + schema + "." +
+                      table);
+    return {0, 0};
+  }
 
   std::string safeSchema = schema;
   std::string safeTable = table;
@@ -353,8 +447,8 @@ MSSQLEngine::getColumnCounts(const std::string &schema,
     return {sourceCount, targetCount};
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "MSSQLEngine",
-                  "Error getting target column count: " +
-                      std::string(e.what()));
+                  "Error getting target column count for " + schema + "." +
+                      table + ": " + std::string(e.what()));
     return {sourceCount, 0};
   }
 }

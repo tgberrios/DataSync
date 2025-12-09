@@ -52,6 +52,7 @@ private:
   std::unique_ptr<ODBCConnection> createConnection();
   std::vector<std::vector<std::string>> executeQuery(SQLHDBC dbc,
                                                      const std::string &query);
+  [[deprecated("This function is not used in the codebase and may be removed in a future version")]]
   std::string extractDatabaseName(const std::string &connectionString);
 };
 
