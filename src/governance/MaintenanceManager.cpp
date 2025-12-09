@@ -715,7 +715,7 @@ void MaintenanceManager::storeTask(const MaintenanceTask &task) {
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
       )
-      ON CONFLICT (maintenance_type, schema_name, object_name, object_type)
+      ON CONFLICT (db_engine, maintenance_type, schema_name, object_name, object_type)
       DO UPDATE SET
         priority = EXCLUDED.priority,
         next_maintenance_date = EXCLUDED.next_maintenance_date,
