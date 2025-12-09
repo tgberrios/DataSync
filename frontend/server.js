@@ -230,7 +230,7 @@ app.patch("/api/catalog/skip-table", async (req, res) => {
   try {
     const result = await pool.query(
       `UPDATE metadata.catalog 
-       SET status = 'SKIP', last_offset = 0, active = false
+       SET status = 'SKIP', active = false
        WHERE schema_name = $1 AND table_name = $2 AND db_engine = $3
        RETURNING *`,
       [schema_name, table_name, db_engine]
@@ -257,7 +257,7 @@ app.patch("/api/catalog/deactivate-schema", async (req, res) => {
   try {
     const result = await pool.query(
       `UPDATE metadata.catalog 
-       SET status = 'SKIPPED', last_offset = 0
+       SET status = 'SKIPPED'
        WHERE schema_name = $1
        RETURNING *`,
       [schema_name]
@@ -292,25 +292,19 @@ app.get("/api/dashboard/stats", async (req, res) => {
       FROM metadata.catalog
     `);
 
-    // 2. DATA PROGRESS METRICS - total last_offset y total_data
+    // 2. DATA PROGRESS METRICS - total_data
     const dataProgress = await pool.query(`
       SELECT 
-        COALESCE(SUM(last_offset), 0) as total_last_offset,
         COALESCE(SUM(table_size), 0) as total_data
       FROM metadata.catalog
       WHERE active = true AND status IN ('LISTENING_CHANGES', 'FULL_LOAD')
     `);
 
-    // Get currently processing table with progress calculation
+    // Get currently processing table
     const currentProcessingTable = await pool.query(`
-      SELECT t.*,
-             CASE 
-               WHEN t.table_size > 0 THEN ROUND((t.last_offset::numeric / t.table_size::numeric) * 100, 1)
-               ELSE 0 
-             END as progress_percentage
+      SELECT t.*
       FROM metadata.catalog t
       WHERE status = 'FULL_LOAD'
-      ORDER BY last_offset desc
       LIMIT 1
     `);
 
@@ -318,9 +312,7 @@ app.get("/api/dashboard/stats", async (req, res) => {
       currentProcessingTable.rows.length > 0
         ? `${String(currentProcessingTable.rows[0].schema_name).toLowerCase()}.${
             String(currentProcessingTable.rows[0].table_name).toLowerCase()
-          } [${currentProcessingTable.rows[0].db_engine}] (${currentProcessingTable.rows[0].last_offset || 0}/${
-            currentProcessingTable.rows[0].table_size || 0
-          } - ${currentProcessingTable.rows[0].progress_percentage || 0}%) - Status: ${currentProcessingTable.rows[0].status}`
+          } [${currentProcessingTable.rows[0].db_engine}] - Status: ${currentProcessingTable.rows[0].status}`
         : "No active transfers";
 
     // 2. TRANSFER PERFORMANCE BY ENGINE
@@ -442,7 +434,6 @@ app.get("/api/dashboard/stats", async (req, res) => {
         skip: parseInt(syncStatus.rows[0]?.skip || 0),
         errors: parseInt(syncStatus.rows[0]?.errors || 0),
         currentProcess: currentProcessText,
-        totalLastOffset: parseInt(dataProgress.rows[0]?.total_last_offset || 0),
         totalData: parseInt(dataProgress.rows[0]?.total_data || 0),
         totalTables: parseInt(totalTablesResult.rows[0]?.total || 0),
       },

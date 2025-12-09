@@ -48,7 +48,7 @@ public:
   virtual int resetTable(const std::string &schema, const std::string &table,
                          const std::string &dbEngine) = 0;
   [[deprecated(
-      "This function will be removed when last_offset logic is eliminated")]]
+      "This function is deprecated and will be removed in a future version")]]
   virtual int cleanInvalidOffsets() = 0;
   virtual std::unordered_map<std::string, int64_t> getTableSizesBatch() = 0;
 };
@@ -82,7 +82,7 @@ public:
   int resetTable(const std::string &schema, const std::string &table,
                  const std::string &dbEngine) override;
   [[deprecated(
-      "This function will be removed when last_offset logic is eliminated")]]
+      "This function is deprecated and will be removed in a future version")]]
   int cleanInvalidOffsets() override;
   std::unordered_map<std::string, int64_t> getTableSizesBatch() override;
 

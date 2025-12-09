@@ -708,25 +708,6 @@ public:
                                        table.last_sync_time);
           }
 
-          // Verificar si hay datos nuevos usando last_offset
-          size_t lastOffset = 0;
-          try {
-            pqxx::work txn(pgConn);
-            auto offsetRes = txn.exec(
-                "SELECT last_offset FROM metadata.catalog WHERE schema_name='" +
-                escapeSQL(schema_name) + "' AND table_name='" +
-                escapeSQL(table_name) + "';");
-            txn.commit();
-
-            if (!offsetRes.empty() && !offsetRes[0][0].is_null()) {
-              lastOffset = std::stoul(offsetRes[0][0].as<std::string>());
-            }
-          } catch (...) {
-            lastOffset = 0;
-          }
-
-          // Simplificado: Siempre usar LISTENING_CHANGES para sincronización
-          // incremental
           updateStatus(pgConn, schema_name, table_name, "LISTENING_CHANGES",
                        sourceCount);
 
@@ -836,15 +817,6 @@ public:
                                lowerTableNamePG + "\" CASCADE;");
               truncateTxn.commit();
 
-              // Resetear last_offset a 0 para re-sincronización completa
-              pqxx::work resetTxn(pgConn);
-              resetTxn.exec("UPDATE metadata.catalog SET last_offset='0' WHERE "
-                            "schema_name='" +
-                            escapeSQL(schema_name) + "' AND table_name='" +
-                            escapeSQL(table_name) + "';");
-              resetTxn.commit();
-
-              // Actualizar status a FULL_LOAD para procesamiento completo
               updateStatus(pgConn, schema_name, table_name, "FULL_LOAD", 0);
 
               Logger::info(
@@ -895,13 +867,6 @@ public:
                              lowerTableNamePG + "\" CASCADE;");
             truncateTxn.commit();
 
-            // Resetear last_offset a 0 para re-sincronización completa
-            pqxx::work resetTxn(pgConn);
-            resetTxn.exec("UPDATE metadata.catalog SET last_offset='0' WHERE "
-                          "schema_name='" +
-                          escapeSQL(schema_name) + "' AND table_name='" +
-                          escapeSQL(table_name) + "';");
-            resetTxn.commit();
 
             // Actualizar status a FULL_LOAD para procesamiento completo
             updateStatus(pgConn, schema_name, table_name, "FULL_LOAD", 0);
@@ -1013,30 +978,13 @@ public:
         }
 
         if (table.status == "FULL_LOAD") {
+          Logger::info(LogCategory::TRANSFER,
+                       "Truncating table: " + lowerSchemaName + "." +
+                           table_name);
           pqxx::work txn(pgConn);
-          auto offsetCheck = txn.exec(
-              "SELECT last_offset FROM metadata.catalog WHERE schema_name='" +
-              escapeSQL(schema_name) + "' AND table_name='" +
-              escapeSQL(table_name) + "';");
+          txn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
+                   lowerTableNamePG + "\" CASCADE;");
           txn.commit();
-
-          bool shouldTruncate = true;
-          if (!offsetCheck.empty() && !offsetCheck[0][0].is_null()) {
-            std::string currentOffset = offsetCheck[0][0].as<std::string>();
-            if (currentOffset != "0" && !currentOffset.empty()) {
-              shouldTruncate = false;
-            }
-          }
-
-          if (shouldTruncate) {
-            Logger::info(LogCategory::TRANSFER,
-                         "Truncating table: " + lowerSchemaName + "." +
-                             table_name);
-            pqxx::work txn(pgConn);
-            txn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
-                     lowerTableNamePG + "\" CASCADE;");
-            txn.commit();
-          }
         } else if (table.status == "RESET") {
           Logger::info(LogCategory::TRANSFER,
                        "Processing RESET table: " + schema_name + "." +
@@ -1044,45 +992,18 @@ public:
           pqxx::work txn(pgConn);
           txn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
                    lowerTableNamePG + "\" CASCADE;");
-          txn.exec("UPDATE metadata.catalog SET last_offset='0' WHERE "
-                   "schema_name='" +
-                   escapeSQL(schema_name) + "' AND table_name='" +
-                   escapeSQL(table_name) + "';");
           txn.commit();
 
           updateStatus(pgConn, schema_name, table_name, "FULL_LOAD", 0);
           continue;
         }
 
-        size_t totalProcessed = 0;
-
-        std::string offsetQuery =
-            "SELECT last_offset FROM metadata.catalog WHERE schema_name='" +
-            escapeSQL(schema_name) + "' AND table_name='" +
-            escapeSQL(table_name) + "';";
-        pqxx::work txn(pgConn);
-        auto currentOffsetRes = txn.exec(offsetQuery);
-        txn.commit();
-
-        if (!currentOffsetRes.empty() && !currentOffsetRes[0][0].is_null()) {
-          try {
-            totalProcessed =
-                std::stoul(currentOffsetRes[0][0].as<std::string>());
-          } catch (...) {
-            totalProcessed = 0;
-          }
-        }
-
-        // Obtener columnas de PK (ya tenemos la estrategia)
         std::vector<std::string> pkColumns =
             getPKColumnsFromCatalog(pgConn, schema_name, table_name);
         std::string lastProcessedPK =
             getLastProcessedPKFromCatalog(pgConn, schema_name, table_name);
 
-        // Transferir datos faltantes usando CURSOR-BASED PAGINATION
         bool hasMoreData = forceFullLoad || (sourceCount > targetCount);
-        size_t currentOffset =
-            totalProcessed; // Inicializar con el offset de la DB
         size_t chunkNumber = 0;
 
         // CRITICAL: Add timeout to prevent infinite loops
@@ -1145,9 +1066,7 @@ public:
             selectQuery += " OFFSET 0 ROWS FETCH NEXT " +
                            std::to_string(CHUNK_SIZE) + " ROWS ONLY;";
           } else {
-            // FALLBACK: Usar OFFSET pagination para tablas sin PK
-            selectQuery += " ORDER BY (SELECT 0) OFFSET " +
-                           std::to_string(currentOffset) + " ROWS FETCH NEXT " +
+            selectQuery += " ORDER BY (SELECT 0) OFFSET 0 ROWS FETCH NEXT " +
                            std::to_string(CHUNK_SIZE) + " ROWS ONLY;";
           }
 
@@ -1260,29 +1179,12 @@ public:
             }
           }
 
-          // Always update targetCount, but only update currentOffset for non-PK
-          // tables
           targetCount += rowsInserted;
 
-          // Solo incrementar currentOffset para tablas sin PK (OFFSET
-          // pagination). Para tablas con PK se usa cursor-based pagination con
-          // last_processed_pk
-          if (pkStrategy != "PK") {
-            currentOffset +=
-                results.size(); // Usar el número real de registros procesados
-          }
-
-          // If COPY failed but we have data, advance the offset by 1
           if (rowsInserted == 0 && !results.empty()) {
-            targetCount += 1; // Advance by 1 to skip the problematic record
-            // Solo avanzar currentOffset para tablas sin PK
-            if (pkStrategy != "PK") {
-              currentOffset +=
-                  1; // Advance OFFSET by 1 to skip the problematic record
-            }
+            targetCount += 1;
             Logger::info(LogCategory::TRANSFER,
-                         "COPY failed, advancing offset by 1 to skip "
-                         "problematic record for " +
+                         "COPY failed, skipping problematic record for " +
                              schema_name + "." + table_name);
           }
 
@@ -1302,33 +1204,11 @@ public:
             }
           }
 
-          // Update last_offset in database solo para tablas sin PK (OFFSET
-          // pagination) Para tablas con PK o TEMPORAL_PK se usa
-          // last_processed_pk en lugar de last_offset
-          if (pkStrategy != "PK") {
-            try {
-              pqxx::work updateTxn(pgConn);
-              updateTxn.exec("UPDATE metadata.catalog SET last_offset='" +
-                             std::to_string(currentOffset) +
-                             "' WHERE schema_name='" + escapeSQL(schema_name) +
-                             "' AND table_name='" + escapeSQL(table_name) +
-                             "';");
-              updateTxn.commit();
-              Logger::info(LogCategory::TRANSFER,
-                           "Updated last_offset to " +
-                               std::to_string(currentOffset) + " for " +
-                               schema_name + "." + table_name);
-            } catch (const std::exception &e) {
-              Logger::warning(LogCategory::TRANSFER,
-                              "Failed to update last_offset: " +
-                                  std::string(e.what()));
-            }
-          }
 
           // Para OFFSET pagination, verificar si hemos procesado todos los
           // registros
           if (pkStrategy != "PK") {
-            if (results.size() < CHUNK_SIZE || currentOffset >= sourceCount) {
+            if (results.size() < CHUNK_SIZE) {
               hasMoreData = false;
             }
           } else {
@@ -1718,7 +1598,6 @@ public:
 
     try {
       size_t chunkNumber = 0;
-      size_t currentOffset = 0;
       const size_t CHUNK_SIZE = SyncConfig::getChunkSize();
 
       // Get PK strategy and columns
@@ -1758,7 +1637,7 @@ public:
                          std::to_string(CHUNK_SIZE) + " ROWS ONLY;";
         } else {
           selectQuery += " ORDER BY (SELECT 0) OFFSET " +
-                         std::to_string(currentOffset) + " ROWS FETCH NEXT " +
+                         "0 ROWS FETCH NEXT " +
                          std::to_string(CHUNK_SIZE) + " ROWS ONLY;";
         }
 
@@ -1834,36 +1713,6 @@ public:
           }
         }
 
-        // Update last_offset for OFFSET strategy tables (as count of processed
-        // records)
-        if (pkStrategy != "PK") {
-          try {
-            // Calculate total records processed (currentOffset + records in
-            // this chunk)
-            size_t totalProcessed = currentOffset + results.size();
-
-            pqxx::work updateTxn(pgConn);
-            updateTxn.exec("UPDATE metadata.catalog SET last_offset='" +
-                           std::to_string(totalProcessed) +
-                           "' WHERE schema_name='" +
-                           escapeSQL(table.schema_name) + "' AND table_name='" +
-                           escapeSQL(table.table_name) + "';");
-            updateTxn.commit();
-            Logger::info(LogCategory::TRANSFER,
-                         "Updated last_offset to " +
-                             std::to_string(totalProcessed) + " (processed " +
-                             std::to_string(results.size()) +
-                             " records) for table " + table.schema_name + "." +
-                             table.table_name);
-          } catch (const std::exception &e) {
-            Logger::error(LogCategory::TRANSFER, "dataFetcherThread",
-                          "Error updating last_offset: " +
-                              std::string(e.what()));
-          }
-
-          // Update offset for next iteration (after saving to database)
-          currentOffset += CHUNK_SIZE;
-        }
 
         // Check if we got less data than expected (end of table)
         if (results.size() < CHUNK_SIZE) {
@@ -2038,11 +1887,6 @@ public:
       std::string updateQuery =
           "UPDATE metadata.catalog SET status='" + status + "'";
 
-      // Actualizar last_offset para todos los status que requieren tracking
-      if (status == "FULL_LOAD" || status == "RESET" ||
-          status == "LISTENING_CHANGES") {
-        updateQuery += ", last_offset='" + std::to_string(offset) + "'";
-      }
 
       if (!lastSyncColumn.empty()) {
         std::string lowerSchemaName = schema_name;
