@@ -58,7 +58,7 @@ add_executable(DataSync
     src/sync/TableProcessorThreadPool.cpp
 )
 
-# Configurar para que el ejecutable se genere en el directorio raíz
+# Configure executable output directory to project root
 set_target_properties(DataSync PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}
 )

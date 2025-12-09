@@ -1,4 +1,4 @@
-# Build directories
+# Build directories and generated files
 build/
 CMakeFiles/
 cmake_install.cmake
@@ -6,7 +6,6 @@ CMakeCache.txt
 Makefile
 ./DataSync.log
 DDL_EXPORT/
-
 
 # Compiled executables
 DataSync

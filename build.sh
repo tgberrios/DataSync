@@ -25,6 +25,7 @@ if cmake .. > /tmp/cmake_output.log 2>&1; then
 else
     echo "   [FAIL] CMake configuration failed!"
     cat /tmp/cmake_output.log
+    rm -f /tmp/cmake_output.log
     exit 1
 fi
 echo ""
@@ -58,5 +59,8 @@ else
     echo ""
     echo "▸ Error details:"
     tail -50 /tmp/make_output.log
+    rm -f /tmp/cmake_output.log /tmp/make_output.log
     exit 1
 fi
+
+rm -f /tmp/cmake_output.log /tmp/make_output.log
