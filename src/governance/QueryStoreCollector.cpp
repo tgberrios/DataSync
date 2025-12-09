@@ -274,17 +274,17 @@ void QueryStoreCollector::storeSnapshots() {
       try {
         pqxx::work txn(conn);
         std::string query = R"(
-          INSERT INTO metadata.query_store_snapshots (
-            dbname, username, queryid, query_text, calls, total_time_ms, mean_time_ms,
-            rows_returned, shared_blks_hit, shared_blks_read, shared_blks_dirtied,
+          INSERT INTO metadata.query_performance (
+            source_type, dbname, username, queryid, query_text, calls, total_time_ms, mean_time_ms,
+            min_time_ms, max_time_ms, rows_returned, shared_blks_hit, shared_blks_read, shared_blks_dirtied,
             shared_blks_written, local_blks_hit, local_blks_read, local_blks_dirtied,
             local_blks_written, temp_blks_read, temp_blks_written, blk_read_time_ms,
-            blk_write_time_ms, wal_records, wal_fpi, wal_bytes, min_time_ms, max_time_ms,
+            blk_write_time_ms, wal_records, wal_fpi, wal_bytes,
             operation_type, query_fingerprint, tables_count, has_joins, has_subqueries,
             has_cte, has_window_functions, has_functions, query_category
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-            $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34
+            'snapshot', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+            $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33
           )
         )";
 
@@ -296,6 +296,8 @@ void QueryStoreCollector::storeSnapshots() {
           snapshot.calls,
           snapshot.total_time_ms,
           snapshot.mean_time_ms,
+          snapshot.min_time_ms,
+          snapshot.max_time_ms,
           snapshot.rows_returned,
           snapshot.shared_blks_hit,
           snapshot.shared_blks_read,
@@ -312,8 +314,6 @@ void QueryStoreCollector::storeSnapshots() {
           snapshot.wal_records,
           snapshot.wal_fpi,
           snapshot.wal_bytes,
-          snapshot.min_time_ms,
-          snapshot.max_time_ms,
           snapshot.operation_type.empty() ? nullptr : snapshot.operation_type.c_str(),
           snapshot.query_fingerprint.empty() ? nullptr : snapshot.query_fingerprint.c_str(),
           snapshot.tables_count,
@@ -333,7 +333,7 @@ void QueryStoreCollector::storeSnapshots() {
     }
 
     Logger::info(LogCategory::GOVERNANCE, "QueryStoreCollector",
-                 "Stored " + std::to_string(stored) + " snapshots");
+                 "Stored " + std::to_string(stored) + " snapshots in unified table");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "QueryStoreCollector",
                   "Error storing snapshots: " + std::string(e.what()));

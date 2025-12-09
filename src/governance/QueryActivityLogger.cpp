@@ -187,12 +187,12 @@ void QueryActivityLogger::storeActivityLog() {
       try {
         pqxx::work txn(conn);
         std::string query = R"(
-          INSERT INTO metadata.query_activity_log (
-            pid, dbname, username, application_name, client_addr, state,
+          INSERT INTO metadata.query_performance (
+            source_type, pid, dbname, username, application_name, client_addr, state,
             wait_event_type, wait_event, query_text, query_duration_ms,
             operation_type, query_category
           ) VALUES (
-            $1, $2, $3, $4, $5::inet, $6, $7, $8, $9, $10, $11, $12
+            'activity', $1, $2, $3, $4, $5::inet, $6, $7, $8, $9, $10, $11, $12
           )
         )";
 
@@ -219,7 +219,7 @@ void QueryActivityLogger::storeActivityLog() {
     }
 
     Logger::info(LogCategory::GOVERNANCE, "QueryActivityLogger",
-                 "Stored " + std::to_string(stored) + " activity records");
+                 "Stored " + std::to_string(stored) + " activity records in unified table");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "QueryActivityLogger",
                   "Error storing activities: " + std::string(e.what()));
