@@ -4,9 +4,17 @@
 #include "utils/time_utils.h"
 #include <algorithm>
 
+// Constructor for DataGovernance. Initializes the governance system by
+// creating a DataClassifier instance for table classification. The classifier
+// is used to determine data categories, business domains, sensitivity levels,
+// and data classifications based on governance rules.
 DataGovernance::DataGovernance()
     : classifier_(std::make_unique<DataClassifier>()) {}
 
+// Initializes the DataGovernance system by creating the necessary database
+// table structure. This function should be called before using any other
+// governance functionality. If initialization fails, an error is logged but
+// the system continues to operate (subsequent operations may fail).
 void DataGovernance::initialize() {
   try {
     createGovernanceTable();
@@ -17,6 +25,13 @@ void DataGovernance::initialize() {
   }
 }
 
+// Creates the metadata.data_governance_catalog table and required indexes if
+// they do not already exist. This table stores comprehensive metadata about
+// tables including structure, quality metrics, usage statistics, health
+// status, and classification information. The table includes a unique
+// constraint on (schema_name, table_name) to prevent duplicates. Creates
+// indexes on schema/table, source engine, and health status for efficient
+// querying.
 void DataGovernance::createGovernanceTable() {
   try {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
@@ -88,6 +103,12 @@ void DataGovernance::createGovernanceTable() {
   }
 }
 
+// Runs the discovery process to analyze all tables in the PostgreSQL database
+// and store their metadata in the governance catalog. Discovers all user
+// tables (excluding system schemas), extracts comprehensive metadata for each
+// table, and stores it in the database. If processing a table fails, logs an
+// error and continues with the next table. This function can be time-consuming
+// for large databases.
 void DataGovernance::runDiscovery() {
 
   try {
@@ -109,6 +130,12 @@ void DataGovernance::runDiscovery() {
   }
 }
 
+// Discovers all user tables in the PostgreSQL database by querying
+// information_schema.tables. Excludes system schemas (information_schema,
+// pg_catalog, pg_toast, pg_temp_1, pg_toast_temp_1, metadata) and only
+// includes BASE TABLE types. Returns a vector of TableMetadata objects, one
+// for each discovered table. If discovery fails, returns an empty vector and
+// logs an error.
 std::vector<TableMetadata> DataGovernance::discoverTables() {
   std::vector<TableMetadata> tables;
 
@@ -143,6 +170,13 @@ std::vector<TableMetadata> DataGovernance::discoverTables() {
   return tables;
 }
 
+// Extracts comprehensive metadata for a specific table. Validates input
+// parameters, verifies table existence, and performs multiple analyses:
+// table structure, data quality, usage statistics, and health status. Also
+// classifies the table and infers the source database engine. Returns a
+// TableMetadata object with all collected information. Throws
+// std::invalid_argument if schema or table name is empty or contains invalid
+// characters. Throws std::runtime_error if the table does not exist.
 TableMetadata
 DataGovernance::extractTableMetadata(const std::string &schema_name,
                                      const std::string &table_name) {
@@ -220,6 +254,11 @@ DataGovernance::extractTableMetadata(const std::string &schema_name,
   return metadata;
 }
 
+// Analyzes the structural properties of a table including column count, row
+// count, table size, primary key columns, index count, and constraint count.
+// Queries information_schema and pg_stat tables to gather this information.
+// Updates the provided metadata object with the collected data. If analysis
+// fails, logs an error but does not throw an exception.
 void DataGovernance::analyzeTableStructure(pqxx::connection &conn,
                                            const std::string &schema_name,
                                            const std::string &table_name,
@@ -307,6 +346,13 @@ void DataGovernance::analyzeTableStructure(pqxx::connection &conn,
   }
 }
 
+// Analyzes data quality metrics for a table including NULL percentage and
+// duplicate percentage. For NULL analysis, checks actual NULL values in
+// nullable columns, not just column definitions. For duplicate analysis, uses
+// sampling (10% TABLESAMPLE) for large tables (>1M rows) to improve
+// performance. Updates the metadata object with null_percentage and
+// duplicate_percentage. If analysis fails, logs an error but does not throw
+// an exception.
 void DataGovernance::analyzeDataQuality(pqxx::connection &conn,
                                         const std::string &schema_name,
                                         const std::string &table_name,
@@ -400,7 +446,9 @@ void DataGovernance::analyzeDataQuality(pqxx::connection &conn,
         }
       }
     } catch (const pqxx::sql_error &e) {
-
+      Logger::error(LogCategory::GOVERNANCE, "analyzeDataQuality",
+                    "SQL error calculating duplicates for " + schema_name + "." +
+                        table_name + ": " + std::string(e.what()));
       metadata.duplicate_percentage = 0.0;
     } catch (const std::exception &e) {
       Logger::error(LogCategory::GOVERNANCE, "analyzeDataQuality",
@@ -415,6 +463,13 @@ void DataGovernance::analyzeDataQuality(pqxx::connection &conn,
   }
 }
 
+// Analyzes usage statistics for a table by querying pg_stat_user_tables.
+// Collects information about sequential scans, index scans, tuple insertions,
+// updates, and deletions. Calculates daily query count and determines access
+// frequency (REAL_TIME, HIGH, MEDIUM, LOW, RARE, ARCHIVED) based on query
+// count. Updates the metadata object with last_accessed, last_vacuum,
+// access_frequency, and query_count_daily. If analysis fails, logs an error
+// but does not throw an exception.
 void DataGovernance::analyzeUsageStatistics(pqxx::connection &conn,
                                             const std::string &schema_name,
                                             const std::string &table_name,
@@ -478,6 +533,13 @@ void DataGovernance::analyzeUsageStatistics(pqxx::connection &conn,
   }
 }
 
+// Analyzes the health status of a table by examining dead tuples, live tuples,
+// and vacuum history from pg_stat_user_tables. Calculates fragmentation
+// percentage as the ratio of dead tuples to live tuples. Determines overall
+// health status (EMERGENCY, CRITICAL, WARNING, HEALTHY, EXCELLENT) based on
+// fragmentation, duplicate, and null percentages. Updates the metadata object
+// with fragmentation_percentage, last_vacuum, and health_status. If analysis
+// fails, logs an error but does not throw an exception.
 void DataGovernance::analyzeHealthStatus(pqxx::connection &conn,
                                          const std::string &schema_name,
                                          const std::string &table_name,
@@ -525,6 +587,12 @@ void DataGovernance::analyzeHealthStatus(pqxx::connection &conn,
   }
 }
 
+// Classifies a table by determining its data category, business domain,
+// sensitivity level, data classification, retention policy, backup frequency,
+// and compliance requirements. Uses the DataClassifier to perform pattern
+// matching on table and schema names. Updates the metadata object with all
+// classification results. If classification fails, logs an error but does not
+// throw an exception.
 void DataGovernance::classifyTable(TableMetadata &metadata) {
   try {
     metadata.data_category =
@@ -547,6 +615,12 @@ void DataGovernance::classifyTable(TableMetadata &metadata) {
   }
 }
 
+// Infers the source database engine for a table by querying metadata.catalog
+// to find matching schema_name entries. If a match is found, sets
+// inferred_source_engine to the db_engine value. If no match is found, sets
+// it to "UNKNOWN". This helps track which source database a table originated
+// from. If inference fails, sets inferred_source_engine to "UNKNOWN" and logs
+// an error.
 void DataGovernance::inferSourceEngine(TableMetadata &metadata) {
   try {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
@@ -571,6 +645,11 @@ void DataGovernance::inferSourceEngine(TableMetadata &metadata) {
   }
 }
 
+// Stores table metadata in the metadata.data_governance_catalog table. If a
+// record with the same schema_name and table_name already exists, calls
+// updateExistingMetadata to update it. Otherwise, inserts a new record with
+// all metadata fields. Uses SQL escaping to prevent injection attacks. If
+// storage fails, logs an error but does not throw an exception.
 void DataGovernance::storeMetadata(const TableMetadata &metadata) {
   try {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
@@ -641,6 +720,11 @@ void DataGovernance::storeMetadata(const TableMetadata &metadata) {
   }
 }
 
+// Updates an existing metadata record in metadata.data_governance_catalog.
+// Updates all fields including structure metrics, quality scores, usage
+// statistics, health status, and classification information. Sets updated_at
+// to the current timestamp. Uses SQL escaping to prevent injection attacks.
+// If update fails, logs an error but does not throw an exception.
 void DataGovernance::updateExistingMetadata(const TableMetadata &metadata) {
   try {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
@@ -726,6 +810,12 @@ void DataGovernance::updateExistingMetadata(const TableMetadata &metadata) {
   }
 }
 
+// Generates a summary report of governance metrics by aggregating data from
+// metadata.data_governance_catalog. Calculates total tables, healthy/warning/
+// critical table counts, average quality score, total rows, and total size.
+// Currently extracts the data but does not output it (variables are assigned
+// but not used). If report generation fails, logs an error but does not throw
+// an exception.
 void DataGovernance::generateReport() {
 
   try {
@@ -756,6 +846,15 @@ void DataGovernance::generateReport() {
       long long totalRows =
           row[5].is_null() ? 0 : static_cast<long long>(row[5].as<double>());
       double totalSize = row[6].is_null() ? 0.0 : row[6].as<double>();
+
+      Logger::info(LogCategory::GOVERNANCE, "generateReport",
+                   "Governance Report: Total tables=" + std::to_string(totalTables) +
+                       ", Healthy=" + std::to_string(healthyTables) +
+                       ", Warning=" + std::to_string(warningTables) +
+                       ", Critical=" + std::to_string(criticalTables) +
+                       ", Avg Quality=" + std::to_string(avgQuality) +
+                       ", Total Rows=" + std::to_string(totalRows) +
+                       ", Total Size MB=" + std::to_string(totalSize));
     }
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "generateReport",
@@ -763,6 +862,11 @@ void DataGovernance::generateReport() {
   }
 }
 
+// Calculates an overall data quality score (0-100) based on null percentage,
+// duplicate percentage, and fragmentation percentage. Applies weighted
+// deductions: null_percentage * 0.5, duplicate_percentage * 0.3,
+// fragmentation_percentage * 0.2. Returns a value clamped between 0.0 and
+// 100.0. Higher scores indicate better data quality.
 double
 DataGovernance::calculateDataQualityScore(const TableMetadata &metadata) {
   double score = 100.0;
@@ -774,6 +878,10 @@ DataGovernance::calculateDataQualityScore(const TableMetadata &metadata) {
   return std::max(0.0, std::min(100.0, score));
 }
 
+// Determines access frequency category based on daily query count. Returns
+// "REAL_TIME" for >10000 queries, "HIGH" for >1000, "MEDIUM" for >100,
+// "LOW" for >10, "RARE" for >0, and "ARCHIVED" for 0 queries. This
+// classification is used to determine backup frequency and retention policies.
 std::string DataGovernance::determineAccessFrequency(int query_count) {
   if (query_count > 10000)
     return "REAL_TIME";
@@ -788,6 +896,13 @@ std::string DataGovernance::determineAccessFrequency(int query_count) {
   return "ARCHIVED";
 }
 
+// Determines the health status of a table based on fragmentation, duplicate,
+// and null percentages. Returns "EMERGENCY" for severe issues (>80%
+// fragmentation, >50% duplicates, >70% nulls), "CRITICAL" for serious issues
+// (>50% fragmentation, >20% duplicates, >50% nulls), "WARNING" for moderate
+// issues (>20% fragmentation, >10% duplicates, >30% nulls), "EXCELLENT" for
+// perfect condition (0% fragmentation, 0% duplicates, <5% nulls), or "HEALTHY"
+// otherwise.
 std::string
 DataGovernance::determineHealthStatus(const TableMetadata &metadata) {
   if (metadata.fragmentation_percentage > 80.0 ||
@@ -809,30 +924,47 @@ DataGovernance::determineHealthStatus(const TableMetadata &metadata) {
   return "HEALTHY";
 }
 
+// Determines the data category for a table by delegating to the DataClassifier.
+// Returns categories such as "TRANSACTIONAL", "ANALYTICAL", "SPORTS", etc.
+// based on pattern matching against governance rules.
 std::string
 DataGovernance::determineDataCategory(const std::string &table_name,
                                       const std::string &schema_name) {
   return classifier_->classifyDataCategory(table_name, schema_name);
 }
 
+// Determines the business domain for a table by delegating to the DataClassifier.
+// Returns domains such as "FINANCE", "HEALTHCARE", "SPORTS", "GENERAL", etc.
+// based on pattern matching against governance rules.
 std::string
 DataGovernance::determineBusinessDomain(const std::string &table_name,
                                         const std::string &schema_name) {
   return classifier_->classifyBusinessDomain(table_name, schema_name);
 }
 
+// Determines the sensitivity level for a table by delegating to the DataClassifier.
+// Returns levels such as "PUBLIC", "PRIVATE", "CRITICAL", "HIGH", etc. based
+// on pattern matching against governance rules.
 std::string
 DataGovernance::determineSensitivityLevel(const std::string &table_name,
                                           const std::string &schema_name) {
   return classifier_->classifySensitivityLevel(table_name, schema_name);
 }
 
+// Determines the data classification for a table by delegating to the DataClassifier.
+// Returns classifications such as "PUBLIC", "CONFIDENTIAL", etc. based on
+// pattern matching against governance rules.
 std::string
 DataGovernance::determineDataClassification(const std::string &table_name,
                                             const std::string &schema_name) {
   return classifier_->classifyDataClassification(table_name, schema_name);
 }
 
+// Determines the retention policy for a table based on data category and
+// sensitivity level. Returns "7_YEARS" for CRITICAL sensitivity, "5_YEARS"
+// for HIGH sensitivity, "3_YEARS" for ANALYTICAL or SPORTS categories,
+// "2_YEARS" for TRANSACTIONAL, or "1_YEAR" as default. Sports data requires
+// longer retention for compliance.
 std::string
 DataGovernance::determineRetentionPolicy(const std::string &data_category,
                                          const std::string &sensitivity_level) {
@@ -854,6 +986,11 @@ DataGovernance::determineRetentionPolicy(const std::string &data_category,
   return "1_YEAR";
 }
 
+// Determines the backup frequency for a table based on data category and
+// access frequency. Returns "HOURLY" for REAL_TIME or HIGH access frequency,
+// "DAILY" for TRANSACTIONAL, MASTER_DATA, or SPORTS categories, "WEEKLY" for
+// ANALYTICAL, or "MONTHLY" as default. Sports data requires frequent backups
+// due to high value.
 std::string
 DataGovernance::determineBackupFrequency(const std::string &data_category,
                                          const std::string &access_frequency) {
@@ -872,6 +1009,12 @@ DataGovernance::determineBackupFrequency(const std::string &data_category,
   return "MONTHLY";
 }
 
+// Determines compliance requirements for a table based on sensitivity level
+// and business domain. Returns "HIPAA" for HEALTHCARE domain, "SOX,PCI" for
+// FINANCE domain with CRITICAL/HIGH sensitivity, "GDPR,PCI,AML" for SPORTS
+// domain with CRITICAL/HIGH sensitivity, "GDPR,AML" for SPORTS domain
+// otherwise, "SOX" for FINANCE domain, "GDPR" for CRITICAL/HIGH sensitivity,
+// or "GDPR" as default. Sports betting requires GDPR, PCI, and AML compliance.
 std::string DataGovernance::determineComplianceRequirements(
     const std::string &sensitivity_level, const std::string &business_domain) {
   if (sensitivity_level == "CRITICAL" || sensitivity_level == "HIGH") {
@@ -899,7 +1042,9 @@ std::string DataGovernance::determineComplianceRequirements(
   return "GDPR";
 }
 
-// Enhanced quality analysis functions
+// Calculates a completeness score (0-100) based on null percentage. Returns
+// 0.0 if total_columns is 0. Otherwise, returns 100.0 minus null_percentage
+// * 0.1. Higher scores indicate more complete data (fewer nulls).
 double
 DataGovernance::calculateCompletenessScore(const TableMetadata &metadata) {
   if (metadata.total_columns == 0)
@@ -907,27 +1052,45 @@ DataGovernance::calculateCompletenessScore(const TableMetadata &metadata) {
   return 100.0 - (metadata.null_percentage * 0.1);
 }
 
+// Calculates an accuracy score (0-100) based on duplicate percentage.
+// Returns 100.0 minus duplicate_percentage * 0.5. Higher scores indicate
+// more accurate data (fewer duplicates).
 double DataGovernance::calculateAccuracyScore(const TableMetadata &metadata) {
   return 100.0 - (metadata.duplicate_percentage * 0.5);
 }
 
+// Calculates a consistency score (0-100) based on fragmentation percentage.
+// Returns 100.0 minus fragmentation_percentage * 0.2. Higher scores indicate
+// more consistent data (less fragmentation).
 double
 DataGovernance::calculateConsistencyScore(const TableMetadata &metadata) {
   return 100.0 - (metadata.fragmentation_percentage * 0.2);
 }
 
+// Calculates a validity score (0-100) based on null percentage. Returns
+// 100.0 minus null_percentage * 0.3. Higher scores indicate more valid data
+// (fewer nulls in required fields).
 double DataGovernance::calculateValidityScore(const TableMetadata &metadata) {
   return 100.0 - (metadata.null_percentage * 0.3);
 }
 
+// Calculates a timeliness score (0-100) based on fragmentation percentage.
+// Returns 100.0 minus fragmentation_percentage * 0.1. Higher scores indicate
+// more timely data (less fragmentation, better maintenance).
 double DataGovernance::calculateTimelinessScore(const TableMetadata &metadata) {
   return 100.0 - (metadata.fragmentation_percentage * 0.1);
 }
 
+// Calculates a uniqueness score (0-100) based on duplicate percentage.
+// Returns 100.0 minus duplicate_percentage * 0.8. Higher scores indicate
+// more unique data (fewer duplicates).
 double DataGovernance::calculateUniquenessScore(const TableMetadata &metadata) {
   return 100.0 - (metadata.duplicate_percentage * 0.8);
 }
 
+// Calculates an integrity score (0-100) based on fragmentation percentage.
+// Returns 100.0 minus fragmentation_percentage * 0.3. Higher scores indicate
+// better data integrity (less fragmentation, better referential integrity).
 double DataGovernance::calculateIntegrityScore(const TableMetadata &metadata) {
   return 100.0 - (metadata.fragmentation_percentage * 0.3);
 }
