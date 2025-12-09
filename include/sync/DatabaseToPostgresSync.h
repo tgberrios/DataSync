@@ -27,7 +27,6 @@ public:
     std::string last_sync_time;
     std::string last_sync_column;
     std::string status;
-    std::string last_offset;
     std::string last_processed_pk;
     std::string pk_strategy;
     std::string pk_columns;

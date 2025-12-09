@@ -99,3 +99,6 @@ NOTAS:
 - Dockerización importante para distribución y monetización
 - Nuevos motores después de estabilizar el sistema actual
 ═══════════════════════════════════════════════════════════════════
+
+
+poner bonitos con las tres fases los include porque esos no los emos tramitado 

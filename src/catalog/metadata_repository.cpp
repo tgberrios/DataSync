@@ -113,10 +113,10 @@ void MetadataRepository::insertOrUpdateTable(
           "INSERT INTO metadata.catalog "
           "(schema_name, table_name, cluster_name, db_engine, "
           "connection_string, last_sync_time, last_sync_column, "
-          "status, last_offset, active, pk_columns, pk_strategy, "
-          "has_pk, table_size) "
-          "VALUES ($1, $2, '', $3, $4, NULL, $5, 'PENDING', 0, false, $6, $7, "
-          "$8, $9)",
+          "status, active, pk_columns, pk_strategy, "
+          "has_pk) "
+          "VALUES ($1, $2, '', $3, $4, NULL, $5, 'PENDING', false, $6, $7, "
+          "$8)",
           tableInfo.schema, tableInfo.table, dbEngine,
           tableInfo.connectionString, timeColumn, pkColumnsJSON, pkStrategy,
           hasPK, tableSize);
@@ -296,7 +296,7 @@ int MetadataRepository::deactivateNoDataTables() {
 }
 
 // Marks all inactive tables (where active = false) as 'SKIP' status and
-// resets their offset tracking fields (last_offset and last_processed_pk).
+// resets their tracking fields (last_processed_pk).
 // This is used to clean up tables that have been deactivated, ensuring they
 // are properly marked to be skipped during sync operations. Tables with
 // status 'NO_DATA' are excluded from this operation. If truncateTarget is true,
@@ -334,8 +334,8 @@ int MetadataRepository::markInactiveTablesAsSkip(bool truncateTarget) {
     }
 
     auto result = txn.exec("UPDATE metadata.catalog SET "
-                           "status = 'SKIP', last_offset = 0, "
-                           "last_processed_pk = 0 "
+                           "status = 'SKIP', "
+                           "last_processed_pk = '' "
                            "WHERE active = false AND status != 'NO_DATA'");
     txn.commit();
     return result.affected_rows();
@@ -373,7 +373,7 @@ int MetadataRepository::resetTable(const std::string &schema,
 
     auto result = txn.exec_params(
         "UPDATE metadata.catalog SET "
-        "status = 'FULL_LOAD', last_offset = 0, last_processed_pk = 0 "
+        "status = 'FULL_LOAD', last_processed_pk = '' "
         "WHERE schema_name = $1 AND table_name = $2 AND db_engine = $3",
         schema, table, dbEngine);
     txn.commit();
@@ -399,16 +399,12 @@ int MetadataRepository::cleanInvalidOffsets() {
     auto conn = getConnection();
     pqxx::work txn(conn);
 
-    auto pkResult =
-        txn.exec("UPDATE metadata.catalog SET last_offset = NULL "
-                 "WHERE pk_strategy = 'PK' AND last_offset IS NOT NULL");
-
     auto offsetResult = txn.exec(
         "UPDATE metadata.catalog SET last_processed_pk = NULL "
         "WHERE pk_strategy = 'OFFSET' AND last_processed_pk IS NOT NULL");
 
     txn.commit();
-    return pkResult.affected_rows() + offsetResult.affected_rows();
+    return offsetResult.affected_rows();
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "MetadataRepository",
                   "Error cleaning invalid offsets: " + std::string(e.what()));
