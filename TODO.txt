@@ -16,11 +16,6 @@
 └─────────────────────────────────────────────────────────────────┘
 
 
-5.1. Implementar DataGovernanceMSSQL.cpp ✓ COMPLETADO
-     [GOVERNANCE - Catálogo específico para MSSQL con métricas detalladas]
-     [ARCHIVO: src/governance/DataGovernanceMSSQL.cpp]
-     [PRIORIDAD: Alta - MSSQL es motor principal]
-     [COMPLETADO: Implementación completa con queries a sys.dm_db_index_physical_stats, sys.dm_db_index_usage_stats, sys.dm_db_missing_index_details, msdb.dbo.backupset, sys.databases, sys.dm_exec_procedure_stats, almacenamiento en PostgreSQL]
 
 5.2. Implementar DataGovernanceMariaDB.cpp
      [GOVERNANCE - Catálogo específico para MariaDB]
@@ -135,3 +130,5 @@ NOTAS:
 
 
 poner bonitos con las tres fases los include porque esos no los emos tramitado 
+
+un catalog de tablas con sus columnas como full metadata de las tablas
