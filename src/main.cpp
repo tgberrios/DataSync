@@ -2,6 +2,14 @@
 #include "sync/StreamingData.h"
 #include <iostream>
 
+// Main entry point for the DataSync application. Initializes the system by
+// loading configuration from config.json, initializing the logger, displaying
+// a startup banner, and launching the StreamingData system. Handles exceptions
+// at multiple levels: initialization errors (return 2), execution errors
+// (return 3), critical errors (return 4), and unknown errors (return 5).
+// Ensures proper cleanup by calling Logger::shutdown() even on errors.
+// Returns 0 on successful completion. This is the primary orchestrator that
+// coordinates all system components.
 int main() {
   try {
     DatabaseConfig::loadFromFile("config.json");
@@ -30,9 +38,8 @@ int main() {
     std::cout
         << "          Enterprise Data Synchronization & Replication System\n";
     std::cout << "                            Version 1.0.0\n";
-    std::cout << "\n" << std::endl;
+    std::cout << "\n";
 
-    // Initialize StreamingData with error handling
     StreamingData sd;
     try {
       sd.initialize();
@@ -47,7 +54,6 @@ int main() {
       return 2;
     }
 
-    // Run StreamingData with error handling
     try {
       sd.run();
       Logger::info(LogCategory::SYSTEM, "main",
@@ -61,7 +67,6 @@ int main() {
       return 3;
     }
 
-    // Clean shutdown
     Logger::shutdown();
     return 0;
 
@@ -70,7 +75,6 @@ int main() {
     try {
       Logger::shutdown();
     } catch (...) {
-      // Ignore errors during shutdown
     }
     return 4;
   } catch (...) {
@@ -78,7 +82,6 @@ int main() {
     try {
       Logger::shutdown();
     } catch (...) {
-      // Ignore errors during shutdown
     }
     return 5;
   }
