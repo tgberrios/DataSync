@@ -388,9 +388,8 @@ int MetadataRepository::resetTable(const std::string &schema,
 // Cleans invalid offset tracking data from the catalog. This function removes
 // last_processed_pk values for tables using 'OFFSET' strategy (which should be
 // NULL for offset-based syncing). This ensures data consistency and prevents
-// sync errors. Returns the total number of entries cleaned. Returns 0 if an error
-// occurs.
-// DEPRECATED: This function will be removed in a future version.
+// sync errors. Returns the total number of entries cleaned. Returns 0 if an
+// error occurs. DEPRECATED: This function will be removed in a future version.
 int MetadataRepository::cleanInvalidOffsets() {
   try {
     auto conn = getConnection();

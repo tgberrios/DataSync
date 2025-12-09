@@ -867,7 +867,6 @@ public:
                              lowerTableNamePG + "\" CASCADE;");
             truncateTxn.commit();
 
-
             // Actualizar status a FULL_LOAD para procesamiento completo
             updateStatus(pgConn, schema_name, table_name, "FULL_LOAD", 0);
 
@@ -1203,7 +1202,6 @@ public:
                   "Error updating last processed PK: " + std::string(e.what()));
             }
           }
-
 
           // Para OFFSET pagination, verificar si hemos procesado todos los
           // registros
@@ -1636,8 +1634,7 @@ public:
           selectQuery += " OFFSET 0 ROWS FETCH NEXT " +
                          std::to_string(CHUNK_SIZE) + " ROWS ONLY;";
         } else {
-          selectQuery += " ORDER BY (SELECT 0) OFFSET " +
-                         "0 ROWS FETCH NEXT " +
+          selectQuery += " ORDER BY (SELECT 0) OFFSET 0 ROWS FETCH NEXT " +
                          std::to_string(CHUNK_SIZE) + " ROWS ONLY;";
         }
 
@@ -1712,7 +1709,6 @@ public:
                              " - maintaining current last_processed_pk state");
           }
         }
-
 
         // Check if we got less data than expected (end of table)
         if (results.size() < CHUNK_SIZE) {
@@ -1886,7 +1882,6 @@ public:
 
       std::string updateQuery =
           "UPDATE metadata.catalog SET status='" + status + "'";
-
 
       if (!lastSyncColumn.empty()) {
         std::string lowerSchemaName = schema_name;

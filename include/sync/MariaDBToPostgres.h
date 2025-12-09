@@ -1100,7 +1100,6 @@ public:
                              lowerTableName + "\" CASCADE;");
             truncateTxn.commit();
 
-
             // Actualizar status a FULL_LOAD para procesamiento completo
             updateStatus(pgConn, schema_name, table_name, "FULL_LOAD", 0);
 
@@ -1380,7 +1379,6 @@ public:
                       std::string(e.what()));
             }
           }
-
 
           // Verificar si hemos procesado todos los datos disponibles
           if (results.size() < CHUNK_SIZE) {
@@ -2172,7 +2170,6 @@ public:
           }
         }
 
-
         // Verificar si hemos procesado todos los datos disponibles (identical
         // to non-parallel)
         if (results.size() < CHUNK_SIZE) {
@@ -2343,7 +2340,7 @@ public:
           "UPDATE metadata.catalog SET status='" + status + "'";
 
       if (pkStrategy == "PK" && (status == "FULL_LOAD" || status == "RESET" ||
-                                  status == "LISTENING_CHANGES")) {
+                                 status == "LISTENING_CHANGES")) {
         updateQuery += ", last_processed_pk=NULL";
       }
 

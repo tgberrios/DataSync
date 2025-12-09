@@ -310,9 +310,13 @@ app.get("/api/dashboard/stats", async (req, res) => {
 
     const currentProcessText =
       currentProcessingTable.rows.length > 0
-        ? `${String(currentProcessingTable.rows[0].schema_name).toLowerCase()}.${
-            String(currentProcessingTable.rows[0].table_name).toLowerCase()
-          } [${currentProcessingTable.rows[0].db_engine}] - Status: ${currentProcessingTable.rows[0].status}`
+        ? `${String(
+            currentProcessingTable.rows[0].schema_name
+          ).toLowerCase()}.${String(
+            currentProcessingTable.rows[0].table_name
+          ).toLowerCase()} [${
+            currentProcessingTable.rows[0].db_engine
+          }] - Status: ${currentProcessingTable.rows[0].status}`
         : "No active transfers";
 
     // 2. TRANSFER PERFORMANCE BY ENGINE
@@ -414,7 +418,9 @@ app.get("/api/dashboard/stats", async (req, res) => {
     `);
 
     // Total tables count
-    const totalTablesResult = await pool.query(`SELECT COUNT(*) as total FROM metadata.catalog`);
+    const totalTablesResult = await pool.query(
+      `SELECT COUNT(*) as total FROM metadata.catalog`
+    );
 
     // Construir el objeto de respuesta
     const listeningChanges = parseInt(
@@ -869,7 +875,10 @@ app.get("/api/governance/data", async (req, res) => {
       "last_analyzed",
     ]);
     const sortField = String(req.query.sort_field || "");
-    const sortDir = String(req.query.sort_direction || "desc").toLowerCase() === "asc" ? "ASC" : "DESC";
+    const sortDir =
+      String(req.query.sort_direction || "desc").toLowerCase() === "asc"
+        ? "ASC"
+        : "DESC";
     let orderClause =
       "ORDER BY CASE health_status WHEN 'HEALTHY' THEN 1 WHEN 'WARNING' THEN 2 WHEN 'CRITICAL' THEN 3 ELSE 4 END";
     if (allowedSortFields.has(sortField)) {
@@ -1051,7 +1060,11 @@ app.get("/api/logs", async (req, res) => {
     if (search && String(search).trim() !== "") {
       params.push(`%${search}%`);
       params.push(`%${search}%`);
-      where.push(`(message ILIKE $${params.length - 1} OR function ILIKE $${params.length})`);
+      where.push(
+        `(message ILIKE $${params.length - 1} OR function ILIKE $${
+          params.length
+        })`
+      );
     }
     if (startDate) {
       params.push(startDate);
@@ -1076,15 +1089,17 @@ app.get("/api/logs", async (req, res) => {
 
     const logs = result.rows.map((r) => {
       const tsIso = r.ts ? new Date(r.ts).toISOString() : null;
-      const lvl = (r.level || '').toUpperCase();
-      const cat = (r.category || '').toUpperCase();
+      const lvl = (r.level || "").toUpperCase();
+      const cat = (r.category || "").toUpperCase();
       return {
         timestamp: tsIso,
         level: lvl,
         category: cat,
-        function: r.function || '',
-        message: r.message || '',
-        raw: `[${tsIso ?? ''}] [${lvl}] [${cat}] [${r.function || ''}] ${r.message || ''}`,
+        function: r.function || "",
+        message: r.message || "",
+        raw: `[${tsIso ?? ""}] [${lvl}] [${cat}] [${r.function || ""}] ${
+          r.message || ""
+        }`,
         parsed: true,
       };
     });
@@ -1105,7 +1120,13 @@ app.get("/api/logs", async (req, res) => {
 // Endpoint para obtener logs de errores desde DB (niveles WARNING/ERROR/CRITICAL)
 app.get("/api/logs/errors", async (req, res) => {
   try {
-    const { lines = 100, category = "ALL", search = "", startDate = "", endDate = "" } = req.query;
+    const {
+      lines = 100,
+      category = "ALL",
+      search = "",
+      startDate = "",
+      endDate = "",
+    } = req.query;
     const params = [];
     let where = ["level IN ('WARNING','ERROR','CRITICAL')"];
     if (category && category !== "ALL") {
@@ -1115,7 +1136,11 @@ app.get("/api/logs/errors", async (req, res) => {
     if (search && String(search).trim() !== "") {
       params.push(`%${search}%`);
       params.push(`%${search}%`);
-      where.push(`(message ILIKE $${params.length - 1} OR function ILIKE $${params.length})`);
+      where.push(
+        `(message ILIKE $${params.length - 1} OR function ILIKE $${
+          params.length
+        })`
+      );
     }
     if (startDate) {
       params.push(startDate);
@@ -1127,7 +1152,9 @@ app.get("/api/logs/errors", async (req, res) => {
     }
     const whereClause = `WHERE ${where.join(" AND ")}`;
     const limit = Math.max(1, parseInt(lines));
-    const q = `SELECT ts, level, category, function, message FROM metadata.logs ${whereClause} ORDER BY ts DESC LIMIT $${params.length + 1}`;
+    const q = `SELECT ts, level, category, function, message FROM metadata.logs ${whereClause} ORDER BY ts DESC LIMIT $${
+      params.length + 1
+    }`;
     const result = await pool.query(q, [...params, limit]);
     const logs = result.rows.map((r) => ({
       timestamp: r.ts,
@@ -1138,18 +1165,30 @@ app.get("/api/logs/errors", async (req, res) => {
       raw: `[${r.ts}] [${r.level}] [${r.category}] [${r.function}] ${r.message}`,
       parsed: true,
     }));
-    res.json({ logs, totalLines: logs.length, filePath: "metadata.logs", lastModified: new Date().toISOString(), filters: { category, search, startDate, endDate } });
+    res.json({
+      logs,
+      totalLines: logs.length,
+      filePath: "metadata.logs",
+      lastModified: new Date().toISOString(),
+      filters: { category, search, startDate, endDate },
+    });
   } catch (err) {
     console.error("Error reading error logs from DB:", err);
-    res.status(500).json({ error: "Error al leer logs de errores", details: err.message });
+    res
+      .status(500)
+      .json({ error: "Error al leer logs de errores", details: err.message });
   }
 });
 
 // Información de logs desde DB
 app.get("/api/logs/info", async (req, res) => {
   try {
-    const countRes = await pool.query("SELECT COUNT(*) AS total FROM metadata.logs");
-    const lastRes = await pool.query("SELECT MAX(ts) AS last_modified FROM metadata.logs");
+    const countRes = await pool.query(
+      "SELECT COUNT(*) AS total FROM metadata.logs"
+    );
+    const lastRes = await pool.query(
+      "SELECT MAX(ts) AS last_modified FROM metadata.logs"
+    );
     res.json({
       exists: true,
       filePath: "metadata.logs",
@@ -1160,46 +1199,79 @@ app.get("/api/logs/info", async (req, res) => {
     });
   } catch (err) {
     console.error("Error getting DB log info:", err);
-    res.status(500).json({ error: "Error al obtener información de logs", details: err.message });
+    res
+      .status(500)
+      .json({
+        error: "Error al obtener información de logs",
+        details: err.message,
+      });
   }
 });
 
 app.get("/api/logs/errors/info", async (req, res) => {
   try {
-    const countRes = await pool.query("SELECT COUNT(*) AS total FROM metadata.logs WHERE level IN ('WARNING','ERROR','CRITICAL')");
-    const lastRes = await pool.query("SELECT MAX(ts) AS last_modified FROM metadata.logs WHERE level IN ('WARNING','ERROR','CRITICAL')");
-    res.json({ exists: true, filePath: "metadata.logs", size: null, totalLines: parseInt(countRes.rows[0]?.total || 0), lastModified: lastRes.rows[0]?.last_modified || null, created: null });
+    const countRes = await pool.query(
+      "SELECT COUNT(*) AS total FROM metadata.logs WHERE level IN ('WARNING','ERROR','CRITICAL')"
+    );
+    const lastRes = await pool.query(
+      "SELECT MAX(ts) AS last_modified FROM metadata.logs WHERE level IN ('WARNING','ERROR','CRITICAL')"
+    );
+    res.json({
+      exists: true,
+      filePath: "metadata.logs",
+      size: null,
+      totalLines: parseInt(countRes.rows[0]?.total || 0),
+      lastModified: lastRes.rows[0]?.last_modified || null,
+      created: null,
+    });
   } catch (err) {
     console.error("Error getting DB error log info:", err);
-    res.status(500).json({ error: "Error al obtener información de logs de errores", details: err.message });
+    res
+      .status(500)
+      .json({
+        error: "Error al obtener información de logs de errores",
+        details: err.message,
+      });
   }
 });
 
 // Endpoints de filtros para logs desde DB
 app.get("/api/logs/levels", async (_req, res) => {
   try {
-    const result = await pool.query("SELECT DISTINCT level FROM metadata.logs ORDER BY level");
+    const result = await pool.query(
+      "SELECT DISTINCT level FROM metadata.logs ORDER BY level"
+    );
     res.json(result.rows.map((r) => r.level));
   } catch (err) {
-    res.status(500).json({ error: "Error al obtener niveles", details: err.message });
+    res
+      .status(500)
+      .json({ error: "Error al obtener niveles", details: err.message });
   }
 });
 
 app.get("/api/logs/categories", async (_req, res) => {
   try {
-    const result = await pool.query("SELECT DISTINCT category FROM metadata.logs ORDER BY category");
+    const result = await pool.query(
+      "SELECT DISTINCT category FROM metadata.logs ORDER BY category"
+    );
     res.json(result.rows.map((r) => r.category));
   } catch (err) {
-    res.status(500).json({ error: "Error al obtener categorías", details: err.message });
+    res
+      .status(500)
+      .json({ error: "Error al obtener categorías", details: err.message });
   }
 });
 
 app.get("/api/logs/functions", async (_req, res) => {
   try {
-    const result = await pool.query("SELECT DISTINCT function FROM metadata.logs ORDER BY function");
+    const result = await pool.query(
+      "SELECT DISTINCT function FROM metadata.logs ORDER BY function"
+    );
     res.json(result.rows.map((r) => r.function));
   } catch (err) {
-    res.status(500).json({ error: "Error al obtener funciones", details: err.message });
+    res
+      .status(500)
+      .json({ error: "Error al obtener funciones", details: err.message });
   }
 });
 
@@ -1311,10 +1383,16 @@ app.get("/api/logs/stats", async (req, res) => {
 app.delete("/api/logs", async (req, res) => {
   try {
     await pool.query("TRUNCATE TABLE metadata.logs");
-    res.json({ success: true, message: "Logs table truncated", clearedAt: new Date().toISOString() });
+    res.json({
+      success: true,
+      message: "Logs table truncated",
+      clearedAt: new Date().toISOString(),
+    });
   } catch (err) {
     console.error("Error truncating logs:", err);
-    res.status(500).json({ error: "Error al truncar logs", details: err.message });
+    res
+      .status(500)
+      .json({ error: "Error al truncar logs", details: err.message });
   }
 });
 
