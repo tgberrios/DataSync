@@ -55,17 +55,6 @@ en los governance cada cuanto saca las snapshots ?
     [NEGOCIO - Estrategia de monetización]
     [NOTA: Licencia propietaria ya implementada ✓]
 
-
-┌─────────────────────────────────────────────────────────────────┐
-│ PRIORITY 6: MEDIUM PRIORITY + HIGH COMPLEXITY                   │
-└─────────────────────────────────────────────────────────────────┘
-
-11. UNA COLUMNA EN CATALOG THAT NOS LISTE TODAS LAS COLUMNAS QUE TIENE 
-    ESA TABLA talvez eso podria ser otro catalog
-    [ARQUITECTURA - Nuevo catálogo para metadatos de columnas]
-    [NOTA: Considerar si es mejor tabla separada o columna JSON]
-
-
 ┌─────────────────────────────────────────────────────────────────┐
 │ PRIORITY 7: LOW PRIORITY + HIGH COMPLEXITY (Future)             │
 └─────────────────────────────────────────────────────────────────┘

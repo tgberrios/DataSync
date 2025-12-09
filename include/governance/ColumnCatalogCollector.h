@@ -54,9 +54,11 @@ private:
   void collectMariaDBColumns(const std::string &connectionString);
   void collectMSSQLColumns(const std::string &connectionString);
 
-  void analyzeColumnStatistics(ColumnMetadata &column, const std::string &connectionString);
+  void analyzeColumnStatistics(ColumnMetadata &column,
+                               const std::string &connectionString);
   void classifyColumn(ColumnMetadata &column);
-  json buildColumnMetadataJSON(const ColumnMetadata &column, const std::string &engine);
+  json buildColumnMetadataJSON(const ColumnMetadata &column,
+                               const std::string &engine);
   std::string escapeSQL(const std::string &str);
 
 public:
@@ -69,4 +71,3 @@ public:
 };
 
 #endif
-

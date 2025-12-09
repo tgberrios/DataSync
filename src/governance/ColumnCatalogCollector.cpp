@@ -1,27 +1,27 @@
 #include "governance/ColumnCatalogCollector.h"
-#include "core/logger.h"
-#include "core/database_config.h"
 #include "catalog/metadata_repository.h"
-#include "governance/data_classifier.h"
-#include "engines/postgres_engine.h"
+#include "core/database_config.h"
+#include "core/logger.h"
 #include "engines/mariadb_engine.h"
 #include "engines/mssql_engine.h"
+#include "engines/postgres_engine.h"
+#include "governance/data_classifier.h"
 #include "utils/connection_utils.h"
-#include <pqxx/pqxx>
 #include <algorithm>
-#include <sstream>
+#include <cctype>
+#include <cstring>
 #include <iomanip>
 #include <mysql/mysql.h>
-#include <cctype>
+#include <pqxx/pqxx>
 #include <sql.h>
 #include <sqlext.h>
+#include <sstream>
 
-ColumnCatalogCollector::ColumnCatalogCollector(const std::string &metadataConnectionString)
-    : metadataConnectionString_(metadataConnectionString) {
-}
+ColumnCatalogCollector::ColumnCatalogCollector(
+    const std::string &metadataConnectionString)
+    : metadataConnectionString_(metadataConnectionString) {}
 
-ColumnCatalogCollector::~ColumnCatalogCollector() {
-}
+ColumnCatalogCollector::~ColumnCatalogCollector() {}
 
 std::string ColumnCatalogCollector::escapeSQL(const std::string &str) {
   std::string escaped = str;
@@ -42,7 +42,8 @@ void ColumnCatalogCollector::collectAllColumns() {
   try {
     MetadataRepository repo(metadataConnectionString_);
 
-    std::vector<std::string> postgresConnections = repo.getConnectionStrings("PostgreSQL");
+    std::vector<std::string> postgresConnections =
+        repo.getConnectionStrings("PostgreSQL");
     for (const auto &connStr : postgresConnections) {
       if (!connStr.empty()) {
         try {
@@ -51,7 +52,8 @@ void ColumnCatalogCollector::collectAllColumns() {
           collectPostgreSQLColumns(connStr);
         } catch (const std::exception &e) {
           Logger::error(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
-                        "Error collecting PostgreSQL columns: " + std::string(e.what()));
+                        "Error collecting PostgreSQL columns: " +
+                            std::string(e.what()));
         }
       }
     }
@@ -63,11 +65,13 @@ void ColumnCatalogCollector::collectAllColumns() {
         collectPostgreSQLColumns(DatabaseConfig::getPostgresConnectionString());
       } catch (const std::exception &e) {
         Logger::error(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
-                      "Error collecting DataLake PostgreSQL columns: " + std::string(e.what()));
+                      "Error collecting DataLake PostgreSQL columns: " +
+                          std::string(e.what()));
       }
     }
 
-    std::vector<std::string> mariadbConnections = repo.getConnectionStrings("MariaDB");
+    std::vector<std::string> mariadbConnections =
+        repo.getConnectionStrings("MariaDB");
     for (const auto &connStr : mariadbConnections) {
       if (!connStr.empty()) {
         try {
@@ -76,12 +80,14 @@ void ColumnCatalogCollector::collectAllColumns() {
           collectMariaDBColumns(connStr);
         } catch (const std::exception &e) {
           Logger::error(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
-                        "Error collecting MariaDB columns: " + std::string(e.what()));
+                        "Error collecting MariaDB columns: " +
+                            std::string(e.what()));
         }
       }
     }
 
-    std::vector<std::string> mssqlConnections = repo.getConnectionStrings("MSSQL");
+    std::vector<std::string> mssqlConnections =
+        repo.getConnectionStrings("MSSQL");
     for (const auto &connStr : mssqlConnections) {
       if (!connStr.empty()) {
         try {
@@ -90,7 +96,8 @@ void ColumnCatalogCollector::collectAllColumns() {
           collectMSSQLColumns(connStr);
         } catch (const std::exception &e) {
           Logger::error(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
-                        "Error collecting MSSQL columns: " + std::string(e.what()));
+                        "Error collecting MSSQL columns: " +
+                            std::string(e.what()));
         }
       }
     }
@@ -104,7 +111,8 @@ void ColumnCatalogCollector::collectAllColumns() {
   }
 }
 
-void ColumnCatalogCollector::collectPostgreSQLColumns(const std::string &connectionString) {
+void ColumnCatalogCollector::collectPostgreSQLColumns(
+    const std::string &connectionString) {
   try {
     pqxx::connection conn(connectionString);
     pqxx::work txn(conn);
@@ -224,14 +232,17 @@ void ColumnCatalogCollector::collectPostgreSQLColumns(const std::string &connect
     }
 
     Logger::info(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
-                 "Collected " + std::to_string(result.size()) + " PostgreSQL columns");
+                 "Collected " + std::to_string(result.size()) +
+                     " PostgreSQL columns");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
-                  "Error collecting PostgreSQL columns: " + std::string(e.what()));
+                  "Error collecting PostgreSQL columns: " +
+                      std::string(e.what()));
   }
 }
 
-void ColumnCatalogCollector::collectMariaDBColumns(const std::string &connectionString) {
+void ColumnCatalogCollector::collectMariaDBColumns(
+    const std::string &connectionString) {
   try {
     auto params = ConnectionStringParser::parse(connectionString);
     if (!params) {
@@ -298,7 +309,8 @@ void ColumnCatalogCollector::collectMariaDBColumns(const std::string &connection
     if (!res) {
       if (mysql_field_count(mysqlConn) > 0) {
         Logger::error(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
-                      "Result fetch failed: " + std::string(mysql_error(mysqlConn)));
+                      "Result fetch failed: " +
+                          std::string(mysql_error(mysqlConn)));
       }
       return;
     }
@@ -314,19 +326,70 @@ void ColumnCatalogCollector::collectMariaDBColumns(const std::string &connection
       col.db_engine = "MariaDB";
       col.connection_string = connectionString;
 
-      col.ordinal_position = row[3] ? std::stoi(row[3]) : 0;
+      try {
+        col.ordinal_position = (row[3] && strlen(row[3]) > 0) ? std::stoi(row[3]) : 0;
+      } catch (const std::exception &) {
+        col.ordinal_position = 0;
+      }
+
       col.data_type = row[4] ? row[4] : "";
-      col.character_maximum_length = row[5] ? std::stoi(row[5]) : 0;
-      col.numeric_precision = row[6] ? std::stoi(row[6]) : 0;
-      col.numeric_scale = row[7] ? std::stoi(row[7]) : 0;
+
+      try {
+        col.character_maximum_length = (row[5] && strlen(row[5]) > 0) ? std::stoi(row[5]) : 0;
+      } catch (const std::exception &) {
+        col.character_maximum_length = 0;
+      }
+
+      try {
+        col.numeric_precision = (row[6] && strlen(row[6]) > 0) ? std::stoi(row[6]) : 0;
+      } catch (const std::exception &) {
+        col.numeric_precision = 0;
+      }
+
+      try {
+        col.numeric_scale = (row[7] && strlen(row[7]) > 0) ? std::stoi(row[7]) : 0;
+      } catch (const std::exception &) {
+        col.numeric_scale = 0;
+      }
+
       col.is_nullable = (row[8] && std::string(row[8]) == "YES");
       col.column_default = row[9] ? row[9] : "";
-      col.is_primary_key = (row[16] && std::stoi(row[16]) == 1);
-      col.is_foreign_key = (row[17] && std::stoi(row[17]) == 1);
-      col.is_unique = (row[18] && std::stoi(row[18]) == 1);
-      col.is_indexed = (row[19] && std::stoi(row[19]) == 1);
-      col.is_auto_increment = (row[20] && std::stoi(row[20]) == 1);
-      col.is_generated = (row[21] && std::stoi(row[21]) == 1);
+
+      try {
+        col.is_primary_key = (row[16] && strlen(row[16]) > 0 && std::stoi(row[16]) == 1);
+      } catch (const std::exception &) {
+        col.is_primary_key = false;
+      }
+
+      try {
+        col.is_foreign_key = (row[17] && strlen(row[17]) > 0 && std::stoi(row[17]) == 1);
+      } catch (const std::exception &) {
+        col.is_foreign_key = false;
+      }
+
+      try {
+        col.is_unique = (row[18] && strlen(row[18]) > 0 && std::stoi(row[18]) == 1);
+      } catch (const std::exception &) {
+        col.is_unique = false;
+      }
+
+      try {
+        col.is_indexed = (row[19] && strlen(row[19]) > 0 && std::stoi(row[19]) == 1);
+      } catch (const std::exception &) {
+        col.is_indexed = false;
+      }
+
+      try {
+        col.is_auto_increment = (row[20] && strlen(row[20]) > 0 && std::stoi(row[20]) == 1);
+      } catch (const std::exception &) {
+        col.is_auto_increment = false;
+      }
+
+      try {
+        col.is_generated = (row[21] && strlen(row[21]) > 0 && std::stoi(row[21]) == 1);
+      } catch (const std::exception &) {
+        col.is_generated = false;
+      }
 
       json mariadbMetadata;
       mariadbMetadata["column_type"] = row[10] ? row[10] : "";
@@ -353,7 +416,8 @@ void ColumnCatalogCollector::collectMariaDBColumns(const std::string &connection
   }
 }
 
-void ColumnCatalogCollector::collectMSSQLColumns(const std::string &connectionString) {
+void ColumnCatalogCollector::collectMSSQLColumns(
+    const std::string &connectionString) {
   try {
     ODBCConnection conn(connectionString);
     if (!conn.isValid()) {
@@ -454,10 +518,11 @@ void ColumnCatalogCollector::collectMSSQLColumns(const std::string &connectionSt
       SQLINTEGER nativeError;
       SQLSMALLINT msgLen;
 
-      if (SQLGetDiagRec(SQL_HANDLE_STMT, stmt, 1, sqlState, &nativeError, errorMsg,
-                        sizeof(errorMsg), &msgLen) == SQL_SUCCESS) {
+      if (SQLGetDiagRec(SQL_HANDLE_STMT, stmt, 1, sqlState, &nativeError,
+                        errorMsg, sizeof(errorMsg), &msgLen) == SQL_SUCCESS) {
         Logger::error(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
-                      "SQLExecDirect failed - SQLState: " + std::string((char *)sqlState) +
+                      "SQLExecDirect failed - SQLState: " +
+                          std::string((char *)sqlState) +
                           ", Error: " + std::string((char *)errorMsg));
       }
       SQLFreeHandle(SQL_HANDLE_STMT, stmt);
@@ -474,13 +539,16 @@ void ColumnCatalogCollector::collectMSSQLColumns(const std::string &connectionSt
       SQLLEN len;
 
       SQLGetData(stmt, 1, SQL_C_CHAR, buffer, sizeof(buffer), &len);
-      col.schema_name = (len > 0 && len < sizeof(buffer)) ? std::string(buffer, len) : "";
+      col.schema_name =
+          (len > 0 && len < sizeof(buffer)) ? std::string(buffer, len) : "";
 
       SQLGetData(stmt, 2, SQL_C_CHAR, buffer, sizeof(buffer), &len);
-      col.table_name = (len > 0 && len < sizeof(buffer)) ? std::string(buffer, len) : "";
+      col.table_name =
+          (len > 0 && len < sizeof(buffer)) ? std::string(buffer, len) : "";
 
       SQLGetData(stmt, 3, SQL_C_CHAR, buffer, sizeof(buffer), &len);
-      col.column_name = (len > 0 && len < sizeof(buffer)) ? std::string(buffer, len) : "";
+      col.column_name =
+          (len > 0 && len < sizeof(buffer)) ? std::string(buffer, len) : "";
 
       col.db_engine = "MSSQL";
       col.connection_string = connectionString;
@@ -490,7 +558,8 @@ void ColumnCatalogCollector::collectMSSQLColumns(const std::string &connectionSt
       col.ordinal_position = (len > 0) ? ordinalPos : 0;
 
       SQLGetData(stmt, 5, SQL_C_CHAR, buffer, sizeof(buffer), &len);
-      col.data_type = (len > 0 && len < sizeof(buffer)) ? std::string(buffer, len) : "";
+      col.data_type =
+          (len > 0 && len < sizeof(buffer)) ? std::string(buffer, len) : "";
 
       SQLINTEGER maxLen;
       SQLGetData(stmt, 6, SQL_C_LONG, &maxLen, 0, &len);
@@ -509,7 +578,8 @@ void ColumnCatalogCollector::collectMSSQLColumns(const std::string &connectionSt
       col.is_nullable = (len > 0 && isNullable == 1);
 
       SQLGetData(stmt, 10, SQL_C_CHAR, buffer, sizeof(buffer), &len);
-      col.column_default = (len > 0 && len < sizeof(buffer)) ? std::string(buffer, len) : "";
+      col.column_default =
+          (len > 0 && len < sizeof(buffer)) ? std::string(buffer, len) : "";
 
       SQLSMALLINT isAutoInc;
       SQLGetData(stmt, 11, SQL_C_SHORT, &isAutoInc, 0, &len);
@@ -576,11 +646,14 @@ void ColumnCatalogCollector::collectMSSQLColumns(const std::string &connectionSt
 void ColumnCatalogCollector::classifyColumn(ColumnMetadata &column) {
   try {
     DataClassifier classifier;
-    column.data_category = classifier.classifyDataCategory(column.table_name, column.schema_name);
-    column.sensitivity_level = classifier.classifySensitivityLevel(column.table_name, column.schema_name);
+    column.data_category =
+        classifier.classifyDataCategory(column.table_name, column.schema_name);
+    column.sensitivity_level = classifier.classifySensitivityLevel(
+        column.table_name, column.schema_name);
 
     std::string columnLower = column.column_name;
-    std::transform(columnLower.begin(), columnLower.end(), columnLower.begin(), ::tolower);
+    std::transform(columnLower.begin(), columnLower.end(), columnLower.begin(),
+                   ::tolower);
 
     if (columnLower.find("email") != std::string::npos ||
         columnLower.find("phone") != std::string::npos ||
@@ -624,71 +697,96 @@ void ColumnCatalogCollector::storeColumnMetadata() {
         std::string jsonStr = col.column_metadata_json.dump();
 
         std::ostringstream insertQuery;
-        insertQuery << "INSERT INTO metadata.column_catalog ("
-                    << "schema_name, table_name, column_name, db_engine, connection_string, "
-                    << "ordinal_position, data_type, character_maximum_length, numeric_precision, "
-                    << "numeric_scale, is_nullable, column_default, column_metadata, "
-                    << "is_primary_key, is_foreign_key, is_unique, is_indexed, "
-                    << "is_auto_increment, is_generated, "
-                    << "null_count, null_percentage, distinct_count, distinct_percentage, "
-                    << "min_value, max_value, avg_value, "
-                    << "data_category, sensitivity_level, contains_pii, contains_phi, "
-                    << "last_seen_at, last_analyzed_at"
-                    << ") VALUES ("
-                    << txn.quote(col.schema_name) << ", "
-                    << txn.quote(col.table_name) << ", "
-                    << txn.quote(col.column_name) << ", "
-                    << txn.quote(col.db_engine) << ", "
-                    << txn.quote(col.connection_string) << ", "
-                    << col.ordinal_position << ", "
-                    << txn.quote(col.data_type) << ", "
-                    << (col.character_maximum_length > 0 ? std::to_string(col.character_maximum_length) : "NULL") << ", "
-                    << (col.numeric_precision > 0 ? std::to_string(col.numeric_precision) : "NULL") << ", "
-                    << (col.numeric_scale > 0 ? std::to_string(col.numeric_scale) : "NULL") << ", "
-                    << (col.is_nullable ? "true" : "false") << ", "
-                    << (col.column_default.empty() ? "NULL" : txn.quote(col.column_default)) << ", "
-                    << txn.quote(jsonStr) << "::jsonb, "
-                    << (col.is_primary_key ? "true" : "false") << ", "
-                    << (col.is_foreign_key ? "true" : "false") << ", "
-                    << (col.is_unique ? "true" : "false") << ", "
-                    << (col.is_indexed ? "true" : "false") << ", "
-                    << (col.is_auto_increment ? "true" : "false") << ", "
-                    << (col.is_generated ? "true" : "false") << ", "
-                    << (col.null_count > 0 ? std::to_string(col.null_count) : "NULL") << ", "
-                    << (col.null_percentage > 0.0 ? std::to_string(col.null_percentage) : "NULL") << ", "
-                    << (col.distinct_count > 0 ? std::to_string(col.distinct_count) : "NULL") << ", "
-                    << (col.distinct_percentage > 0.0 ? std::to_string(col.distinct_percentage) : "NULL") << ", "
-                    << (col.min_value.empty() ? "NULL" : txn.quote(col.min_value)) << ", "
-                    << (col.max_value.empty() ? "NULL" : txn.quote(col.max_value)) << ", "
-                    << (col.avg_value != 0.0 ? std::to_string(col.avg_value) : "NULL") << ", "
-                    << (col.data_category.empty() ? "NULL" : txn.quote(col.data_category)) << ", "
-                    << (col.sensitivity_level.empty() ? "NULL" : txn.quote(col.sensitivity_level)) << ", "
-                    << (col.contains_pii ? "true" : "false") << ", "
-                    << (col.contains_phi ? "true" : "false") << ", "
-                    << "NOW(), NOW()"
-                    << ") "
-                    << "ON CONFLICT (schema_name, table_name, column_name, db_engine, connection_string) "
-                    << "DO UPDATE SET "
-                    << "ordinal_position = EXCLUDED.ordinal_position, "
-                    << "data_type = EXCLUDED.data_type, "
-                    << "character_maximum_length = EXCLUDED.character_maximum_length, "
-                    << "numeric_precision = EXCLUDED.numeric_precision, "
-                    << "numeric_scale = EXCLUDED.numeric_scale, "
-                    << "is_nullable = EXCLUDED.is_nullable, "
-                    << "column_default = EXCLUDED.column_default, "
-                    << "column_metadata = EXCLUDED.column_metadata, "
-                    << "is_primary_key = EXCLUDED.is_primary_key, "
-                    << "is_foreign_key = EXCLUDED.is_foreign_key, "
-                    << "is_unique = EXCLUDED.is_unique, "
-                    << "is_indexed = EXCLUDED.is_indexed, "
-                    << "is_auto_increment = EXCLUDED.is_auto_increment, "
-                    << "is_generated = EXCLUDED.is_generated, "
-                    << "data_category = EXCLUDED.data_category, "
-                    << "sensitivity_level = EXCLUDED.sensitivity_level, "
-                    << "contains_pii = EXCLUDED.contains_pii, "
-                    << "contains_phi = EXCLUDED.contains_phi, "
-                    << "last_seen_at = NOW(), "
-                    << "updated_at = NOW()";
+        insertQuery
+            << "INSERT INTO metadata.column_catalog ("
+            << "schema_name, table_name, column_name, db_engine, "
+               "connection_string, "
+            << "ordinal_position, data_type, character_maximum_length, "
+               "numeric_precision, "
+            << "numeric_scale, is_nullable, column_default, column_metadata, "
+            << "is_primary_key, is_foreign_key, is_unique, is_indexed, "
+            << "is_auto_increment, is_generated, "
+            << "null_count, null_percentage, distinct_count, "
+               "distinct_percentage, "
+            << "min_value, max_value, avg_value, "
+            << "data_category, sensitivity_level, contains_pii, contains_phi, "
+            << "last_seen_at, last_analyzed_at"
+            << ") VALUES (" << txn.quote(col.schema_name) << ", "
+            << txn.quote(col.table_name) << ", " << txn.quote(col.column_name)
+            << ", " << txn.quote(col.db_engine) << ", "
+            << txn.quote(col.connection_string) << ", " << col.ordinal_position
+            << ", " << txn.quote(col.data_type) << ", "
+            << (col.character_maximum_length > 0
+                    ? std::to_string(col.character_maximum_length)
+                    : "NULL")
+            << ", "
+            << (col.numeric_precision > 0
+                    ? std::to_string(col.numeric_precision)
+                    : "NULL")
+            << ", "
+            << (col.numeric_scale > 0 ? std::to_string(col.numeric_scale)
+                                      : "NULL")
+            << ", " << (col.is_nullable ? "true" : "false") << ", "
+            << (col.column_default.empty() ? "NULL"
+                                           : txn.quote(col.column_default))
+            << ", " << txn.quote(jsonStr) << "::jsonb, "
+            << (col.is_primary_key ? "true" : "false") << ", "
+            << (col.is_foreign_key ? "true" : "false") << ", "
+            << (col.is_unique ? "true" : "false") << ", "
+            << (col.is_indexed ? "true" : "false") << ", "
+            << (col.is_auto_increment ? "true" : "false") << ", "
+            << (col.is_generated ? "true" : "false") << ", "
+            << (col.null_count > 0 ? std::to_string(col.null_count) : "NULL")
+            << ", "
+            << (col.null_percentage > 0.0 ? std::to_string(col.null_percentage)
+                                          : "NULL")
+            << ", "
+            << (col.distinct_count > 0 ? std::to_string(col.distinct_count)
+                                       : "NULL")
+            << ", "
+            << (col.distinct_percentage > 0.0
+                    ? std::to_string(col.distinct_percentage)
+                    : "NULL")
+            << ", "
+            << (col.min_value.empty() ? "NULL" : txn.quote(col.min_value))
+            << ", "
+            << (col.max_value.empty() ? "NULL" : txn.quote(col.max_value))
+            << ", "
+            << (col.avg_value != 0.0 ? std::to_string(col.avg_value) : "NULL")
+            << ", "
+            << (col.data_category.empty() ? "NULL"
+                                          : txn.quote(col.data_category))
+            << ", "
+            << (col.sensitivity_level.empty()
+                    ? "NULL"
+                    : txn.quote(col.sensitivity_level))
+            << ", " << (col.contains_pii ? "true" : "false") << ", "
+            << (col.contains_phi ? "true" : "false") << ", "
+            << "NOW(), NOW()"
+            << ") "
+            << "ON CONFLICT (schema_name, table_name, column_name, db_engine, "
+               "connection_string) "
+            << "DO UPDATE SET "
+            << "ordinal_position = EXCLUDED.ordinal_position, "
+            << "data_type = EXCLUDED.data_type, "
+            << "character_maximum_length = EXCLUDED.character_maximum_length, "
+            << "numeric_precision = EXCLUDED.numeric_precision, "
+            << "numeric_scale = EXCLUDED.numeric_scale, "
+            << "is_nullable = EXCLUDED.is_nullable, "
+            << "column_default = EXCLUDED.column_default, "
+            << "column_metadata = EXCLUDED.column_metadata, "
+            << "is_primary_key = EXCLUDED.is_primary_key, "
+            << "is_foreign_key = EXCLUDED.is_foreign_key, "
+            << "is_unique = EXCLUDED.is_unique, "
+            << "is_indexed = EXCLUDED.is_indexed, "
+            << "is_auto_increment = EXCLUDED.is_auto_increment, "
+            << "is_generated = EXCLUDED.is_generated, "
+            << "data_category = EXCLUDED.data_category, "
+            << "sensitivity_level = EXCLUDED.sensitivity_level, "
+            << "contains_pii = EXCLUDED.contains_pii, "
+            << "contains_phi = EXCLUDED.contains_phi, "
+            << "last_seen_at = NOW(), "
+            << "updated_at = NOW()";
 
         txn.exec(insertQuery.str());
 
@@ -697,8 +795,9 @@ void ColumnCatalogCollector::storeColumnMetadata() {
       } catch (const std::exception &e) {
         failed++;
         Logger::error(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
-                      "Error storing column " + col.schema_name + "." + col.table_name + "." +
-                          col.column_name + ": " + std::string(e.what()));
+                      "Error storing column " + col.schema_name + "." +
+                          col.table_name + "." + col.column_name + ": " +
+                          std::string(e.what()));
       }
     }
 
@@ -747,4 +846,3 @@ void ColumnCatalogCollector::generateReport() {
                   "Error generating report: " + std::string(e.what()));
   }
 }
-
