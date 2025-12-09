@@ -148,15 +148,13 @@ void DataGovernanceMSSQL::queryDatabaseConfig() {
                         "page_verify_option_desc, "
                         "is_auto_create_stats_on, "
                         "is_auto_update_stats_on, "
-                        "is_auto_update_stats_async_on, "
-                        "maxdop, "
-                        "cost_threshold_for_parallelism "
+                        "is_auto_update_stats_async_on "
                         "FROM sys.databases WHERE name = '" + escapeSQL(databaseName) + "';";
 
     auto results = executeQueryMSSQL(conn.getDbc(), query);
 
     for (const auto &row : results) {
-      if (row.size() >= 8) {
+      if (row.size() >= 6) {
         MSSQLGovernanceData data;
         data.server_name = serverName;
         data.database_name = databaseName;
@@ -177,14 +175,6 @@ void DataGovernanceMSSQL::queryDatabaseConfig() {
         data.auto_create_stats = (row[3] == "1" || row[3] == "true" || row[3] == "TRUE");
         data.auto_update_stats = (row[4] == "1" || row[4] == "true" || row[4] == "TRUE");
         data.auto_update_stats_async = (row[5] == "1" || row[5] == "true" || row[5] == "TRUE");
-
-        try {
-          if (!row[6].empty()) data.maxdop = std::stoi(row[6]);
-          if (!row[7].empty()) data.cost_threshold = std::stoi(row[7]);
-        } catch (const std::exception &e) {
-          Logger::warning(LogCategory::GOVERNANCE, "DataGovernanceMSSQL",
-                          "Error parsing maxdop/cost_threshold: " + std::string(e.what()));
-        }
 
         governanceData_.push_back(data);
       }
@@ -276,7 +266,6 @@ void DataGovernanceMSSQL::queryIndexUsageStats() {
                         "ius.user_scans, "
                         "ius.user_lookups, "
                         "ius.user_updates, "
-                        "ius.page_splits, "
                         "ius.leaf_insert_count "
                         "FROM sys.dm_db_index_usage_stats ius "
                         "INNER JOIN sys.indexes i ON ius.object_id = i.object_id AND ius.index_id = i.index_id "
@@ -285,7 +274,7 @@ void DataGovernanceMSSQL::queryIndexUsageStats() {
     auto results = executeQueryMSSQL(conn.getDbc(), query);
 
     for (const auto &row : results) {
-      if (row.size() >= 10) {
+      if (row.size() >= 9) {
         std::string schemaName = row[0];
         std::string tableName = row[1];
         std::string indexName = row[2];
@@ -305,8 +294,7 @@ void DataGovernanceMSSQL::queryIndexUsageStats() {
               if (!row[5].empty()) data.user_scans = std::stoll(row[5]);
               if (!row[6].empty()) data.user_lookups = std::stoll(row[6]);
               if (!row[7].empty()) data.user_updates = std::stoll(row[7]);
-              if (!row[8].empty()) data.page_splits = std::stoll(row[8]);
-              if (!row[9].empty()) data.leaf_inserts = std::stoll(row[9]);
+              if (!row[8].empty()) data.leaf_inserts = std::stoll(row[8]);
             } catch (const std::exception &e) {
               Logger::warning(LogCategory::GOVERNANCE, "DataGovernanceMSSQL",
                               "Error parsing index usage stats: " + std::string(e.what()));
@@ -559,8 +547,6 @@ void DataGovernanceMSSQL::storeGovernanceData() {
       return;
     }
 
-    pqxx::work txn(conn);
-
     int successCount = 0;
     int errorCount = 0;
 
@@ -572,98 +558,103 @@ void DataGovernanceMSSQL::storeGovernanceData() {
         continue;
       }
 
-      std::ostringstream insertQuery;
-      insertQuery << "INSERT INTO metadata.data_governance_catalog_mssql ("
-                  << "server_name, database_name, schema_name, table_name, "
-                  << "object_name, object_type, index_name, index_id, object_id, "
-                  << "row_count, table_size_mb, fragmentation_pct, page_count, "
-                  << "fill_factor, user_seeks, user_scans, user_lookups, "
-                  << "user_updates, page_splits, leaf_inserts, "
-                  << "index_key_columns, index_include_columns, "
-                  << "has_missing_index, missing_index_avg_user_impact, is_unused, "
-                  << "is_potential_duplicate, last_full_backup, last_diff_backup, "
-                  << "last_log_backup, compatibility_level, recovery_model, "
-                  << "page_verify, auto_create_stats, auto_update_stats, "
-                  << "auto_update_stats_async, maxdop, cost_threshold, "
-                  << "access_frequency, health_status, recommendation_summary, "
-                  << "health_score, missing_index_equality_columns, "
-                  << "missing_index_inequality_columns, missing_index_included_columns, "
-                  << "missing_index_avg_user_impact, missing_index_user_seeks, "
-                  << "missing_index_user_scans, missing_index_avg_total_user_cost, "
-                  << "missing_index_unique_compiles, sp_name, "
-                  << "avg_execution_time_seconds, total_elapsed_time_ms, "
-                  << "avg_logical_reads, avg_physical_reads, execution_count, "
-                  << "snapshot_date"
-                  << ") VALUES ("
-                  << txn.quote(data.server_name) << ", "
-                  << txn.quote(data.database_name) << ", "
-                  << txn.quote(data.schema_name) << ", "
-                  << (data.table_name.empty() ? "NULL" : txn.quote(data.table_name)) << ", "
-                  << (data.object_name.empty() ? "NULL" : txn.quote(data.object_name)) << ", "
-                  << (data.object_type.empty() ? "NULL" : txn.quote(data.object_type)) << ", "
-                  << (data.index_name.empty() ? "NULL" : txn.quote(data.index_name)) << ", "
-                  << (data.index_id == 0 ? "NULL" : std::to_string(data.index_id)) << ", "
-                  << (data.object_id == 0 ? "NULL" : std::to_string(data.object_id)) << ", "
-                  << (data.row_count == 0 ? "NULL" : std::to_string(data.row_count)) << ", "
-                  << (data.table_size_mb == 0.0 ? "NULL" : std::to_string(data.table_size_mb)) << ", "
-                  << (data.fragmentation_pct == 0.0 ? "NULL" : std::to_string(data.fragmentation_pct)) << ", "
-                  << (data.page_count == 0 ? "NULL" : std::to_string(data.page_count)) << ", "
-                  << (data.fill_factor == 0 && data.object_type != "INDEX" ? "NULL" : std::to_string(data.fill_factor)) << ", "
-                  << (data.user_seeks == 0 && data.user_scans == 0 && data.user_lookups == 0 ? "NULL" : std::to_string(data.user_seeks)) << ", "
-                  << (data.user_seeks == 0 && data.user_scans == 0 && data.user_lookups == 0 ? "NULL" : std::to_string(data.user_scans)) << ", "
-                  << (data.user_seeks == 0 && data.user_scans == 0 && data.user_lookups == 0 ? "NULL" : std::to_string(data.user_lookups)) << ", "
-                  << (data.user_updates == 0 ? "NULL" : std::to_string(data.user_updates)) << ", "
-                  << (data.page_splits == 0 ? "NULL" : std::to_string(data.page_splits)) << ", "
-                  << (data.leaf_inserts == 0 ? "NULL" : std::to_string(data.leaf_inserts)) << ", "
-                  << (data.index_key_columns.empty() ? "NULL" : txn.quote(data.index_key_columns)) << ", "
-                  << (data.index_include_columns.empty() ? "NULL" : txn.quote(data.index_include_columns)) << ", "
-                  << (data.has_missing_index ? "true" : "false") << ", "
-                  << (data.missing_index_avg_user_impact == 0.0 ? "NULL" : std::to_string(data.missing_index_avg_user_impact)) << ", "
-                  << (data.is_unused ? "true" : "false") << ", "
-                  << (data.is_potential_duplicate ? "true" : "false") << ", "
-                  << (data.last_full_backup.empty() ? "NULL" : txn.quote(data.last_full_backup)) << ", "
-                  << (data.last_diff_backup.empty() ? "NULL" : txn.quote(data.last_diff_backup)) << ", "
-                  << (data.last_log_backup.empty() ? "NULL" : txn.quote(data.last_log_backup)) << ", "
-                  << (data.compatibility_level == 0 ? "NULL" : std::to_string(data.compatibility_level)) << ", "
-                  << (data.recovery_model.empty() ? "NULL" : txn.quote(data.recovery_model)) << ", "
-                  << (data.page_verify.empty() ? "NULL" : txn.quote(data.page_verify)) << ", "
-                  << (data.auto_create_stats ? "true" : "false") << ", "
-                  << (data.auto_update_stats ? "true" : "false") << ", "
-                  << (data.auto_update_stats_async ? "true" : "false") << ", "
-                  << (data.maxdop == 0 ? "NULL" : std::to_string(data.maxdop)) << ", "
-                  << (data.cost_threshold == 0 ? "NULL" : std::to_string(data.cost_threshold)) << ", "
-                  << (data.access_frequency.empty() ? "NULL" : txn.quote(data.access_frequency)) << ", "
-                  << (data.health_status.empty() ? "NULL" : txn.quote(data.health_status)) << ", "
-                  << (data.recommendation_summary.empty() ? "NULL" : txn.quote(data.recommendation_summary)) << ", "
-                  << (data.health_score == 0.0 ? "NULL" : std::to_string(data.health_score)) << ", "
-                  << (data.missing_index_equality_columns.empty() ? "NULL" : txn.quote(data.missing_index_equality_columns)) << ", "
-                  << (data.missing_index_inequality_columns.empty() ? "NULL" : txn.quote(data.missing_index_inequality_columns)) << ", "
-                  << (data.missing_index_included_columns.empty() ? "NULL" : txn.quote(data.missing_index_included_columns)) << ", "
-                  << (data.missing_index_avg_user_impact == 0.0 ? "NULL" : std::to_string(data.missing_index_avg_user_impact)) << ", "
-                  << (data.missing_index_user_seeks == 0 ? "NULL" : std::to_string(data.missing_index_user_seeks)) << ", "
-                  << (data.missing_index_user_scans == 0 ? "NULL" : std::to_string(data.missing_index_user_scans)) << ", "
-                  << (data.missing_index_avg_total_user_cost == 0.0 ? "NULL" : std::to_string(data.missing_index_avg_total_user_cost)) << ", "
-                  << (data.missing_index_unique_compiles == 0 ? "NULL" : std::to_string(data.missing_index_unique_compiles)) << ", "
-                  << (data.sp_name.empty() ? "NULL" : txn.quote(data.sp_name)) << ", "
-                  << (data.avg_execution_time_seconds == 0.0 ? "NULL" : std::to_string(data.avg_execution_time_seconds)) << ", "
-                  << (data.total_elapsed_time_ms == 0 ? "NULL" : std::to_string(data.total_elapsed_time_ms)) << ", "
-                  << (data.avg_logical_reads == 0 ? "NULL" : std::to_string(data.avg_logical_reads)) << ", "
-                  << (data.avg_physical_reads == 0 ? "NULL" : std::to_string(data.avg_physical_reads)) << ", "
-                  << (data.execution_count == 0 ? "NULL" : std::to_string(data.execution_count)) << ", "
-                  << "NOW()"
-                  << ") ON CONFLICT DO NOTHING;";
-
       try {
+        pqxx::work txn(conn);
+
+        std::ostringstream insertQuery;
+        insertQuery << "INSERT INTO metadata.data_governance_catalog_mssql ("
+                    << "server_name, database_name, schema_name, table_name, "
+                    << "object_name, object_type, index_name, index_id, object_id, "
+                    << "row_count, table_size_mb, fragmentation_pct, page_count, "
+                    << "fill_factor, user_seeks, user_scans, user_lookups, "
+                    << "user_updates, page_splits, leaf_inserts, "
+                    << "index_key_columns, index_include_columns, "
+                    << "has_missing_index, is_unused, "
+                    << "is_potential_duplicate, last_full_backup, last_diff_backup, "
+                    << "last_log_backup, compatibility_level, recovery_model, "
+                    << "page_verify, auto_create_stats, auto_update_stats, "
+                    << "auto_update_stats_async, maxdop, cost_threshold, "
+                    << "access_frequency, health_status, recommendation_summary, "
+                    << "health_score, missing_index_equality_columns, "
+                    << "missing_index_inequality_columns, missing_index_included_columns, "
+                    << "missing_index_avg_user_impact, missing_index_user_seeks, "
+                    << "missing_index_user_scans, missing_index_avg_total_user_cost, "
+                    << "missing_index_unique_compiles, sp_name, "
+                    << "avg_execution_time_seconds, total_elapsed_time_ms, "
+                    << "avg_logical_reads, avg_physical_reads, execution_count, "
+                    << "snapshot_date"
+                    << ") VALUES ("
+                    << txn.quote(data.server_name) << ", "
+                    << txn.quote(data.database_name) << ", "
+                    << txn.quote(data.schema_name) << ", "
+                    << (data.table_name.empty() ? "NULL" : txn.quote(data.table_name)) << ", "
+                    << (data.object_name.empty() ? "NULL" : txn.quote(data.object_name)) << ", "
+                    << (data.object_type.empty() ? "NULL" : txn.quote(data.object_type)) << ", "
+                    << (data.index_name.empty() ? "NULL" : txn.quote(data.index_name)) << ", "
+                    << (data.index_id == 0 ? "NULL" : std::to_string(data.index_id)) << ", "
+                    << (data.object_id == 0 ? "NULL" : std::to_string(data.object_id)) << ", "
+                    << (data.row_count == 0 ? "NULL" : std::to_string(data.row_count)) << ", "
+                    << (data.table_size_mb == 0.0 ? "NULL" : std::to_string(data.table_size_mb)) << ", "
+                    << (data.fragmentation_pct == 0.0 ? "NULL" : std::to_string(data.fragmentation_pct)) << ", "
+                    << (data.page_count == 0 ? "NULL" : std::to_string(data.page_count)) << ", "
+                    << (data.fill_factor == 0 && data.object_type != "INDEX" ? "NULL" : std::to_string(data.fill_factor)) << ", "
+                    << (data.user_seeks == 0 && data.user_scans == 0 && data.user_lookups == 0 ? "NULL" : std::to_string(data.user_seeks)) << ", "
+                    << (data.user_seeks == 0 && data.user_scans == 0 && data.user_lookups == 0 ? "NULL" : std::to_string(data.user_scans)) << ", "
+                    << (data.user_seeks == 0 && data.user_scans == 0 && data.user_lookups == 0 ? "NULL" : std::to_string(data.user_lookups)) << ", "
+                    << (data.user_updates == 0 ? "NULL" : std::to_string(data.user_updates)) << ", "
+                    << "NULL, "
+                    << (data.leaf_inserts == 0 ? "NULL" : std::to_string(data.leaf_inserts)) << ", "
+                    << (data.index_key_columns.empty() ? "NULL" : txn.quote(data.index_key_columns)) << ", "
+                    << (data.index_include_columns.empty() ? "NULL" : txn.quote(data.index_include_columns)) << ", "
+                    << (data.has_missing_index ? "true" : "false") << ", "
+                    << (data.is_unused ? "true" : "false") << ", "
+                    << (data.is_potential_duplicate ? "true" : "false") << ", "
+                    << (data.last_full_backup.empty() ? "NULL" : txn.quote(data.last_full_backup)) << ", "
+                    << (data.last_diff_backup.empty() ? "NULL" : txn.quote(data.last_diff_backup)) << ", "
+                    << (data.last_log_backup.empty() ? "NULL" : txn.quote(data.last_log_backup)) << ", "
+                    << (data.compatibility_level == 0 ? "NULL" : std::to_string(data.compatibility_level)) << ", "
+                    << (data.recovery_model.empty() ? "NULL" : txn.quote(data.recovery_model)) << ", "
+                    << (data.page_verify.empty() ? "NULL" : txn.quote(data.page_verify)) << ", "
+                    << (data.auto_create_stats ? "true" : "false") << ", "
+                    << (data.auto_update_stats ? "true" : "false") << ", "
+                    << (data.auto_update_stats_async ? "true" : "false") << ", "
+                    << (data.maxdop == 0 ? "NULL" : std::to_string(data.maxdop)) << ", "
+                    << (data.cost_threshold == 0 ? "NULL" : std::to_string(data.cost_threshold)) << ", "
+                    << (data.access_frequency.empty() ? "NULL" : txn.quote(data.access_frequency)) << ", "
+                    << (data.health_status.empty() ? "NULL" : txn.quote(data.health_status)) << ", "
+                    << (data.recommendation_summary.empty() ? "NULL" : txn.quote(data.recommendation_summary)) << ", "
+                    << (data.health_score == 0.0 ? "NULL" : std::to_string(data.health_score)) << ", "
+                    << (data.missing_index_equality_columns.empty() ? "NULL" : txn.quote(data.missing_index_equality_columns)) << ", "
+                    << (data.missing_index_inequality_columns.empty() ? "NULL" : txn.quote(data.missing_index_inequality_columns)) << ", "
+                    << (data.missing_index_included_columns.empty() ? "NULL" : txn.quote(data.missing_index_included_columns)) << ", "
+                    << (data.missing_index_avg_user_impact == 0.0 ? "NULL" : std::to_string(data.missing_index_avg_user_impact)) << ", "
+                    << (data.missing_index_user_seeks == 0 ? "NULL" : std::to_string(data.missing_index_user_seeks)) << ", "
+                    << (data.missing_index_user_scans == 0 ? "NULL" : std::to_string(data.missing_index_user_scans)) << ", "
+                    << (data.missing_index_avg_total_user_cost == 0.0 ? "NULL" : std::to_string(data.missing_index_avg_total_user_cost)) << ", "
+                    << (data.missing_index_unique_compiles == 0 ? "NULL" : std::to_string(data.missing_index_unique_compiles)) << ", "
+                    << (data.sp_name.empty() ? "NULL" : txn.quote(data.sp_name)) << ", "
+                    << (data.avg_execution_time_seconds == 0.0 ? "NULL" : std::to_string(data.avg_execution_time_seconds)) << ", "
+                    << (data.total_elapsed_time_ms == 0 ? "NULL" : std::to_string(data.total_elapsed_time_ms)) << ", "
+                    << (data.avg_logical_reads == 0 ? "NULL" : std::to_string(data.avg_logical_reads)) << ", "
+                    << (data.avg_physical_reads == 0 ? "NULL" : std::to_string(data.avg_physical_reads)) << ", "
+                    << (data.execution_count == 0 ? "NULL" : std::to_string(data.execution_count)) << ", "
+                    << "NOW()"
+                    << ") ON CONFLICT DO NOTHING;";
+
         txn.exec(insertQuery.str());
+        txn.commit();
         successCount++;
       } catch (const std::exception &e) {
         Logger::error(LogCategory::GOVERNANCE, "DataGovernanceMSSQL",
                       "Error inserting record: " + std::string(e.what()));
         errorCount++;
+        try {
+          pqxx::work rollbackTxn(conn);
+          rollbackTxn.abort();
+        } catch (...) {
+        }
       }
     }
-
-    txn.commit();
 
     Logger::info(LogCategory::GOVERNANCE, "DataGovernanceMSSQL",
                  "Stored " + std::to_string(successCount) +
