@@ -1,5 +1,6 @@
 #include "governance/DataGovernance.h"
 #include "governance/DataGovernanceMSSQL.h"
+#include "governance/DataGovernanceMariaDB.h"
 #include "catalog/metadata_repository.h"
 #include "core/database_config.h"
 #include "engines/database_engine.h"
@@ -129,8 +130,8 @@ void DataGovernance::runDiscovery() {
 
     try {
       MetadataRepository repo(DatabaseConfig::getPostgresConnectionString());
-      std::vector<std::string> mssqlConnections = repo.getConnectionStrings("MSSQL");
       
+      std::vector<std::string> mssqlConnections = repo.getConnectionStrings("MSSQL");
       for (const auto &connStr : mssqlConnections) {
         if (!connStr.empty()) {
           try {
@@ -147,9 +148,27 @@ void DataGovernance::runDiscovery() {
           }
         }
       }
+
+      std::vector<std::string> mariadbConnections = repo.getConnectionStrings("MariaDB");
+      for (const auto &connStr : mariadbConnections) {
+        if (!connStr.empty()) {
+          try {
+            Logger::info(LogCategory::GOVERNANCE, "runDiscovery",
+                         "Collecting MariaDB governance data for connection");
+            DataGovernanceMariaDB mariadbGov(connStr);
+            mariadbGov.collectGovernanceData();
+            mariadbGov.storeGovernanceData();
+            mariadbGov.generateReport();
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::GOVERNANCE, "runDiscovery",
+                          "Error collecting MariaDB governance data: " +
+                              std::string(e.what()));
+          }
+        }
+      }
     } catch (const std::exception &e) {
       Logger::error(LogCategory::GOVERNANCE, "runDiscovery",
-                    "Error processing MSSQL governance: " +
+                    "Error processing database governance: " +
                         std::string(e.what()));
     }
 

@@ -39,6 +39,7 @@ add_executable(DataSync
     src/core/database_log_writer.cpp
     src/governance/DataGovernance.cpp
     src/governance/DataGovernanceMSSQL.cpp
+    src/governance/DataGovernanceMariaDB.cpp
     src/governance/DataQuality.cpp
     src/governance/data_classifier.cpp
     src/metrics/MetricsCollector.cpp
