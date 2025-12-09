@@ -38,7 +38,7 @@ en los governance cada cuanto saca las snapshots ?
    
 
    
-
+eso de governance y lineage tambien para oracle y mongo
    
    7.11. Data Lineage Visualizer - MongoDB (metadata.mongo_lineage)
          [LINEAGE - Visualización de dependencias MongoDB]
