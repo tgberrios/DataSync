@@ -7,6 +7,7 @@
 #include "engines/mariadb_engine.h"
 #include "engines/mssql_engine.h"
 #include "engines/postgres_engine.h"
+#include "engines/mongodb_engine.h"
 #include "utils/cluster_name_resolver.h"
 #include <memory>
 #include <string>
@@ -33,6 +34,7 @@ public:
   void syncCatalogMariaDBToPostgres();
   void syncCatalogMSSQLToPostgres();
   void syncCatalogPostgresToPostgres();
+  void syncCatalogMongoDBToPostgres();
 
 private:
   void syncCatalog(const std::string &dbEngine);

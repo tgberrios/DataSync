@@ -722,3 +722,586 @@ export const securityApi = {
     }
   },
 };
+
+export const queryPerformanceApi = {
+  getQueries: async (params: {
+    page?: number;
+    limit?: number;
+    performance_tier?: string;
+    operation_type?: string;
+    source_type?: string;
+    search?: string;
+  }) => {
+    try {
+      const response = await api.get("/query-performance/queries", { params });
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching query performance data:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getMetrics: async () => {
+    try {
+      const response = await api.get("/query-performance/metrics");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching query performance metrics:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+};
+
+export const maintenanceApi = {
+  getMaintenanceItems: async (params: {
+    page?: number;
+    limit?: number;
+    maintenance_type?: string;
+    status?: string;
+    db_engine?: string;
+  }) => {
+    try {
+      const response = await api.get("/maintenance/items", { params });
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching maintenance data:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getMetrics: async () => {
+    try {
+      const response = await api.get("/maintenance/metrics");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching maintenance metrics:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+};
+
+export const columnCatalogApi = {
+  getColumns: async (params: {
+    page?: number;
+    limit?: number;
+    schema_name?: string;
+    table_name?: string;
+    db_engine?: string;
+    data_type?: string;
+    sensitivity_level?: string;
+    contains_pii?: string;
+    contains_phi?: string;
+    search?: string;
+  }) => {
+    try {
+      const response = await api.get("/column-catalog/columns", { params });
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching column catalog data:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getMetrics: async () => {
+    try {
+      const response = await api.get("/column-catalog/metrics");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching column catalog metrics:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getSchemas: async () => {
+    try {
+      const response = await api.get("/column-catalog/schemas");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching schemas:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getTables: async (schemaName: string) => {
+    try {
+      const response = await api.get(
+        `/column-catalog/tables/${encodeURIComponent(schemaName)}`
+      );
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching tables:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+};
+
+export const catalogLocksApi = {
+  getLocks: async () => {
+    try {
+      const response = await api.get("/catalog-locks/locks");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching catalog locks:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getMetrics: async () => {
+    try {
+      const response = await api.get("/catalog-locks/metrics");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching catalog locks metrics:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  unlock: async (lockName: string) => {
+    try {
+      const response = await api.delete(
+        `/catalog-locks/locks/${encodeURIComponent(lockName)}`
+      );
+      return response.data;
+    } catch (error) {
+      console.error("Error unlocking lock:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  cleanExpired: async () => {
+    try {
+      const response = await api.post("/catalog-locks/clean-expired");
+      return response.data;
+    } catch (error) {
+      console.error("Error cleaning expired locks:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+};
+
+export const dataLineageApi = {
+  getMariaDBLineage: async (params: {
+    page?: number;
+    limit?: number;
+    server_name?: string;
+    database_name?: string;
+    object_type?: string;
+    relationship_type?: string;
+    search?: string;
+  }) => {
+    try {
+      const response = await api.get("/data-lineage/mariadb", { params });
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching MariaDB lineage data:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getMariaDBMetrics: async () => {
+    try {
+      const response = await api.get("/data-lineage/mariadb/metrics");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching MariaDB lineage metrics:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getMariaDBServers: async () => {
+    try {
+      const response = await api.get("/data-lineage/mariadb/servers");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching MariaDB servers:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getMariaDBDatabases: async (serverName: string) => {
+    try {
+      const response = await api.get(
+        `/data-lineage/mariadb/databases/${encodeURIComponent(serverName)}`
+      );
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching MariaDB databases:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+};
+
+export const dataLineageMSSQLApi = {
+  getMSSQLLineage: async (params: {
+    page?: number;
+    limit?: number;
+    server_name?: string;
+    instance_name?: string;
+    database_name?: string;
+    object_type?: string;
+    relationship_type?: string;
+    search?: string;
+  }) => {
+    try {
+      const response = await api.get("/data-lineage/mssql", { params });
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching MSSQL lineage data:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getMSSQLMetrics: async () => {
+    try {
+      const response = await api.get("/data-lineage/mssql/metrics");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching MSSQL lineage metrics:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getMSSQLServers: async () => {
+    try {
+      const response = await api.get("/data-lineage/mssql/servers");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching MSSQL servers:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getMSSQLInstances: async (serverName: string) => {
+    try {
+      const response = await api.get(
+        `/data-lineage/mssql/instances/${encodeURIComponent(serverName)}`
+      );
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching MSSQL instances:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getMSSQLDatabases: async (serverName: string, instanceName: string) => {
+    try {
+      const response = await api.get(
+        `/data-lineage/mssql/databases/${encodeURIComponent(
+          serverName
+        )}/${encodeURIComponent(instanceName)}`
+      );
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching MSSQL databases:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+};
+
+export const governanceCatalogApi = {
+  getMariaDBItems: async (params: {
+    page?: number;
+    limit?: number;
+    server_name?: string;
+    database_name?: string;
+    health_status?: string;
+    access_frequency?: string;
+    search?: string;
+  }) => {
+    try {
+      const response = await api.get("/governance-catalog/mariadb", { params });
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching MariaDB governance catalog:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getMariaDBMetrics: async () => {
+    try {
+      const response = await api.get("/governance-catalog/mariadb/metrics");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching MariaDB governance metrics:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getMariaDBServers: async () => {
+    try {
+      const response = await api.get("/governance-catalog/mariadb/servers");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching MariaDB servers:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getMariaDBDatabases: async (serverName: string) => {
+    try {
+      const response = await api.get(
+        `/governance-catalog/mariadb/databases/${encodeURIComponent(
+          serverName
+        )}`
+      );
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching MariaDB databases:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getMSSQLItems: async (params: {
+    page?: number;
+    limit?: number;
+    server_name?: string;
+    database_name?: string;
+    object_type?: string;
+    health_status?: string;
+    access_frequency?: string;
+    search?: string;
+  }) => {
+    try {
+      const response = await api.get("/governance-catalog/mssql", { params });
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching MSSQL governance catalog:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getMSSQLMetrics: async () => {
+    try {
+      const response = await api.get("/governance-catalog/mssql/metrics");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching MSSQL governance metrics:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getMSSQLServers: async () => {
+    try {
+      const response = await api.get("/governance-catalog/mssql/servers");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching MSSQL servers:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getMSSQLDatabases: async (serverName: string) => {
+    try {
+      const response = await api.get(
+        `/governance-catalog/mssql/databases/${encodeURIComponent(serverName)}`
+      );
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching MSSQL databases:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+};

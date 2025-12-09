@@ -9,6 +9,14 @@ import Governance from './components/Governance'
 import Security from './components/Security'
 import LogsViewer from './components/LogsViewer'
 import Config from './components/Config'
+import QueryPerformance from './components/QueryPerformance'
+import Maintenance from './components/Maintenance'
+import ColumnCatalog from './components/ColumnCatalog'
+import CatalogLocks from './components/CatalogLocks'
+import DataLineageMariaDB from './components/DataLineageMariaDB'
+import DataLineageMSSQL from './components/DataLineageMSSQL'
+import GovernanceCatalogMariaDB from './components/GovernanceCatalogMariaDB'
+import GovernanceCatalogMSSQL from './components/GovernanceCatalogMSSQL'
 
 function App() {
   return (
@@ -17,7 +25,15 @@ function App() {
         <Route path="/" element={<Layout />}>
           <Route index element={<Dashboard />} />
           <Route path="catalog" element={<Catalog />} />
+          <Route path="column-catalog" element={<ColumnCatalog />} />
+          <Route path="catalog-locks" element={<CatalogLocks />} />
+          <Route path="data-lineage-mariadb" element={<DataLineageMariaDB />} />
+          <Route path="data-lineage-mssql" element={<DataLineageMSSQL />} />
+          <Route path="governance-catalog-mariadb" element={<GovernanceCatalogMariaDB />} />
+          <Route path="governance-catalog-mssql" element={<GovernanceCatalogMSSQL />} />
           <Route path="monitor" element={<Monitor />} />
+          <Route path="query-performance" element={<QueryPerformance />} />
+          <Route path="maintenance" element={<Maintenance />} />
           <Route path="live-changes" element={<LiveChanges />} />
           <Route path="quality" element={<Quality />} />
           <Route path="governance" element={<Governance />} />

@@ -2,6 +2,7 @@
 #include "catalog/catalog_lock.h"
 #include "core/Config.h"
 #include "core/logger.h"
+#include "engines/mongodb_engine.h"
 #include "utils/string_utils.h"
 #include <algorithm>
 #include <sql.h>
@@ -322,6 +323,8 @@ void CatalogManager::syncCatalog(const std::string &dbEngine) {
         engine = std::make_unique<MSSQLEngine>(connStr);
       else if (dbEngine == "PostgreSQL")
         engine = std::make_unique<PostgreSQLEngine>(connStr);
+      else if (dbEngine == "MongoDB")
+        engine = std::make_unique<MongoDBEngine>(connStr);
 
       if (!engine)
         continue;
@@ -371,3 +374,7 @@ void CatalogManager::syncCatalogMSSQLToPostgres() { syncCatalog("MSSQL"); }
 void CatalogManager::syncCatalogPostgresToPostgres() {
   syncCatalog("PostgreSQL");
 }
+
+// Sync catalog from MongoDB to PostgreSQL. This is a convenience wrapper
+// that calls syncCatalog with "MongoDB" as the database engine parameter.
+void CatalogManager::syncCatalogMongoDBToPostgres() { syncCatalog("MongoDB"); }

@@ -10,6 +10,7 @@
 #include "metrics/MetricsCollector.h"
 #include "sync/MSSQLToPostgres.h"
 #include "sync/MariaDBToPostgres.h"
+#include "sync/MongoDBToPostgres.h"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -36,6 +37,7 @@ private:
 
   MariaDBToPostgres mariaToPg;
   MSSQLToPostgres mssqlToPg;
+  MongoDBToPostgres mongoToPg;
   CatalogManager catalogManager;
   DataQuality dataQuality;
 
@@ -44,6 +46,7 @@ private:
   void catalogSyncThread();
   void mariaTransferThread();
   void mssqlTransferThread();
+  void mongoTransferThread();
   void qualityThread();
   void maintenanceThread();
   void monitoringThread();
