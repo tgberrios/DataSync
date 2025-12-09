@@ -34,11 +34,9 @@ link_directories(
 
 add_executable(DataSync
     src/main.cpp
-    src/core/Config.cpp
     src/core/database_config.cpp
     src/core/sync_config.cpp
     src/core/logger.cpp
-    src/core/file_log_writer.cpp
     src/core/database_log_writer.cpp
     src/governance/DataGovernance.cpp
     src/governance/DataQuality.cpp

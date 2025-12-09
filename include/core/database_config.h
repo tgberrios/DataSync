@@ -27,11 +27,6 @@ public:
            " user=" + postgres_user_ + " password=" + postgres_password_ +
            " port=" + postgres_port_;
   }
-
-  static void setForTesting(const std::string &host, const std::string &db,
-                            const std::string &user,
-                            const std::string &password,
-                            const std::string &port);
 };
 
 #endif

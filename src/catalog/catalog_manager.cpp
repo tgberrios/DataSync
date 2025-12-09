@@ -4,6 +4,8 @@
 #include "core/logger.h"
 #include "utils/string_utils.h"
 #include <algorithm>
+#include <sql.h>
+#include <sqlext.h>
 
 CatalogManager::CatalogManager(std::string metadataConnStr)
     : metadataConnStr_(std::move(metadataConnStr)),
@@ -225,11 +227,64 @@ int64_t CatalogManager::getTableSize(const std::string &schema,
       }
       mysql_free_result(res);
     } else if (db_engine == "MSSQL") {
-      MSSQLEngine engine(connStr);
-      return engine.getTableSize(schema, table);
+      ODBCConnection conn(connStr);
+      if (!conn.isValid()) {
+        Logger::error(LogCategory::DATABASE, "CatalogManager",
+                      "Failed to connect to MSSQL");
+        return 0;
+      }
+
+      SQLHDBC dbc = conn.getDbc();
+      std::string query = "SELECT COUNT(*) FROM [" + schema + "].[" + table + "]";
+
+      SQLHSTMT stmt;
+      SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt);
+      if (!SQL_SUCCEEDED(ret)) {
+        Logger::error(LogCategory::DATABASE, "CatalogManager",
+                      "Failed to allocate statement handle");
+        return 0;
+      }
+
+      ret = SQLExecDirect(stmt, (SQLCHAR *)query.c_str(), SQL_NTS);
+      if (!SQL_SUCCEEDED(ret)) {
+        Logger::error(LogCategory::DATABASE, "CatalogManager",
+                      "Query execution failed");
+        SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+        return 0;
+      }
+
+      int64_t count = 0;
+      if (SQLFetch(stmt) == SQL_SUCCESS) {
+        char buffer[256];
+        SQLLEN len;
+        ret = SQLGetData(stmt, 1, SQL_C_CHAR, buffer, sizeof(buffer), &len);
+        if (SQL_SUCCEEDED(ret) && len != SQL_NULL_DATA) {
+          try {
+            count = std::stoll(std::string(buffer, len));
+          } catch (...) {
+            count = 0;
+          }
+        }
+      }
+
+      SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+      return count;
     } else if (db_engine == "PostgreSQL") {
-      PostgreSQLEngine engine(connStr);
-      return engine.getTableSize(schema, table);
+      try {
+        pqxx::connection conn(connStr);
+        pqxx::work txn(conn);
+        std::string query = "SELECT COUNT(*) FROM " + txn.quote_name(schema) +
+                           "." + txn.quote_name(table);
+        auto result = txn.exec(query);
+        if (!result.empty()) {
+          return result[0][0].as<int64_t>();
+        }
+      } catch (const std::exception &e) {
+        Logger::error(LogCategory::DATABASE, "CatalogManager",
+                      "Error getting PostgreSQL table size: " +
+                          std::string(e.what()));
+        return 0;
+      }
     }
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "CatalogManager",
