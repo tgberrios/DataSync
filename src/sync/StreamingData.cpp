@@ -578,7 +578,7 @@ void StreamingData::mongoTransferThread() {
               " - MongoDB data sync failed, retrying in 1 hour");
     }
 
-    std::this_thread::sleep_for(std::chrono::seconds(10));
+    std::this_thread::sleep_for(std::chrono::seconds(3600));
   }
   Logger::info(LogCategory::MONITORING, "MongoDB transfer thread stopped");
 }
