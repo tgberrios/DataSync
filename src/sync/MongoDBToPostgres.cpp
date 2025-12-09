@@ -439,11 +439,11 @@ void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
                      " fields for collection " + tableInfo.table_name);
 
     pqxx::work checkTxn(conn);
-    auto existingColumns = checkTxn.exec(
-        "SELECT column_name FROM information_schema.columns "
-        "WHERE table_schema = " + checkTxn.quote(schemaName) +
-        " AND table_name = " + checkTxn.quote(tableName) +
-        " ORDER BY ordinal_position");
+    auto existingColumns =
+        checkTxn.exec("SELECT column_name FROM information_schema.columns "
+                      "WHERE table_schema = " +
+                      checkTxn.quote(schemaName) + " AND table_name = " +
+                      checkTxn.quote(tableName) + " ORDER BY ordinal_position");
     checkTxn.commit();
 
     std::set<std::string> existingColumnSet;
@@ -481,9 +481,9 @@ void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
     pqxx::work typeTxn(conn);
     auto columnTypes = typeTxn.exec(
         "SELECT column_name, data_type FROM information_schema.columns "
-        "WHERE table_schema = " + typeTxn.quote(schemaName) +
-        " AND table_name = " + typeTxn.quote(tableName) +
-        " ORDER BY ordinal_position");
+        "WHERE table_schema = " +
+        typeTxn.quote(schemaName) + " AND table_name = " +
+        typeTxn.quote(tableName) + " ORDER BY ordinal_position");
     typeTxn.commit();
 
     std::unordered_map<std::string, std::string> columnTypeMap;
@@ -503,11 +503,15 @@ void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
           fieldTypes.push_back("JSONB");
         } else if (pgType.find("INT") != std::string::npos) {
           fieldTypes.push_back("INTEGER");
-        } else if (pgType.find("DOUBLE") != std::string::npos || pgType.find("NUMERIC") != std::string::npos || pgType.find("REAL") != std::string::npos) {
+        } else if (pgType.find("DOUBLE") != std::string::npos ||
+                   pgType.find("NUMERIC") != std::string::npos ||
+                   pgType.find("REAL") != std::string::npos) {
           fieldTypes.push_back("NUMERIC");
         } else if (pgType.find("BOOL") != std::string::npos) {
           fieldTypes.push_back("BOOLEAN");
-        } else if (pgType.find("TIMESTAMP") != std::string::npos || pgType.find("DATE") != std::string::npos || pgType.find("TIME") != std::string::npos) {
+        } else if (pgType.find("TIMESTAMP") != std::string::npos ||
+                   pgType.find("DATE") != std::string::npos ||
+                   pgType.find("TIME") != std::string::npos) {
           fieldTypes.push_back("TIMESTAMP");
         } else {
           fieldTypes.push_back("TEXT");
@@ -550,7 +554,8 @@ void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
           if (fieldIndex < data[j].size()) {
             if (validFields[k] == "_document") {
               std::string jsonValue = data[j][fieldIndex];
-              if (jsonValue.empty() || jsonValue == "NULL" || jsonValue == "null") {
+              if (jsonValue.empty() || jsonValue == "NULL" ||
+                  jsonValue == "null") {
                 insertQuery << "NULL";
               } else {
                 try {
@@ -564,7 +569,8 @@ void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
               }
             } else if (fieldTypes[k] == "JSONB") {
               std::string jsonValue = data[j][fieldIndex];
-              if (jsonValue.empty() || jsonValue == "NULL" || jsonValue == "null") {
+              if (jsonValue.empty() || jsonValue == "NULL" ||
+                  jsonValue == "null") {
                 insertQuery << "NULL";
               } else {
                 try {
@@ -651,7 +657,9 @@ void MongoDBToPostgres::transferDataMongoDBToPostgresParallel() {
 
     Logger::info(LogCategory::TRANSFER, "transferDataMongoDBToPostgresParallel",
                  "Found " + std::to_string(collectionsToSync.size()) +
-                     " collections to sync out of " + std::to_string(result.size()) + " total MongoDB collections");
+                     " collections to sync out of " +
+                     std::to_string(result.size()) +
+                     " total MongoDB collections");
 
     for (const auto &tableInfo : collectionsToSync) {
       try {
