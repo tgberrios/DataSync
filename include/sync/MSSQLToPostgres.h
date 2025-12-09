@@ -180,15 +180,15 @@ public:
       auto results = txn.exec(
           "SELECT schema_name, table_name, cluster_name, db_engine, "
           "connection_string, last_sync_time, last_sync_column, "
-          "status, last_offset, last_processed_pk, pk_strategy, "
-          "pk_columns, has_pk, table_size "
+          "status, last_processed_pk, pk_strategy, "
+          "pk_columns, has_pk "
           "FROM metadata.catalog "
           "WHERE active=true AND db_engine='MSSQL' AND status != 'NO_DATA' "
-          "ORDER BY table_size ASC, schema_name, table_name;");
+          "ORDER BY schema_name, table_name;");
       txn.commit();
 
       for (const auto &row : results) {
-        if (row.size() < 14)
+        if (row.size() < 13)
           continue;
 
         TableInfo t;
@@ -200,11 +200,10 @@ public:
         t.last_sync_time = row[5].is_null() ? "" : row[5].as<std::string>();
         t.last_sync_column = row[6].is_null() ? "" : row[6].as<std::string>();
         t.status = row[7].is_null() ? "" : row[7].as<std::string>();
-        t.last_offset = row[8].is_null() ? "" : row[8].as<std::string>();
-        t.last_processed_pk = row[9].is_null() ? "" : row[9].as<std::string>();
-        t.pk_strategy = row[10].is_null() ? "" : row[10].as<std::string>();
-        t.pk_columns = row[11].is_null() ? "" : row[11].as<std::string>();
-        t.has_pk = row[12].is_null() ? false : row[12].as<bool>();
+        t.last_processed_pk = row[8].is_null() ? "" : row[8].as<std::string>();
+        t.pk_strategy = row[9].is_null() ? "" : row[9].as<std::string>();
+        t.pk_columns = row[10].is_null() ? "" : row[10].as<std::string>();
+        t.has_pk = row[11].is_null() ? false : row[11].as<bool>();
         data.push_back(t);
       }
     } catch (const pqxx::sql_error &e) {
