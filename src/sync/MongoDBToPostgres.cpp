@@ -478,12 +478,40 @@ void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
                  "Using " + std::to_string(validFields.size()) +
                      " valid fields for " + fullTableName);
 
+    pqxx::work typeTxn(conn);
+    auto columnTypes = typeTxn.exec(
+        "SELECT column_name, data_type FROM information_schema.columns "
+        "WHERE table_schema = " + typeTxn.quote(schemaName) +
+        " AND table_name = " + typeTxn.quote(tableName) +
+        " ORDER BY ordinal_position");
+    typeTxn.commit();
+
+    std::unordered_map<std::string, std::string> columnTypeMap;
+    for (const auto &row : columnTypes) {
+      std::string colName = row[0].as<std::string>();
+      std::string dataType = row[1].as<std::string>();
+      columnTypeMap[colName] = dataType;
+    }
+
     std::vector<std::string> fieldTypes;
     for (const auto &field : validFields) {
-      if (field == "_id") {
-        fieldTypes.push_back("TEXT");
-      } else if (field == "_document") {
-        fieldTypes.push_back("JSONB");
+      auto it = columnTypeMap.find(field);
+      if (it != columnTypeMap.end()) {
+        std::string pgType = it->second;
+        std::transform(pgType.begin(), pgType.end(), pgType.begin(), ::toupper);
+        if (pgType == "JSONB") {
+          fieldTypes.push_back("JSONB");
+        } else if (pgType.find("INT") != std::string::npos) {
+          fieldTypes.push_back("INTEGER");
+        } else if (pgType.find("DOUBLE") != std::string::npos || pgType.find("NUMERIC") != std::string::npos || pgType.find("REAL") != std::string::npos) {
+          fieldTypes.push_back("NUMERIC");
+        } else if (pgType.find("BOOL") != std::string::npos) {
+          fieldTypes.push_back("BOOLEAN");
+        } else if (pgType.find("TIMESTAMP") != std::string::npos || pgType.find("DATE") != std::string::npos || pgType.find("TIME") != std::string::npos) {
+          fieldTypes.push_back("TIMESTAMP");
+        } else {
+          fieldTypes.push_back("TEXT");
+        }
       } else {
         fieldTypes.push_back("TEXT");
       }
@@ -529,7 +557,9 @@ void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
                   nlohmann::json::parse(jsonValue);
                   insertQuery << insertTxn.quote(jsonValue) << "::jsonb";
                 } catch (...) {
-                  insertQuery << insertTxn.quote("{\"value\": " + insertTxn.quote(jsonValue) + "}") << "::jsonb";
+                  nlohmann::json wrapper;
+                  wrapper["value"] = jsonValue;
+                  insertQuery << insertTxn.quote(wrapper.dump()) << "::jsonb";
                 }
               }
             } else if (fieldTypes[k] == "JSONB") {
@@ -541,7 +571,9 @@ void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
                   nlohmann::json::parse(jsonValue);
                   insertQuery << insertTxn.quote(jsonValue) << "::jsonb";
                 } catch (...) {
-                  insertQuery << insertTxn.quote("{\"value\": " + insertTxn.quote(jsonValue) + "}") << "::jsonb";
+                  nlohmann::json wrapper;
+                  wrapper["value"] = jsonValue;
+                  insertQuery << insertTxn.quote(wrapper.dump()) << "::jsonb";
                 }
               }
             } else {
