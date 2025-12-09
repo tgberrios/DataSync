@@ -327,7 +327,8 @@ DatabaseToPostgresSync::getPrimaryKeyColumnsFromPostgres(
                         "ON tc.constraint_name = kcu.constraint_name "
                         "AND tc.table_schema = kcu.table_schema "
                         "WHERE tc.constraint_type = 'PRIMARY KEY' "
-                        "AND tc.table_schema = " + txn.quote(schemaName) +
+                        "AND tc.table_schema = " +
+                        txn.quote(schemaName) +
                         " AND tc.table_name = " + txn.quote(tableName) +
                         " ORDER BY kcu.ordinal_position;";
 

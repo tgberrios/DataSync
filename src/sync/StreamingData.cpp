@@ -123,9 +123,8 @@ void StreamingData::loadConfigFromDatabase(pqxx::connection &pgConn) {
     txn.commit();
 
     if (!pgConn.is_open()) {
-      Logger::error(
-          LogCategory::MONITORING,
-          "CRITICAL ERROR: Connection lost after transaction commit");
+      Logger::error(LogCategory::MONITORING,
+                    "CRITICAL ERROR: Connection lost after transaction commit");
       return;
     }
 
@@ -212,8 +211,8 @@ void StreamingData::loadConfigFromDatabase(pqxx::connection &pgConn) {
           }
         } catch (const std::exception &e) {
           Logger::error(LogCategory::MONITORING,
-                        "Failed to parse max_tables_per_cycle value '" +
-                            value + "': " + std::string(e.what()));
+                        "Failed to parse max_tables_per_cycle value '" + value +
+                            "': " + std::string(e.what()));
         }
       }
     }
@@ -228,8 +227,7 @@ void StreamingData::loadConfigFromDatabase(pqxx::connection &pgConn) {
   } catch (const pqxx::broken_connection &e) {
     Logger::error(
         LogCategory::MONITORING, "loadConfigFromDatabase",
-        "CONNECTION ERROR in loadConfigFromDatabase: " +
-            std::string(e.what()) +
+        "CONNECTION ERROR in loadConfigFromDatabase: " + std::string(e.what()) +
             " - Database connection lost during configuration load");
   } catch (const std::exception &e) {
     Logger::error(
@@ -264,15 +262,13 @@ void StreamingData::initializationThread() {
                    "DataGovernance discovery completed");
 
       dg.generateReport();
-      Logger::info(LogCategory::MONITORING,
-                   "DataGovernance report generated");
+      Logger::info(LogCategory::MONITORING, "DataGovernance report generated");
     } catch (const std::exception &e) {
       Logger::error(LogCategory::MONITORING, "initializationThread",
                     "CRITICAL ERROR in DataGovernance initialization: " +
                         std::string(e.what()) +
                         " - System may not function properly");
     }
-
 
     try {
       Logger::info(LogCategory::MONITORING,
@@ -282,15 +278,13 @@ void StreamingData::initializationThread() {
       Logger::info(LogCategory::MONITORING,
                    "MetricsCollector completed successfully");
     } catch (const std::exception &e) {
-      Logger::error(
-          LogCategory::MONITORING, "initializationThread",
-          "CRITICAL ERROR in MetricsCollector: " + std::string(e.what()) +
-              " - Metrics collection failed");
+      Logger::error(LogCategory::MONITORING, "initializationThread",
+                    "CRITICAL ERROR in MetricsCollector: " +
+                        std::string(e.what()) + " - Metrics collection failed");
     }
 
     try {
-      Logger::info(LogCategory::MONITORING,
-                   "Setting up MariaDB target tables");
+      Logger::info(LogCategory::MONITORING, "Setting up MariaDB target tables");
       mariaToPg.setupTableTargetMariaDBToPostgres();
       Logger::info(LogCategory::MONITORING,
                    "MariaDB target tables setup completed");
@@ -358,8 +352,7 @@ void StreamingData::catalogSyncThread() {
 
       syncThreads.emplace_back([this, &exceptions, &exceptionMutex]() {
         try {
-          Logger::info(LogCategory::MONITORING,
-                       "Starting MSSQL catalog sync");
+          Logger::info(LogCategory::MONITORING, "Starting MSSQL catalog sync");
           catalogManager.syncCatalogMSSQLToPostgres();
           Logger::info(LogCategory::MONITORING,
                        "MSSQL catalog sync completed successfully");
@@ -378,11 +371,10 @@ void StreamingData::catalogSyncThread() {
       }
 
       if (!exceptions.empty()) {
-        Logger::error(
-            LogCategory::MONITORING, "catalogSyncThread",
-            "CRITICAL: " + std::to_string(exceptions.size()) +
-                " catalog sync operations failed - system may be in "
-                "inconsistent state");
+        Logger::error(LogCategory::MONITORING, "catalogSyncThread",
+                      "CRITICAL: " + std::to_string(exceptions.size()) +
+                          " catalog sync operations failed - system may be in "
+                          "inconsistent state");
       }
 
       try {
@@ -444,18 +436,17 @@ void StreamingData::mariaTransferThread() {
       mariaToPg.transferDataMariaDBToPostgresParallel();
       auto endTime = std::chrono::high_resolution_clock::now();
 
-      auto duration = std::chrono::duration_cast<std::chrono::seconds>(
-          endTime - startTime);
+      auto duration =
+          std::chrono::duration_cast<std::chrono::seconds>(endTime - startTime);
       Logger::info(LogCategory::MONITORING,
                    "MariaDB transfer cycle completed successfully in " +
                        std::to_string(duration.count()) + " seconds");
     } catch (const std::exception &e) {
-      Logger::error(LogCategory::MONITORING, "mariaTransferThread",
-                    "CRITICAL ERROR in MariaDB transfer cycle: " +
-                        std::string(e.what()) +
-                        " - MariaDB data sync failed, retrying in " +
-                        std::to_string(SyncConfig::getSyncInterval()) +
-                        " seconds");
+      Logger::error(
+          LogCategory::MONITORING, "mariaTransferThread",
+          "CRITICAL ERROR in MariaDB transfer cycle: " + std::string(e.what()) +
+              " - MariaDB data sync failed, retrying in " +
+              std::to_string(SyncConfig::getSyncInterval()) + " seconds");
     }
 
     std::this_thread::sleep_for(std::chrono::seconds(
@@ -484,8 +475,8 @@ void StreamingData::mssqlTransferThread() {
       mssqlToPg.transferDataMSSQLToPostgresParallel();
       auto endTime = std::chrono::high_resolution_clock::now();
 
-      auto duration = std::chrono::duration_cast<std::chrono::seconds>(
-          endTime - startTime);
+      auto duration =
+          std::chrono::duration_cast<std::chrono::seconds>(endTime - startTime);
       Logger::info(LogCategory::MONITORING,
                    "MSSQL transfer cycle completed successfully in " +
                        std::to_string(duration.count()) + " seconds");
@@ -751,15 +742,15 @@ void StreamingData::monitoringThread() {
 // validations, allowing the process to continue even if one table fails. Used
 // by qualityThread to validate tables for all engines.
 void StreamingData::validateTablesForEngine(pqxx::connection &pgConn,
-                                             const std::string &dbEngine) {
+                                            const std::string &dbEngine) {
   try {
     Logger::info(LogCategory::MONITORING,
                  "Starting " + dbEngine + " table validation");
     pqxx::work txn(pgConn);
     auto tables =
         txn.exec("SELECT schema_name, table_name FROM metadata.catalog WHERE "
-                 "db_engine = " + txn.quote(dbEngine) +
-                 " AND status = 'LISTENING_CHANGES'");
+                 "db_engine = " +
+                 txn.quote(dbEngine) + " AND status = 'LISTENING_CHANGES'");
     txn.commit();
 
     for (const auto &row : tables) {
@@ -787,4 +778,3 @@ void StreamingData::validateTablesForEngine(pqxx::connection &pgConn,
                       dbEngine + " data quality checks failed");
   }
 }
-
