@@ -1,19 +1,101 @@
-expandir las rules mas bien seria quitar las rules no creo ocuparlas 
-talvez quitar last_offset si no lo ocupo ?  
-extraer nuevamente los DDL de las tablas
-actualizar un poco el frontend ? 
+═══════════════════════════════════════════════════════════════════
+                    TODO LIST - ORDERED BY PRIORITY & COMPLEXITY
+═══════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────┐
+│ PRIORITY 1: HIGH PRIORITY + LOW COMPLEXITY (Do First)          │
+└─────────────────────────────────────────────────────────────────┘
+
+1. LAST_OFFSET es una columna que no ocupamos! porque las tablas con 
+   esas estrategias las jalaremos una vez por semana de forma FULL_LOAD
+   [LIMPIEZA DE CÓDIGO - Eliminar columna no usada]
+
+2. expandir las rules mas bien seria quitar las rules no creo ocuparlas
+   [LIMPIEZA DE CÓDIGO - Eliminar archivos no usados]
 
 
-ORACLE
-MONGO
-OTROS MOTORES
+┌─────────────────────────────────────────────────────────────────┐
+│ PRIORITY 2: HIGH PRIORITY + MEDIUM COMPLEXITY                   │
+└─────────────────────────────────────────────────────────────────┘
+
+3. talvez que esto pueda ser dockerizado para poder instalarlo en todo
+   [DISTRIBUCIÓN - Dockerizar para fácil instalación]
+   [IMPORTANTE: Facilita monetización y distribución]
+
+4. Necesitamos una columna para DB_NAME ya no me acuerdo para que jaja 
+   aunque creo que el DB name lo sacamos de la conn_string
+   [INVESTIGACIÓN + IMPLEMENTACIÓN - Revisar si es necesario y agregar]
 
 
+┌─────────────────────────────────────────────────────────────────┐
+│ PRIORITY 3: MEDIUM PRIORITY + LOW COMPLEXITY                   │
+└─────────────────────────────────────────────────────────────────┘
 
-LAST_OFFSET es una columna que no ocupamos!
-Necesitamos una columna para DB_NAME
-UNA COLUMNA EN CATALOG QUE NOS LISTE TODAS LAS COLUMNAS QUE TIENE ESA TABLA
+5. ordenas tablas en postgres
+   [MEJORA UX - Ordenar tablas en la visualización]
 
 
+┌─────────────────────────────────────────────────────────────────┐
+│ PRIORITY 4: MEDIUM PRIORITY + MEDIUM COMPLEXITY                 │
+└─────────────────────────────────────────────────────────────────┘
 
-data governance debe tener una funcionalidad para generar governanza y calidad de data apartir de las fuentes
+6. actualizar un poco el frontend ?
+   [MEJORA UX - Actualizar interfaz de usuario]
+
+7. crear vistas bonitas para visualizar bien la data!
+   [MEJORA UX - Crear vistas para visualización de datos]
+
+
+┌─────────────────────────────────────────────────────────────────┐
+│ PRIORITY 5: HIGH PRIORITY + HIGH COMPLEXITY                     │
+└─────────────────────────────────────────────────────────────────┘
+
+8. MONGO que pueda jalar deaca
+   [NUEVO MOTOR - Implementar soporte para MongoDB]
+   [IMPORTANTE: Amplía capacidades del sistema]
+
+9. ORACLE que pueda jalar deaca
+   [NUEVO MOTOR - Implementar soporte para Oracle]
+   [IMPORTANTE: Amplía capacidades del sistema]
+
+10. monetizar este proyecto !
+    [NEGOCIO - Estrategia de monetización]
+    [NOTA: Licencia propietaria ya implementada ✓]
+
+
+┌─────────────────────────────────────────────────────────────────┐
+│ PRIORITY 6: MEDIUM PRIORITY + HIGH COMPLEXITY                   │
+└─────────────────────────────────────────────────────────────────┘
+
+11. UNA COLUMNA EN CATALOG THAT NOS LISTE TODAS LAS COLUMNAS QUE TIENE 
+    ESA TABLA talvez eso podria ser otro catalog
+    [ARQUITECTURA - Nuevo catálogo para metadatos de columnas]
+    [NOTA: Considerar si es mejor tabla separada o columna JSON]
+
+12. data governance debe tener una funcionalidad para generar governanza 
+    y calidad de data apartir de las fuentes
+    [FUNCIONALIDAD - Mejorar data governance con generación automática]
+
+
+┌─────────────────────────────────────────────────────────────────┐
+│ PRIORITY 7: LOW PRIORITY + HIGH COMPLEXITY (Future)             │
+└─────────────────────────────────────────────────────────────────┘
+
+13. OTROS MOTORES que pueda jalar deaca
+    [NUEVO MOTOR - Soporte genérico para otros motores]
+    [NOTA: Muy genérico, definir primero qué motores específicos]
+
+14. anadir algo que simule el programa liquidbase o crear mi propia version
+    [FUNCIONALIDAD COMPLEJA - Sistema de migraciones de esquema]
+    [NOTA: Liquibase es muy complejo, requiere análisis profundo]
+
+
+═══════════════════════════════════════════════════════════════════
+NOTAS:
+- Prioridad basada en: impacto en el negocio, facilidad de implementación,
+  dependencias entre tareas, y valor para monetización
+- Complejidad estimada: Baja (<1 día), Media (1-3 días), Alta (>3 días)
+- Tareas de limpieza primero para mantener código limpio
+- Dockerización importante para distribución y monetización
+- Nuevos motores después de estabilizar el sistema actual
+═══════════════════════════════════════════════════════════════════
