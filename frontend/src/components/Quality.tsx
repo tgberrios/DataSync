@@ -7,6 +7,7 @@ const QualityContainer = styled.div`
   color: #333;
   padding: 20px;
   font-family: monospace;
+  animation: fadeIn 0.25s ease-in;
 `;
 
 const Header = styled.div`
@@ -16,26 +17,47 @@ const Header = styled.div`
   margin-bottom: 30px;
   font-size: 1.5em;
   font-weight: bold;
-  background-color: #f5f5f5;
-  border-radius: 4px;
+  background: linear-gradient(135deg, #f5f5f5 0%, #ffffff 50%, #f5f5f5 100%);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  position: relative;
+  overflow: hidden;
+  animation: slideUp 0.3s ease-out;
+  
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(10, 25, 41, 0.1), transparent);
+    animation: shimmer 3s infinite;
+  }
 `;
 
 const QualityList = styled.div`
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
+  animation: slideUp 0.25s ease-out;
+  animation-delay: 0.1s;
+  animation-fill-mode: both;
 `;
 
 const QualityItem = styled.div`
   border: 1px solid #eee;
-  border-radius: 4px;
+  border-radius: 6px;
   background-color: #fafafa;
   overflow: hidden;
   transition: all 0.2s ease;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
   
   &:hover {
-    border-color: #ddd;
-    background-color: #f5f5f5;
+    border-color: rgba(10, 25, 41, 0.2);
+    background-color: #ffffff;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    transform: translateY(-2px);
   }
 `;
 
@@ -75,10 +97,15 @@ const QualityItem = styled.div`
   display: grid;
   grid-template-columns: 150px 150px 100px 100px 100px 1fr;
   align-items: center;
-  padding: 10px 15px;
+  padding: 12px 15px;
   cursor: pointer;
   gap: 10px;
   font-size: 0.9em;
+  transition: all 0.2s ease;
+  
+  &:hover {
+    background: linear-gradient(90deg, #f0f0f0 0%, #f8f9fa 100%);
+  }
   
   & > div {
     text-align: left;
@@ -105,7 +132,7 @@ const QualityItem = styled.div`
 const QualityDetails = styled.div<{ $isOpen: boolean }>`
   max-height: ${props => props.$isOpen ? '800px' : '0'};
   opacity: ${props => props.$isOpen ? '1' : '0'};
-  transition: all 0.3s ease;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   border-top: ${props => props.$isOpen ? '1px solid #eee' : 'none'};
   background-color: white;
   overflow: hidden;
@@ -136,14 +163,33 @@ const MetricsGrid = styled.div`
 const MetricCard = styled.div`
   background: white;
   border: 1px solid #eee;
-  border-radius: 4px;
+  border-radius: 6px;
   padding: 12px;
+  transition: all 0.2s ease;
+  animation: fadeIn 0.2s ease-in;
+  animation-fill-mode: both;
+  
+  &:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    border-color: rgba(10, 25, 41, 0.2);
+    background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+  }
+  
+  &:nth-child(1) { animation-delay: 0.1s; }
+  &:nth-child(2) { animation-delay: 0.15s; }
+  &:nth-child(3) { animation-delay: 0.2s; }
+  &:nth-child(4) { animation-delay: 0.25s; }
+  &:nth-child(5) { animation-delay: 0.15s; }
+  &:nth-child(6) { animation-delay: 0.35s; }
+  &:nth-child(7) { animation-delay: 0.2s; }
 `;
 
 const MetricLabel = styled.div`
   color: #666;
   font-size: 0.85em;
   margin-bottom: 5px;
+  font-weight: 500;
 `;
 
 const MetricValue = styled.div`
@@ -152,10 +198,17 @@ const MetricValue = styled.div`
 `;
 
 const ValidationStatus = styled.span<{ $status: string }>`
-  padding: 3px 8px;
-  border-radius: 3px;
+  padding: 4px 10px;
+  border-radius: 6px;
   font-size: 0.85em;
   font-weight: 500;
+  display: inline-block;
+  transition: all 0.2s ease;
+  
+  &:hover {
+    transform: scale(1.05);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  }
   background-color: ${props => {
     switch (props.$status) {
       case 'PASSED': return '#e8f5e9';
@@ -175,10 +228,17 @@ const ValidationStatus = styled.span<{ $status: string }>`
 `;
 
 const QualityScore = styled.span<{ $score: number }>`
-  padding: 4px 8px;
-  border-radius: 4px;
+  padding: 4px 10px;
+  border-radius: 6px;
   font-size: 0.9em;
   font-weight: 500;
+  display: inline-block;
+  transition: all 0.2s ease;
+  
+  &:hover {
+    transform: scale(1.05);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  }
   background-color: ${props => {
     if (props.$score >= 90) return '#e8f5e9';
     if (props.$score >= 70) return '#f1f8e9';
@@ -210,18 +270,32 @@ const FiltersContainer = styled.div`
   margin-bottom: 20px;
   padding: 15px;
   background: #f5f5f5;
-  border-radius: 4px;
+  border-radius: 6px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
+  animation: slideUp 0.25s ease-out;
+  animation-delay: 0.15s;
+  animation-fill-mode: both;
+  flex-wrap: wrap;
 `;
 
 const Select = styled.select`
-  padding: 8px;
+  padding: 8px 12px;
   border: 1px solid #ddd;
-  border-radius: 4px;
+  border-radius: 6px;
   font-family: monospace;
+  transition: all 0.2s ease;
+  background: white;
+  cursor: pointer;
+  
+  &:hover {
+    border-color: rgba(10, 25, 41, 0.3);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  }
   
   &:focus {
     outline: none;
-    border-color: #666;
+    border-color: #0d1b2a;
+    box-shadow: 0 0 0 3px rgba(10, 25, 41, 0.1);
   }
 `;
 
@@ -233,18 +307,26 @@ const Pagination = styled.div`
   margin-top: 20px;
   padding: 15px;
   font-size: 0.9em;
+  animation: slideUp 0.25s ease-out;
+  animation-delay: 0.2s;
+  animation-fill-mode: both;
 `;
 
 const PageButton = styled.button<{ $active?: boolean }>`
-  padding: 5px 10px;
+  padding: 8px 14px;
   border: 1px solid #ddd;
-  border-radius: 4px;
-  background: ${props => props.$active ? '#333' : 'white'};
+  border-radius: 6px;
+  background: ${props => props.$active ? '#0d1b2a' : 'white'};
   color: ${props => props.$active ? 'white' : '#333'};
   cursor: pointer;
+  transition: all 0.2s ease;
+  font-weight: ${props => props.$active ? 'bold' : 'normal'};
   
-  &:hover {
-    background: ${props => props.active ? '#333' : '#f5f5f5'};
+  &:hover:not(:disabled) {
+    background: ${props => props.$active ? '#1e3a5f' : '#f5f5f5'};
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    border-color: ${props => props.$active ? '#0d1b2a' : 'rgba(10, 25, 41, 0.3)'};
   }
   
   &:disabled {

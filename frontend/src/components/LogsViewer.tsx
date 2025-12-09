@@ -11,6 +11,7 @@ const LogsContainer = styled.div`
   height: 100vh;
   display: flex;
   flex-direction: column;
+  animation: fadeIn 0.25s ease-in;
 `;
 
 const Header = styled.div`
@@ -20,16 +21,44 @@ const Header = styled.div`
   margin-bottom: 30px;
   font-size: 1.5em;
   font-weight: bold;
-  background-color: #f5f5f5;
-  border-radius: 4px;
+  background: linear-gradient(135deg, #f5f5f5 0%, #ffffff 50%, #f5f5f5 100%);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  position: relative;
+  overflow: hidden;
+  animation: slideUp 0.3s ease-out;
+  
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(10, 25, 41, 0.1), transparent);
+    animation: shimmer 3s infinite;
+  }
 `;
 
 const Section = styled.div`
   margin-bottom: 30px;
   padding: 20px;
   border: 1px solid #eee;
-  border-radius: 4px;
+  border-radius: 6px;
   background-color: #fafafa;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
+  transition: all 0.2s ease;
+  animation: slideUp 0.25s ease-out;
+  animation-fill-mode: both;
+  
+  &:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    transform: translateY(-2px);
+    border-color: rgba(10, 25, 41, 0.2);
+  }
+  
+  &:nth-child(1) { animation-delay: 0.05s; }
+  &:nth-child(2) { animation-delay: 0.1s; }
 `;
 
 const SectionTitle = styled.h3`
@@ -38,6 +67,22 @@ const SectionTitle = styled.h3`
   color: #222;
   border-bottom: 2px solid #333;
   padding-bottom: 8px;
+  position: relative;
+  
+  &::after {
+    content: '';
+    position: absolute;
+    bottom: -2px;
+    left: 0;
+    width: 60px;
+    height: 2px;
+    background: linear-gradient(90deg, #0d1b2a, #1e3a5f);
+    transition: width 0.3s ease;
+  }
+  
+  &:hover::after {
+    width: 100%;
+  }
 `;
 
 const Controls = styled.div`
@@ -47,9 +92,13 @@ const Controls = styled.div`
   padding: 20px;
   background-color: #fafafa;
   border: 1px solid #eee;
-  border-radius: 4px;
+  border-radius: 6px;
   flex-wrap: wrap;
   align-items: end;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
+  animation: slideUp 0.25s ease-out;
+  animation-delay: 0.08s;
+  animation-fill-mode: both;
 `;
 
 const ControlGroup = styled.div`
@@ -69,88 +118,121 @@ const Label = styled.label`
 const Select = styled.select`
   padding: 8px 12px;
   border: 1px solid #ddd;
-  border-radius: 4px;
+  border-radius: 6px;
   background-color: white;
   font-family: monospace;
   font-size: 1em;
+  transition: all 0.2s ease;
+  cursor: pointer;
+
+  &:hover {
+    border-color: rgba(10, 25, 41, 0.3);
+  }
 
   &:focus {
     outline: none;
-    border-color: #666;
+    border-color: #0d1b2a;
+    box-shadow: 0 0 0 3px rgba(10, 25, 41, 0.1);
   }
 `;
 
 const Input = styled.input`
   padding: 8px 12px;
   border: 1px solid #ddd;
-  border-radius: 4px;
+  border-radius: 6px;
   font-family: monospace;
   font-size: 1em;
   width: 100px;
+  transition: all 0.2s ease;
+
+  &:hover {
+    border-color: rgba(10, 25, 41, 0.3);
+  }
 
   &:focus {
     outline: none;
-    border-color: #666;
+    border-color: #0d1b2a;
+    box-shadow: 0 0 0 3px rgba(10, 25, 41, 0.1);
+    transform: translateY(-1px);
   }
 `;
 
 const Button = styled.button<{ $variant?: 'primary' | 'secondary' }>`
   padding: 8px 16px;
   border: none;
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
   font-family: monospace;
   font-size: 1em;
-  background-color: ${props => props.$variant === 'secondary' ? '#e8f5e9' : '#333'};
-  color: ${props => props.$variant === 'secondary' ? '#2e7d32' : 'white'};
+  transition: all 0.2s ease;
+  font-weight: 500;
+  background-color: ${props => props.$variant === 'secondary' ? '#f5f5f5' : '#0d1b2a'};
+  color: ${props => props.$variant === 'secondary' ? '#333' : 'white'};
   height: fit-content;
+  border: ${props => props.$variant === 'secondary' ? '1px solid #ddd' : 'none'};
 
-  &:hover {
-    background-color: ${props => props.$variant === 'secondary' ? '#c8e6c9' : '#555'};
+  &:hover:not(:disabled) {
+    background-color: ${props => props.$variant === 'secondary' ? '#e0e0e0' : '#1e3a5f'};
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  }
+
+  &:active:not(:disabled) {
+    transform: translateY(0);
   }
 
   &:disabled {
     background-color: #ccc;
     cursor: not-allowed;
+    opacity: 0.6;
   }
 `;
 
-const LogsArea = styled.div`
+const LogsArea = styled.div<{ $isTransitioning?: boolean }>`
   flex: 1;
   border: 1px solid #ddd;
-  border-radius: 4px;
+  border-radius: 6px;
   background-color: white;
   color: #333;
   overflow-y: auto;
   padding: 15px;
   font-size: 0.9em;
-  line-height: 1.4;
+  line-height: 1.6;
   max-height: 500px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
+  transition: all 0.2s ease;
+  animation: ${props => props.$isTransitioning ? 'pageTransition 0.2s ease-out' : 'none'};
+  
+  &:hover {
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.05);
+  }
 `;
 
 const LogLine = styled.div<{ level: string; category: string }>`
   margin-bottom: 2px;
-  padding: 2px 0;
+  padding: 4px 0;
   border-left: 3px solid ${props => {
     switch (props.level) {
       case 'ERROR':
       case 'CRITICAL':
-        return '#ff6b6b';
+        return '#c62828';
       case 'WARNING':
-        return '#ffa726';
+        return '#ef6c00';
       case 'INFO':
-        return '#42a5f5';
+        return '#0d1b2a';
       case 'DEBUG':
-        return '#66bb6a';
-      default:
         return '#666';
+      default:
+        return '#999';
     }
   }};
   padding-left: 8px;
   position: relative;
+  transition: all 0.15s ease;
 
   &:hover {
-    background-color: #f5f5f5;
+    background-color: #f8f9fa;
+    transform: translateX(2px);
   }
 
   &::before {
@@ -161,31 +243,12 @@ const LogLine = styled.div<{ level: string; category: string }>`
     bottom: 0;
     width: 1px;
     background-color: ${props => {
-      switch (props.category) {
-        case 'DATABASE':
-          return '#9c27b0';
-        case 'TRANSFER':
-          return '#4caf50';
-        case 'CONFIG':
-          return '#2196f3';
-        case 'VALIDATION':
-          return '#4caf50';
-        case 'MAINTENANCE':
-          return '#607d8b';
-        case 'MONITORING':
-          return '#00bcd4';
-        case 'DDL_EXPORT':
-          return '#795548';
-        case 'METRICS':
-          return '#e91e63';
-        case 'GOVERNANCE':
-          return '#3f51b5';
-        case 'QUALITY':
-          return '#009688';
-        default:
-          return 'transparent';
-      }
+      const baseColor = props.level === 'ERROR' || props.level === 'CRITICAL' ? '#c62828' :
+                        props.level === 'WARNING' ? '#ef6c00' :
+                        props.level === 'INFO' ? '#0d1b2a' : '#666';
+      return baseColor;
     }};
+    opacity: 0.3;
   }
 `;
 
@@ -202,13 +265,13 @@ const LogLevel = styled.span<{ level: string }>`
     switch (props.level) {
       case 'ERROR':
       case 'CRITICAL':
-        return '#d32f2f';
+        return '#c62828';
       case 'WARNING':
-        return '#f57c00';
+        return '#ef6c00';
       case 'INFO':
-        return '#1976d2';
+        return '#0d1b2a';
       case 'DEBUG':
-        return '#388e3c';
+        return '#666';
       default:
         return '#333';
     }
@@ -216,41 +279,19 @@ const LogLevel = styled.span<{ level: string }>`
 `;
 
 const LogFunction = styled.span`
-  color: #7b1fa2;
+  color: #555;
   margin-right: 10px;
   font-size: 0.9em;
 `;
 
 const LogCategory = styled.span<{ category: string }>`
-  color: ${props => {
-    switch (props.category) {
-      case 'DATABASE':
-        return '#9c27b0';
-      case 'TRANSFER':
-        return '#4caf50';
-      case 'CONFIG':
-        return '#2196f3';
-      case 'VALIDATION':
-        return '#4caf50';
-      case 'MAINTENANCE':
-        return '#607d8b';
-      case 'MONITORING':
-        return '#00bcd4';
-      case 'DDL_EXPORT':
-        return '#795548';
-      case 'METRICS':
-        return '#e91e63';
-      case 'GOVERNANCE':
-        return '#3f51b5';
-      case 'QUALITY':
-        return '#009688';
-      default:
-        return '#666';
-    }
-  }};
+  color: #555;
   margin-right: 10px;
   font-size: 0.8em;
-  font-weight: bold;
+  font-weight: 500;
+  background-color: #f0f0f0;
+  padding: 2px 6px;
+  border-radius: 3px;
 `;
 
 const LogMessage = styled.span`
@@ -307,23 +348,29 @@ const Pagination = styled.div`
 `;
 
 const PageButton = styled.button<{ $active?: boolean }>`
-  padding: 8px 12px;
+  padding: 8px 14px;
   border: 1px solid #ddd;
-  border-radius: 4px;
-  background-color: ${props => props.$active ? '#333' : 'white'};
+  border-radius: 6px;
+  background-color: ${props => props.$active ? '#0d1b2a' : 'white'};
   color: ${props => props.$active ? 'white' : '#333'};
   cursor: pointer;
   font-family: monospace;
   font-size: 0.9em;
+  transition: all 0.2s ease;
+  font-weight: ${props => props.$active ? 'bold' : 'normal'};
 
-  &:hover {
-    background-color: ${props => props.$active ? '#555' : '#f5f5f5'};
+  &:hover:not(:disabled) {
+    background-color: ${props => props.$active ? '#1e3a5f' : '#f5f5f5'};
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    border-color: ${props => props.$active ? '#0d1b2a' : 'rgba(10, 25, 41, 0.3)'};
   }
 
   &:disabled {
     background-color: #f5f5f5;
     color: #ccc;
     cursor: not-allowed;
+    opacity: 0.5;
   }
 `;
 
@@ -390,6 +437,7 @@ const LogsViewer = () => {
   const [refreshCountdown, setRefreshCountdown] = useState(5);
   const [isCopying, setIsCopying] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
+  const [isPageTransitioning, setIsPageTransitioning] = useState(false);
   
   // Single tab (DB-backed)
   const [activeTab] = useState<'all'>('all');
@@ -462,12 +510,16 @@ const LogsViewer = () => {
   // no-op; unified tab
 
   const goToPage = (page: number) => {
-    if (page >= 1 && page <= totalPages) {
-      setCurrentPage(page);
-      const logsPerPage = 50;
-      const startIndex = (page - 1) * logsPerPage;
-      const endIndex = startIndex + logsPerPage;
-      setLogs(allLogs.slice(startIndex, endIndex));
+    if (page >= 1 && page <= totalPages && page !== currentPage) {
+      setIsPageTransitioning(true);
+      setTimeout(() => {
+        setCurrentPage(page);
+        const logsPerPage = 50;
+        const startIndex = (page - 1) * logsPerPage;
+        const endIndex = startIndex + logsPerPage;
+        setLogs(allLogs.slice(startIndex, endIndex));
+        setTimeout(() => setIsPageTransitioning(false), 200);
+      }, 50);
     }
   };
 
@@ -821,7 +873,7 @@ const LogsViewer = () => {
 
       <Section>
         <SectionTitle>■ LOG ENTRIES (DB)</SectionTitle>
-        <LogsArea>
+        <LogsArea $isTransitioning={isPageTransitioning}>
           {logs.map((log, index) => (
             <LogLine key={log.id || index} level={log.level} category={log.category || 'SYSTEM'}>
               <LogTimestamp>{log.timestamp ? formatDate(log.timestamp) : ''}</LogTimestamp>
