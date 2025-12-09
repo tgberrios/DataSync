@@ -55,9 +55,6 @@ en los governance cada cuanto saca las snapshots ?
 │ PRIORITY 5: HIGH PRIORITY + HIGH COMPLEXITY                     │
 └─────────────────────────────────────────────────────────────────┘
 
-8. MONGO que pueda jalar deaca
-   [NUEVO MOTOR - Implementar soporte para MongoDB]
-   [IMPORTANTE: Amplía capacidades del sistema]
 
 9. ORACLE que pueda jalar deaca
    [NUEVO MOTOR - Implementar soporte para Oracle]
