@@ -45,7 +45,9 @@ private:
   void generateMetricsReport();
 
   std::string getEstimatedStartTime(const std::string &completedAt);
+  [[deprecated("This function is not used in the codebase and may be removed in a future version")]]
   double calculateTransferRate(long long records, int duration_ms);
+  [[deprecated("This function is not used in the codebase and may be removed in a future version")]]
   long long calculateBytesTransferred(const std::string &schema_name,
                                       const std::string &table_name);
 
