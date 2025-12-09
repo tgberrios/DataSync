@@ -202,15 +202,6 @@ MSSQLEngine::executeQuery(SQLHDBC dbc, const std::string &query) {
 
 // Extracts the database name from a connection string. Parses the connection
 // string and returns the database name, or "master" if parsing fails or no
-// database is specified. This function is used internally but may not be
-// actively used in the current codebase.
-[[deprecated("This function is not used in the codebase and may be removed in a future version")]]
-std::string
-MSSQLEngine::extractDatabaseName(const std::string &connectionString) {
-  auto params = ConnectionStringParser::parse(connectionString);
-  return params ? params->db : "master";
-}
-
 // Discovers all user tables in the SQL Server database. Queries sys.tables and
 // sys.schemas to find all user tables, excluding system schemas
 // (INFORMATION_SCHEMA, sys, guest) and system tables (spt_%, MS%, sp_%, fn_%,

@@ -12,7 +12,6 @@ include_directories(
     ./include/utils
     ./include/core
     ./include/governance
-    ./include/export
     ./include/metrics
     ./include/third_party
     /usr/local/include
@@ -41,7 +40,6 @@ add_executable(DataSync
     src/governance/DataGovernance.cpp
     src/governance/DataQuality.cpp
     src/governance/data_classifier.cpp
-    src/export/DDLExporter.cpp
     src/metrics/MetricsCollector.cpp
     src/utils/connection_utils.cpp
     src/utils/cluster_name_resolver.cpp

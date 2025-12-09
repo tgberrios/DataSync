@@ -4,7 +4,6 @@
 #include "catalog/catalog_manager.h"
 #include "core/Config.h"
 #include "core/logger.h"
-#include "export/DDLExporter.h"
 #include "governance/DataGovernance.h"
 #include "governance/DataQuality.h"
 #include "metrics/MetricsCollector.h"
