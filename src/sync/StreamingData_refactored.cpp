@@ -238,18 +238,6 @@ void StreamingData::initializationThread() {
                         " - System may not function properly");
     }
 
-    try {
-      Logger::info(LogCategory::MONITORING,
-                   "Initializing DDLExporter component");
-      DDLExporter ddlExporter;
-      ddlExporter.exportAllDDL();
-      Logger::info(LogCategory::MONITORING,
-                   "DDLExporter completed successfully");
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::MONITORING, "initializationThread",
-                    "CRITICAL ERROR in DDLExporter: " + std::string(e.what()) +
-                        " - Schema exports may be incomplete");
-    }
 
     try {
       Logger::info(LogCategory::MONITORING,
