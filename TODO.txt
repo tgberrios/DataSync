@@ -3,14 +3,6 @@
 ═══════════════════════════════════════════════════════════════════
 
 ┌─────────────────────────────────────────────────────────────────┐
-│ PRIORITY 1: HIGH PRIORITY + LOW COMPLEXITY (Do First)          │
-└─────────────────────────────────────────────────────────────────┘
-
-2. expandir las rules mas bien seria quitar las rules no creo ocuparlas
-   [LIMPIEZA DE CÓDIGO - Eliminar archivos no usados]
-
-
-┌─────────────────────────────────────────────────────────────────┐
 │ PRIORITY 2: HIGH PRIORITY + MEDIUM COMPLEXITY                   │
 └─────────────────────────────────────────────────────────────────┘
 
@@ -18,17 +10,67 @@
    [DISTRIBUCIÓN - Dockerizar para fácil instalación]
    [IMPORTANTE: Facilita monetización y distribución]
 
-4. Necesitamos una columna para DB_NAME ya no me acuerdo para que jaja 
-   aunque creo que el DB name lo sacamos de la conn_string
-   [INVESTIGACIÓN + IMPLEMENTACIÓN - Revisar si es necesario y agregar]
-
 
 ┌─────────────────────────────────────────────────────────────────┐
 │ PRIORITY 3: MEDIUM PRIORITY + LOW COMPLEXITY                   │
 └─────────────────────────────────────────────────────────────────┘
 
-5. ordenas tablas en postgres
+5. ordenas tablas en postgres ✓ COMPLETADO
+   con esto me refiero a todas las tablas de metadata.
+   y creacion de views y triggers
+   y todo eso para tener un schemas mas completo seria directo en postgre
    [MEJORA UX - Ordenar tablas en la visualización]
+   [COMPLETADO: Tablas MSSQL unificadas en data_governance_catalog_mssql, tablas innecesarias eliminadas]
+
+5.1. Implementar DataGovernanceMSSQL.cpp
+     [GOVERNANCE - Catálogo específico para MSSQL con métricas detalladas]
+     [ARCHIVO: src/governance/DataGovernanceMSSQL.cpp]
+     [PRIORIDAD: Alta - MSSQL es motor principal]
+
+5.2. Implementar DataGovernanceMariaDB.cpp
+     [GOVERNANCE - Catálogo específico para MariaDB]
+     [ARCHIVO: src/governance/DataGovernanceMariaDB.cpp]
+     [PRIORIDAD: Media - Motor secundario]
+
+5.3. Implementar QueryStoreCollector.cpp
+     [MONITORING - Snapshots de query performance PostgreSQL]
+     [ARCHIVO: src/governance/QueryStoreCollector.cpp]
+     [PRIORIDAD: Media - Útil para optimización]
+
+5.4. Implementar QueryActivityLogger.cpp
+     [MONITORING - Log de queries activas PostgreSQL]
+     [ARCHIVO: src/governance/QueryActivityLogger.cpp]
+     [PRIORIDAD: Media - Complementa QueryStore]
+
+5.5. Implementar MaintenanceManager.cpp
+     [MAINTENANCE - Detección y ejecución de mantenimiento]
+     [ARCHIVO: src/governance/MaintenanceManager.cpp]
+     [PRIORIDAD: Media - Mejora performance]
+
+5.6. Implementar MSSQLStoredProcedureMonitor.cpp
+     [MONITORING - Monitoreo de stored procedures MSSQL]
+     [ARCHIVO: src/governance/MSSQLStoredProcedureMonitor.cpp]
+     [PRIORIDAD: Media - Específico para MSSQL]
+
+5.7. Implementar LineageExtractorMSSQL.cpp
+     [LINEAGE - Extracción de dependencias MSSQL]
+     [ARCHIVO: src/governance/LineageExtractorMSSQL.cpp]
+     [PRIORIDAD: Baja - Funcionalidad avanzada]
+
+5.8. Implementar LineageExtractorMariaDB.cpp
+     [LINEAGE - Extracción de dependencias MariaDB]
+     [ARCHIVO: src/governance/LineageExtractorMariaDB.cpp]
+     [PRIORIDAD: Baja - Funcionalidad avanzada]
+
+5.9. Implementar DataGovernanceMongoDB.cpp
+     [GOVERNANCE - Catálogo específico para MongoDB]
+     [ARCHIVO: src/governance/DataGovernanceMongoDB.cpp]
+     [PRIORIDAD: Baja - Depende de implementación MongoDB]
+
+5.10. Implementar LineageExtractorMongoDB.cpp
+      [LINEAGE - Extracción de dependencias MongoDB]
+      [ARCHIVO: src/governance/LineageExtractorMongoDB.cpp]
+      [PRIORIDAD: Baja - Depende de implementación MongoDB]
 
 
 ┌─────────────────────────────────────────────────────────────────┐
