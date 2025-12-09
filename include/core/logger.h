@@ -38,8 +38,6 @@ class Logger {
 private:
   static std::unique_ptr<DatabaseLogWriter> dbWriter_;
   static std::mutex logMutex;
-  static size_t messageCount;
-  static const size_t MAX_MESSAGES_BEFORE_FLUSH = 100;
 
   static LogLevel currentLogLevel;
   static bool showTimestamps;
@@ -154,7 +152,7 @@ private:
   }
 
 public:
-  static void initialize(const std::string &fileName = "DataSync.log");
+  static void initialize();
 
   static void shutdown() {
     std::lock_guard<std::mutex> lock(logMutex);
