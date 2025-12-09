@@ -120,8 +120,10 @@ void DataGovernanceMariaDB::queryServerConfig() {
     std::string serverName = extractServerName(connectionString_);
     std::string databaseName = extractDatabaseName(connectionString_);
 
-    std::string query = "SELECT VERSION(), @@innodb_version, @@innodb_page_size, "
-                        "@@innodb_file_per_table, @@innodb_flush_log_at_trx_commit, "
+    std::string query = "SELECT VERSION(), "
+                        "@@innodb_page_size, "
+                        "@@innodb_file_per_table, "
+                        "@@innodb_flush_log_at_trx_commit, "
                         "@@sync_binlog";
 
     auto results = executeQuery(mysqlConn, query);
@@ -343,23 +345,48 @@ void DataGovernanceMariaDB::queryUserInfo() {
     std::string query = "SELECT "
                         "COUNT(*) AS user_total, "
                         "SUM(CASE WHEN Super_priv = 'Y' THEN 1 ELSE 0 END) AS user_super_count, "
-                        "SUM(CASE WHEN account_locked = 'Y' THEN 1 ELSE 0 END) AS user_locked_count, "
                         "SUM(CASE WHEN password_expired = 'Y' THEN 1 ELSE 0 END) AS user_expired_count "
                         "FROM mysql.user";
 
     auto results = executeQuery(mysqlConn, query);
 
-    if (!results.empty() && results[0].size() >= 4) {
-      for (auto &data : governanceData_) {
-        try {
-          if (!results[0][0].empty()) data.user_total = std::stoi(results[0][0]);
-          if (!results[0][1].empty()) data.user_super_count = std::stoi(results[0][1]);
-          if (!results[0][2].empty()) data.user_locked_count = std::stoi(results[0][2]);
-          if (!results[0][3].empty()) data.user_expired_count = std::stoi(results[0][3]);
-        } catch (const std::exception &e) {
-          Logger::warning(LogCategory::GOVERNANCE, "DataGovernanceMariaDB",
-                          "Error parsing user info: " + std::string(e.what()));
+    if (!results.empty() && results[0].size() >= 3) {
+      int userTotal = 0;
+      int userSuperCount = 0;
+      int userExpiredCount = 0;
+
+      try {
+        if (!results[0][0].empty()) userTotal = std::stoi(results[0][0]);
+        if (!results[0][1].empty()) userSuperCount = std::stoi(results[0][1]);
+        if (!results[0][2].empty()) userExpiredCount = std::stoi(results[0][2]);
+      } catch (const std::exception &e) {
+        Logger::warning(LogCategory::GOVERNANCE, "DataGovernanceMariaDB",
+                        "Error parsing user info: " + std::string(e.what()));
+      }
+
+      std::string accountLockedQuery = "SELECT COUNT(*) FROM information_schema.COLUMNS "
+                                       "WHERE TABLE_SCHEMA = 'mysql' AND TABLE_NAME = 'user' "
+                                       "AND COLUMN_NAME = 'account_locked'";
+      auto lockedCheckResults = executeQuery(mysqlConn, accountLockedQuery);
+      int userLockedCount = 0;
+
+      if (!lockedCheckResults.empty() && !lockedCheckResults[0][0].empty() && lockedCheckResults[0][0] != "0") {
+        std::string lockedQuery = "SELECT SUM(CASE WHEN account_locked = 'Y' THEN 1 ELSE 0 END) "
+                                  "FROM mysql.user";
+        auto lockedResults = executeQuery(mysqlConn, lockedQuery);
+        if (!lockedResults.empty() && !lockedResults[0][0].empty()) {
+          try {
+            userLockedCount = std::stoi(lockedResults[0][0]);
+          } catch (...) {
+          }
         }
+      }
+
+      for (auto &data : governanceData_) {
+        data.user_total = userTotal;
+        data.user_super_count = userSuperCount;
+        data.user_locked_count = userLockedCount;
+        data.user_expired_count = userExpiredCount;
       }
     }
   } catch (const std::exception &e) {

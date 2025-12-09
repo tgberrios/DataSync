@@ -17,10 +17,6 @@
 
 
 
-5.2. Implementar DataGovernanceMariaDB.cpp
-     [GOVERNANCE - Catálogo específico para MariaDB]
-     [ARCHIVO: src/governance/DataGovernanceMariaDB.cpp]
-     [PRIORIDAD: Media - Motor secundario]
 
 5.3. Implementar QueryStoreCollector.cpp
      [MONITORING - Snapshots de query performance PostgreSQL]
