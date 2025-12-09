@@ -17,7 +17,9 @@
 
 
 
-
+esto deberia ser solo una sola tabla y script 
+y en la tabla unificada tener ya columnas calculadas 
+de metrics performance etc 
 5.3. Implementar QueryStoreCollector.cpp
      [MONITORING - Snapshots de query performance PostgreSQL]
      [ARCHIVO: src/governance/QueryStoreCollector.cpp]
