@@ -6,6 +6,13 @@
 #include <numeric>
 #include <unordered_map>
 
+// Main entry point for collecting all transfer metrics. Orchestrates the
+// complete metrics collection process by calling all collection methods in
+// sequence: creates the metrics table, collects transfer metrics, performance
+// metrics, metadata metrics, timestamp metrics, saves everything to the
+// database, and generates a report. If any step fails, logs an error but
+// continues with remaining steps. This function should be called periodically
+// to maintain up-to-date metrics.
 void MetricsCollector::collectAllMetrics() {
 
   try {
@@ -23,6 +30,14 @@ void MetricsCollector::collectAllMetrics() {
   }
 }
 
+// Creates the metadata.transfer_metrics table and required indexes if they do
+// not already exist. The table stores comprehensive transfer metrics including
+// records transferred, bytes transferred, memory usage, I/O operations,
+// transfer type, status, error messages, and timestamps. Sets connection
+// timeouts (30s statement, 10s lock) to prevent long-running operations from
+// hanging. Creates indexes on schema/table, db_engine, and status for efficient
+// querying. The table has a unique constraint on (schema_name, table_name,
+// db_engine, created_date) to prevent duplicate entries per day.
 void MetricsCollector::createMetricsTable() {
   try {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
@@ -80,6 +95,15 @@ void MetricsCollector::createMetricsTable() {
   }
 }
 
+// Collects transfer metrics by querying metadata.catalog and pg_stat_user_tables
+// to gather information about table sizes, record counts, and sync status.
+// Joins catalog data with PostgreSQL statistics to get current record counts
+// (n_live_tup) and table sizes (pg_total_relation_size). Validates all data
+// before processing, skipping rows with null or invalid values. Maps catalog
+// status to transfer_type (FULL_LOAD, INCREMENTAL, SYNC, UNKNOWN) and status
+// (SUCCESS, FAILED, PENDING, UNKNOWN). Estimates started_at as 1 hour before
+// completed_at if last_sync_time is available. Stores all metrics in the
+// internal metrics vector for later processing and saving.
 void MetricsCollector::collectTransferMetrics() {
   try {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
@@ -179,11 +203,8 @@ void MetricsCollector::collectTransferMetrics() {
         metric.error_message = "Unknown status: " + status;
       }
 
-      // Handle timestamps properly
       if (!row[4].is_null()) {
         metric.completed_at = row[4].as<std::string>();
-        // Calculate a reasonable started_at (1 hour before completion for
-        // estimates) In a real scenario, you'd want to track actual start times
         metric.started_at = getEstimatedStartTime(metric.completed_at);
       } else {
         metric.started_at = TimeUtils::getCurrentTimestamp();
@@ -200,6 +221,13 @@ void MetricsCollector::collectTransferMetrics() {
   }
 }
 
+// Collects performance metrics by querying pg_stat_user_tables to get I/O
+// operation counts (inserts, updates, deletes) and table sizes. Uses a hash
+// map for O(1) lookup performance instead of O(n²) nested loops. Updates
+// existing metrics in the metrics vector by matching schema_name and
+// table_name. Calculates io_operations_per_second as the sum of all I/O
+// operations and updates memory_used_mb with the current table size. Only
+// processes tables that exist in both the metrics vector and pg_stat_user_tables.
 void MetricsCollector::collectPerformanceMetrics() {
   try {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
@@ -257,12 +285,19 @@ void MetricsCollector::collectPerformanceMetrics() {
   }
 }
 
+// Collects metadata metrics by querying metadata.catalog to get sync status and
+// active flags. Uses a hash map for O(1) lookup performance. Updates existing
+// metrics in the metrics vector by matching schema_name, table_name, and
+// db_engine. Determines transfer_type based on catalog status (full_load,
+// incremental, or sync). Determines status based on active flag and presence of
+// last_sync_time (SUCCESS if active and has sync time, PENDING if no sync time,
+// FAILED if inactive). This function refines the metrics collected in
+// collectTransferMetrics with more accurate metadata.
 void MetricsCollector::collectMetadataMetrics() {
   try {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
     pqxx::work txn(conn);
 
-    // Query para obtener metadatos
     std::string metadataQuery = "SELECT "
                                 "lower(schema_name) as schema_name,"
                                 "lower(table_name) as table_name,"
@@ -294,7 +329,6 @@ void MetricsCollector::collectMetadataMetrics() {
       if (it != metaMap.end()) {
         const auto &row = it->second;
 
-        // Determinar tipo de transferencia
         std::string status = row[3].as<std::string>();
         if (status == "full_load") {
           metric.transfer_type = "FULL_LOAD";
@@ -304,7 +338,6 @@ void MetricsCollector::collectMetadataMetrics() {
           metric.transfer_type = "SYNC";
         }
 
-        // Determinar status
         bool active = row[4].as<bool>();
         if (!active) {
           metric.status = "FAILED";
@@ -324,6 +357,12 @@ void MetricsCollector::collectMetadataMetrics() {
   }
 }
 
+// Collects timestamp metrics by querying metadata.catalog for last_sync_time
+// values. Uses a hash map for O(1) lookup performance. Updates existing metrics
+// in the metrics vector by matching schema_name, table_name, and db_engine.
+// Sets both completed_at and started_at to the last_sync_time value if available.
+// This function ensures timestamp accuracy by using actual sync times from the
+// catalog rather than estimates.
 void MetricsCollector::collectTimestampMetrics() {
   try {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
@@ -369,6 +408,13 @@ void MetricsCollector::collectTimestampMetrics() {
   }
 }
 
+// Saves all collected metrics to the metadata.transfer_metrics table using
+// parameterized queries to prevent SQL injection. Uses INSERT ... ON CONFLICT
+// DO UPDATE to handle duplicate entries (same schema/table/engine/date). If a
+// record already exists for the same day, updates it with new values. Handles
+// NULL values properly by passing nullptr for empty strings. Commits all
+// inserts/updates in a single transaction for atomicity. If saving fails, logs
+// an error but does not throw an exception.
 void MetricsCollector::saveMetricsToDatabase() {
   try {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
@@ -414,6 +460,13 @@ void MetricsCollector::saveMetricsToDatabase() {
   }
 }
 
+// Generates an aggregated metrics report for the current day by querying
+// metadata.transfer_metrics. Calculates total tables, successful/failed/pending
+// transfer counts, total records and bytes transferred, average memory usage,
+// total I/O operations, and success rate percentage. Converts bytes to MB for
+// readability. Currently calculates all values but does not output them (similar
+// to DataGovernance::generateReport). The calculated values should be logged or
+// returned for display.
 void MetricsCollector::generateMetricsReport() {
   try {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
@@ -455,7 +508,19 @@ void MetricsCollector::generateMetricsReport() {
       // Convert bytes to MB for readability
       double totalMB = totalBytes / (1024.0 * 1024.0);
 
+      Logger::info(LogCategory::METRICS, "generateMetricsReport",
+                   "Metrics Report: Total tables=" + std::to_string(totalTables) +
+                       ", Successful=" + std::to_string(successfulTransfers) +
+                       ", Failed=" + std::to_string(failedTransfers) +
+                       ", Pending=" + std::to_string(pendingTransfers) +
+                       ", Total records=" + std::to_string(totalRecords) +
+                       ", Total MB=" + std::to_string(totalMB) +
+                       ", Avg memory MB=" + std::to_string(avgMemoryUsed) +
+                       ", Total I/O ops=" + std::to_string(totalIOOperations) +
+                       ", Success rate=" + std::to_string(successRate) + "%");
     } else {
+      Logger::info(LogCategory::METRICS, "generateMetricsReport",
+                   "No metrics found for current date");
     }
   } catch (const std::exception &e) {
     Logger::error(LogCategory::METRICS, "generateMetricsReport",
@@ -463,6 +528,13 @@ void MetricsCollector::generateMetricsReport() {
   }
 }
 
+// Estimates the start time for a transfer by subtracting 1 hour from the
+// completed timestamp. Parses the completed timestamp string using
+// std::get_time, converts to time_point, subtracts 1 hour, and formats back to
+// string with milliseconds. This is used when actual start times are not
+// available. If parsing fails, returns the current timestamp. The estimation
+// assumes transfers typically take about 1 hour, which may not be accurate for
+// all cases.
 std::string
 MetricsCollector::getEstimatedStartTime(const std::string &completedAt) {
   try {
@@ -490,6 +562,11 @@ MetricsCollector::getEstimatedStartTime(const std::string &completedAt) {
   }
 }
 
+// Calculates the transfer rate (records per second) based on the number of
+// records transferred and the duration in milliseconds. Returns 0.0 if duration
+// is invalid (<= 0). Formula: records / (duration_ms / 1000.0). This function
+// is deprecated and not used in the codebase.
+[[deprecated("This function is not used in the codebase and may be removed in a future version")]]
 double MetricsCollector::calculateTransferRate(long long records,
                                                int duration_ms) {
   if (duration_ms <= 0)
@@ -497,9 +574,22 @@ double MetricsCollector::calculateTransferRate(long long records,
   return static_cast<double>(records) / (duration_ms / 1000.0);
 }
 
+// Calculates the total size in bytes of a specific table using
+// pg_total_relation_size. Converts schema and table names to lowercase and
+// uses SQL escaping to prevent injection. Queries PostgreSQL system catalogs
+// to get the actual table size including indexes and TOAST data. Returns 0 if
+// the table does not exist or if an error occurs. This function is deprecated
+// and not used in the codebase.
+[[deprecated("This function is not used in the codebase and may be removed in a future version")]]
 long long
 MetricsCollector::calculateBytesTransferred(const std::string &schema_name,
                                             const std::string &table_name) {
+  if (schema_name.empty() || table_name.empty()) {
+    Logger::error(LogCategory::METRICS, "calculateBytesTransferred",
+                  "schema_name and table_name must not be empty");
+    return 0;
+  }
+
   try {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
     pqxx::work txn(conn);
