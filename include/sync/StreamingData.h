@@ -6,6 +6,7 @@
 #include "core/logger.h"
 #include "governance/DataGovernance.h"
 #include "governance/DataQuality.h"
+#include "governance/MaintenanceManager.h"
 #include "metrics/MetricsCollector.h"
 #include "sync/MSSQLToPostgres.h"
 #include "sync/MariaDBToPostgres.h"

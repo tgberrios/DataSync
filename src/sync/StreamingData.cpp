@@ -671,6 +671,22 @@ void StreamingData::maintenanceThread() {
                           " - System metrics may not be current");
       }
 
+      try {
+        Logger::info(LogCategory::MONITORING,
+                     "Performing database maintenance detection and execution");
+        MaintenanceManager maintenanceManager(DatabaseConfig::getPostgresConnectionString());
+        maintenanceManager.detectMaintenanceNeeds();
+        maintenanceManager.executeMaintenance();
+        maintenanceManager.generateReport();
+        Logger::info(LogCategory::MONITORING,
+                     "Database maintenance completed");
+      } catch (const std::exception &e) {
+        Logger::error(LogCategory::MONITORING, "maintenanceThread",
+                      "ERROR in database maintenance: " +
+                          std::string(e.what()) +
+                          " - Database maintenance may not be current");
+      }
+
       auto cycleEndTime = std::chrono::high_resolution_clock::now();
       auto cycleDuration = std::chrono::duration_cast<std::chrono::seconds>(
           cycleEndTime - cycleStartTime);
