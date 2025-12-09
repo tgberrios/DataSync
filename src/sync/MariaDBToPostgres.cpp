@@ -36,15 +36,16 @@ std::unordered_map<std::string, std::string> MariaDBToPostgres::collationMap = {
     {"ascii_general_ci", "C"}};
 
 // Cleans and normalizes a value from MariaDB for insertion into PostgreSQL.
-// Handles null detection (empty strings, "NULL", invalid dates like "0000-00-00",
-// "1900-01-01", "1970-01-01"), invalid binary characters (non-ASCII), and
-// invalid date formats. For VARCHAR/CHAR types, truncates values that exceed
-// the maximum length specified in the column type. For BYTEA/BLOB/BIT types,
-// validates hexadecimal format and truncates large binary data (>1000 bytes).
-// For null values, returns appropriate defaults based on column type (0 for
-// integers, 0.0 for floats, "DEFAULT" for strings, "1970-01-01 00:00:00" for
-// timestamps). For date/timestamp types, validates format and detects invalid
-// dates containing "-00". Returns the cleaned value ready for SQL insertion.
+// Handles null detection (empty strings, "NULL", invalid dates like
+// "0000-00-00", "1900-01-01", "1970-01-01"), invalid binary characters
+// (non-ASCII), and invalid date formats. For VARCHAR/CHAR types, truncates
+// values that exceed the maximum length specified in the column type. For
+// BYTEA/BLOB/BIT types, validates hexadecimal format and truncates large binary
+// data (>1000 bytes). For null values, returns appropriate defaults based on
+// column type (0 for integers, 0.0 for floats, "DEFAULT" for strings,
+// "1970-01-01 00:00:00" for timestamps). For date/timestamp types, validates
+// format and detects invalid dates containing "-00". Returns the cleaned value
+// ready for SQL insertion.
 std::string
 MariaDBToPostgres::cleanValueForPostgres(const std::string &value,
                                          const std::string &columnType) {

@@ -1,4 +1,4 @@
-expandir las rules
+expandir las rules mas bien seria quitar las rules no creo ocuparlas 
 talvez quitar last_offset si no lo ocupo ?  
 extraer nuevamente los DDL de las tablas
 actualizar un poco el frontend ? 
@@ -13,3 +13,7 @@ OTROS MOTORES
 LAST_OFFSET es una columna que no ocupamos!
 Necesitamos una columna para DB_NAME
 UNA COLUMNA EN CATALOG QUE NOS LISTE TODAS LAS COLUMNAS QUE TIENE ESA TABLA
+
+
+
+data governance debe tener una funcionalidad para generar governanza y calidad de data apartir de las fuentes

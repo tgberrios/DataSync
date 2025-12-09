@@ -2,6 +2,13 @@
 #include "core/logger.h"
 #include <algorithm>
 
+// Checks if a table exists in PostgreSQL by querying information_schema.tables.
+// Converts schema and table names to lowercase for case-insensitive matching.
+// Uses parameterized queries (txn.exec_params) with $1 and $2 placeholders to
+// prevent SQL injection. Returns true if the table exists (COUNT(*) > 0),
+// false otherwise. Logs errors and returns false if the query fails or any
+// exception occurs. This is a utility function used throughout the codebase
+// to verify table existence before performing operations on them.
 bool TableUtils::tableExistsInPostgres(pqxx::connection &conn,
                                        const std::string &schema,
                                        const std::string &table) {

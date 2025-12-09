@@ -30,11 +30,12 @@ TableProcessorThreadPool::TableProcessorThreadPool(size_t numWorkers) {
 TableProcessorThreadPool::~TableProcessorThreadPool() { shutdown(); }
 
 // Main worker thread function that processes tasks from the queue. Continuously
-// pops tasks from the blocking queue until shutdown is requested. For each task,
-// increments activeWorkers counter, executes the processor function, increments
-// completedTasks on success or failedTasks on exception, then decrements
-// activeWorkers. Logs all processing activity including start, completion, and
-// failures. Thread-safe through atomic counters and thread-safe queue.
+// pops tasks from the blocking queue until shutdown is requested. For each
+// task, increments activeWorkers counter, executes the processor function,
+// increments completedTasks on success or failedTasks on exception, then
+// decrements activeWorkers. Logs all processing activity including start,
+// completion, and failures. Thread-safe through atomic counters and thread-safe
+// queue.
 void TableProcessorThreadPool::workerThread(size_t workerId) {
   Logger::info(LogCategory::TRANSFER,
                "Worker #" + std::to_string(workerId) + " started");
@@ -89,10 +90,9 @@ void TableProcessorThreadPool::submitTask(
     const DatabaseToPostgresSync::TableInfo &table,
     std::function<void(const DatabaseToPostgresSync::TableInfo &)> processor) {
   if (shutdown_.load()) {
-    Logger::warning(
-        LogCategory::TRANSFER, "submitTask",
-        "Cannot submit task - thread pool is shutting down: " +
-            table.schema_name + "." + table.table_name);
+    Logger::warning(LogCategory::TRANSFER, "submitTask",
+                    "Cannot submit task - thread pool is shutting down: " +
+                        table.schema_name + "." + table.table_name);
     return;
   }
 
@@ -156,8 +156,8 @@ void TableProcessorThreadPool::shutdown() {
 // pool statistics. When enabling, creates a new monitoring thread that reports
 // every 10 seconds. When disabling, joins the existing monitoring thread if
 // it's running. Thread-safe through atomic monitoringEnabled flag. Monitoring
-// reports include active workers, completed/failed/pending tasks, and processing
-// speed (tables per second).
+// reports include active workers, completed/failed/pending tasks, and
+// processing speed (tables per second).
 void TableProcessorThreadPool::enableMonitoring(bool enable) {
   if (enable && !monitoringEnabled_.load()) {
     monitoringEnabled_ = true;
@@ -199,9 +199,8 @@ void TableProcessorThreadPool::monitoringThreadFunc() {
                        " | Completed: " + std::to_string(completed) + "/" +
                        std::to_string(totalTasksSubmitted_) +
                        " | Failed: " + std::to_string(failed) +
-                       " | Pending: " + std::to_string(pending) +
-                       " | Speed: " + std::to_string(static_cast<int>(speed)) +
-                       " tbl/s");
+                       " | Pending: " + std::to_string(pending) + " | Speed: " +
+                       std::to_string(static_cast<int>(speed)) + " tbl/s");
     }
 
     std::this_thread::sleep_for(std::chrono::seconds(10));
@@ -215,9 +214,9 @@ void TableProcessorThreadPool::monitoringThreadFunc() {
 // (read-only access to startTime_).
 double TableProcessorThreadPool::getTasksPerSecond() const {
   auto now = std::chrono::steady_clock::now();
-  auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now -
-                                                                   startTime_)
-                     .count();
+  auto elapsed =
+      std::chrono::duration_cast<std::chrono::seconds>(now - startTime_)
+          .count();
 
   if (elapsed == 0)
     return 0.0;
@@ -225,4 +224,3 @@ double TableProcessorThreadPool::getTasksPerSecond() const {
   return static_cast<double>(completedTasks_.load()) /
          static_cast<double>(elapsed);
 }
-
