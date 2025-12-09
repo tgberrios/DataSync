@@ -9,6 +9,7 @@ const DashboardContainer = styled.div`
   padding: 20px;
   font-family: monospace;
   box-sizing: border-box;
+  animation: fadeIn 0.25s ease-in;
 `;
 
 const Header = styled.div`
@@ -18,30 +19,80 @@ const Header = styled.div`
   margin-bottom: 30px;
   font-size: 1.5em;
   font-weight: bold;
-  background-color: #f5f5f5;
-  border-radius: 4px;
+  background: linear-gradient(135deg, #f5f5f5 0%, #ffffff 50%, #f5f5f5 100%);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  position: relative;
+  overflow: hidden;
+  animation: slideUp 0.3s ease-out;
+  
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(10, 25, 41, 0.1), transparent);
+    animation: shimmer 3s infinite;
+  }
 `;
 
 const Section = styled.div`
   margin-bottom: 30px;
   padding: 20px;
   border: 1px solid #eee;
-  border-radius: 4px;
+  border-radius: 6px;
   background-color: #fafafa;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
+  transition: all 0.2s ease;
+  animation: slideUp 0.25s ease-out;
+  animation-fill-mode: both;
+  
+  &:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    transform: translateY(-2px);
+    border-color: rgba(10, 25, 41, 0.2);
+  }
+  
+  &:nth-child(1) { animation-delay: 0.05s; }
+  &:nth-child(2) { animation-delay: 0.1s; }
+  &:nth-child(3) { animation-delay: 0.15s; }
+  &:nth-child(4) { animation-delay: 0.2s; }
+  &:nth-child(5) { animation-delay: 0.25s; }
 `;
 
 const ProgressBar = styled.div<{ progress: number }>`
   width: 100%;
-  height: 20px;
-  background-color: #ddd;
+  height: 24px;
+  background-color: #e0e0e0;
   margin: 10px 0;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
+  position: relative;
   
   &:after {
     content: '';
     display: block;
     width: ${props => props.progress}%;
     height: 100%;
-    background-color: #333;
+    background: linear-gradient(90deg, #0d1b2a 0%, #1e3a5f 50%, #2d4a6f 100%);
+    border-radius: 12px;
+    animation: progressBar 0.6s ease-out;
+    box-shadow: 0 0 10px rgba(13, 27, 42, 0.4);
+    position: relative;
+    
+    &::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+      animation: shimmer 2s infinite;
+    }
   }
 `;
 
@@ -58,14 +109,39 @@ const SectionTitle = styled.h3`
   color: #222;
   border-bottom: 2px solid #333;
   padding-bottom: 8px;
+  position: relative;
+  
+  &::after {
+    content: '';
+    position: absolute;
+    bottom: -2px;
+    left: 0;
+    width: 60px;
+    height: 2px;
+    background: linear-gradient(90deg, #0d1b2a, #1e3a5f);
+    transition: width 0.3s ease;
+  }
+  
+  &:hover::after {
+    width: 100%;
+  }
 `;
 
 const Value = styled.div`
   font-size: 1.1em;
-  padding: 8px;
+  padding: 12px;
   background-color: #fff;
-  border-radius: 3px;
+  border-radius: 6px;
   border: 1px solid #ddd;
+  transition: all 0.2s ease;
+  cursor: default;
+  
+  &:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    border-color: rgba(10, 25, 41, 0.3);
+    background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+  }
 `;
 
 const Dashboard = () => {
@@ -174,9 +250,11 @@ const Dashboard = () => {
           padding: '20px', 
           textAlign: 'center',
           border: '1px solid red',
-          borderRadius: '4px',
+          borderRadius: '6px',
           margin: '20px',
-          backgroundColor: '#fff5f5'
+          backgroundColor: '#fff5f5',
+          animation: 'slideUp 0.2s ease-out',
+          boxShadow: '0 4px 12px rgba(220, 38, 38, 0.15)'
         }}>
           <div style={{ fontWeight: 'bold', marginBottom: '10px' }}>Error al cargar datos:</div>
           <div>{error}</div>
@@ -191,12 +269,24 @@ const Dashboard = () => {
             }}
             style={{
               marginTop: '10px',
-              padding: '8px 16px',
+              padding: '10px 20px',
               border: '1px solid red',
-              borderRadius: '4px',
+              borderRadius: '6px',
               background: 'white',
               color: 'red',
-              cursor: 'pointer'
+              cursor: 'pointer',
+              transition: 'all 0.3s ease',
+              fontWeight: 'bold'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'red';
+              e.currentTarget.style.color = 'white';
+              e.currentTarget.style.transform = 'scale(1.05)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'white';
+              e.currentTarget.style.color = 'red';
+              e.currentTarget.style.transform = 'scale(1)';
             }}
           >
             Reintentar
@@ -239,7 +329,12 @@ const Dashboard = () => {
                 </Value>
               </Grid>
             </div>
-            <Value style={{ marginTop: '20px' }}>
+            <Value style={{ 
+              marginTop: '20px',
+              background: 'linear-gradient(135deg, #ffffff 0%, #f0f7ff 100%)',
+              borderLeft: '4px solid #0d1b2a',
+              animation: currentlyProcessing ? 'pulse 2s infinite' : 'none'
+            }}>
               ► Currently Processing: {
                 currentlyProcessing 
                   ? `${currentlyProcessing.schema_name}.${currentlyProcessing.table_name} [${currentlyProcessing.db_engine}] (${formatNumberWithCommas(currentlyProcessing.total_records)} records) - ${currentlyProcessing.status}`

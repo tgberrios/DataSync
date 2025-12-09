@@ -7,6 +7,7 @@ const SecurityContainer = styled.div`
   color: #333;
   padding: 20px;
   font-family: monospace;
+  animation: fadeIn 0.25s ease-in;
 `;
 
 const Header = styled.div`
@@ -16,16 +17,46 @@ const Header = styled.div`
   margin-bottom: 30px;
   font-size: 1.5em;
   font-weight: bold;
-  background-color: #f5f5f5;
-  border-radius: 4px;
+  background: linear-gradient(135deg, #f5f5f5 0%, #ffffff 50%, #f5f5f5 100%);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  position: relative;
+  overflow: hidden;
+  animation: slideUp 0.3s ease-out;
+  
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(10, 25, 41, 0.1), transparent);
+    animation: shimmer 3s infinite;
+  }
 `;
 
 const Section = styled.div`
   margin-bottom: 25px;
   padding: 20px;
   border: 1px solid #eee;
-  border-radius: 4px;
+  border-radius: 6px;
   background-color: #fafafa;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
+  transition: all 0.2s ease;
+  animation: slideUp 0.25s ease-out;
+  animation-fill-mode: both;
+  
+  &:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    transform: translateY(-2px);
+    border-color: rgba(10, 25, 41, 0.2);
+  }
+  
+  &:nth-child(1) { animation-delay: 0.1s; }
+  &:nth-child(2) { animation-delay: 0.2s; }
+  &:nth-child(3) { animation-delay: 0.15s; }
+  &:nth-child(4) { animation-delay: 0.2s; }
 `;
 
 const SectionTitle = styled.h3`
@@ -34,6 +65,22 @@ const SectionTitle = styled.h3`
   color: #222;
   border-bottom: 2px solid #333;
   padding-bottom: 8px;
+  position: relative;
+  
+  &::after {
+    content: '';
+    position: absolute;
+    bottom: -2px;
+    left: 0;
+    width: 60px;
+    height: 2px;
+    background: linear-gradient(90deg, #0d1b2a, #1e3a5f);
+    transition: width 0.3s ease;
+  }
+  
+  &:hover::after {
+    width: 100%;
+  }
 `;
 
 const Grid = styled.div`
@@ -48,7 +95,7 @@ const Value = styled.div`
   font-size: 1.1em;
   padding: 12px;
   background-color: #fff;
-  border-radius: 4px;
+  border-radius: 6px;
   border: 1px solid #ddd;
   text-align: center;
   min-height: 50px;
@@ -56,6 +103,14 @@ const Value = styled.div`
   align-items: center;
   justify-content: center;
   font-weight: 500;
+  transition: all 0.2s ease;
+  
+  &:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    border-color: rgba(10, 25, 41, 0.3);
+    background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+  }
 `;
 
 const Table = styled.table`
@@ -63,29 +118,38 @@ const Table = styled.table`
   border-collapse: collapse;
   margin-top: 20px;
   background: white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  border-radius: 6px;
+  overflow: hidden;
 `;
 
 const Th = styled.th`
   padding: 15px 12px;
   text-align: left;
   border-bottom: 2px solid #333;
-  background: #f5f5f5;
+  background: linear-gradient(180deg, #f5f5f5 0%, #fafafa 100%);
   white-space: nowrap;
   font-weight: 600;
   font-size: 0.95em;
+  position: sticky;
+  top: 0;
+  z-index: 10;
 `;
 
 const Td = styled.td`
   padding: 12px;
   border-bottom: 1px solid #eee;
   vertical-align: middle;
+  transition: all 0.2s ease;
 `;
 
 const Badge = styled.span<{ type: string }>`
-  padding: 4px 8px;
-  border-radius: 4px;
+  padding: 4px 10px;
+  border-radius: 6px;
   font-size: 0.9em;
   font-weight: 500;
+  display: inline-block;
+  transition: all 0.2s ease;
   background-color: ${props => {
     switch (props.type) {
       case 'SUPERUSER': return '#ffebee';
@@ -118,14 +182,26 @@ const Badge = styled.span<{ type: string }>`
       default: return '#757575';
     }
   }};
+  
+  &:hover {
+    transform: scale(1.05);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  }
 `;
 
 const ExpandableRow = styled.tr<{ expanded: boolean }>`
   cursor: pointer;
   background-color: ${props => props.expanded ? '#f8f9fa' : 'white'};
+  transition: all 0.2s ease;
   
   &:hover {
-    background-color: #f5f5f5;
+    background: linear-gradient(90deg, #f0f0f0 0%, #f8f9fa 100%);
+    transform: scale(1.001);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+    
+    ${Td} {
+      border-bottom-color: rgba(10, 25, 41, 0.1);
+    }
   }
 `;
 
@@ -134,24 +210,31 @@ const ExpandableTd = styled.td`
   border-bottom: 1px solid #eee;
   vertical-align: middle;
   position: relative;
+  transition: all 0.2s ease;
 `;
 
 const ExpandIcon = styled.span<{ expanded: boolean }>`
   margin-left: 8px;
   font-size: 0.8em;
   color: #666;
-  transition: transform 0.2s ease;
+  transition: transform 0.3s ease;
   transform: ${props => props.expanded ? 'rotate(90deg)' : 'rotate(0deg)'};
 `;
 
 const ConnectionCount = styled.span`
-  background: #e3f2fd;
-  color: #1565c0;
-  padding: 2px 8px;
+  background: linear-gradient(135deg, #0d1b2a 0%, #1e3a5f 100%);
+  color: white;
+  padding: 3px 10px;
   border-radius: 12px;
   font-size: 0.8em;
   font-weight: 500;
   margin-left: 8px;
+  transition: all 0.2s ease;
+  
+  &:hover {
+    transform: scale(1.1);
+    box-shadow: 0 2px 6px rgba(13, 27, 42, 0.3);
+  }
 `;
 
 const StatusSummary = styled.div`
@@ -163,6 +246,7 @@ const StatusSummary = styled.div`
 
 const ExpandedRow = styled.tr`
   background-color: #fafafa;
+  animation: slideUp 0.2s ease-out;
 `;
 
 const ExpandedTd = styled.td`
@@ -173,8 +257,9 @@ const ExpandedTd = styled.td`
 
 const ExpandedContent = styled.div`
   padding: 15px 20px;
-  border-left: 3px solid #e3f2fd;
+  border-left: 3px solid #0d1b2a;
   margin-left: 20px;
+  animation: fadeIn 0.2s ease-in;
 `;
 
 const DetailRow = styled.div`
@@ -184,6 +269,12 @@ const DetailRow = styled.div`
   padding: 8px 0;
   border-bottom: 1px solid #f0f0f0;
   font-size: 0.9em;
+  transition: all 0.2s ease;
+  
+  &:hover {
+    background-color: #f8f9fa;
+    padding-left: 5px;
+  }
   
   &:last-child {
     border-bottom: none;

@@ -8,6 +8,7 @@ const ConfigContainer = styled.div`
   color: #333;
   padding: 20px;
   font-family: monospace;
+  animation: fadeIn 0.25s ease-in;
 `;
 
 const Header = styled.div`
@@ -17,8 +18,23 @@ const Header = styled.div`
   margin-bottom: 30px;
   font-size: 1.5em;
   font-weight: bold;
-  background-color: #f5f5f5;
-  border-radius: 4px;
+  background: linear-gradient(135deg, #f5f5f5 0%, #ffffff 50%, #f5f5f5 100%);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  position: relative;
+  overflow: hidden;
+  animation: slideUp 0.3s ease-out;
+  
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(10, 25, 41, 0.1), transparent);
+    animation: shimmer 3s infinite;
+  }
 `;
 
 const ConfigTable = styled.table`
@@ -26,32 +42,64 @@ const ConfigTable = styled.table`
   border-collapse: collapse;
   margin-top: 20px;
   background: white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  border-radius: 6px;
+  overflow: hidden;
+  animation: slideUp 0.25s ease-out;
+  animation-delay: 0.1s;
+  animation-fill-mode: both;
 `;
 
 const Th = styled.th`
   padding: 12px;
   text-align: left;
   border-bottom: 2px solid #333;
-  background: #f5f5f5;
+  background: linear-gradient(180deg, #f5f5f5 0%, #fafafa 100%);
+  font-weight: bold;
+  position: sticky;
+  top: 0;
+  z-index: 10;
 `;
 
 const Td = styled.td`
   padding: 12px;
-  border-bottom: 1px solid #ddd;
+  border-bottom: 1px solid #eee;
   font-family: 'Courier New', monospace;
+  transition: all 0.2s ease;
+`;
+
+const TableRow = styled.tr`
+  transition: all 0.2s ease;
+  
+  &:hover {
+    background: linear-gradient(90deg, #ffffff 0%, #f8f9fa 100%);
+    transform: scale(1.001);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+    
+    ${Td} {
+      border-bottom-color: rgba(10, 25, 41, 0.1);
+    }
+  }
 `;
 
 const Input = styled.input`
   width: 100%;
-  padding: 8px;
+  padding: 10px;
   border: 1px solid #ddd;
-  border-radius: 4px;
+  border-radius: 6px;
   font-family: 'Courier New', monospace;
-  background: transparent;
+  background: white;
+  transition: all 0.2s ease;
+
+  &:hover:not(:disabled) {
+    border-color: rgba(10, 25, 41, 0.3);
+  }
 
   &:focus {
     outline: none;
-    border-color: #666;
+    border-color: #0d1b2a;
+    box-shadow: 0 0 0 3px rgba(10, 25, 41, 0.1);
+    transform: translateY(-1px);
   }
 
   &:disabled {
@@ -62,17 +110,24 @@ const Input = styled.input`
 
 const TextArea = styled.textarea`
   width: 100%;
-  padding: 8px;
+  padding: 10px;
   border: 1px solid #ddd;
-  border-radius: 4px;
+  border-radius: 6px;
   font-family: 'Courier New', monospace;
   resize: vertical;
   min-height: 60px;
-  background: transparent;
+  background: white;
+  transition: all 0.2s ease;
+
+  &:hover:not(:disabled) {
+    border-color: rgba(10, 25, 41, 0.3);
+  }
 
   &:focus {
     outline: none;
-    border-color: #666;
+    border-color: #0d1b2a;
+    box-shadow: 0 0 0 3px rgba(10, 25, 41, 0.1);
+    transform: translateY(-1px);
   }
 
   &:disabled {
@@ -84,15 +139,23 @@ const TextArea = styled.textarea`
 const Button = styled.button<{ $variant?: 'primary' | 'danger' }>`
   padding: 8px 16px;
   border: none;
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
   font-family: monospace;
-  background-color: ${props => props.$variant === 'danger' ? '#ffebee' : '#e8f5e9'};
-  color: ${props => props.$variant === 'danger' ? '#c62828' : '#2e7d32'};
+  transition: all 0.2s ease;
+  font-weight: 500;
+  background-color: ${props => props.$variant === 'danger' ? '#ffebee' : '#0d1b2a'};
+  color: ${props => props.$variant === 'danger' ? '#c62828' : 'white'};
   margin-right: 8px;
 
-  &:hover {
-    background-color: ${props => props.$variant === 'danger' ? '#ffcdd2' : '#c8e6c9'};
+  &:hover:not(:disabled) {
+    background-color: ${props => props.$variant === 'danger' ? '#ffcdd2' : '#1e3a5f'};
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  }
+
+  &:active:not(:disabled) {
+    transform: translateY(0);
   }
 
   &:disabled {
@@ -103,12 +166,15 @@ const Button = styled.button<{ $variant?: 'primary' | 'danger' }>`
 
 const ActionCell = styled.td`
   padding: 12px;
-  border-bottom: 1px solid #ddd;
+  border-bottom: 1px solid #eee;
   text-align: right;
 `;
 
 const AddButton = styled(Button)`
   margin: 20px 0;
+  animation: slideUp 0.25s ease-out;
+  animation-delay: 0.2s;
+  animation-fill-mode: both;
 `;
 
 const Config = () => {
@@ -206,7 +272,7 @@ const Config = () => {
         </thead>
         <tbody>
           {editingKey === 'new' && editForm && (
-            <tr>
+            <TableRow>
               <Td>
                 <Input
                   value={editForm.key}
@@ -227,10 +293,10 @@ const Config = () => {
                 <Button onClick={handleCreate}>Save</Button>
                 <Button $variant="danger" onClick={handleCancel}>Cancel</Button>
               </ActionCell>
-            </tr>
+            </TableRow>
           )}
           {configs.map(config => (
-            <tr key={config.key}>
+            <TableRow key={config.key}>
               <Td>
                 {editingKey === config.key ? (
                   <Input
@@ -268,7 +334,7 @@ const Config = () => {
                   <Button onClick={() => handleEdit(config)}>Edit</Button>
                 )}
               </ActionCell>
-            </tr>
+            </TableRow>
           ))}
         </tbody>
       </ConfigTable>

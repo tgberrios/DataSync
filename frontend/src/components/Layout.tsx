@@ -8,16 +8,18 @@ const LayoutContainer = styled.div`
 
 const Sidebar = styled.div`
   width: 250px;
-  background-color: #1a1a1a;
+  background: linear-gradient(180deg, #1a1a1a 0%, #1a1a1a 100%);
   color: white;
   padding: 20px 0;
   border-right: 1px solid #333;
+  box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
 `;
 
 const MainContent = styled.div`
   flex: 1;
   background-color: white;
   overflow-y: auto;
+  animation: fadeIn 0.2s ease-in;
 `;
 
 const NavItem = styled(NavLink)`
@@ -29,16 +31,32 @@ const NavItem = styled(NavLink)`
   font-family: monospace;
   font-size: 1.1em;
   border-left: 3px solid transparent;
+  transition: all 0.2s ease;
+  position: relative;
   
   &:hover {
-    background-color: #252525;
+    background: linear-gradient(90deg, #252525 0%, rgba(10, 25, 41, 0.3) 100%);
     color: white;
+    transform: translateX(3px);
+    border-left-color: #1e3a5f;
   }
   
   &.active {
-    background-color: #252525;
+    background: linear-gradient(90deg, #252525 0%, rgba(10, 25, 41, 0.5) 100%);
     color: white;
-    border-left-color: #4a9eff;
+    border-left-color: #0d1b2a;
+    font-weight: bold;
+    
+    &::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 3px;
+      background: linear-gradient(180deg, #0d1b2a 0%, #1e3a5f 50%, #2d4a6f 100%);
+      box-shadow: 0 0 8px rgba(13, 27, 42, 0.6);
+    }
   }
 `;
 
@@ -50,6 +68,13 @@ const Logo = styled.div`
   border-bottom: 1px solid #333;
   margin-bottom: 20px;
   font-family: monospace;
+  background: linear-gradient(90deg, transparent 0%, rgba(10, 25, 41, 0.2) 50%, transparent 100%);
+  transition: all 0.2s ease;
+  
+  &:hover {
+    background: linear-gradient(90deg, transparent 0%, rgba(10, 25, 41, 0.4) 50%, transparent 100%);
+    transform: scale(1.02);
+  }
 `;
 
 const Layout = () => {
