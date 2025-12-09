@@ -2,12 +2,14 @@
 #include "core/database_config.h"
 #include "core/logger.h"
 #include "engines/database_engine.h"
+#include "third_party/json.hpp"
 #include <algorithm>
 #include <ctime>
 #include <iomanip>
 #include <pqxx/pqxx>
 #include <set>
 #include <sstream>
+#include <unordered_map>
 
 std::unordered_map<std::string, std::string> MongoDBToPostgres::dataTypeMap = {
     {"string", "TEXT"},    {"int32", "INTEGER"},      {"int64", "BIGINT"},
@@ -432,8 +434,52 @@ void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
         discoverCollectionFields(tableInfo.connection_string,
                                  tableInfo.schema_name, tableInfo.table_name);
 
-    std::vector<std::string> fieldTypes;
+    Logger::info(LogCategory::TRANSFER, "truncateAndLoadCollection",
+                 "Discovered " + std::to_string(fields.size()) +
+                     " fields for collection " + tableInfo.table_name);
+
+    pqxx::work checkTxn(conn);
+    auto existingColumns = checkTxn.exec(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = " + checkTxn.quote(schemaName) +
+        " AND table_name = " + checkTxn.quote(tableName) +
+        " ORDER BY ordinal_position");
+    checkTxn.commit();
+
+    std::set<std::string> existingColumnSet;
+    for (const auto &row : existingColumns) {
+      existingColumnSet.insert(row[0].as<std::string>());
+    }
+
+    if (existingColumnSet.find("_document") == existingColumnSet.end()) {
+      pqxx::work alterTxn(conn);
+      alterTxn.exec("ALTER TABLE " + fullTableName +
+                    " ADD COLUMN IF NOT EXISTS _document JSONB");
+      alterTxn.commit();
+      existingColumnSet.insert("_document");
+      Logger::info(LogCategory::TRANSFER, "truncateAndLoadCollection",
+                   "Added missing _document column to " + fullTableName);
+    }
+
+    std::vector<std::string> validFields;
     for (const auto &field : fields) {
+      if (existingColumnSet.find(field) != existingColumnSet.end()) {
+        validFields.push_back(field);
+      }
+    }
+
+    if (validFields.empty()) {
+      Logger::error(LogCategory::TRANSFER, "truncateAndLoadCollection",
+                    "No valid fields found for " + fullTableName);
+      return;
+    }
+
+    Logger::info(LogCategory::TRANSFER, "truncateAndLoadCollection",
+                 "Using " + std::to_string(validFields.size()) +
+                     " valid fields for " + fullTableName);
+
+    std::vector<std::string> fieldTypes;
+    for (const auto &field : validFields) {
       if (field == "_id") {
         fieldTypes.push_back("TEXT");
       } else if (field == "_document") {
@@ -452,10 +498,10 @@ void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
       std::ostringstream insertQuery;
       insertQuery << "INSERT INTO " << fullTableName << " (";
 
-      for (size_t j = 0; j < fields.size(); j++) {
+      for (size_t j = 0; j < validFields.size(); j++) {
         if (j > 0)
           insertQuery << ", ";
-        insertQuery << insertTxn.quote_name(fields[j]);
+        insertQuery << insertTxn.quote_name(validFields[j]);
       }
       insertQuery << ") VALUES ";
 
@@ -463,15 +509,44 @@ void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
         if (j > i)
           insertQuery << ", ";
         insertQuery << "(";
-        for (size_t k = 0; k < fields.size(); k++) {
+        for (size_t k = 0; k < validFields.size(); k++) {
           if (k > 0)
             insertQuery << ", ";
-          if (k < data[j].size()) {
-            if (fields[k] == "_document") {
-              insertQuery << insertTxn.quote(data[j][k]) << "::jsonb";
+          size_t fieldIndex = 0;
+          for (size_t f = 0; f < fields.size(); f++) {
+            if (fields[f] == validFields[k]) {
+              fieldIndex = f;
+              break;
+            }
+          }
+          if (fieldIndex < data[j].size()) {
+            if (validFields[k] == "_document") {
+              std::string jsonValue = data[j][fieldIndex];
+              if (jsonValue.empty() || jsonValue == "NULL" || jsonValue == "null") {
+                insertQuery << "NULL";
+              } else {
+                try {
+                  nlohmann::json::parse(jsonValue);
+                  insertQuery << insertTxn.quote(jsonValue) << "::jsonb";
+                } catch (...) {
+                  insertQuery << insertTxn.quote("{\"value\": " + insertTxn.quote(jsonValue) + "}") << "::jsonb";
+                }
+              }
+            } else if (fieldTypes[k] == "JSONB") {
+              std::string jsonValue = data[j][fieldIndex];
+              if (jsonValue.empty() || jsonValue == "NULL" || jsonValue == "null") {
+                insertQuery << "NULL";
+              } else {
+                try {
+                  nlohmann::json::parse(jsonValue);
+                  insertQuery << insertTxn.quote(jsonValue) << "::jsonb";
+                } catch (...) {
+                  insertQuery << insertTxn.quote("{\"value\": " + insertTxn.quote(jsonValue) + "}") << "::jsonb";
+                }
+              }
             } else {
               insertQuery << insertTxn.quote(
-                  cleanValueForPostgres(data[j][k], fieldTypes[k]));
+                  cleanValueForPostgres(data[j][fieldIndex], fieldTypes[k]));
             }
           } else {
             insertQuery << "NULL";
@@ -480,8 +555,18 @@ void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
         insertQuery << ")";
       }
 
-      insertTxn.exec(insertQuery.str());
-      inserted += (batchEnd - i);
+      try {
+        insertTxn.exec(insertQuery.str());
+        inserted += (batchEnd - i);
+        Logger::info(LogCategory::TRANSFER, "truncateAndLoadCollection",
+                     "Inserted batch: " + std::to_string(batchEnd - i) +
+                         " rows (total: " + std::to_string(inserted) + ")");
+      } catch (const std::exception &e) {
+        Logger::error(LogCategory::TRANSFER, "truncateAndLoadCollection",
+                      "Error inserting batch: " + std::string(e.what()) +
+                          " - Query: " + insertQuery.str().substr(0, 200));
+        throw;
+      }
 
       if (inserted % 10000 == 0) {
         Logger::info(LogCategory::TRANSFER, "truncateAndLoadCollection",
@@ -494,7 +579,8 @@ void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
 
     Logger::info(LogCategory::TRANSFER, "truncateAndLoadCollection",
                  "Completed loading " + std::to_string(inserted) +
-                     " rows into " + fullTableName);
+                     " rows into " + fullTableName + " from " +
+                     std::to_string(data.size()) + " documents");
 
   } catch (const std::exception &e) {
     Logger::error(LogCategory::TRANSFER, "truncateAndLoadCollection",
