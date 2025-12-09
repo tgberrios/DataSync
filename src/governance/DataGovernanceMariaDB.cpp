@@ -276,7 +276,6 @@ void DataGovernanceMariaDB::queryIndexStats() {
         std::string indexName = row[2];
 
         bool found = false;
-        bool found = false;
         for (auto &data : governanceData_) {
           if (data.schema_name == schemaName && data.table_name == tableName && data.index_name.empty()) {
             data.index_name = indexName;
