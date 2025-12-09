@@ -1,4 +1,7 @@
 #include "governance/DataGovernance.h"
+#include "governance/DataGovernanceMSSQL.h"
+#include "catalog/metadata_repository.h"
+#include "core/database_config.h"
 #include "engines/database_engine.h"
 #include "utils/string_utils.h"
 #include "utils/time_utils.h"
@@ -122,6 +125,32 @@ void DataGovernance::runDiscovery() {
                       "Error processing table " + table.schema_name + "." +
                           table.table_name + ": " + std::string(e.what()));
       }
+    }
+
+    try {
+      MetadataRepository repo(DatabaseConfig::getPostgresConnectionString());
+      std::vector<std::string> mssqlConnections = repo.getConnectionStrings("MSSQL");
+      
+      for (const auto &connStr : mssqlConnections) {
+        if (!connStr.empty()) {
+          try {
+            Logger::info(LogCategory::GOVERNANCE, "runDiscovery",
+                         "Collecting MSSQL governance data for connection");
+            DataGovernanceMSSQL mssqlGov(connStr);
+            mssqlGov.collectGovernanceData();
+            mssqlGov.storeGovernanceData();
+            mssqlGov.generateReport();
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::GOVERNANCE, "runDiscovery",
+                          "Error collecting MSSQL governance data: " +
+                              std::string(e.what()));
+          }
+        }
+      }
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::GOVERNANCE, "runDiscovery",
+                    "Error processing MSSQL governance: " +
+                        std::string(e.what()));
     }
 
   } catch (const std::exception &e) {
