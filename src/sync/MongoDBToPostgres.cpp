@@ -559,8 +559,8 @@ void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
                 insertQuery << "NULL";
               } else {
                 try {
-                  nlohmann::json::parse(jsonValue);
-                  insertQuery << insertTxn.quote(jsonValue) << "::jsonb";
+                  auto parsed = nlohmann::json::parse(jsonValue);
+                  insertQuery << insertTxn.quote(parsed.dump()) << "::jsonb";
                 } catch (...) {
                   nlohmann::json wrapper;
                   wrapper["value"] = jsonValue;
@@ -574,8 +574,8 @@ void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
                 insertQuery << "NULL";
               } else {
                 try {
-                  nlohmann::json::parse(jsonValue);
-                  insertQuery << insertTxn.quote(jsonValue) << "::jsonb";
+                  auto parsed = nlohmann::json::parse(jsonValue);
+                  insertQuery << insertTxn.quote(parsed.dump()) << "::jsonb";
                 } catch (...) {
                   nlohmann::json wrapper;
                   wrapper["value"] = jsonValue;
