@@ -4,6 +4,11 @@
 
 std::mutex DatabaseToPostgresSync::metadataUpdateMutex;
 
+// Initializes parallel processing queues for data transfer. Clears and resets
+// all three queues: rawDataQueue (for raw data chunks), preparedBatchQueue
+// (for prepared SQL batches), and resultQueue (for processing results). This
+// should be called before starting any parallel data transfer operations to
+// ensure clean queue state.
 void DatabaseToPostgresSync::startParallelProcessing() {
   rawDataQueue.clear();
   preparedBatchQueue.clear();
@@ -16,6 +21,10 @@ void DatabaseToPostgresSync::startParallelProcessing() {
   Logger::info(LogCategory::TRANSFER, "Parallel processing started");
 }
 
+// Shuts down parallel processing by signaling all queues to stop accepting new
+// items, then joining all parallel threads. Ensures clean shutdown of all
+// worker threads before returning. Should be called after all data transfer
+// operations are complete to free resources.
 void DatabaseToPostgresSync::shutdownParallelProcessing() {
   rawDataQueue.shutdown_queue();
   preparedBatchQueue.shutdown_queue();
@@ -31,6 +40,12 @@ void DatabaseToPostgresSync::shutdownParallelProcessing() {
   Logger::info(LogCategory::TRANSFER, "Parallel processing shutdown completed");
 }
 
+// Parses a JSON array string into a vector of strings. Handles empty arrays
+// and empty strings by returning an empty vector. Validates that the input is
+// actually a JSON array, throwing an exception if not. Extracts only string
+// elements from the array, ignoring other types. Catches JSON parse errors and
+// general exceptions, logging them and returning an empty vector on failure.
+// Used primarily for parsing primary key column arrays from the catalog.
 std::vector<std::string>
 DatabaseToPostgresSync::parseJSONArray(const std::string &jsonArray) {
   std::vector<std::string> result;
@@ -59,6 +74,11 @@ DatabaseToPostgresSync::parseJSONArray(const std::string &jsonArray) {
   return result;
 }
 
+// Parses the last processed primary key value into a vector. Currently
+// returns a single-element vector containing the lastPK string if it's not
+// empty. This is a simplified implementation that may need enhancement for
+// composite primary keys. Returns an empty vector if lastPK is empty. Catches
+// exceptions and logs errors, returning an empty vector on failure.
 std::vector<std::string>
 DatabaseToPostgresSync::parseLastPK(const std::string &lastPK) {
   std::vector<std::string> pkValues;
@@ -73,6 +93,12 @@ DatabaseToPostgresSync::parseLastPK(const std::string &lastPK) {
   return pkValues;
 }
 
+// Updates the last_processed_pk field in metadata.catalog for a specific table.
+// Uses a static mutex to ensure thread-safe updates across multiple threads.
+// Escapes SQL values to prevent injection. Commits the transaction after
+// updating. Logs success and errors. This tracks the progress of incremental
+// syncs by recording the last primary key value that was successfully
+// processed.
 void DatabaseToPostgresSync::updateLastProcessedPK(
     pqxx::connection &pgConn, const std::string &schema_name,
     const std::string &table_name, const std::string &lastPK) {
@@ -95,6 +121,11 @@ void DatabaseToPostgresSync::updateLastProcessedPK(
   }
 }
 
+// Retrieves the primary key strategy (e.g., "OFFSET", "PK") from
+// metadata.catalog for a specific table. Creates a separate connection to
+// avoid transaction conflicts. Escapes SQL values to prevent injection.
+// Returns the pk_strategy value if found, or "OFFSET" as the default if not
+// found or on error. Logs errors but does not throw exceptions.
 std::string DatabaseToPostgresSync::getPKStrategyFromCatalog(
     pqxx::connection &pgConn, const std::string &schema_name,
     const std::string &table_name) {
@@ -117,6 +148,11 @@ std::string DatabaseToPostgresSync::getPKStrategyFromCatalog(
   return "OFFSET";
 }
 
+// Retrieves the primary key columns from metadata.catalog for a specific table.
+// Creates a separate connection to avoid transaction conflicts. Escapes SQL
+// values to prevent injection. Parses the pk_columns JSON array using
+// parseJSONArray. Returns a vector of column names, or an empty vector if not
+// found or on error. Logs errors but does not throw exceptions.
 std::vector<std::string>
 DatabaseToPostgresSync::getPKColumnsFromCatalog(pqxx::connection &pgConn,
                                                 const std::string &schema_name,
@@ -142,6 +178,12 @@ DatabaseToPostgresSync::getPKColumnsFromCatalog(pqxx::connection &pgConn,
   return pkColumns;
 }
 
+// Retrieves the last_processed_pk value from metadata.catalog for a specific
+// table. Creates a separate connection to avoid transaction conflicts. Escapes
+// SQL values to prevent injection. Returns the last_processed_pk string if
+// found, or an empty string if not found or on error. Logs errors but does not
+// throw exceptions. Used to resume incremental syncs from the last processed
+// position.
 std::string DatabaseToPostgresSync::getLastProcessedPKFromCatalog(
     pqxx::connection &pgConn, const std::string &schema_name,
     const std::string &table_name) {
@@ -164,6 +206,12 @@ std::string DatabaseToPostgresSync::getLastProcessedPKFromCatalog(
   return "";
 }
 
+// Extracts the last primary key value from a result set. Takes the results
+// vector, pkColumns vector, and columnNames vector. Returns the value of the
+// first primary key column from the last row in the results. Returns an empty
+// string if results are empty, pkColumns is empty, or the column is not found.
+// Handles exceptions by logging errors and returning an empty string. Used to
+// track progress during batch processing.
 std::string DatabaseToPostgresSync::getLastPKFromResults(
     const std::vector<std::vector<std::string>> &results,
     const std::vector<std::string> &pkColumns,
@@ -198,6 +246,13 @@ std::string DatabaseToPostgresSync::getLastPKFromResults(
   }
 }
 
+// Deletes records from PostgreSQL by their primary key values. Takes a vector
+// of deleted primary key vectors (for composite keys) and the pkColumns
+// vector. Builds a DELETE query with OR conditions for each deleted PK,
+// handling NULL values appropriately. Escapes SQL values to prevent
+// injection. Converts table name to lowercase. Returns the number of deleted
+// rows, or 0 if deletedPKs or pkColumns is empty. Logs errors but does not
+// throw exceptions. Used for handling deleted records during incremental sync.
 size_t DatabaseToPostgresSync::deleteRecordsByPrimaryKey(
     pqxx::connection &pgConn, const std::string &lowerSchemaName,
     const std::string &table_name,
@@ -251,6 +306,13 @@ size_t DatabaseToPostgresSync::deleteRecordsByPrimaryKey(
   return deletedCount;
 }
 
+// Retrieves primary key column names from PostgreSQL's information_schema for
+// a specific table. Queries table_constraints and key_column_usage to find
+// PRIMARY KEY constraints. Returns columns ordered by ordinal_position for
+// composite keys. Converts all column names to lowercase. Returns an empty
+// vector if no primary key is found or on error. Logs errors but does not
+// throw exceptions. Used to determine which columns to use for upsert
+// conflict resolution.
 std::vector<std::string>
 DatabaseToPostgresSync::getPrimaryKeyColumnsFromPostgres(
     pqxx::connection &pgConn, const std::string &schemaName,
@@ -265,13 +327,9 @@ DatabaseToPostgresSync::getPrimaryKeyColumnsFromPostgres(
                         "ON tc.constraint_name = kcu.constraint_name "
                         "AND tc.table_schema = kcu.table_schema "
                         "WHERE tc.constraint_type = 'PRIMARY KEY' "
-                        "AND tc.table_schema = '" +
-                        schemaName +
-                        "' "
-                        "AND tc.table_name = '" +
-                        tableName +
-                        "' "
-                        "ORDER BY kcu.ordinal_position;";
+                        "AND tc.table_schema = " + txn.quote(schemaName) +
+                        " AND tc.table_name = " + txn.quote(tableName) +
+                        " ORDER BY kcu.ordinal_position;";
 
     auto results = txn.exec(query);
     txn.commit();
@@ -292,6 +350,11 @@ DatabaseToPostgresSync::getPrimaryKeyColumnsFromPostgres(
   return pkColumns;
 }
 
+// Builds the INSERT portion of an UPSERT query. Takes column names, primary
+// key columns, schema name, and table name. Converts table and column names
+// to lowercase. Constructs "INSERT INTO schema.table (col1, col2, ...) VALUES"
+// query. Returns the query string ready for value appending. Does not include
+// the ON CONFLICT clause (see buildUpsertConflictClause).
 std::string DatabaseToPostgresSync::buildUpsertQuery(
     const std::vector<std::string> &columnNames,
     const std::vector<std::string> &pkColumns, const std::string &schemaName,
@@ -314,6 +377,11 @@ std::string DatabaseToPostgresSync::buildUpsertQuery(
   return query;
 }
 
+// Builds the ON CONFLICT clause for an UPSERT query. Takes column names and
+// primary key columns. Constructs "ON CONFLICT (pk1, pk2, ...) DO UPDATE SET
+// col1 = EXCLUDED.col1, col2 = EXCLUDED.col2, ..." clause. Converts all column
+// names to lowercase. Used together with buildUpsertQuery to create complete
+// UPSERT statements that update existing rows or insert new ones.
 std::string DatabaseToPostgresSync::buildUpsertConflictClause(
     const std::vector<std::string> &columnNames,
     const std::vector<std::string> &pkColumns) {
@@ -339,6 +407,14 @@ std::string DatabaseToPostgresSync::buildUpsertConflictClause(
   return conflictClause;
 }
 
+// Compares a new record with the existing record in PostgreSQL and updates
+// only changed fields. Executes a SELECT query to fetch the current record,
+// then compares each field. Builds an UPDATE query with only the changed
+// fields. Handles NULL values and escapes SQL values. Removes invalid
+// characters (non-ASCII, control characters) from values. Returns true if any
+// updates were made, false if the record is unchanged or not found. Logs
+// errors but does not throw exceptions. Used for incremental syncs to update
+// only modified records.
 bool DatabaseToPostgresSync::compareAndUpdateRecord(
     pqxx::connection &pgConn, const std::string &schemaName,
     const std::string &tableName, const std::vector<std::string> &newRecord,
@@ -424,6 +500,13 @@ bool DatabaseToPostgresSync::compareAndUpdateRecord(
   }
 }
 
+// Performs a bulk INSERT operation into PostgreSQL. Takes a vector of result
+// rows, column names, column types, schema name, and table name. Processes
+// rows in batches using SyncConfig::getChunkSize(). Cleans values using
+// cleanValueForPostgres and escapes SQL values. Sets statement_timeout to 600s
+// for large batches. Commits the transaction after all batches. Throws
+// exceptions on error to allow caller to handle failures. Used for initial
+// full loads of tables.
 void DatabaseToPostgresSync::performBulkInsert(
     pqxx::connection &pgConn,
     const std::vector<std::vector<std::string>> &results,
@@ -505,6 +588,13 @@ void DatabaseToPostgresSync::performBulkInsert(
   }
 }
 
+// Worker thread function for parallel batch insertion. Continuously pops
+// PreparedBatch items from preparedBatchQueue and executes them. Sets
+// statement_timeout to 600s for each batch. Tracks total processed rows and
+// chunk numbers. Pushes ProcessedResult items to resultQueue after each
+// batch. Stops when a batch with batchSize == 0 is received (shutdown
+// signal). Logs errors for failed batches but continues processing. Used in
+// parallel processing pipeline for high-throughput data transfer.
 void DatabaseToPostgresSync::batchInserterThread(pqxx::connection &pgConn) {
 
   try {
@@ -556,6 +646,14 @@ void DatabaseToPostgresSync::batchInserterThread(pqxx::connection &pgConn) {
   }
 }
 
+// Performs a bulk UPSERT (INSERT ... ON CONFLICT DO UPDATE) operation into
+// PostgreSQL. Retrieves primary key columns from PostgreSQL. If no primary key
+// is found, falls back to performBulkInsert. Processes rows in batches using
+// SyncConfig::getChunkSize(). Handles transaction aborts by processing rows
+// individually (up to MAX_INDIVIDUAL_PROCESSING limit). Handles binary data
+// errors by processing rows individually (up to MAX_BINARY_ERROR_PROCESSING
+// limit). Sets statement_timeout to 600s. Throws exceptions on error. Used
+// for incremental syncs that need to update existing rows or insert new ones.
 void DatabaseToPostgresSync::performBulkUpsert(
     pqxx::connection &pgConn,
     const std::vector<std::vector<std::string>> &results,

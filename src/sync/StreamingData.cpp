@@ -1,7 +1,13 @@
 #include "sync/StreamingData.h"
 
+// Destructor automatically shuts down the system, ensuring all threads are
+// properly joined and resources are cleaned up.
 StreamingData::~StreamingData() { shutdown(); }
 
+// Initializes the DataSync system components. Currently performs minimal
+// initialization, logging that database connections will be created as needed.
+// This is a placeholder for future initialization logic. Should be called
+// before run() to prepare the system.
 void StreamingData::initialize() {
   Logger::info(LogCategory::MONITORING,
                "Initializing DataSync system components");
@@ -13,6 +19,12 @@ void StreamingData::initialize() {
                "System initialization completed successfully");
 }
 
+// Main entry point that starts the multi-threaded DataSync system. Launches
+// all core threads (initialization, catalog sync, monitoring, quality,
+// maintenance) and transfer threads (MariaDB, MSSQL). Waits for all threads to
+// complete before returning. Handles exceptions when joining threads. This
+// method blocks until all threads finish execution. Should be called after
+// initialize().
 void StreamingData::run() {
   Logger::info(LogCategory::MONITORING,
                "Starting multi-threaded DataSync system");
@@ -52,6 +64,11 @@ void StreamingData::run() {
   Logger::info(LogCategory::MONITORING, "All threads completed");
 }
 
+// Shuts down the DataSync system gracefully. Sets the running flag to false
+// to signal all threads to stop, then waits for all threads to finish by
+// joining them. Clears the threads vector after all threads are joined.
+// Handles exceptions when joining threads. Idempotent - can be called
+// multiple times safely. Should be called before destroying the object.
 void StreamingData::shutdown() {
   Logger::info(LogCategory::MONITORING, "Shutting down DataSync system");
   running = false;
@@ -73,6 +90,14 @@ void StreamingData::shutdown() {
   Logger::info(LogCategory::MONITORING, "Shutdown completed successfully");
 }
 
+// Loads configuration parameters from metadata.config table in PostgreSQL.
+// Queries for chunk_size, sync_interval, max_workers, and
+// max_tables_per_cycle. Validates connection is open before and after
+// transaction. Validates numeric values and ranges before updating
+// SyncConfig. Only updates if the new value differs from current value.
+// Handles SQL errors, connection errors, and general exceptions, logging them
+// appropriately. Does not throw exceptions, allowing the system to continue
+// with default values if configuration load fails.
 void StreamingData::loadConfigFromDatabase(pqxx::connection &pgConn) {
   try {
     Logger::info(LogCategory::MONITORING,
@@ -214,6 +239,13 @@ void StreamingData::loadConfigFromDatabase(pqxx::connection &pgConn) {
   }
 }
 
+// Initialization thread that runs once at system startup. Initializes
+// DataGovernance component, runs discovery, and generates a report.
+// Initializes MetricsCollector and collects all metrics. Sets up MariaDB and
+// MSSQL target tables. Each component initialization is wrapped in try-catch
+// to prevent one failure from stopping the entire initialization. Logs all
+// operations and errors. This thread completes after all initialization
+// tasks are done.
 void StreamingData::initializationThread() {
   try {
     Logger::info(LogCategory::MONITORING,
@@ -289,6 +321,13 @@ void StreamingData::initializationThread() {
   }
 }
 
+// Catalog synchronization thread that runs continuously while the system is
+// running. Performs periodic catalog synchronization for MariaDB and MSSQL
+// in parallel using separate threads. After sync, performs catalog cleanup
+// and deactivates tables with no data. Sleeps for SyncConfig::getSyncInterval()
+// seconds between cycles. Handles exceptions for each operation
+// independently, allowing the thread to continue even if one operation fails.
+// Logs all operations and errors.
 void StreamingData::catalogSyncThread() {
   Logger::info(LogCategory::MONITORING, "Catalog sync thread started");
   while (running) {
@@ -385,6 +424,13 @@ void StreamingData::catalogSyncThread() {
   Logger::info(LogCategory::MONITORING, "Catalog sync thread stopped");
 }
 
+// MariaDB transfer thread that runs continuously while the system is running.
+// Performs periodic data transfer from MariaDB to PostgreSQL using parallel
+// processing. Measures and logs transfer duration. Sleeps for
+// max(5, sync_interval/4) seconds between cycles to avoid overwhelming the
+// system. Handles exceptions by logging errors and continuing to the next
+// cycle. This thread is responsible for keeping MariaDB data synchronized
+// with PostgreSQL.
 void StreamingData::mariaTransferThread() {
   Logger::info(LogCategory::MONITORING, "MariaDB transfer thread started");
   while (running) {
@@ -418,6 +464,13 @@ void StreamingData::mariaTransferThread() {
   Logger::info(LogCategory::MONITORING, "MariaDB transfer thread stopped");
 }
 
+// MSSQL transfer thread that runs continuously while the system is running.
+// Performs periodic data transfer from MSSQL to PostgreSQL using parallel
+// processing. Measures and logs transfer duration. Sleeps for
+// max(5, sync_interval/4) seconds between cycles to avoid overwhelming the
+// system. Handles exceptions by logging errors and continuing to the next
+// cycle. This thread is responsible for keeping MSSQL data synchronized with
+// PostgreSQL.
 void StreamingData::mssqlTransferThread() {
   Logger::info(LogCategory::MONITORING, "MSSQL transfer thread started");
   while (running) {
@@ -450,6 +503,14 @@ void StreamingData::mssqlTransferThread() {
   Logger::info(LogCategory::MONITORING, "MSSQL transfer thread stopped");
 }
 
+// Data quality validation thread that runs continuously while the system is
+// running. Validates tables for MariaDB, MSSQL, and PostgreSQL engines by
+// calling validateTablesForEngine for each. Creates a PostgreSQL connection
+// with 30s statement timeout and 10s lock timeout. Sleeps for
+// sync_interval * 2 seconds between cycles. Handles connection errors by
+// sleeping and retrying. Handles exceptions by logging errors and continuing
+// to the next cycle. This thread ensures data quality metrics are regularly
+// updated.
 void StreamingData::qualityThread() {
   Logger::info(LogCategory::MONITORING, "Data quality thread started");
   while (running) {
@@ -503,6 +564,13 @@ void StreamingData::qualityThread() {
   Logger::info(LogCategory::MONITORING, "Data quality thread stopped");
 }
 
+// Maintenance thread that runs continuously while the system is running.
+// Performs periodic maintenance tasks: MariaDB table setup, MSSQL catalog
+// sync, catalog cleanup, no-data table deactivation, and metrics collection.
+// Measures and logs maintenance cycle duration. Each maintenance task is
+// wrapped in try-catch to prevent one failure from stopping the entire cycle.
+// Sleeps for sync_interval * 4 seconds between cycles. This thread ensures
+// the system stays healthy and metrics are current.
 void StreamingData::maintenanceThread() {
   Logger::info(LogCategory::MONITORING, "Maintenance thread started");
   while (running) {
@@ -596,6 +664,13 @@ void StreamingData::maintenanceThread() {
   Logger::info(LogCategory::MONITORING, "Maintenance thread stopped");
 }
 
+// Monitoring thread that runs continuously while the system is running.
+// Loads configuration from the database on each cycle. Creates a PostgreSQL
+// connection with 30s statement timeout and 10s lock timeout. Measures and
+// logs monitoring cycle duration. Sleeps for sync_interval seconds between
+// cycles. Handles connection errors by sleeping and retrying. Handles
+// exceptions by logging errors and continuing to the next cycle. This thread
+// ensures system configuration stays current and system health is monitored.
 void StreamingData::monitoringThread() {
   Logger::info(LogCategory::MONITORING, "Monitoring thread started");
   while (running) {
@@ -668,6 +743,13 @@ void StreamingData::monitoringThread() {
   Logger::info(LogCategory::MONITORING, "Monitoring thread stopped");
 }
 
+// Validates tables for a specific database engine by querying metadata.catalog
+// for tables with status 'LISTENING_CHANGES'. For each table, calls
+// dataQuality.validateTable to perform quality checks. Uses txn.quote() to
+// prevent SQL injection when constructing the query. Logs validation start,
+// progress, and completion. Handles exceptions for individual table
+// validations, allowing the process to continue even if one table fails. Used
+// by qualityThread to validate tables for all engines.
 void StreamingData::validateTablesForEngine(pqxx::connection &pgConn,
                                              const std::string &dbEngine) {
   try {
@@ -676,8 +758,8 @@ void StreamingData::validateTablesForEngine(pqxx::connection &pgConn,
     pqxx::work txn(pgConn);
     auto tables =
         txn.exec("SELECT schema_name, table_name FROM metadata.catalog WHERE "
-                 "db_engine = '" +
-                 dbEngine + "' AND status = 'LISTENING_CHANGES'");
+                 "db_engine = " + txn.quote(dbEngine) +
+                 " AND status = 'LISTENING_CHANGES'");
     txn.commit();
 
     for (const auto &row : tables) {
