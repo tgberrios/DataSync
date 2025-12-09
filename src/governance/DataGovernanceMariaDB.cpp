@@ -128,20 +128,28 @@ void DataGovernanceMariaDB::queryServerConfig() {
 
     auto results = executeQuery(mysqlConn, query);
 
-    if (!results.empty() && results[0].size() >= 6) {
+    if (!results.empty() && results[0].size() >= 5) {
       std::string version = results[0][0];
-      std::string innodbVersion = results[0][1];
       int innodbPageSize = 0;
       bool innodbFilePerTable = false;
       int innodbFlushLogAtTrxCommit = 0;
       int syncBinlog = 0;
 
       try {
-        if (!results[0][2].empty()) innodbPageSize = std::stoi(results[0][2]);
-        if (!results[0][3].empty()) innodbFilePerTable = (results[0][3] == "1" || results[0][3] == "ON");
-        if (!results[0][4].empty()) innodbFlushLogAtTrxCommit = std::stoi(results[0][4]);
-        if (!results[0][5].empty()) syncBinlog = std::stoi(results[0][5]);
-      } catch (...) {
+        if (!results[0][1].empty()) innodbPageSize = std::stoi(results[0][1]);
+        if (!results[0][2].empty()) innodbFilePerTable = (results[0][2] == "1" || results[0][2] == "ON");
+        if (!results[0][3].empty()) innodbFlushLogAtTrxCommit = std::stoi(results[0][3]);
+        if (!results[0][4].empty()) syncBinlog = std::stoi(results[0][4]);
+      } catch (const std::exception &e) {
+        Logger::warning(LogCategory::GOVERNANCE, "DataGovernanceMariaDB",
+                        "Error parsing server config: " + std::string(e.what()));
+      }
+
+      std::string innodbVersionQuery = "SHOW VARIABLES LIKE 'innodb_version'";
+      auto innodbVersionResults = executeQuery(mysqlConn, innodbVersionQuery);
+      std::string innodbVersion = "";
+      if (!innodbVersionResults.empty() && innodbVersionResults[0].size() >= 2) {
+        innodbVersion = innodbVersionResults[0][1];
       }
 
       for (auto &data : governanceData_) {
