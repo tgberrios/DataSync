@@ -159,7 +159,7 @@ void CatalogCleaner::cleanOrphanedTables() {
 
     auto result2 =
         txn.exec("DELETE FROM metadata.catalog "
-                 "WHERE db_engine NOT IN ('PostgreSQL', 'MariaDB', 'MSSQL')");
+                 "WHERE db_engine NOT IN ('PostgreSQL', 'MariaDB', 'MSSQL', 'MongoDB')");
     size_t deleted2 = result2.affected_rows();
 
     auto result3 = txn.exec("DELETE FROM metadata.catalog "

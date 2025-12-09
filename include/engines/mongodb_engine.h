@@ -4,9 +4,9 @@
 #include "core/Config.h"
 #include "core/logger.h"
 #include "engines/database_engine.h"
-#include <mongoc/mongoc.h>
 #include <bson/bson.h>
 #include <memory>
+#include <mongoc/mongoc.h>
 #include <string>
 #include <vector>
 
@@ -47,4 +47,3 @@ private:
 };
 
 #endif
-

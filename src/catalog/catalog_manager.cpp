@@ -236,7 +236,8 @@ int64_t CatalogManager::getTableSize(const std::string &schema,
       }
 
       SQLHDBC dbc = conn.getDbc();
-      std::string query = "SELECT COUNT(*) FROM [" + schema + "].[" + table + "]";
+      std::string query =
+          "SELECT COUNT(*) FROM [" + schema + "].[" + table + "]";
 
       SQLHSTMT stmt;
       SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt);
@@ -275,7 +276,7 @@ int64_t CatalogManager::getTableSize(const std::string &schema,
         pqxx::connection conn(connStr);
         pqxx::work txn(conn);
         std::string query = "SELECT COUNT(*) FROM " + txn.quote_name(schema) +
-                           "." + txn.quote_name(table);
+                            "." + txn.quote_name(table);
         auto result = txn.exec(query);
         if (!result.empty()) {
           return result[0][0].as<int64_t>();

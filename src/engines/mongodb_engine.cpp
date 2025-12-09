@@ -1,9 +1,11 @@
 #include "engines/mongodb_engine.h"
 #include "utils/connection_utils.h"
-#include <pqxx/pqxx>
 #include <algorithm>
-#include <sstream>
 #include <iomanip>
+#include <mutex>
+#include <pqxx/pqxx>
+#include <sstream>
+#include <atomic>
 
 MongoDBEngine::MongoDBEngine(std::string connectionString)
     : connectionString_(std::move(connectionString)), client_(nullptr),
@@ -16,9 +18,7 @@ MongoDBEngine::MongoDBEngine(std::string connectionString)
   }
 }
 
-MongoDBEngine::~MongoDBEngine() {
-  disconnect();
-}
+MongoDBEngine::~MongoDBEngine() { disconnect(); }
 
 bool MongoDBEngine::parseConnectionString(const std::string &connectionString) {
   if (connectionString.empty()) {
@@ -62,7 +62,8 @@ bool MongoDBEngine::parseConnectionString(const std::string &connectionString) {
 
   if (colonPos != std::string::npos && colonPos < slashPos) {
     host_ = connectionString.substr(hostStart, colonPos - hostStart);
-    std::string portStr = connectionString.substr(colonPos + 1, slashPos - colonPos - 1);
+    std::string portStr =
+        connectionString.substr(colonPos + 1, slashPos - colonPos - 1);
     try {
       port_ = std::stoi(portStr);
     } catch (...) {
@@ -77,7 +78,8 @@ bool MongoDBEngine::parseConnectionString(const std::string &connectionString) {
 }
 
 bool MongoDBEngine::connect() {
-  mongoc_init();
+  static std::once_flag initFlag;
+  std::call_once(initFlag, []() { mongoc_init(); });
 
   bson_error_t error;
   client_ = mongoc_client_new(connectionString_.c_str());
@@ -91,7 +93,8 @@ bool MongoDBEngine::connect() {
   mongoc_client_set_appname(client_, "DataSync");
 
   bson_t *ping = BCON_NEW("ping", BCON_INT32(1));
-  mongoc_database_t *db = mongoc_client_get_database(client_, databaseName_.c_str());
+  mongoc_database_t *db =
+      mongoc_client_get_database(client_, databaseName_.c_str());
   bool ret = mongoc_database_command_simple(db, ping, nullptr, nullptr, &error);
   bson_destroy(ping);
   mongoc_database_destroy(db);
@@ -115,7 +118,6 @@ void MongoDBEngine::disconnect() {
     mongoc_client_destroy(client_);
     client_ = nullptr;
   }
-  mongoc_cleanup();
 }
 
 std::vector<CatalogTableInfo> MongoDBEngine::discoverTables() {
@@ -128,13 +130,15 @@ std::vector<CatalogTableInfo> MongoDBEngine::discoverTables() {
   }
 
   try {
-    mongoc_database_t *db = mongoc_client_get_database(client_, databaseName_.c_str());
+    mongoc_database_t *db =
+        mongoc_client_get_database(client_, databaseName_.c_str());
     bson_error_t error;
     char **collection_names = mongoc_database_get_collection_names(db, &error);
 
     if (!collection_names) {
       Logger::error(LogCategory::DATABASE, "MongoDBEngine",
-                    "Failed to get collection names: " + std::string(error.message));
+                    "Failed to get collection names: " +
+                        std::string(error.message));
       mongoc_database_destroy(db);
       return collections;
     }
@@ -161,21 +165,23 @@ std::vector<CatalogTableInfo> MongoDBEngine::discoverTables() {
   return collections;
 }
 
-std::vector<std::string> MongoDBEngine::detectPrimaryKey(const std::string &schema,
-                                                         const std::string &table) {
+std::vector<std::string>
+MongoDBEngine::detectPrimaryKey(const std::string &schema,
+                                const std::string &table) {
   std::vector<std::string> pk;
   pk.push_back("_id");
   return pk;
 }
 
 std::string MongoDBEngine::detectTimeColumn(const std::string &schema,
-                                           const std::string &table) {
+                                            const std::string &table) {
   return "";
 }
 
-std::pair<int, int> MongoDBEngine::getColumnCounts(const std::string &schema,
-                                                  const std::string &table,
-                                                  const std::string &targetConnStr) {
+std::pair<int, int>
+MongoDBEngine::getColumnCounts(const std::string &schema,
+                               const std::string &table,
+                               const std::string &targetConnStr) {
   int sourceCount = 0;
   int targetCount = 0;
 
@@ -199,10 +205,10 @@ std::pair<int, int> MongoDBEngine::getColumnCounts(const std::string &schema,
   try {
     pqxx::connection conn(targetConnStr);
     pqxx::work txn(conn);
-    std::string query =
-        "SELECT COUNT(*) FROM information_schema.columns "
-        "WHERE table_schema = '" +
-        escapeSQL(schema) + "' AND table_name = '" + escapeSQL(table) + "'";
+    std::string query = "SELECT COUNT(*) FROM information_schema.columns "
+                        "WHERE table_schema = '" +
+                        escapeSQL(schema) + "' AND table_name = '" +
+                        escapeSQL(table) + "'";
     auto result = txn.exec(query);
     if (!result.empty()) {
       targetCount = result[0][0].as<int>();
@@ -210,7 +216,8 @@ std::pair<int, int> MongoDBEngine::getColumnCounts(const std::string &schema,
     txn.commit();
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "MongoDBEngine",
-                  "Error getting target column count: " + std::string(e.what()));
+                  "Error getting target column count: " +
+                      std::string(e.what()));
   }
 
   return {sourceCount, targetCount};
@@ -223,15 +230,15 @@ long long MongoDBEngine::getCollectionCount(const std::string &database,
   }
 
   try {
-    mongoc_collection_t *coll =
-        mongoc_client_get_collection(client_, database.c_str(), collection.c_str());
+    mongoc_collection_t *coll = mongoc_client_get_collection(
+        client_, database.c_str(), collection.c_str());
     if (!coll) {
       return 0;
     }
 
     bson_error_t error;
-    int64_t count = mongoc_collection_count_documents(
-        coll, nullptr, nullptr, nullptr, nullptr, &error);
+    int64_t count = mongoc_collection_count_documents(coll, nullptr, nullptr,
+                                                      nullptr, nullptr, &error);
 
     mongoc_collection_destroy(coll);
 
@@ -248,4 +255,3 @@ long long MongoDBEngine::getCollectionCount(const std::string &database,
     return 0;
   }
 }
-

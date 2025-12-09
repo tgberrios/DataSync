@@ -1,7 +1,7 @@
 #include "sync/StreamingData.h"
-#include "governance/QueryStoreCollector.h"
-#include "governance/QueryActivityLogger.h"
 #include "core/database_config.h"
+#include "governance/QueryActivityLogger.h"
+#include "governance/QueryStoreCollector.h"
 
 // Destructor automatically shuts down the system, ensuring all threads are
 // properly joined and resources are cleaned up.
@@ -298,9 +298,10 @@ void StreamingData::initializationThread() {
       Logger::info(LogCategory::MONITORING,
                    "QueryStoreCollector completed successfully");
     } catch (const std::exception &e) {
-      Logger::error(LogCategory::MONITORING, "initializationThread",
-                    "CRITICAL ERROR in QueryStoreCollector: " +
-                        std::string(e.what()) + " - Query snapshot collection failed");
+      Logger::error(
+          LogCategory::MONITORING, "initializationThread",
+          "CRITICAL ERROR in QueryStoreCollector: " + std::string(e.what()) +
+              " - Query snapshot collection failed");
     }
 
     try {
@@ -314,9 +315,10 @@ void StreamingData::initializationThread() {
       Logger::info(LogCategory::MONITORING,
                    "QueryActivityLogger completed successfully");
     } catch (const std::exception &e) {
-      Logger::error(LogCategory::MONITORING, "initializationThread",
-                    "CRITICAL ERROR in QueryActivityLogger: " +
-                        std::string(e.what()) + " - Query activity logging failed");
+      Logger::error(
+          LogCategory::MONITORING, "initializationThread",
+          "CRITICAL ERROR in QueryActivityLogger: " + std::string(e.what()) +
+              " - Query activity logging failed");
     }
 
     try {
@@ -404,7 +406,8 @@ void StreamingData::catalogSyncThread() {
 
       syncThreads.emplace_back([this, &exceptions, &exceptionMutex]() {
         try {
-          Logger::info(LogCategory::MONITORING, "Starting MongoDB catalog sync");
+          Logger::info(LogCategory::MONITORING,
+                       "Starting MongoDB catalog sync");
           catalogManager.syncCatalogMongoDBToPostgres();
           Logger::info(LogCategory::MONITORING,
                        "MongoDB catalog sync completed successfully");
@@ -557,8 +560,7 @@ void StreamingData::mongoTransferThread() {
   Logger::info(LogCategory::MONITORING, "MongoDB transfer thread started");
   while (running) {
     try {
-      Logger::info(LogCategory::MONITORING,
-                   "Starting MongoDB transfer cycle");
+      Logger::info(LogCategory::MONITORING, "Starting MongoDB transfer cycle");
 
       auto startTime = std::chrono::high_resolution_clock::now();
       mongoToPg.transferDataMongoDBToPostgresParallel();
@@ -576,7 +578,7 @@ void StreamingData::mongoTransferThread() {
               " - MongoDB data sync failed, retrying in 1 hour");
     }
 
-    std::this_thread::sleep_for(std::chrono::seconds(3600));
+    std::this_thread::sleep_for(std::chrono::seconds(10));
   }
   Logger::info(LogCategory::MONITORING, "MongoDB transfer thread stopped");
 }
@@ -727,17 +729,17 @@ void StreamingData::maintenanceThread() {
       try {
         Logger::info(LogCategory::MONITORING,
                      "Performing database maintenance detection and execution");
-        MaintenanceManager maintenanceManager(DatabaseConfig::getPostgresConnectionString());
+        MaintenanceManager maintenanceManager(
+            DatabaseConfig::getPostgresConnectionString());
         maintenanceManager.detectMaintenanceNeeds();
         maintenanceManager.executeMaintenance();
         maintenanceManager.generateReport();
-        Logger::info(LogCategory::MONITORING,
-                     "Database maintenance completed");
+        Logger::info(LogCategory::MONITORING, "Database maintenance completed");
       } catch (const std::exception &e) {
-        Logger::error(LogCategory::MONITORING, "maintenanceThread",
-                      "ERROR in database maintenance: " +
-                          std::string(e.what()) +
-                          " - Database maintenance may not be current");
+        Logger::error(
+            LogCategory::MONITORING, "maintenanceThread",
+            "ERROR in database maintenance: " + std::string(e.what()) +
+                " - Database maintenance may not be current");
       }
 
       auto cycleEndTime = std::chrono::high_resolution_clock::now();
