@@ -15,12 +15,6 @@
 │ PRIORITY 3: MEDIUM PRIORITY + LOW COMPLEXITY                   │
 └─────────────────────────────────────────────────────────────────┘
 
-5. ordenas tablas en postgres ✓ COMPLETADO
-   con esto me refiero a todas las tablas de metadata.
-   y creacion de views y triggers
-   y todo eso para tener un schemas mas completo seria directo en postgre
-   [MEJORA UX - Ordenar tablas en la visualización]
-   [COMPLETADO: Tablas MSSQL unificadas en data_governance_catalog_mssql, tablas innecesarias eliminadas]
 
 5.1. Implementar DataGovernanceMSSQL.cpp ✓ COMPLETADO
      [GOVERNANCE - Catálogo específico para MSSQL con métricas detalladas]
