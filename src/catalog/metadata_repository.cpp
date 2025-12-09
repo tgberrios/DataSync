@@ -1,13 +1,24 @@
 #include "catalog/metadata_repository.h"
 #include "core/logger.h"
 
+// Constructor for MetadataRepository. Initializes the repository with a
+// connection string to the metadata database. This connection string is used
+// for all database operations performed by the repository methods.
 MetadataRepository::MetadataRepository(std::string connectionString)
     : connectionString_(std::move(connectionString)) {}
 
+// Creates and returns a new PostgreSQL database connection using the stored
+// connection string. This is a private helper method used internally by all
+// repository methods to establish database connections for their operations.
 pqxx::connection MetadataRepository::getConnection() {
   return pqxx::connection(connectionString_);
 }
 
+// Retrieves all distinct connection strings for a specific database engine
+// from the metadata catalog. Only returns connection strings for active tables.
+// This is useful for discovering all source database connections of a
+// particular type (MariaDB, MSSQL, PostgreSQL) that need to be processed.
+// Returns an empty vector if no connections are found or if an error occurs.
 std::vector<std::string>
 MetadataRepository::getConnectionStrings(const std::string &dbEngine) {
   std::vector<std::string> connStrings;
@@ -31,6 +42,12 @@ MetadataRepository::getConnectionStrings(const std::string &dbEngine) {
   return connStrings;
 }
 
+// Retrieves all catalog entries for a specific database engine and connection
+// string combination. This function returns detailed metadata about each table
+// including schema name, table name, status, primary key information, and table
+// size. The entries are returned as CatalogEntry objects containing all
+// relevant metadata fields. Returns an empty vector if no entries are found
+// or if an error occurs.
 std::vector<CatalogEntry>
 MetadataRepository::getCatalogEntries(const std::string &dbEngine,
                                       const std::string &connectionString) {
@@ -67,6 +84,13 @@ MetadataRepository::getCatalogEntries(const std::string &dbEngine,
   return entries;
 }
 
+// Inserts a new table entry into the catalog or updates an existing one if it
+// already exists. For new entries, the table is inserted with status 'PENDING'
+// and active set to false. For existing entries, the function intelligently
+// updates only the fields that have changed (time column, primary key columns,
+// primary key strategy, has_pk flag) or just the table size if no other changes
+// are detected. This ensures the catalog stays synchronized with the actual
+// table structure while preserving existing metadata like sync status.
 void MetadataRepository::insertOrUpdateTable(
     const CatalogTableInfo &tableInfo, const std::string &timeColumn,
     const std::vector<std::string> &pkColumns, bool hasPK, int64_t tableSize,
@@ -105,7 +129,6 @@ void MetadataRepository::insertOrUpdateTable(
           existing[0][2].is_null() ? "" : existing[0][2].as<std::string>();
       bool currentHasPK =
           existing[0][3].is_null() ? false : existing[0][3].as<bool>();
-
       if (currentTimeColumn != timeColumn ||
           currentPKColumns != pkColumnsJSON ||
           currentPKStrategy != pkStrategy || currentHasPK != hasPK) {
@@ -130,6 +153,11 @@ void MetadataRepository::insertOrUpdateTable(
   }
 }
 
+// Updates the cluster name for all catalog entries matching a specific
+// connection string and database engine. This is used to group tables from
+// the same database cluster together for organizational and monitoring
+// purposes. The cluster name is resolved from the connection string using
+// the ClusterNameResolver utility.
 void MetadataRepository::updateClusterName(const std::string &clusterName,
                                            const std::string &connectionString,
                                            const std::string &dbEngine) {
@@ -146,13 +174,35 @@ void MetadataRepository::updateClusterName(const std::string &clusterName,
   }
 }
 
+// Deletes a table's metadata entry from the catalog. If a connection string
+// is provided, it deletes only entries matching that specific connection.
+// If the connection string is empty, it deletes all entries matching the
+// schema, table, and database engine combination. This is used during
+// catalog cleanup when tables no longer exist in the source database.
+// If dropTargetTable is true, the function also drops the corresponding
+// table from the target PostgreSQL database before removing the catalog entry.
+// The table name in PostgreSQL is constructed as "schema_table" (lowercase).
 void MetadataRepository::deleteTable(const std::string &schema,
                                      const std::string &table,
                                      const std::string &dbEngine,
-                                     const std::string &connectionString) {
+                                     const std::string &connectionString,
+                                     bool dropTargetTable) {
   try {
     auto conn = getConnection();
     pqxx::work txn(conn);
+
+    if (dropTargetTable) {
+      std::string lowerSchema = schema;
+      std::transform(lowerSchema.begin(), lowerSchema.end(),
+                     lowerSchema.begin(), ::tolower);
+      std::string lowerTable = table;
+      std::transform(lowerTable.begin(), lowerTable.end(), lowerTable.begin(),
+                     ::tolower);
+      std::string target_full_table =
+          txn.quote_name(lowerSchema + "_" + lowerTable);
+      txn.exec("DROP TABLE IF EXISTS " + target_full_table);
+    }
+
     if (connectionString.empty()) {
       txn.exec_params("DELETE FROM metadata.catalog "
                       "WHERE schema_name = $1 AND table_name = $2 AND "
@@ -171,6 +221,64 @@ void MetadataRepository::deleteTable(const std::string &schema,
   }
 }
 
+// Reactivates tables that have data in the target PostgreSQL database but are
+// currently marked as inactive. This function checks if tables have rows in
+// the target database by executing COUNT(*) queries and reactivates them by
+// setting active = true. This is used before deactivating tables to prevent
+// deactivating tables that have received data. Returns the number of tables
+// that were reactivated. Returns 0 if an error occurs.
+int MetadataRepository::reactivateTablesWithData() {
+  try {
+    auto conn = getConnection();
+    pqxx::work txn(conn);
+
+    auto inactiveTables =
+        txn.exec("SELECT schema_name, table_name FROM metadata.catalog "
+                 "WHERE active = false");
+
+    int reactivatedCount = 0;
+    for (const auto &row : inactiveTables) {
+      std::string schema = row[0].as<std::string>();
+      std::string table = row[1].as<std::string>();
+
+      std::string lowerSchema = schema;
+      std::transform(lowerSchema.begin(), lowerSchema.end(),
+                     lowerSchema.begin(), ::tolower);
+      std::string lowerTable = table;
+      std::transform(lowerTable.begin(), lowerTable.end(), lowerTable.begin(),
+                     ::tolower);
+
+      try {
+        auto countResult =
+            txn.exec("SELECT COUNT(*) FROM " + txn.quote_name(lowerSchema) +
+                     "." + txn.quote_name(lowerTable));
+        if (!countResult.empty() && countResult[0][0].as<int64_t>() > 0) {
+          txn.exec_params("UPDATE metadata.catalog SET active = true "
+                          "WHERE schema_name = $1 AND table_name = $2",
+                          schema, table);
+          reactivatedCount++;
+        }
+      } catch (const std::exception &) {
+      }
+    }
+
+    txn.commit();
+    return reactivatedCount;
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::DATABASE, "MetadataRepository",
+                  "Error reactivating tables with data: " +
+                      std::string(e.what()));
+    return 0;
+  }
+}
+
+// Deactivates all tables in the catalog that have a status of 'NO_DATA'.
+// This marks tables as inactive when they have no data to sync, preventing
+// unnecessary processing attempts. The function should be called periodically
+// (recommended: every 24 hours) to maintain catalog consistency. Before
+// deactivating, tables that have received data should be reactivated using
+// reactivateTablesWithData(). Returns the number of tables that were
+// deactivated. Returns 0 if an error occurs.
 int MetadataRepository::deactivateNoDataTables() {
   try {
     auto conn = getConnection();
@@ -187,10 +295,44 @@ int MetadataRepository::deactivateNoDataTables() {
   }
 }
 
-int MetadataRepository::markInactiveTablesAsSkip() {
+// Marks all inactive tables (where active = false) as 'SKIP' status and
+// resets their offset tracking fields (last_offset and last_processed_pk).
+// This is used to clean up tables that have been deactivated, ensuring they
+// are properly marked to be skipped during sync operations. Tables with
+// status 'NO_DATA' are excluded from this operation. If truncateTarget is true,
+// the function also truncates the corresponding tables in the target PostgreSQL
+// database before marking them as SKIP, effectively clearing all data from
+// the target tables. Returns the number of tables that were updated.
+// Returns 0 if an error occurs.
+int MetadataRepository::markInactiveTablesAsSkip(bool truncateTarget) {
   try {
     auto conn = getConnection();
     pqxx::work txn(conn);
+
+    auto inactiveTables =
+        txn.exec("SELECT schema_name, table_name FROM metadata.catalog "
+                 "WHERE active = false AND status != 'NO_DATA'");
+
+    if (truncateTarget) {
+      for (const auto &row : inactiveTables) {
+        std::string schema = row[0].as<std::string>();
+        std::string table = row[1].as<std::string>();
+
+        std::string lowerSchema = schema;
+        std::transform(lowerSchema.begin(), lowerSchema.end(),
+                       lowerSchema.begin(), ::tolower);
+        std::string lowerTable = table;
+        std::transform(lowerTable.begin(), lowerTable.end(), lowerTable.begin(),
+                       ::tolower);
+        std::string target_full_table =
+            txn.quote_name(lowerSchema + "_" + lowerTable);
+        try {
+          txn.exec("TRUNCATE TABLE " + target_full_table);
+        } catch (const std::exception &) {
+        }
+      }
+    }
+
     auto result = txn.exec("UPDATE metadata.catalog SET "
                            "status = 'SKIP', last_offset = 0, "
                            "last_processed_pk = 0 "
@@ -204,6 +346,13 @@ int MetadataRepository::markInactiveTablesAsSkip() {
   }
 }
 
+// Resets a table in the catalog by dropping the target table in PostgreSQL
+// and resetting the catalog entry to 'FULL_LOAD' status with cleared offset
+// tracking. This forces a complete reload of the table data from the source
+// database. The schema and table names are converted to lowercase and combined
+// as "schema_table" to match the target table naming convention used in
+// deleteTable(). Returns the number of catalog entries updated (typically 1).
+// Returns 0 if an error occurs.
 int MetadataRepository::resetTable(const std::string &schema,
                                    const std::string &table,
                                    const std::string &dbEngine) {
@@ -217,9 +366,10 @@ int MetadataRepository::resetTable(const std::string &schema,
     std::string lowerTable = table;
     std::transform(lowerTable.begin(), lowerTable.end(), lowerTable.begin(),
                    ::tolower);
+    std::string target_full_table =
+        txn.quote_name(lowerSchema + "_" + lowerTable);
 
-    txn.exec("DROP TABLE IF EXISTS \"" + lowerSchema + "\".\"" + lowerTable +
-             "\"");
+    txn.exec("DROP TABLE IF EXISTS " + target_full_table);
 
     auto result = txn.exec_params(
         "UPDATE metadata.catalog SET "
@@ -235,6 +385,15 @@ int MetadataRepository::resetTable(const std::string &schema,
   }
 }
 
+// Cleans invalid offset tracking data from the catalog. This function removes
+// offset values that are inconsistent with the primary key strategy being used.
+// For tables using 'PK' strategy, it clears any last_offset values (which
+// should be NULL for PK-based syncing). For tables using 'OFFSET' strategy,
+// it clears any last_processed_pk values (which should be NULL for offset-based
+// syncing). This ensures data consistency and prevents sync errors. Returns the
+// total number of entries cleaned. Returns 0 if an error occurs.
+// DEPRECATED: This function will be removed in a future version when the
+// last_offset logic is completely eliminated from the system.
 int MetadataRepository::cleanInvalidOffsets() {
   try {
     auto conn = getConnection();
@@ -257,6 +416,16 @@ int MetadataRepository::cleanInvalidOffsets() {
   }
 }
 
+// Retrieves table sizes (row counts) for all user tables in PostgreSQL in a
+// single batch operation. The function queries each table individually using
+// COUNT(*) to get accurate row counts for all regular tables, excluding system
+// schemas. Returns a map where keys are in the format "schema|table" and values
+// are the actual row counts. This is used during catalog synchronization to
+// populate table size information. Note: This function gets sizes from the
+// target PostgreSQL database, while getTableSize() in CatalogManager gets
+// sizes from the source database. Use this function for batch operations during
+// catalog sync, and use getTableSize() for individual queries when you need
+// the actual source database size.
 std::unordered_map<std::string, int64_t>
 MetadataRepository::getTableSizesBatch() {
   std::unordered_map<std::string, int64_t> sizes;
@@ -265,8 +434,7 @@ MetadataRepository::getTableSizesBatch() {
     pqxx::work txn(conn);
 
     auto result =
-        txn.exec("SELECT n.nspname as schema_name, c.relname as table_name, "
-                 "COALESCE(c.reltuples::bigint, 0) as row_count "
+        txn.exec("SELECT n.nspname as schema_name, c.relname as table_name "
                  "FROM pg_class c "
                  "JOIN pg_namespace n ON c.relnamespace = n.oid "
                  "WHERE c.relkind = 'r' AND n.nspname NOT IN ('pg_catalog', "
@@ -275,9 +443,18 @@ MetadataRepository::getTableSizesBatch() {
     for (const auto &row : result) {
       std::string schema = row[0].as<std::string>();
       std::string table = row[1].as<std::string>();
-      int64_t size = row[2].as<int64_t>();
-      std::string key = schema + "|" + table;
-      sizes[key] = size;
+
+      try {
+        auto countResult =
+            txn.exec("SELECT COUNT(*) FROM " + txn.quote_name(schema) + "." +
+                     txn.quote_name(table));
+        if (!countResult.empty()) {
+          int64_t size = countResult[0][0].as<int64_t>();
+          std::string key = schema + "|" + table;
+          sizes[key] = size;
+        }
+      } catch (const std::exception &) {
+      }
     }
 
     txn.commit();

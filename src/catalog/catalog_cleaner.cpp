@@ -1,6 +1,7 @@
 #include "catalog/catalog_cleaner.h"
 #include "core/Config.h"
 #include "core/logger.h"
+#include "utils/table_utils.h"
 #include <algorithm>
 #include <set>
 
@@ -8,40 +9,12 @@ CatalogCleaner::CatalogCleaner(std::string metadataConnStr)
     : metadataConnStr_(std::move(metadataConnStr)),
       repo_(std::make_unique<MetadataRepository>(metadataConnStr_)) {}
 
-// TODO: Document better this function
-// TODO: This function should be in helpers
-bool CatalogCleaner::tableExistsInPostgres(const std::string &schema,
-                                           const std::string &table) {
-  try {
-    pqxx::connection conn(metadataConnStr_);
-    pqxx::work txn(conn);
-
-    std::string lowerSchema = schema;
-    std::transform(lowerSchema.begin(), lowerSchema.end(), lowerSchema.begin(),
-                   ::tolower);
-    std::string lowerTable = table;
-    std::transform(lowerTable.begin(), lowerTable.end(), lowerTable.begin(),
-                   ::tolower);
-
-    auto result =
-        txn.exec_params("SELECT COUNT(*) FROM information_schema.tables "
-                        "WHERE table_schema = $1 AND table_name = $2",
-                        lowerSchema, lowerTable);
-    txn.commit();
-
-    return !result.empty() && result[0][0].as<int>() > 0;
-  } catch (const std::exception &e) {
-    Logger::error(LogCategory::DATABASE, "CatalogCleaner",
-                  "Error checking table existence: " + std::string(e.what()));
-    return false;
-  }
-}
-
-/*This Function clean non existent Postgres Tables from catalog
-which don't exist in the Source Database any more
-This use this AUX Function tableExistsInPostgres to check existence of each
-table
-*/
+// This function cleans non-existent PostgreSQL tables from the catalog that
+// no longer exist in the source database. It queries the catalog for all
+// PostgreSQL tables, checks each one's existence using tableExistsInPostgres,
+// and removes entries from both the catalog and the target database for tables
+// that no longer exist. This helps maintain catalog consistency when source
+// tables are dropped.
 void CatalogCleaner::cleanNonExistentPostgresTables() {
   try {
     pqxx::connection conn(metadataConnStr_);
@@ -61,13 +34,8 @@ void CatalogCleaner::cleanNonExistentPostgresTables() {
       std::string schema = row[0].as<std::string>();
       std::string table = row[1].as<std::string>();
 
-      if (!tableExistsInPostgres(schema, table)) {
-        // Deleted from Catalog
-        repo_->deleteTable(schema, table, "PostgreSQL");
-
-        // Deleted from Target
-        std::string target_full_table = txn.quote_name(schema + "_" + table);
-        txn.exec("DROP TABLE IF EXISTS " + target_full_table);
+      if (!TableUtils::tableExistsInPostgres(conn, schema, table)) {
+        repo_->deleteTable(schema, table, "PostgreSQL", "", true);
         deletedCount++;
       }
     }
@@ -83,18 +51,14 @@ void CatalogCleaner::cleanNonExistentPostgresTables() {
   }
 }
 
-/*
-This function is to clean non existent MariaDB Tablres from catalog
-which don't exist in the Source Database anymore and also drop them from target.
-*/
-
+// This function cleans non-existent MariaDB tables from the catalog that
+// no longer exist in the source database. It connects to each MariaDB source,
+// discovers all existing tables, and compares them against catalog entries.
+// Tables that exist in the catalog but not in the source database are removed
+// from both the catalog and the target PostgreSQL database. This ensures
+// catalog consistency when source tables are dropped from MariaDB databases.
 void CatalogCleaner::cleanNonExistentMariaDBTables() {
   try {
-    // Postgres Connection for target table drops
-    pqxx::connection conn(metadataConnStr_);
-    pqxx::work txn(conn);
-
-    // Connection to MariaDB sources
     auto connStrings = repo_->getConnectionStrings("MariaDB");
     size_t totalDeleted = 0;
 
@@ -102,30 +66,21 @@ void CatalogCleaner::cleanNonExistentMariaDBTables() {
                  "Checking " + std::to_string(connStrings.size()) +
                      " MariaDB connection(s) for non-existent tables");
 
-    // Connect to each MariaDB source to check existence
     for (const auto &connStr : connStrings) {
       MariaDBEngine engine(connStr);
       auto existingTables = engine.discoverTables();
 
-      // Add the tables to this set for quick lookup
       std::set<std::pair<std::string, std::string>> existingSet;
       for (const auto &table : existingTables) {
         existingSet.insert({table.schema, table.table});
       }
 
-      // Now check catalog entries against existing tables
       auto catalogEntries = repo_->getCatalogEntries("MariaDB", connStr);
       for (const auto &entry : catalogEntries) {
         if (existingSet.find({entry.schema, entry.table}) ==
             existingSet.end()) {
-          // Delete Table from Catalog
-          repo_->deleteTable(entry.schema, entry.table, "MariaDB", connStr);
-
-          // Drop Table on Target (Postgres)
-          // TODO: Maybe this could be a helper
-          std::string target_full_table =
-              txn.quote_name(entry.schema + "_" + entry.table);
-          txn.exec("DROP TABLE IF EXISTS " + target_full_table);
+          repo_->deleteTable(entry.schema, entry.table, "MariaDB", connStr,
+                             true);
           totalDeleted++;
         }
       }
@@ -140,9 +95,14 @@ void CatalogCleaner::cleanNonExistentMariaDBTables() {
   }
 }
 
+// This function cleans non-existent MSSQL tables from the catalog that
+// no longer exist in the source database. It connects to each MSSQL source,
+// discovers all existing tables, and compares them against catalog entries.
+// Tables that exist in the catalog but not in the source database are removed
+// from both the catalog and the target PostgreSQL database. This ensures
+// catalog consistency when source tables are dropped from MSSQL databases.
 void CatalogCleaner::cleanNonExistentMSSQLTables() {
   try {
-    // Obtain all MSSQL connection strings from the repository
     auto connStrings = repo_->getConnectionStrings("MSSQL");
     size_t totalDeleted = 0;
 
@@ -150,7 +110,6 @@ void CatalogCleaner::cleanNonExistentMSSQLTables() {
                  "Checking " + std::to_string(connStrings.size()) +
                      " MSSQL connection(s) for non-existent tables");
 
-    // Connect to each MSSQL source to check existence
     for (const auto &connStr : connStrings) {
       MSSQLEngine engine(connStr);
       auto existingTables = engine.discoverTables();
@@ -160,18 +119,11 @@ void CatalogCleaner::cleanNonExistentMSSQLTables() {
         existingSet.insert({table.schema, table.table});
       }
 
-      // Now check catalog entries against existing tables
       auto catalogEntries = repo_->getCatalogEntries("MSSQL", connStr);
       for (const auto &entry : catalogEntries) {
         if (existingSet.find({entry.schema, entry.table}) ==
             existingSet.end()) {
-          repo_->deleteTable(entry.schema, entry.table, "MSSQL", connStr);
-          // Drop Table on Target (Postgres)
-          pqxx::connection conn(metadataConnStr_);
-          pqxx::work txn(conn);
-          std::string target_full_table =
-              txn.quote_name(entry.schema + "_" + entry.table);
-          txn.exec("DROP TABLE IF EXISTS " + target_full_table);
+          repo_->deleteTable(entry.schema, entry.table, "MSSQL", connStr, true);
           totalDeleted++;
         }
       }
@@ -186,9 +138,12 @@ void CatalogCleaner::cleanNonExistentMSSQLTables() {
   }
 }
 
-/*
-This function clean in catalog any unsupported or orphaned table entries
-*/
+// This function cleans orphaned or invalid table entries from the catalog.
+// It removes three types of invalid entries: (1) entries with NULL or empty
+// connection strings, (2) entries with unsupported database engines (only
+// PostgreSQL, MariaDB, and MSSQL are supported), and (3) entries with NULL or
+// empty schema or table names. This helps maintain catalog data integrity by
+// removing entries that cannot be properly processed.
 void CatalogCleaner::cleanOrphanedTables() {
   try {
     pqxx::connection conn(metadataConnStr_);
@@ -196,22 +151,17 @@ void CatalogCleaner::cleanOrphanedTables() {
 
     Logger::info(LogCategory::DATABASE, "CatalogCleaner",
                  "Cleaning orphaned catalog entries");
-    // Delete entries which have NULL or EMPTY connections strings.
-    // That means that the connections is wrong added or missing.
+
     auto result1 =
         txn.exec("DELETE FROM metadata.catalog "
                  "WHERE connection_string IS NULL OR connection_string = ''");
     size_t deleted1 = result1.affected_rows();
 
-    // Delete entries in which the engine is not supported yet by the system
-    // Probably in future we will handle more support for another engines.
     auto result2 =
         txn.exec("DELETE FROM metadata.catalog "
                  "WHERE db_engine NOT IN ('PostgreSQL', 'MariaDB', 'MSSQL')");
     size_t deleted2 = result2.affected_rows();
 
-    // Delete entries which have incomplete information about schema or table
-    // names
     auto result3 = txn.exec("DELETE FROM metadata.catalog "
                             "WHERE schema_name IS NULL OR schema_name = '' "
                             "OR table_name IS NULL OR table_name = ''");
@@ -232,21 +182,19 @@ void CatalogCleaner::cleanOrphanedTables() {
   }
 }
 
-/*
-Probably the simplest of all, this function clean old logs from metadata.logs
-table
-*/
-
+// This function cleans old logs from the metadata.logs table based on a
+// retention policy. It deletes all log entries older than the specified
+// retention period (in hours). The function checks the log count before and
+// after deletion to provide detailed logging information. If no logs exist,
+// the function returns early without performing any operations.
 void CatalogCleaner::cleanOldLogs(int retentionHours) {
   try {
     pqxx::connection conn(metadataConnStr_);
     pqxx::work txn(conn);
 
-    // Check how many logs are there before deletion.
     auto countBefore = txn.exec("SELECT COUNT(*) FROM metadata.logs");
     int logsBefore = countBefore[0][0].as<int>();
 
-    // If no logs, nothing to do.
     if (logsBefore == 0) {
       Logger::info(LogCategory::MAINTENANCE, "cleanOldLogs",
                    "No logs found in metadata.logs table");
@@ -254,7 +202,6 @@ void CatalogCleaner::cleanOldLogs(int retentionHours) {
       return;
     }
 
-    // Delete old logs
     auto result = txn.exec_params("DELETE FROM metadata.logs WHERE ts < NOW() "
                                   "- make_interval(hours => $1)",
                                   retentionHours);
