@@ -15,6 +15,7 @@
 │ PRIORITY 3: MEDIUM PRIORITY + LOW COMPLEXITY                   │
 └─────────────────────────────────────────────────────────────────┘
 
+en los governance cada cuanto saca las snapshots ?
 
 
 esto deberia ser solo una sola tabla y script 
