@@ -49,6 +49,20 @@ void QueryStoreCollector::queryPgStatStatements(pqxx::connection &conn) {
   try {
     pqxx::work txn(conn);
 
+    std::string checkExtension = "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements')";
+    auto extResult = txn.exec(checkExtension);
+    bool extensionExists = false;
+    if (!extResult.empty() && !extResult[0][0].is_null()) {
+      extensionExists = extResult[0][0].as<bool>();
+    }
+
+    if (!extensionExists) {
+      Logger::warning(LogCategory::GOVERNANCE, "QueryStoreCollector",
+                      "pg_stat_statements extension not enabled. Run: CREATE EXTENSION pg_stat_statements;");
+      txn.commit();
+      return;
+    }
+
     std::string query = R"(
       SELECT 
         datname,
