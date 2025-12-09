@@ -5,9 +5,9 @@
 #include "catalog/metadata_repository.h"
 #include "core/Config.h"
 #include "engines/mariadb_engine.h"
+#include "engines/mongodb_engine.h"
 #include "engines/mssql_engine.h"
 #include "engines/postgres_engine.h"
-#include "engines/mongodb_engine.h"
 #include "utils/cluster_name_resolver.h"
 #include <memory>
 #include <string>

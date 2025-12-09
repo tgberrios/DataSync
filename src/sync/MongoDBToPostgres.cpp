@@ -2,24 +2,26 @@
 #include "core/database_config.h"
 #include "core/logger.h"
 #include "engines/database_engine.h"
-#include <pqxx/pqxx>
 #include <algorithm>
 #include <ctime>
 #include <iomanip>
-#include <sstream>
+#include <pqxx/pqxx>
 #include <set>
+#include <sstream>
 
 std::unordered_map<std::string, std::string> MongoDBToPostgres::dataTypeMap = {
-    {"string", "TEXT"},       {"int32", "INTEGER"},    {"int64", "BIGINT"},
-    {"double", "NUMERIC"},    {"decimal128", "NUMERIC"}, {"bool", "BOOLEAN"},
-    {"date", "TIMESTAMP"},    {"objectId", "TEXT"},    {"array", "JSONB"},
-    {"object", "JSONB"},      {"binary", "BYTEA"},     {"null", "TEXT"}};
+    {"string", "TEXT"},    {"int32", "INTEGER"},      {"int64", "BIGINT"},
+    {"double", "NUMERIC"}, {"decimal128", "NUMERIC"}, {"bool", "BOOLEAN"},
+    {"date", "TIMESTAMP"}, {"objectId", "TEXT"},      {"array", "JSONB"},
+    {"object", "JSONB"},   {"binary", "BYTEA"},       {"null", "TEXT"}};
 
-std::string MongoDBToPostgres::cleanValueForPostgres(const std::string &value,
-                                                     const std::string &columnType) {
+std::string
+MongoDBToPostgres::cleanValueForPostgres(const std::string &value,
+                                         const std::string &columnType) {
   if (value.empty() || value == "NULL" || value == "null") {
     std::string upperType = columnType;
-    std::transform(upperType.begin(), upperType.end(), upperType.begin(), ::toupper);
+    std::transform(upperType.begin(), upperType.end(), upperType.begin(),
+                   ::toupper);
 
     if (upperType.find("INTEGER") != std::string::npos ||
         upperType.find("BIGINT") != std::string::npos) {
@@ -37,7 +39,8 @@ std::string MongoDBToPostgres::cleanValueForPostgres(const std::string &value,
   std::string cleanValue = value;
   cleanValue.erase(std::remove_if(cleanValue.begin(), cleanValue.end(),
                                   [](unsigned char c) {
-                                    return c < 32 && c != 9 && c != 10 && c != 13;
+                                    return c < 32 && c != 9 && c != 10 &&
+                                           c != 13;
                                   }),
                    cleanValue.end());
 
@@ -90,9 +93,10 @@ void MongoDBToPostgres::updateLastSyncTime(pqxx::connection &pgConn,
   try {
     std::lock_guard<std::mutex> lock(metadataUpdateMutex);
     pqxx::work txn(pgConn);
-    txn.exec("UPDATE metadata.catalog SET last_sync_time = NOW() WHERE schema_name = '" +
-             escapeSQL(schema_name) + "' AND table_name = '" + escapeSQL(table_name) +
-             "' AND db_engine = 'MongoDB'");
+    txn.exec("UPDATE metadata.catalog SET last_sync_time = NOW() WHERE "
+             "schema_name = '" +
+             escapeSQL(schema_name) + "' AND table_name = '" +
+             escapeSQL(table_name) + "' AND db_engine = 'MongoDB'");
     txn.commit();
   } catch (const std::exception &e) {
     Logger::error(LogCategory::TRANSFER, "updateLastSyncTime",
@@ -100,9 +104,10 @@ void MongoDBToPostgres::updateLastSyncTime(pqxx::connection &pgConn,
   }
 }
 
-std::vector<std::string> MongoDBToPostgres::discoverCollectionFields(
-    const std::string &connectionString, const std::string &database,
-    const std::string &collection) {
+std::vector<std::string>
+MongoDBToPostgres::discoverCollectionFields(const std::string &connectionString,
+                                            const std::string &database,
+                                            const std::string &collection) {
   std::vector<std::string> fields;
   fields.push_back("_id");
 
@@ -114,15 +119,15 @@ std::vector<std::string> MongoDBToPostgres::discoverCollectionFields(
       return fields;
     }
 
-    mongoc_collection_t *coll =
-        mongoc_client_get_collection(engine.getClient(), database.c_str(),
-                                     collection.c_str());
+    mongoc_collection_t *coll = mongoc_client_get_collection(
+        engine.getClient(), database.c_str(), collection.c_str());
     if (!coll) {
       return fields;
     }
 
     bson_t *query = bson_new();
-    mongoc_cursor_t *cursor = mongoc_collection_find_with_opts(coll, query, nullptr, nullptr);
+    mongoc_cursor_t *cursor =
+        mongoc_collection_find_with_opts(coll, query, nullptr, nullptr);
 
     const bson_t *doc;
     std::set<std::string> fieldSet;
@@ -205,16 +210,18 @@ void MongoDBToPostgres::createPostgreSQLTable(
     pqxx::work txn(conn);
 
     std::string schemaName = tableInfo.schema_name;
-    std::transform(schemaName.begin(), schemaName.end(), schemaName.begin(), ::tolower);
+    std::transform(schemaName.begin(), schemaName.end(), schemaName.begin(),
+                   ::tolower);
 
     std::string tableName = tableInfo.table_name;
-    std::transform(tableName.begin(), tableName.end(), tableName.begin(), ::tolower);
+    std::transform(tableName.begin(), tableName.end(), tableName.begin(),
+                   ::tolower);
 
     txn.exec("CREATE SCHEMA IF NOT EXISTS " + txn.quote_name(schemaName));
 
     std::ostringstream createTable;
-    createTable << "CREATE TABLE IF NOT EXISTS " << txn.quote_name(schemaName) << "."
-                << txn.quote_name(tableName) << " (";
+    createTable << "CREATE TABLE IF NOT EXISTS " << txn.quote_name(schemaName)
+                << "." << txn.quote_name(tableName) << " (";
 
     for (size_t i = 0; i < fields.size(); i++) {
       if (i > 0)
@@ -259,55 +266,56 @@ void MongoDBToPostgres::convertBSONToPostgresRow(
     bson_free(jsonStr);
   }
 
-    while (bson_iter_next(&iter)) {
-      const char *key = bson_iter_key(&iter);
-      auto it = fieldIndexMap.find(key);
-      if (it != fieldIndexMap.end()) {
-        int index = it->second;
-        const bson_value_t *value = bson_iter_value(&iter);
+  while (bson_iter_next(&iter)) {
+    const char *key = bson_iter_key(&iter);
+    auto it = fieldIndexMap.find(key);
+    if (it != fieldIndexMap.end()) {
+      int index = it->second;
+      const bson_value_t *value = bson_iter_value(&iter);
 
-        if (!value) {
-          row[index] = "";
-          continue;
-        }
+      if (!value) {
+        row[index] = "";
+        continue;
+      }
 
-        switch (value->value_type) {
-        case BSON_TYPE_UTF8:
-          row[index] = std::string(value->value.v_utf8.str, value->value.v_utf8.len);
-          break;
-        case BSON_TYPE_INT32:
-          row[index] = std::to_string(value->value.v_int32);
-          break;
-        case BSON_TYPE_INT64:
-          row[index] = std::to_string(value->value.v_int64);
-          break;
-        case BSON_TYPE_DOUBLE:
-          row[index] = std::to_string(value->value.v_double);
-          break;
-        case BSON_TYPE_BOOL:
-          row[index] = value->value.v_bool ? "true" : "false";
-          break;
-        case BSON_TYPE_OID: {
-          char oid_str[25];
-          bson_oid_to_string(&value->value.v_oid, oid_str);
-          row[index] = oid_str;
-          break;
-        }
-        case BSON_TYPE_DATE_TIME: {
-          int64_t millis = value->value.v_datetime;
-          std::time_t time = millis / 1000;
-          std::tm *tm = std::gmtime(&time);
-          std::ostringstream oss;
-          oss << std::put_time(tm, "%Y-%m-%d %H:%M:%S");
-          row[index] = oss.str();
-          break;
-        }
-        default:
-          row[index] = "";
-          break;
-        }
+      switch (value->value_type) {
+      case BSON_TYPE_UTF8:
+        row[index] =
+            std::string(value->value.v_utf8.str, value->value.v_utf8.len);
+        break;
+      case BSON_TYPE_INT32:
+        row[index] = std::to_string(value->value.v_int32);
+        break;
+      case BSON_TYPE_INT64:
+        row[index] = std::to_string(value->value.v_int64);
+        break;
+      case BSON_TYPE_DOUBLE:
+        row[index] = std::to_string(value->value.v_double);
+        break;
+      case BSON_TYPE_BOOL:
+        row[index] = value->value.v_bool ? "true" : "false";
+        break;
+      case BSON_TYPE_OID: {
+        char oid_str[25];
+        bson_oid_to_string(&value->value.v_oid, oid_str);
+        row[index] = oid_str;
+        break;
+      }
+      case BSON_TYPE_DATE_TIME: {
+        int64_t millis = value->value.v_datetime;
+        std::time_t time = millis / 1000;
+        std::tm *tm = std::gmtime(&time);
+        std::ostringstream oss;
+        oss << std::put_time(tm, "%Y-%m-%d %H:%M:%S");
+        row[index] = oss.str();
+        break;
+      }
+      default:
+        row[index] = "";
+        break;
       }
     }
+  }
 
   auto docIt = fieldIndexMap.find("_document");
   if (docIt != fieldIndexMap.end()) {
@@ -328,7 +336,8 @@ MongoDBToPostgres::fetchCollectionData(const TableInfo &tableInfo) {
     }
 
     mongoc_collection_t *coll = mongoc_client_get_collection(
-        engine.getClient(), tableInfo.schema_name.c_str(), tableInfo.table_name.c_str());
+        engine.getClient(), tableInfo.schema_name.c_str(),
+        tableInfo.table_name.c_str());
     if (!coll) {
       Logger::error(LogCategory::TRANSFER, "fetchCollectionData",
                     "Failed to get collection");
@@ -336,8 +345,8 @@ MongoDBToPostgres::fetchCollectionData(const TableInfo &tableInfo) {
     }
 
     std::vector<std::string> fields =
-        discoverCollectionFields(tableInfo.connection_string, tableInfo.schema_name,
-                                 tableInfo.table_name);
+        discoverCollectionFields(tableInfo.connection_string,
+                                 tableInfo.schema_name, tableInfo.table_name);
 
     std::unordered_map<std::string, int> fieldIndexMap;
     for (size_t i = 0; i < fields.size(); i++) {
@@ -369,7 +378,8 @@ MongoDBToPostgres::fetchCollectionData(const TableInfo &tableInfo) {
     mongoc_collection_destroy(coll);
 
     Logger::info(LogCategory::TRANSFER, "fetchCollectionData",
-                 "Fetched " + std::to_string(results.size()) + " total documents");
+                 "Fetched " + std::to_string(results.size()) +
+                     " total documents");
 
   } catch (const std::exception &e) {
     Logger::error(LogCategory::TRANSFER, "fetchCollectionData",
@@ -385,18 +395,29 @@ void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
     pqxx::work txn(conn);
 
     std::string schemaName = tableInfo.schema_name;
-    std::transform(schemaName.begin(), schemaName.end(), schemaName.begin(), ::tolower);
+    std::transform(schemaName.begin(), schemaName.end(), schemaName.begin(),
+                   ::tolower);
 
     std::string tableName = tableInfo.table_name;
-    std::transform(tableName.begin(), tableName.end(), tableName.begin(), ::tolower);
+    std::transform(tableName.begin(), tableName.end(), tableName.begin(),
+                   ::tolower);
 
-    std::string fullTableName = txn.quote_name(schemaName) + "." + txn.quote_name(tableName);
+    std::string fullTableName =
+        txn.quote_name(schemaName) + "." + txn.quote_name(tableName);
 
     Logger::info(LogCategory::TRANSFER, "truncateAndLoadCollection",
                  "TRUNCATE and loading " + fullTableName);
 
-    txn.exec("TRUNCATE TABLE " + fullTableName);
-    txn.commit();
+    try {
+      txn.exec("TRUNCATE TABLE " + fullTableName);
+      txn.commit();
+      Logger::info(LogCategory::TRANSFER, "truncateAndLoadCollection",
+                   "TRUNCATE completed for " + fullTableName);
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER, "truncateAndLoadCollection",
+                    "Error during TRUNCATE: " + std::string(e.what()));
+      throw;
+    }
 
     std::vector<std::vector<std::string>> data = fetchCollectionData(tableInfo);
 
@@ -408,8 +429,8 @@ void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
     }
 
     std::vector<std::string> fields =
-        discoverCollectionFields(tableInfo.connection_string, tableInfo.schema_name,
-                                 tableInfo.table_name);
+        discoverCollectionFields(tableInfo.connection_string,
+                                 tableInfo.schema_name, tableInfo.table_name);
 
     std::vector<std::string> fieldTypes;
     for (const auto &field : fields) {
@@ -449,7 +470,8 @@ void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
             if (fields[k] == "_document") {
               insertQuery << insertTxn.quote(data[j][k]) << "::jsonb";
             } else {
-              insertQuery << insertTxn.quote(cleanValueForPostgres(data[j][k], fieldTypes[k]));
+              insertQuery << insertTxn.quote(
+                  cleanValueForPostgres(data[j][k], fieldTypes[k]));
             }
           } else {
             insertQuery << "NULL";
@@ -471,12 +493,13 @@ void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
     updateLastSyncTime(conn, tableInfo.schema_name, tableInfo.table_name);
 
     Logger::info(LogCategory::TRANSFER, "truncateAndLoadCollection",
-                 "Completed loading " + std::to_string(inserted) + " rows into " +
-                     fullTableName);
+                 "Completed loading " + std::to_string(inserted) +
+                     " rows into " + fullTableName);
 
   } catch (const std::exception &e) {
     Logger::error(LogCategory::TRANSFER, "truncateAndLoadCollection",
-                  "Error truncating and loading collection: " + std::string(e.what()));
+                  "Error truncating and loading collection: " +
+                      std::string(e.what()));
   }
 }
 
@@ -485,10 +508,10 @@ void MongoDBToPostgres::transferDataMongoDBToPostgresParallel() {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
     pqxx::work txn(conn);
 
-    auto result = txn.exec(
-        "SELECT schema_name, table_name, connection_string, status, last_sync_time "
-        "FROM metadata.catalog "
-        "WHERE db_engine = 'MongoDB' AND active = true");
+    auto result = txn.exec("SELECT schema_name, table_name, connection_string, "
+                           "status, last_sync_time "
+                           "FROM metadata.catalog "
+                           "WHERE db_engine = 'MongoDB' AND active = true");
 
     txn.commit();
 
@@ -500,7 +523,8 @@ void MongoDBToPostgres::transferDataMongoDBToPostgresParallel() {
       tableInfo.table_name = row[1].as<std::string>();
       tableInfo.connection_string = row[2].as<std::string>();
       tableInfo.status = row[3].as<std::string>();
-      tableInfo.last_sync_time = row[4].is_null() ? "" : row[4].as<std::string>();
+      tableInfo.last_sync_time =
+          row[4].is_null() ? "" : row[4].as<std::string>();
 
       if (shouldSyncCollection(tableInfo)) {
         collectionsToSync.push_back(tableInfo);
@@ -509,20 +533,22 @@ void MongoDBToPostgres::transferDataMongoDBToPostgresParallel() {
 
     Logger::info(LogCategory::TRANSFER, "transferDataMongoDBToPostgresParallel",
                  "Found " + std::to_string(collectionsToSync.size()) +
-                     " collections to sync");
+                     " collections to sync out of " + std::to_string(result.size()) + " total MongoDB collections");
 
     for (const auto &tableInfo : collectionsToSync) {
       try {
         truncateAndLoadCollection(tableInfo);
       } catch (const std::exception &e) {
-        Logger::error(LogCategory::TRANSFER, "transferDataMongoDBToPostgresParallel",
+        Logger::error(LogCategory::TRANSFER,
+                      "transferDataMongoDBToPostgresParallel",
                       "Error syncing " + tableInfo.schema_name + "." +
                           tableInfo.table_name + ": " + std::string(e.what()));
       }
     }
 
   } catch (const std::exception &e) {
-    Logger::error(LogCategory::TRANSFER, "transferDataMongoDBToPostgresParallel",
+    Logger::error(LogCategory::TRANSFER,
+                  "transferDataMongoDBToPostgresParallel",
                   "Error in transfer: " + std::string(e.what()));
   }
 }
@@ -532,10 +558,9 @@ void MongoDBToPostgres::setupTableTargetMongoDBToPostgres() {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
     pqxx::work txn(conn);
 
-    auto result = txn.exec(
-        "SELECT schema_name, table_name, connection_string "
-        "FROM metadata.catalog "
-        "WHERE db_engine = 'MongoDB' AND active = true");
+    auto result = txn.exec("SELECT schema_name, table_name, connection_string "
+                           "FROM metadata.catalog "
+                           "WHERE db_engine = 'MongoDB' AND active = true");
 
     txn.commit();
 
@@ -571,4 +596,3 @@ void MongoDBToPostgres::setupTableTargetMongoDBToPostgres() {
                   "Error setting up tables: " + std::string(e.what()));
   }
 }
-
