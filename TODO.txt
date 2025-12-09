@@ -19,11 +19,6 @@ en los governance cada cuanto saca las snapshots ?
 
 
 
-esto creo que ya lo captura del de governance de mssql
-5.6. Implementar MSSQLStoredProcedureMonitor.cpp
-     [MONITORING - Monitoreo de stored procedures MSSQL]
-     [ARCHIVO: src/governance/MSSQLStoredProcedureMonitor.cpp]
-     [PRIORIDAD: Media - Específico para MSSQL]
 
 5.7. Implementar LineageExtractorMSSQL.cpp
      [LINEAGE - Extracción de dependencias MSSQL]
