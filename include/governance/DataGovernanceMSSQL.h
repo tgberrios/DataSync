@@ -29,7 +29,6 @@ struct MSSQLGovernanceData {
   std::string index_key_columns;
   std::string index_include_columns;
   bool has_missing_index = false;
-  double missing_index_impact = 0.0;
   bool is_unused = false;
   bool is_potential_duplicate = false;
   std::string last_full_backup;
@@ -62,6 +61,7 @@ struct MSSQLGovernanceData {
   long long missing_index_user_scans = 0;
   double missing_index_avg_total_user_cost = 0.0;
   long long missing_index_unique_compiles = 0;
+  long long object_id = 0;
   std::string sp_name;
   double avg_execution_time_seconds = 0.0;
   long long avg_logical_reads = 0;

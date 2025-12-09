@@ -61,9 +61,21 @@ DataGovernanceMSSQL::executeQueryMSSQL(SQLHDBC conn, const std::string &query) {
 
   ret = SQLExecDirect(stmt, (SQLCHAR *)query.c_str(), SQL_NTS);
   if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
+    SQLCHAR sqlState[6];
+    SQLCHAR errorMsg[SQL_MAX_MESSAGE_LENGTH];
+    SQLINTEGER nativeError;
+    SQLSMALLINT msgLen;
+
+    if (SQLGetDiagRec(SQL_HANDLE_STMT, stmt, 1, sqlState, &nativeError, errorMsg,
+                      sizeof(errorMsg), &msgLen) == SQL_SUCCESS) {
+      Logger::error(LogCategory::GOVERNANCE, "DataGovernanceMSSQL",
+                    "SQLExecDirect failed - SQLState: " + std::string((char *)sqlState) +
+                        ", Error: " + std::string((char *)errorMsg));
+    } else {
+      Logger::error(LogCategory::GOVERNANCE, "DataGovernanceMSSQL",
+                    "SQLExecDirect failed");
+    }
     SQLFreeHandle(SQL_HANDLE_STMT, stmt);
-    Logger::error(LogCategory::GOVERNANCE, "DataGovernanceMSSQL",
-                  "SQLExecDirect failed");
     return results;
   }
 
@@ -77,10 +89,12 @@ DataGovernanceMSSQL::executeQueryMSSQL(SQLHDBC conn, const std::string &query) {
       SQLLEN len;
       ret = SQLGetData(stmt, i, SQL_C_CHAR, buffer, sizeof(buffer), &len);
       if (SQL_SUCCEEDED(ret)) {
-        if (len == SQL_NULL_DATA)
+        if (len == SQL_NULL_DATA || len < 0)
           row.push_back("");
-        else
+        else if (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer)))
           row.push_back(std::string(buffer, len));
+        else
+          row.push_back("");
       } else {
         row.push_back("");
       }
@@ -95,6 +109,8 @@ DataGovernanceMSSQL::executeQueryMSSQL(SQLHDBC conn, const std::string &query) {
 void DataGovernanceMSSQL::collectGovernanceData() {
   Logger::info(LogCategory::GOVERNANCE, "DataGovernanceMSSQL",
                "Starting governance data collection for MSSQL");
+
+  governanceData_.clear();
 
   try {
     queryDatabaseConfig();
@@ -149,21 +165,25 @@ void DataGovernanceMSSQL::queryDatabaseConfig() {
         data.object_name = databaseName;
 
         try {
-          data.compatibility_level = std::stoi(row[0]);
-        } catch (...) {
+          if (!row[0].empty()) data.compatibility_level = std::stoi(row[0]);
+        } catch (const std::exception &e) {
+          Logger::warning(LogCategory::GOVERNANCE, "DataGovernanceMSSQL",
+                          "Error parsing compatibility_level: " + std::string(e.what()));
         }
 
         data.recovery_model = row[1];
         data.page_verify = row[2];
 
-        data.auto_create_stats = (row[3] == "1" || row[3] == "true");
-        data.auto_update_stats = (row[4] == "1" || row[4] == "true");
-        data.auto_update_stats_async = (row[5] == "1" || row[5] == "true");
+        data.auto_create_stats = (row[3] == "1" || row[3] == "true" || row[3] == "TRUE");
+        data.auto_update_stats = (row[4] == "1" || row[4] == "true" || row[4] == "TRUE");
+        data.auto_update_stats_async = (row[5] == "1" || row[5] == "true" || row[5] == "TRUE");
 
         try {
-          data.maxdop = std::stoi(row[6]);
-          data.cost_threshold = std::stoi(row[7]);
-        } catch (...) {
+          if (!row[6].empty()) data.maxdop = std::stoi(row[6]);
+          if (!row[7].empty()) data.cost_threshold = std::stoi(row[7]);
+        } catch (const std::exception &e) {
+          Logger::warning(LogCategory::GOVERNANCE, "DataGovernanceMSSQL",
+                          "Error parsing maxdop/cost_threshold: " + std::string(e.what()));
         }
 
         governanceData_.push_back(data);
@@ -192,6 +212,7 @@ void DataGovernanceMSSQL::queryIndexPhysicalStats() {
                         "OBJECT_NAME(ips.object_id) AS table_name, "
                         "i.name AS index_name, "
                         "ips.index_id, "
+                        "ips.object_id, "
                         "ips.record_count, "
                         "ips.avg_fragmentation_in_percent, "
                         "ips.page_count, "
@@ -204,7 +225,7 @@ void DataGovernanceMSSQL::queryIndexPhysicalStats() {
     auto results = executeQueryMSSQL(conn.getDbc(), query);
 
     for (const auto &row : results) {
-      if (row.size() >= 8) {
+      if (row.size() >= 9) {
         MSSQLGovernanceData data;
         data.server_name = serverName;
         data.database_name = databaseName;
@@ -214,12 +235,15 @@ void DataGovernanceMSSQL::queryIndexPhysicalStats() {
         data.object_type = "INDEX";
 
         try {
-          data.index_id = std::stoi(row[3]);
-          data.row_count = std::stoll(row[4]);
-          data.fragmentation_pct = std::stod(row[5]);
-          data.page_count = std::stoll(row[6]);
-          data.fill_factor = std::stoi(row[7]);
-        } catch (...) {
+          if (!row[3].empty()) data.index_id = std::stoi(row[3]);
+          if (!row[4].empty()) data.object_id = std::stoll(row[4]);
+          if (!row[5].empty()) data.row_count = std::stoll(row[5]);
+          if (!row[6].empty()) data.fragmentation_pct = std::stod(row[6]);
+          if (!row[7].empty()) data.page_count = std::stoll(row[7]);
+          if (!row[8].empty()) data.fill_factor = std::stoi(row[8]);
+        } catch (const std::exception &e) {
+          Logger::warning(LogCategory::GOVERNANCE, "DataGovernanceMSSQL",
+                          "Error parsing index physical stats: " + std::string(e.what()));
         }
 
         governanceData_.push_back(data);
@@ -266,17 +290,26 @@ void DataGovernanceMSSQL::queryIndexUsageStats() {
         std::string tableName = row[1];
         std::string indexName = row[2];
 
+        int indexId = 0;
+        try {
+          indexId = std::stoi(row[3]);
+        } catch (...) {
+        }
+
         for (auto &data : governanceData_) {
           if (data.schema_name == schemaName && data.table_name == tableName &&
-              data.index_name == indexName) {
+              data.object_type == "INDEX" &&
+              (data.index_name == indexName || (indexId > 0 && data.index_id == indexId))) {
             try {
-              data.user_seeks = std::stoll(row[4]);
-              data.user_scans = std::stoll(row[5]);
-              data.user_lookups = std::stoll(row[6]);
-              data.user_updates = std::stoll(row[7]);
-              data.page_splits = std::stoll(row[8]);
-              data.leaf_inserts = std::stoll(row[9]);
-            } catch (...) {
+              if (!row[4].empty()) data.user_seeks = std::stoll(row[4]);
+              if (!row[5].empty()) data.user_scans = std::stoll(row[5]);
+              if (!row[6].empty()) data.user_lookups = std::stoll(row[6]);
+              if (!row[7].empty()) data.user_updates = std::stoll(row[7]);
+              if (!row[8].empty()) data.page_splits = std::stoll(row[8]);
+              if (!row[9].empty()) data.leaf_inserts = std::stoll(row[9]);
+            } catch (const std::exception &e) {
+              Logger::warning(LogCategory::GOVERNANCE, "DataGovernanceMSSQL",
+                              "Error parsing index usage stats: " + std::string(e.what()));
             }
             break;
           }
@@ -330,12 +363,14 @@ void DataGovernanceMSSQL::queryMissingIndexes() {
         data.has_missing_index = true;
 
         try {
-          data.missing_index_avg_user_impact = std::stod(row[2]);
-          data.missing_index_user_seeks = std::stoll(row[3]);
-          data.missing_index_user_scans = std::stoll(row[4]);
-          data.missing_index_avg_total_user_cost = std::stod(row[5]);
-          data.missing_index_unique_compiles = std::stoll(row[6]);
-        } catch (...) {
+          if (!row[2].empty()) data.missing_index_avg_user_impact = std::stod(row[2]);
+          if (!row[3].empty()) data.missing_index_user_seeks = std::stoll(row[3]);
+          if (!row[4].empty()) data.missing_index_user_scans = std::stoll(row[4]);
+          if (!row[5].empty()) data.missing_index_avg_total_user_cost = std::stod(row[5]);
+          if (!row[6].empty()) data.missing_index_unique_compiles = std::stoll(row[6]);
+        } catch (const std::exception &e) {
+          Logger::warning(LogCategory::GOVERNANCE, "DataGovernanceMSSQL",
+                          "Error parsing missing index stats: " + std::string(e.what()));
         }
 
         data.missing_index_equality_columns = row[7];
@@ -365,7 +400,7 @@ void DataGovernanceMSSQL::queryBackupInfo() {
 
     std::string databaseName = extractDatabaseName(connectionString_);
 
-    std::string query = "SELECT TOP 1 "
+    std::string query = "SELECT "
                         "MAX(CASE WHEN type = 'D' THEN backup_finish_date END) AS last_full_backup, "
                         "MAX(CASE WHEN type = 'I' THEN backup_finish_date END) AS last_diff_backup, "
                         "MAX(CASE WHEN type = 'L' THEN backup_finish_date END) AS last_log_backup "
@@ -375,13 +410,19 @@ void DataGovernanceMSSQL::queryBackupInfo() {
     auto results = executeQueryMSSQL(conn.getDbc(), query);
 
     if (!results.empty() && results[0].size() >= 3) {
+      bool found = false;
       for (auto &data : governanceData_) {
         if (data.database_name == databaseName && data.object_type == "DATABASE") {
-          data.last_full_backup = results[0][0];
-          data.last_diff_backup = results[0][1];
-          data.last_log_backup = results[0][2];
+          data.last_full_backup = results[0][0].empty() ? "" : results[0][0];
+          data.last_diff_backup = results[0][1].empty() ? "" : results[0][1];
+          data.last_log_backup = results[0][2].empty() ? "" : results[0][2];
+          found = true;
           break;
         }
+      }
+      if (!found) {
+        Logger::warning(LogCategory::GOVERNANCE, "DataGovernanceMSSQL",
+                        "Database config record not found for backup info update");
       }
     }
   } catch (const std::exception &e) {
@@ -403,11 +444,12 @@ void DataGovernanceMSSQL::queryStoredProcedures() {
     std::string query = "SELECT "
                         "OBJECT_SCHEMA_NAME(ps.object_id) AS schema_name, "
                         "OBJECT_NAME(ps.object_id) AS sp_name, "
+                        "ps.object_id, "
                         "ps.execution_count, "
-                        "ps.total_elapsed_time / 1000000.0 AS avg_execution_time_seconds, "
+                        "CASE WHEN ps.execution_count > 0 THEN ps.total_elapsed_time / 1000000.0 / ps.execution_count ELSE 0 END AS avg_execution_time_seconds, "
                         "ps.total_elapsed_time AS total_elapsed_time_ms, "
-                        "ps.total_logical_reads / ps.execution_count AS avg_logical_reads, "
-                        "ps.total_physical_reads / ps.execution_count AS avg_physical_reads "
+                        "CASE WHEN ps.execution_count > 0 THEN ps.total_logical_reads / ps.execution_count ELSE 0 END AS avg_logical_reads, "
+                        "CASE WHEN ps.execution_count > 0 THEN ps.total_physical_reads / ps.execution_count ELSE 0 END AS avg_physical_reads "
                         "FROM sys.dm_exec_procedure_stats ps "
                         "WHERE ps.database_id = DB_ID() "
                         "ORDER BY ps.total_elapsed_time DESC;";
@@ -415,7 +457,7 @@ void DataGovernanceMSSQL::queryStoredProcedures() {
     auto results = executeQueryMSSQL(conn.getDbc(), query);
 
     for (const auto &row : results) {
-      if (row.size() >= 7) {
+      if (row.size() >= 8) {
         MSSQLGovernanceData data;
         data.server_name = serverName;
         data.database_name = databaseName;
@@ -425,12 +467,15 @@ void DataGovernanceMSSQL::queryStoredProcedures() {
         data.sp_name = row[1];
 
         try {
-          data.execution_count = std::stoll(row[2]);
-          data.avg_execution_time_seconds = std::stod(row[3]);
-          data.total_elapsed_time_ms = std::stoll(row[4]);
-          data.avg_logical_reads = std::stoll(row[5]);
-          data.avg_physical_reads = std::stoll(row[6]);
-        } catch (...) {
+          if (!row[2].empty()) data.object_id = std::stoll(row[2]);
+          if (!row[3].empty()) data.execution_count = std::stoll(row[3]);
+          if (!row[4].empty()) data.avg_execution_time_seconds = std::stod(row[4]);
+          if (!row[5].empty()) data.total_elapsed_time_ms = std::stoll(row[5]);
+          if (!row[6].empty()) data.avg_logical_reads = std::stoll(row[6]);
+          if (!row[7].empty()) data.avg_physical_reads = std::stoll(row[7]);
+        } catch (const std::exception &e) {
+          Logger::warning(LogCategory::GOVERNANCE, "DataGovernanceMSSQL",
+                          "Error parsing stored procedure stats: " + std::string(e.what()));
         }
 
         governanceData_.push_back(data);
@@ -452,10 +497,11 @@ void DataGovernanceMSSQL::calculateHealthScores() {
     double score = 100.0;
 
     if (data.fragmentation_pct > 30.0) {
-      score -= (data.fragmentation_pct - 30.0) * 0.5;
+      double penalty = (data.fragmentation_pct - 30.0) * 0.5;
+      score -= std::min(penalty, 40.0);
     }
 
-    if (data.is_unused) {
+    if (data.is_unused && data.object_type == "INDEX") {
       score -= 20.0;
     }
 
@@ -463,7 +509,11 @@ void DataGovernanceMSSQL::calculateHealthScores() {
       score -= 15.0;
     }
 
-    if (data.last_full_backup.empty()) {
+    if (data.object_type == "DATABASE" && data.last_full_backup.empty()) {
+      score -= 10.0;
+    }
+
+    if (data.object_type == "STORED_PROCEDURE" && data.avg_execution_time_seconds > 5.0) {
       score -= 10.0;
     }
 
@@ -477,12 +527,19 @@ void DataGovernanceMSSQL::calculateHealthScores() {
       data.health_status = "CRITICAL";
     }
 
-    if (data.fragmentation_pct > 30.0) {
-      data.recommendation_summary = "Consider rebuilding index due to high fragmentation";
-    } else if (data.has_missing_index) {
-      data.recommendation_summary = "Consider creating missing index for better performance";
-    } else if (data.is_unused) {
-      data.recommendation_summary = "Index appears unused, consider removing";
+    if (data.recommendation_summary.empty()) {
+      if (data.fragmentation_pct > 30.0) {
+        data.recommendation_summary = "Consider rebuilding index due to high fragmentation (" +
+                                     std::to_string(static_cast<int>(data.fragmentation_pct)) + "%)";
+      } else if (data.has_missing_index) {
+        data.recommendation_summary = "Consider creating missing index for better performance (impact: " +
+                                     std::to_string(static_cast<int>(data.missing_index_avg_user_impact)) + "%)";
+      } else if (data.is_unused && data.object_type == "INDEX") {
+        data.recommendation_summary = "Index appears unused, consider removing";
+      } else if (data.object_type == "STORED_PROCEDURE" && data.avg_execution_time_seconds > 5.0) {
+        data.recommendation_summary = "Stored procedure execution time is high (" +
+                                     std::to_string(static_cast<int>(data.avg_execution_time_seconds)) + "s avg)";
+      }
     }
   }
 }
@@ -496,18 +553,34 @@ void DataGovernanceMSSQL::storeGovernanceData() {
 
   try {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
+    if (!conn.is_open()) {
+      Logger::error(LogCategory::GOVERNANCE, "DataGovernanceMSSQL",
+                    "Failed to connect to PostgreSQL");
+      return;
+    }
+
     pqxx::work txn(conn);
 
+    int successCount = 0;
+    int errorCount = 0;
+
     for (const auto &data : governanceData_) {
+      if (data.server_name.empty() || data.database_name.empty() || data.schema_name.empty()) {
+        Logger::warning(LogCategory::GOVERNANCE, "DataGovernanceMSSQL",
+                        "Skipping record with missing required fields");
+        errorCount++;
+        continue;
+      }
+
       std::ostringstream insertQuery;
       insertQuery << "INSERT INTO metadata.data_governance_catalog_mssql ("
                   << "server_name, database_name, schema_name, table_name, "
-                  << "object_name, object_type, index_name, index_id, "
+                  << "object_name, object_type, index_name, index_id, object_id, "
                   << "row_count, table_size_mb, fragmentation_pct, page_count, "
                   << "fill_factor, user_seeks, user_scans, user_lookups, "
                   << "user_updates, page_splits, leaf_inserts, "
                   << "index_key_columns, index_include_columns, "
-                  << "has_missing_index, missing_index_impact, is_unused, "
+                  << "has_missing_index, missing_index_avg_user_impact, is_unused, "
                   << "is_potential_duplicate, last_full_backup, last_diff_backup, "
                   << "last_log_backup, compatibility_level, recovery_model, "
                   << "page_verify, auto_create_stats, auto_update_stats, "
@@ -530,21 +603,22 @@ void DataGovernanceMSSQL::storeGovernanceData() {
                   << (data.object_type.empty() ? "NULL" : txn.quote(data.object_type)) << ", "
                   << (data.index_name.empty() ? "NULL" : txn.quote(data.index_name)) << ", "
                   << (data.index_id == 0 ? "NULL" : std::to_string(data.index_id)) << ", "
+                  << (data.object_id == 0 ? "NULL" : std::to_string(data.object_id)) << ", "
                   << (data.row_count == 0 ? "NULL" : std::to_string(data.row_count)) << ", "
                   << (data.table_size_mb == 0.0 ? "NULL" : std::to_string(data.table_size_mb)) << ", "
                   << (data.fragmentation_pct == 0.0 ? "NULL" : std::to_string(data.fragmentation_pct)) << ", "
                   << (data.page_count == 0 ? "NULL" : std::to_string(data.page_count)) << ", "
-                  << (data.fill_factor == 0 ? "NULL" : std::to_string(data.fill_factor)) << ", "
-                  << (data.user_seeks == 0 ? "NULL" : std::to_string(data.user_seeks)) << ", "
-                  << (data.user_scans == 0 ? "NULL" : std::to_string(data.user_scans)) << ", "
-                  << (data.user_lookups == 0 ? "NULL" : std::to_string(data.user_lookups)) << ", "
+                  << (data.fill_factor == 0 && data.object_type != "INDEX" ? "NULL" : std::to_string(data.fill_factor)) << ", "
+                  << (data.user_seeks == 0 && data.user_scans == 0 && data.user_lookups == 0 ? "NULL" : std::to_string(data.user_seeks)) << ", "
+                  << (data.user_seeks == 0 && data.user_scans == 0 && data.user_lookups == 0 ? "NULL" : std::to_string(data.user_scans)) << ", "
+                  << (data.user_seeks == 0 && data.user_scans == 0 && data.user_lookups == 0 ? "NULL" : std::to_string(data.user_lookups)) << ", "
                   << (data.user_updates == 0 ? "NULL" : std::to_string(data.user_updates)) << ", "
                   << (data.page_splits == 0 ? "NULL" : std::to_string(data.page_splits)) << ", "
                   << (data.leaf_inserts == 0 ? "NULL" : std::to_string(data.leaf_inserts)) << ", "
                   << (data.index_key_columns.empty() ? "NULL" : txn.quote(data.index_key_columns)) << ", "
                   << (data.index_include_columns.empty() ? "NULL" : txn.quote(data.index_include_columns)) << ", "
                   << (data.has_missing_index ? "true" : "false") << ", "
-                  << (data.missing_index_impact == 0.0 ? "NULL" : std::to_string(data.missing_index_impact)) << ", "
+                  << (data.missing_index_avg_user_impact == 0.0 ? "NULL" : std::to_string(data.missing_index_avg_user_impact)) << ", "
                   << (data.is_unused ? "true" : "false") << ", "
                   << (data.is_potential_duplicate ? "true" : "false") << ", "
                   << (data.last_full_backup.empty() ? "NULL" : txn.quote(data.last_full_backup)) << ", "
@@ -579,14 +653,22 @@ void DataGovernanceMSSQL::storeGovernanceData() {
                   << "NOW()"
                   << ") ON CONFLICT DO NOTHING;";
 
-      txn.exec(insertQuery.str());
+      try {
+        txn.exec(insertQuery.str());
+        successCount++;
+      } catch (const std::exception &e) {
+        Logger::error(LogCategory::GOVERNANCE, "DataGovernanceMSSQL",
+                      "Error inserting record: " + std::string(e.what()));
+        errorCount++;
+      }
     }
 
     txn.commit();
 
     Logger::info(LogCategory::GOVERNANCE, "DataGovernanceMSSQL",
-                 "Stored " + std::to_string(governanceData_.size()) +
-                     " governance records in PostgreSQL");
+                 "Stored " + std::to_string(successCount) +
+                     " governance records in PostgreSQL (errors: " +
+                     std::to_string(errorCount) + ")");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "DataGovernanceMSSQL",
                   "Error storing governance data: " + std::string(e.what()));
