@@ -155,8 +155,6 @@ const EditModal: React.FC<EditModalProps> = ({ entry, onClose, onSave }) => {
           <Label>Offset</Label>
           <Input
             type="text"
-            value={editedEntry.last_offset}
-            onChange={(e) => setEditedEntry({...editedEntry, last_offset: e.target.value})}
           />
         </FormGroup>
 

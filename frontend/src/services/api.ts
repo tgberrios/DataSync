@@ -17,7 +17,6 @@ export interface CatalogEntry {
   status: string;
   last_sync_time: string;
   last_sync_column: string;
-  last_offset: number;
   cluster_name: string;
   updated_at: string;
   pk_strategy?: string;
@@ -41,7 +40,6 @@ export interface DashboardStats {
     skip: number;
     errors: number;
     currentProcess: string;
-    totalLastOffset?: number;
     totalData?: number;
   };
   systemResources: {
@@ -75,7 +73,6 @@ export interface DashboardStats {
     schemaName: string;
     tableName: string;
     dbEngine: string;
-    lastOffset: number;
     tableSize: number;
     progressPercentage: number;
     status: string;
