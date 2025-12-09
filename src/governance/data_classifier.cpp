@@ -4,11 +4,9 @@
 #include <fstream>
 
 // Default constructor for DataClassifier. Initializes the classifier with
-// loaded_ set to false and attempts to load rules from the default path
-// "/rules/governance_rules.json". If loading fails, the classifier will still
-// be functional but will return default values for all classification methods.
+// loaded_ set to false. The classifier will return default values for all
+// classification methods (TRANSACTIONAL, GENERAL, PUBLIC).
 DataClassifier::DataClassifier() : loaded_(false) {
-  loadRules("/rules/governance_rules.json");
 }
 
 // Constructor for DataClassifier with custom rules path. Initializes the

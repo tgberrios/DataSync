@@ -6,10 +6,6 @@
 │ PRIORITY 1: HIGH PRIORITY + LOW COMPLEXITY (Do First)          │
 └─────────────────────────────────────────────────────────────────┘
 
-1. LAST_OFFSET es una columna que no ocupamos! porque las tablas con 
-   esas estrategias las jalaremos una vez por semana de forma FULL_LOAD
-   [LIMPIEZA DE CÓDIGO - Eliminar columna no usada]
-
 2. expandir las rules mas bien seria quitar las rules no creo ocuparlas
    [LIMPIEZA DE CÓDIGO - Eliminar archivos no usados]
 
