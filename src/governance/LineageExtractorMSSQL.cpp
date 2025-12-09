@@ -455,19 +455,19 @@ void LineageExtractorMSSQL::storeLineage() {
   try {
     std::string connStr = DatabaseConfig::getPostgresConnectionString();
     pqxx::connection conn(connStr);
-    pqxx::work txn(conn);
 
     int stored = 0;
     for (const auto &edge : lineageEdges_) {
       try {
+        pqxx::work txn(conn);
         std::string query = R"(
           INSERT INTO metadata.mssql_lineage (
             edge_key, server_name, instance_name, database_name, schema_name,
             object_name, object_type, column_name, target_object_name,
             target_object_type, target_column_name, relationship_type,
-            definition_text, dependency_level, discovery_method, confidence_score
+            definition_text, dependency_level, discovery_method, discovered_by, confidence_score
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
           )
           ON CONFLICT (edge_key) DO UPDATE SET
             last_seen_at = NOW(),
@@ -492,15 +492,15 @@ void LineageExtractorMSSQL::storeLineage() {
             edge.definition_text.empty() ? nullptr
                                          : edge.definition_text.c_str(),
             edge.dependency_level, edge.discovery_method,
+            "LineageExtractorMSSQL",
             edge.confidence_score);
+        txn.commit();
         stored++;
       } catch (const std::exception &e) {
         Logger::warning(LogCategory::GOVERNANCE, "LineageExtractorMSSQL",
                         "Error storing lineage edge: " + std::string(e.what()));
       }
     }
-
-    txn.commit();
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMSSQL",
                  "Stored " + std::to_string(stored) + " lineage edges");
   } catch (const std::exception &e) {
