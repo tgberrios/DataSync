@@ -17,11 +17,6 @@
 
 en los governance cada cuanto saca las snapshots ?
 
-5.8. Implementar LineageExtractorMariaDB.cpp
-     [LINEAGE - Extracción de dependencias MariaDB]
-     [ARCHIVO: src/governance/LineageExtractorMariaDB.cpp]
-     [PRIORIDAD: Baja - Funcionalidad avanzada]
-
 5.9. Implementar DataGovernanceMongoDB.cpp
      [GOVERNANCE - Catálogo específico para MongoDB]
      [ARCHIVO: src/governance/DataGovernanceMongoDB.cpp]
