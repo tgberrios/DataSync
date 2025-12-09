@@ -2,6 +2,7 @@
 #include "governance/DataGovernanceMSSQL.h"
 #include "governance/DataGovernanceMariaDB.h"
 #include "governance/LineageExtractorMSSQL.h"
+#include "governance/LineageExtractorMariaDB.h"
 #include "catalog/metadata_repository.h"
 #include "core/database_config.h"
 #include "engines/database_engine.h"
@@ -177,6 +178,20 @@ void DataGovernance::runDiscovery() {
           } catch (const std::exception &e) {
             Logger::error(LogCategory::GOVERNANCE, "runDiscovery",
                           "Error collecting MariaDB governance data: " +
+                              std::string(e.what()));
+          }
+
+          try {
+            Logger::info(LogCategory::GOVERNANCE, "runDiscovery",
+                         "Extracting MariaDB lineage for connection");
+            LineageExtractorMariaDB lineageExtractor(connStr);
+            lineageExtractor.extractLineage();
+            lineageExtractor.storeLineage();
+            Logger::info(LogCategory::GOVERNANCE, "runDiscovery",
+                         "MariaDB lineage extraction completed");
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::GOVERNANCE, "runDiscovery",
+                          "Error extracting MariaDB lineage: " +
                               std::string(e.what()));
           }
         }
