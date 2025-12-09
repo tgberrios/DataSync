@@ -65,33 +65,35 @@ void QueryStoreCollector::queryPgStatStatements(pqxx::connection &conn) {
 
     std::string query = R"(
       SELECT 
-        datname,
-        usename,
-        queryid,
-        query,
-        calls,
-        total_exec_time,
-        mean_exec_time,
-        rows,
-        shared_blks_hit,
-        shared_blks_read,
-        shared_blks_dirtied,
-        shared_blks_written,
-        local_blks_hit,
-        local_blks_read,
-        local_blks_dirtied,
-        local_blks_written,
-        temp_blks_read,
-        temp_blks_written,
-        blk_read_time,
-        blk_write_time,
-        wal_records,
-        wal_fpi,
-        wal_bytes
-      FROM pg_stat_statements
-      WHERE query NOT LIKE '%pg_stat_statements%'
-        AND query NOT LIKE '%pg_catalog%'
-      ORDER BY total_exec_time DESC
+        COALESCE(pg_database.datname::text, 'unknown') as datname,
+        COALESCE(pg_user.usename::text, 'unknown') as usename,
+        pss.queryid,
+        pss.query,
+        pss.calls,
+        pss.total_exec_time,
+        pss.mean_exec_time,
+        pss.rows,
+        pss.shared_blks_hit,
+        pss.shared_blks_read,
+        pss.shared_blks_dirtied,
+        pss.shared_blks_written,
+        pss.local_blks_hit,
+        pss.local_blks_read,
+        pss.local_blks_dirtied,
+        pss.local_blks_written,
+        pss.temp_blks_read,
+        pss.temp_blks_written,
+        pss.blk_read_time,
+        pss.blk_write_time,
+        pss.wal_records,
+        pss.wal_fpi,
+        pss.wal_bytes
+      FROM pg_stat_statements pss
+      LEFT JOIN pg_database ON pss.dbid = pg_database.oid
+      LEFT JOIN pg_user ON pss.userid = pg_user.usesysid
+      WHERE pss.query NOT LIKE '%pg_stat_statements%'
+        AND pss.query NOT LIKE '%pg_catalog%'
+      ORDER BY pss.total_exec_time DESC
       LIMIT 1000
     )";
 
