@@ -1,4 +1,7 @@
 #include "sync/StreamingData.h"
+#include "governance/QueryStoreCollector.h"
+#include "governance/QueryActivityLogger.h"
+#include "core/database_config.h"
 
 // Destructor automatically shuts down the system, ensuring all threads are
 // properly joined and resources are cleaned up.
@@ -281,6 +284,38 @@ void StreamingData::initializationThread() {
       Logger::error(LogCategory::MONITORING, "initializationThread",
                     "CRITICAL ERROR in MetricsCollector: " +
                         std::string(e.what()) + " - Metrics collection failed");
+    }
+
+    try {
+      Logger::info(LogCategory::MONITORING,
+                   "Initializing QueryStoreCollector component");
+      std::string pgConnStr = DatabaseConfig::getPostgresConnectionString();
+      QueryStoreCollector queryStoreCollector(pgConnStr);
+      queryStoreCollector.collectQuerySnapshots();
+      queryStoreCollector.storeSnapshots();
+      queryStoreCollector.analyzeQueries();
+      Logger::info(LogCategory::MONITORING,
+                   "QueryStoreCollector completed successfully");
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::MONITORING, "initializationThread",
+                    "CRITICAL ERROR in QueryStoreCollector: " +
+                        std::string(e.what()) + " - Query snapshot collection failed");
+    }
+
+    try {
+      Logger::info(LogCategory::MONITORING,
+                   "Initializing QueryActivityLogger component");
+      std::string pgConnStr = DatabaseConfig::getPostgresConnectionString();
+      QueryActivityLogger queryActivityLogger(pgConnStr);
+      queryActivityLogger.logActiveQueries();
+      queryActivityLogger.storeActivityLog();
+      queryActivityLogger.analyzeActivity();
+      Logger::info(LogCategory::MONITORING,
+                   "QueryActivityLogger completed successfully");
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::MONITORING, "initializationThread",
+                    "CRITICAL ERROR in QueryActivityLogger: " +
+                        std::string(e.what()) + " - Query activity logging failed");
     }
 
     try {
