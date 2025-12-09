@@ -65,10 +65,6 @@ en los governance cada cuanto saca las snapshots ?
     [ARQUITECTURA - Nuevo catálogo para metadatos de columnas]
     [NOTA: Considerar si es mejor tabla separada o columna JSON]
 
-12. data governance debe tener una funcionalidad para generar governanza 
-    y calidad de data apartir de las fuentes
-    [FUNCIONALIDAD - Mejorar data governance con generación automática]
-
 
 ┌─────────────────────────────────────────────────────────────────┐
 │ PRIORITY 7: LOW PRIORITY + HIGH COMPLEXITY (Future)             │

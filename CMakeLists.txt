@@ -47,6 +47,7 @@ add_executable(DataSync
     src/governance/MaintenanceManager.cpp
     src/governance/LineageExtractorMSSQL.cpp
     src/governance/LineageExtractorMariaDB.cpp
+    src/governance/ColumnCatalogCollector.cpp
     src/metrics/MetricsCollector.cpp
     src/utils/connection_utils.cpp
     src/utils/cluster_name_resolver.cpp

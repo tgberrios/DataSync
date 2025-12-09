@@ -128,23 +128,28 @@ void LineageExtractorMariaDB::extractLineage() {
 
     extractForeignKeyDependencies();
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
-                 "After FK extraction: " + std::to_string(lineageEdges_.size()) + " edges");
+                 "After FK extraction: " +
+                     std::to_string(lineageEdges_.size()) + " edges");
 
     extractTableDependencies();
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
-                 "After table extraction: " + std::to_string(lineageEdges_.size()) + " edges");
+                 "After table extraction: " +
+                     std::to_string(lineageEdges_.size()) + " edges");
 
     extractViewDependencies();
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
-                 "After view extraction: " + std::to_string(lineageEdges_.size()) + " edges");
+                 "After view extraction: " +
+                     std::to_string(lineageEdges_.size()) + " edges");
 
     extractTriggerDependencies();
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
-                 "After trigger extraction: " + std::to_string(lineageEdges_.size()) + " edges");
+                 "After trigger extraction: " +
+                     std::to_string(lineageEdges_.size()) + " edges");
 
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
                  "Lineage extraction completed. Found " +
-                     std::to_string(lineageEdges_.size()) + " total dependencies");
+                     std::to_string(lineageEdges_.size()) +
+                     " total dependencies");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
                   "Error extracting lineage: " + std::string(e.what()));
@@ -187,7 +192,8 @@ void LineageExtractorMariaDB::extractForeignKeyDependencies() {
     auto results = executeQuery(mysqlConn, query);
 
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
-                 "Found " + std::to_string(results.size()) + " foreign key constraints");
+                 "Found " + std::to_string(results.size()) +
+                     " foreign key constraints");
 
     for (const auto &row : results) {
       if (row.size() >= 7) {
@@ -211,16 +217,19 @@ void LineageExtractorMariaDB::extractForeignKeyDependencies() {
 
         lineageEdges_.push_back(edge);
         Logger::debug(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
-                     "Added FK edge: " + edge.object_name + " -> " + edge.target_object_name);
+                      "Added FK edge: " + edge.object_name + " -> " +
+                          edge.target_object_name);
       } else {
         Logger::warning(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
-                       "Row has insufficient columns: " + std::to_string(row.size()));
+                        "Row has insufficient columns: " +
+                            std::to_string(row.size()));
       }
     }
 
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
                  "Extracted " + std::to_string(lineageEdges_.size()) +
-                     " foreign key dependencies from " + std::to_string(results.size()) + " constraints");
+                     " foreign key dependencies from " +
+                     std::to_string(results.size()) + " constraints");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
                   "Error extracting foreign key dependencies: " +
@@ -259,7 +268,8 @@ void LineageExtractorMariaDB::extractViewDependencies() {
     auto results = executeQuery(mysqlConn, query);
 
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
-                 "Found " + std::to_string(results.size()) + " views to analyze");
+                 "Found " + std::to_string(results.size()) +
+                     " views to analyze");
 
     std::regex tableRegex(R"(\bFROM\s+[`"]?(\w+)[`"]?\.?[`"]?(\w+)[`"]?)",
                           std::regex_constants::icase);
@@ -326,7 +336,8 @@ void LineageExtractorMariaDB::extractViewDependencies() {
 
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
                  "Extracted " + std::to_string(viewEdgesAdded) +
-                     " view dependencies from " + std::to_string(results.size()) + " views");
+                     " view dependencies from " +
+                     std::to_string(results.size()) + " views");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
                   "Error extracting view dependencies: " +
@@ -362,7 +373,8 @@ void LineageExtractorMariaDB::extractTriggerDependencies() {
     auto results = executeQuery(mysqlConn, query);
 
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
-                 "Found " + std::to_string(results.size()) + " triggers to analyze");
+                 "Found " + std::to_string(results.size()) +
+                     " triggers to analyze");
 
     std::regex tableRegex(R"(\bFROM\s+[`"]?(\w+)[`"]?\.?[`"]?(\w+)[`"]?)",
                           std::regex_constants::icase);
@@ -466,7 +478,8 @@ void LineageExtractorMariaDB::extractTriggerDependencies() {
 
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
                  "Extracted " + std::to_string(triggerEdgesAdded) +
-                     " trigger dependencies from " + std::to_string(results.size()) + " triggers");
+                     " trigger dependencies from " +
+                     std::to_string(results.size()) + " triggers");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
                   "Error extracting trigger dependencies: " +
@@ -476,7 +489,8 @@ void LineageExtractorMariaDB::extractTriggerDependencies() {
 
 void LineageExtractorMariaDB::storeLineage() {
   Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
-               "storeLineage called with " + std::to_string(lineageEdges_.size()) + " edges");
+               "storeLineage called with " +
+                   std::to_string(lineageEdges_.size()) + " edges");
 
   if (lineageEdges_.empty()) {
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
@@ -489,7 +503,8 @@ void LineageExtractorMariaDB::storeLineage() {
     pqxx::connection conn(connStr);
 
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
-                 "Connected to PostgreSQL, starting to store " + std::to_string(lineageEdges_.size()) + " edges");
+                 "Connected to PostgreSQL, starting to store " +
+                     std::to_string(lineageEdges_.size()) + " edges");
 
     int stored = 0;
     int failed = 0;
@@ -532,12 +547,14 @@ void LineageExtractorMariaDB::storeLineage() {
       } catch (const std::exception &e) {
         failed++;
         Logger::warning(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
-                        "Error storing lineage edge " + edge.edge_key + ": " + std::string(e.what()));
+                        "Error storing lineage edge " + edge.edge_key + ": " +
+                            std::string(e.what()));
       }
     }
 
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
-                 "Stored " + std::to_string(stored) + " lineage edges, " + std::to_string(failed) + " failed");
+                 "Stored " + std::to_string(stored) + " lineage edges, " +
+                     std::to_string(failed) + " failed");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
                   "Error storing lineage: " + std::string(e.what()));

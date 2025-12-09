@@ -3,6 +3,7 @@
 #include "governance/DataGovernanceMariaDB.h"
 #include "governance/LineageExtractorMSSQL.h"
 #include "governance/LineageExtractorMariaDB.h"
+#include "governance/ColumnCatalogCollector.h"
 #include "catalog/metadata_repository.h"
 #include "core/database_config.h"
 #include "engines/database_engine.h"
@@ -200,6 +201,20 @@ void DataGovernance::runDiscovery() {
       Logger::error(LogCategory::GOVERNANCE, "runDiscovery",
                     "Error processing database governance: " +
                         std::string(e.what()));
+    }
+
+    try {
+      Logger::info(LogCategory::GOVERNANCE, "runDiscovery",
+                   "Collecting column catalog from all sources");
+      ColumnCatalogCollector columnCollector(DatabaseConfig::getPostgresConnectionString());
+      columnCollector.collectAllColumns();
+      columnCollector.storeColumnMetadata();
+      columnCollector.generateReport();
+      Logger::info(LogCategory::GOVERNANCE, "runDiscovery",
+                   "Column catalog collection completed");
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::GOVERNANCE, "runDiscovery",
+                    "Error collecting column catalog: " + std::string(e.what()));
     }
 
   } catch (const std::exception &e) {
