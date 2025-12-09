@@ -447,8 +447,8 @@ void DataGovernance::analyzeDataQuality(pqxx::connection &conn,
       }
     } catch (const pqxx::sql_error &e) {
       Logger::error(LogCategory::GOVERNANCE, "analyzeDataQuality",
-                    "SQL error calculating duplicates for " + schema_name + "." +
-                        table_name + ": " + std::string(e.what()));
+                    "SQL error calculating duplicates for " + schema_name +
+                        "." + table_name + ": " + std::string(e.what()));
       metadata.duplicate_percentage = 0.0;
     } catch (const std::exception &e) {
       Logger::error(LogCategory::GOVERNANCE, "analyzeDataQuality",
@@ -673,7 +673,7 @@ void DataGovernance::storeMetadata(const TableMetadata &metadata) {
           "inferred_source_engine, last_analyzed,"
           "last_accessed, access_frequency, query_count_daily,"
           "data_category, business_domain, sensitivity_level,"
-          "health_status, last_vacuum, fragmentation_percentage"
+          "health_status, last_vacuum, fragmentation_percentage, snapshot_date"
           ") VALUES ("
           "'" +
           escapeSQL(metadata.schema_name) + "', '" +
@@ -708,7 +708,8 @@ void DataGovernance::storeMetadata(const TableMetadata &metadata) {
           (metadata.last_vacuum.empty()
                ? "NULL"
                : "'" + escapeSQL(metadata.last_vacuum) + "'") +
-          ", " + std::to_string(metadata.fragmentation_percentage) + ");";
+          ", " + std::to_string(metadata.fragmentation_percentage) +
+          ", NOW());";
 
       txn.exec(insertQuery);
     }
@@ -847,14 +848,15 @@ void DataGovernance::generateReport() {
           row[5].is_null() ? 0 : static_cast<long long>(row[5].as<double>());
       double totalSize = row[6].is_null() ? 0.0 : row[6].as<double>();
 
-      Logger::info(LogCategory::GOVERNANCE, "generateReport",
-                   "Governance Report: Total tables=" + std::to_string(totalTables) +
-                       ", Healthy=" + std::to_string(healthyTables) +
-                       ", Warning=" + std::to_string(warningTables) +
-                       ", Critical=" + std::to_string(criticalTables) +
-                       ", Avg Quality=" + std::to_string(avgQuality) +
-                       ", Total Rows=" + std::to_string(totalRows) +
-                       ", Total Size MB=" + std::to_string(totalSize));
+      Logger::info(
+          LogCategory::GOVERNANCE, "generateReport",
+          "Governance Report: Total tables=" + std::to_string(totalTables) +
+              ", Healthy=" + std::to_string(healthyTables) +
+              ", Warning=" + std::to_string(warningTables) +
+              ", Critical=" + std::to_string(criticalTables) +
+              ", Avg Quality=" + std::to_string(avgQuality) +
+              ", Total Rows=" + std::to_string(totalRows) +
+              ", Total Size MB=" + std::to_string(totalSize));
     }
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "generateReport",
@@ -933,27 +935,27 @@ DataGovernance::determineDataCategory(const std::string &table_name,
   return classifier_->classifyDataCategory(table_name, schema_name);
 }
 
-// Determines the business domain for a table by delegating to the DataClassifier.
-// Returns domains such as "FINANCE", "HEALTHCARE", "SPORTS", "GENERAL", etc.
-// based on pattern matching against governance rules.
+// Determines the business domain for a table by delegating to the
+// DataClassifier. Returns domains such as "FINANCE", "HEALTHCARE", "SPORTS",
+// "GENERAL", etc. based on pattern matching against governance rules.
 std::string
 DataGovernance::determineBusinessDomain(const std::string &table_name,
                                         const std::string &schema_name) {
   return classifier_->classifyBusinessDomain(table_name, schema_name);
 }
 
-// Determines the sensitivity level for a table by delegating to the DataClassifier.
-// Returns levels such as "PUBLIC", "PRIVATE", "CRITICAL", "HIGH", etc. based
-// on pattern matching against governance rules.
+// Determines the sensitivity level for a table by delegating to the
+// DataClassifier. Returns levels such as "PUBLIC", "PRIVATE", "CRITICAL",
+// "HIGH", etc. based on pattern matching against governance rules.
 std::string
 DataGovernance::determineSensitivityLevel(const std::string &table_name,
                                           const std::string &schema_name) {
   return classifier_->classifySensitivityLevel(table_name, schema_name);
 }
 
-// Determines the data classification for a table by delegating to the DataClassifier.
-// Returns classifications such as "PUBLIC", "CONFIDENTIAL", etc. based on
-// pattern matching against governance rules.
+// Determines the data classification for a table by delegating to the
+// DataClassifier. Returns classifications such as "PUBLIC", "CONFIDENTIAL",
+// etc. based on pattern matching against governance rules.
 std::string
 DataGovernance::determineDataClassification(const std::string &table_name,
                                             const std::string &schema_name) {
