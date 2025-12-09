@@ -3,14 +3,26 @@
 #include "utils/string_utils.h"
 #include <fstream>
 
+// Default constructor for DataClassifier. Initializes the classifier with
+// loaded_ set to false and attempts to load rules from the default path
+// "/rules/governance_rules.json". If loading fails, the classifier will still
+// be functional but will return default values for all classification methods.
 DataClassifier::DataClassifier() : loaded_(false) {
   loadRules("/rules/governance_rules.json");
 }
 
+// Constructor for DataClassifier with custom rules path. Initializes the
+// classifier with loaded_ set to false and attempts to load rules from the
+// specified path. If loading fails, the classifier will still be functional
+// but will return default values for all classification methods.
 DataClassifier::DataClassifier(const std::string &rulesPath) : loaded_(false) {
   loadRules(rulesPath);
 }
 
+// Loads governance rules from a JSON file. Parses the JSON file and stores it
+// in the rules_ member. Sets loaded_ to true on success, false on failure.
+// Logs warnings if the file cannot be opened, and errors if JSON parsing
+// fails. Returns true if rules were successfully loaded, false otherwise.
 bool DataClassifier::loadRules(const std::string &rulesPath) {
   try {
     std::ifstream file(rulesPath);
@@ -33,6 +45,11 @@ bool DataClassifier::loadRules(const std::string &rulesPath) {
   }
 }
 
+// Checks if the given text matches any of the patterns in the provided vector.
+// Performs case-insensitive substring matching by converting both the text and
+// each pattern to lowercase before comparison. Returns true if any pattern is
+// found as a substring in the text, false otherwise. This is used internally
+// for pattern matching in classification methods.
 bool DataClassifier::matchesAny(const std::string &text,
                                 const std::vector<std::string> &patterns) {
   std::string lowerText = StringUtils::toLower(text);
@@ -44,9 +61,20 @@ bool DataClassifier::matchesAny(const std::string &text,
   return false;
 }
 
+// Classifies a table into a data category (e.g., TRANSACTIONAL, ANALYTICAL)
+// based on schema and table name patterns defined in the governance rules.
+// First checks schema_patterns, then table_patterns. If no match is found,
+// returns the default category from rules or "TRANSACTIONAL" if rules are not
+// loaded. Returns "TRANSACTIONAL" on error or if rules are not loaded.
 std::string
 DataClassifier::classifyDataCategory(const std::string &tableName,
                                      const std::string &schemaName) {
+  if (tableName.empty() || schemaName.empty()) {
+    Logger::error(LogCategory::GOVERNANCE, "DataClassifier",
+                  "classifyDataCategory: tableName and schemaName must not be empty");
+    return "TRANSACTIONAL";
+  }
+
   if (!loaded_) {
     return "TRANSACTIONAL";
   }
@@ -82,9 +110,20 @@ DataClassifier::classifyDataCategory(const std::string &tableName,
   }
 }
 
+// Classifies a table into a business domain (e.g., FINANCE, HEALTHCARE, SPORTS)
+// based on keywords found in the table or schema name. Searches through
+// business_domains patterns in the governance rules. If no match is found,
+// returns the default domain from rules or "GENERAL" if rules are not loaded.
+// Returns "GENERAL" on error or if rules are not loaded.
 std::string
 DataClassifier::classifyBusinessDomain(const std::string &tableName,
                                        const std::string &schemaName) {
+  if (tableName.empty() || schemaName.empty()) {
+    Logger::error(LogCategory::GOVERNANCE, "DataClassifier",
+                  "classifyBusinessDomain: tableName and schemaName must not be empty");
+    return "GENERAL";
+  }
+
   if (!loaded_) {
     return "GENERAL";
   }
@@ -111,9 +150,20 @@ DataClassifier::classifyBusinessDomain(const std::string &tableName,
   }
 }
 
+// Classifies a table's sensitivity level (e.g., PUBLIC, PRIVATE, CRITICAL)
+// based on keywords found in the table or schema name. Searches through
+// sensitivity_levels patterns in the governance rules. If no match is found,
+// returns the default level from rules or "PUBLIC" if rules are not loaded.
+// Returns "PUBLIC" on error or if rules are not loaded.
 std::string
 DataClassifier::classifySensitivityLevel(const std::string &tableName,
                                          const std::string &schemaName) {
+  if (tableName.empty() || schemaName.empty()) {
+    Logger::error(LogCategory::GOVERNANCE, "DataClassifier",
+                  "classifySensitivityLevel: tableName and schemaName must not be empty");
+    return "PUBLIC";
+  }
+
   if (!loaded_) {
     return "PUBLIC";
   }
@@ -140,9 +190,20 @@ DataClassifier::classifySensitivityLevel(const std::string &tableName,
   }
 }
 
+// Classifies a table's data classification (e.g., PUBLIC, CONFIDENTIAL)
+// based on keywords found in the table or schema name. Searches through
+// data_classifications patterns in the governance rules. If no match is found,
+// returns the default classification from rules or "PUBLIC" if rules are not
+// loaded. Returns "PUBLIC" on error or if rules are not loaded.
 std::string
 DataClassifier::classifyDataClassification(const std::string &tableName,
                                            const std::string &schemaName) {
+  if (tableName.empty() || schemaName.empty()) {
+    Logger::error(LogCategory::GOVERNANCE, "DataClassifier",
+                  "classifyDataClassification: tableName and schemaName must not be empty");
+    return "PUBLIC";
+  }
+
   if (!loaded_) {
     return "PUBLIC";
   }

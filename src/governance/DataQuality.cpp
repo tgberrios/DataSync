@@ -2,6 +2,13 @@
 #include "utils/string_utils.h"
 #include <algorithm>
 
+// Validates a table by collecting comprehensive quality metrics and storing
+// them in the database. Validates input parameters (schema, table, engine must
+// not be empty), checks connection status, and performs basic SQL injection
+// prevention. Collects metrics including data types, null counts, duplicates,
+// and constraints. Calculates quality score and determines validation status
+// (PASSED, WARNING, FAILED). Returns true if validation completes successfully
+// and metrics are saved, false otherwise.
 bool DataQuality::validateTable(pqxx::connection &conn,
                                 const std::string &schema,
                                 const std::string &table,
@@ -60,6 +67,10 @@ bool DataQuality::validateTable(pqxx::connection &conn,
   }
 }
 
+// Checks if a table exists in the database by querying information_schema.tables.
+// Uses parameterized queries (txn.quote) to prevent SQL injection. Returns
+// true if the table exists, false otherwise. This is a helper function used
+// internally to validate table existence before performing quality checks.
 bool DataQuality::tableExists(pqxx::work &txn, const std::string &schema,
                               const std::string &table) {
   auto result =
@@ -69,6 +80,13 @@ bool DataQuality::tableExists(pqxx::work &txn, const std::string &schema,
   return result[0][0].as<int>() > 0;
 }
 
+// Collects comprehensive quality metrics for a table. Performs multiple checks:
+// data types validation, null counts, duplicate detection, and constraint
+// validation. Uses sampling for large tables (>1M rows) to improve
+// performance. Handles SQL errors, invalid arguments, and general exceptions
+// gracefully, setting appropriate error details and validation status. Returns
+// a QualityMetrics object with all collected data. If collection fails,
+// returns metrics with FAILED status and error details.
 DataQuality::QualityMetrics
 DataQuality::collectMetrics(pqxx::connection &conn, const std::string &schema,
                             const std::string &table) {
@@ -96,18 +114,21 @@ DataQuality::collectMetrics(pqxx::connection &conn, const std::string &schema,
 
   } catch (const pqxx::sql_error &e) {
     Logger::error(LogCategory::QUALITY, "collectMetrics",
-                  "SQL error collecting metrics: " + std::string(e.what()) +
+                  "SQL error collecting metrics for " + schema + "." + table +
+                      ": " + std::string(e.what()) +
                       " [SQL State: " + e.sqlstate() + "]");
     metrics.error_details = "SQL Error: " + std::string(e.what());
     metrics.validation_status = "FAILED";
   } catch (const std::invalid_argument &e) {
     Logger::error(LogCategory::QUALITY, "collectMetrics",
-                  "Invalid argument error: " + std::string(e.what()));
+                  "Invalid argument error for " + schema + "." + table +
+                      ": " + std::string(e.what()));
     metrics.error_details = "Invalid Argument: " + std::string(e.what());
     metrics.validation_status = "FAILED";
   } catch (const std::exception &e) {
     Logger::error(LogCategory::QUALITY, "collectMetrics",
-                  "General error collecting metrics: " + std::string(e.what()));
+                  "General error collecting metrics for " + schema + "." + table +
+                      ": " + std::string(e.what()));
     metrics.error_details = "General Error: " + std::string(e.what());
     metrics.validation_status = "FAILED";
   }
@@ -115,6 +136,12 @@ DataQuality::collectMetrics(pqxx::connection &conn, const std::string &schema,
   return metrics;
 }
 
+// Checks data types for all columns in a table to identify type mismatches.
+// Queries information_schema.columns to get column definitions, then for each
+// column checks if actual data types match expected types. Uses sampling (5%
+// TABLESAMPLE) for large tables (>1M rows) to improve performance. Updates
+// metrics with invalid_type_count and type_mismatch_details JSON object.
+// Returns true if check completes successfully, false on error.
 bool DataQuality::checkDataTypes(pqxx::connection &conn,
                                  QualityMetrics &metrics) {
   try {
@@ -195,6 +222,11 @@ bool DataQuality::checkDataTypes(pqxx::connection &conn,
   }
 }
 
+// Checks for NULL values in all columns of a table. First verifies table
+// existence, then gets total row count. Builds a single efficient query using
+// FILTER clauses to count NULLs across all columns in one pass (instead of
+// N+1 queries). Updates metrics with total_rows and null_count. Returns true
+// if check completes successfully, false on error.
 bool DataQuality::checkNullCounts(pqxx::connection &conn,
                                   QualityMetrics &metrics) {
   try {
@@ -265,6 +297,11 @@ bool DataQuality::checkNullCounts(pqxx::connection &conn,
   }
 }
 
+// Checks for duplicate rows in a table by comparing total row count with
+// distinct ctid count. Uses sampling (10% TABLESAMPLE) for large tables
+// (>1M rows) to improve performance, then adjusts the count by multiplying by
+// 10. Updates metrics with duplicate_count. Returns true if check completes
+// successfully, false on error.
 bool DataQuality::checkDuplicates(pqxx::connection &conn,
                                   QualityMetrics &metrics) {
   try {
@@ -317,6 +354,13 @@ bool DataQuality::checkDuplicates(pqxx::connection &conn,
   }
 }
 
+// Checks foreign key constraints for violations. Queries
+// information_schema.referential_constraints to find all foreign keys, then
+// for each foreign key checks if there are any orphaned rows (rows with
+// foreign key values that don't exist in the referenced table). Updates
+// metrics with referential_integrity_errors and integrity_check_details JSON
+// object containing violation details. Returns true if check completes
+// successfully, false on error.
 bool DataQuality::checkConstraints(pqxx::connection &conn,
                                    QualityMetrics &metrics) {
   try {
@@ -391,6 +435,12 @@ bool DataQuality::checkConstraints(pqxx::connection &conn,
   }
 }
 
+// Calculates an overall quality score (0-100) based on various quality
+// metrics. Applies weighted deductions: null percentage (20 points), duplicate
+// percentage (20 points), invalid type count (30 points), and referential
+// integrity errors (30 points). All deductions are proportional to the total
+// row count. Returns a value clamped between 0.0 and 100.0. Higher scores
+// indicate better data quality.
 void DataQuality::calculateQualityScore(QualityMetrics &metrics) {
   double score = 100.0;
 
@@ -420,6 +470,10 @@ void DataQuality::calculateQualityScore(QualityMetrics &metrics) {
   metrics.quality_score = std::max(0.0, std::min(100.0, score));
 }
 
+// Determines the validation status based on quality score. Returns "PASSED"
+// for scores >= 90.0, "WARNING" for scores >= 70.0, and "FAILED" for scores
+// < 70.0. This status is used to categorize tables by their data quality
+// level.
 std::string
 DataQuality::determineValidationStatus(const QualityMetrics &metrics) {
   if (metrics.quality_score >= 90.0) {
@@ -431,6 +485,12 @@ DataQuality::determineValidationStatus(const QualityMetrics &metrics) {
   }
 }
 
+// Saves quality metrics to the metadata.data_quality table using parameterized
+// queries to prevent SQL injection. Inserts a new record with all metrics
+// including schema/table names, source engine, row counts, quality scores,
+// validation status, and check duration. JSON fields (type_mismatch_details,
+// integrity_check_details) are serialized to strings. Returns true if save
+// completes successfully, false on error.
 bool DataQuality::saveMetrics(pqxx::connection &conn,
                               const QualityMetrics &metrics) {
   try {
@@ -468,6 +528,13 @@ bool DataQuality::saveMetrics(pqxx::connection &conn,
   }
 }
 
+// Retrieves the latest quality metrics for all tables from
+// metadata.data_quality. Uses a CTE (Common Table Expression) with DISTINCT
+// ON to get only the most recent check for each schema/table combination,
+// ordered by check_timestamp DESC. Optionally filters by validation_status if
+// status parameter is provided. Deserializes JSON fields back to JSON objects.
+// Returns a vector of QualityMetrics objects. If retrieval fails, returns an
+// empty vector and logs an error.
 std::vector<DataQuality::QualityMetrics>
 DataQuality::getLatestMetrics(pqxx::connection &conn,
                               const std::string &status) {
