@@ -32,11 +32,23 @@ en los governance cada cuanto saca las snapshots ?
 │ PRIORITY 4: MEDIUM PRIORITY + MEDIUM COMPLEXITY                 │
 └─────────────────────────────────────────────────────────────────┘
 
-6. actualizar un poco el frontend ?
-   [MEJORA UX - Actualizar interfaz de usuario]
 
-7. crear vistas bonitas para visualizar bien la data!
+7. bueno ahora que tenemos ese monton nuevas de tablas y todo eso podemos crear mas metricas y dashboard para mostrar salud de muchas cosas etc etc 
    [MEJORA UX - Crear vistas para visualización de datos]
+   
+
+   
+
+   
+   7.11. Data Lineage Visualizer - MongoDB (metadata.mongo_lineage)
+         [LINEAGE - Visualización de dependencias MongoDB]
+         [TABLA: metadata.mongo_lineage]
+         [PRIORIDAD: Media - Útil para entender dependencias]
+   
+   7.13. Governance Catalog - MongoDB (metadata.data_governance_catalog_mongodb)
+         [GOVERNANCE - Vista específica de governance MongoDB]
+         [TABLA: metadata.data_governance_catalog_mongodb]
+         [PRIORIDAD: Baja - Similar a Governance pero específico]
 
 
 ┌─────────────────────────────────────────────────────────────────┐
@@ -63,9 +75,7 @@ en los governance cada cuanto saca las snapshots ?
     [NUEVO MOTOR - Soporte genérico para otros motores]
     [NOTA: Muy genérico, definir primero qué motores específicos]
 
-14. anadir algo que simule el programa liquidbase o crear mi propia version
-    [FUNCIONALIDAD COMPLEJA - Sistema de migraciones de esquema]
-    [NOTA: Liquibase es muy complejo, requiere análisis profundo]
+
 
 
 ═══════════════════════════════════════════════════════════════════
@@ -84,3 +94,28 @@ poner bonitos con las tres fases los include porque esos no los emos tramitado
 un catalog de tablas con sus columnas como full metadata de las tablas
 
 de maintance metrics talvez todos esos threeshold podrian venir de config
+
+
+
+   7.5. Backup Control Dashboard (metadata.backup_control_log)
+        [DASHBOARD - Visualización de operaciones de backup]
+        [TABLA: metadata.backup_control_log]
+        [PRIORIDAD: Media - Útil para monitoreo de backups]
+
+        eso es otro 
+        
+
+   7.4. Process Log Viewer (metadata.process_log)
+        [LOGS - Vista de procesos ETL/jobs]
+        [TABLA: metadata.process_log]
+        [PRIORIDAD: Media - Útil para monitoreo de procesos]
+
+        otro job deberia ser una app como airflow pero mejorando todo en lo que carece! 
+
+
+
+14. anadir algo que simule el programa liquidbase o crear mi propia version
+    [FUNCIONALIDAD COMPLEJA - Sistema de migraciones de esquema]
+    [NOTA: Liquibase es muy complejo, requiere análisis profundo]
+
+    otro proyecto igual mejorando en lo que carece!

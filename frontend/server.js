@@ -1199,12 +1199,10 @@ app.get("/api/logs/info", async (req, res) => {
     });
   } catch (err) {
     console.error("Error getting DB log info:", err);
-    res
-      .status(500)
-      .json({
-        error: "Error al obtener información de logs",
-        details: err.message,
-      });
+    res.status(500).json({
+      error: "Error al obtener información de logs",
+      details: err.message,
+    });
   }
 });
 
@@ -1226,12 +1224,10 @@ app.get("/api/logs/errors/info", async (req, res) => {
     });
   } catch (err) {
     console.error("Error getting DB error log info:", err);
-    res
-      .status(500)
-      .json({
-        error: "Error al obtener información de logs de errores",
-        details: err.message,
-      });
+    res.status(500).json({
+      error: "Error al obtener información de logs de errores",
+      details: err.message,
+    });
   }
 });
 
@@ -1705,6 +1701,1130 @@ app.post("/api/monitor/processing-logs/cleanup", async (req, res) => {
     });
   }
 });
+
+app.get("/api/query-performance/queries", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = (page - 1) * limit;
+    const performance_tier = req.query.performance_tier || "";
+    const operation_type = req.query.operation_type || "";
+    const source_type = req.query.source_type || "";
+    const search = req.query.search || "";
+
+    const whereConditions = [];
+    const params = [];
+    let paramCount = 1;
+
+    if (performance_tier) {
+      whereConditions.push(`performance_tier = $${paramCount}`);
+      params.push(performance_tier);
+      paramCount++;
+    }
+
+    if (operation_type) {
+      whereConditions.push(`operation_type = $${paramCount}`);
+      params.push(operation_type);
+      paramCount++;
+    }
+
+    if (source_type) {
+      whereConditions.push(`source_type = $${paramCount}`);
+      params.push(source_type);
+      paramCount++;
+    }
+
+    if (search) {
+      whereConditions.push(`query_text ILIKE $${paramCount}`);
+      params.push(`%${search}%`);
+      paramCount++;
+    }
+
+    const whereClause =
+      whereConditions.length > 0
+        ? "WHERE " + whereConditions.join(" AND ")
+        : "";
+
+    const countQuery = `SELECT COUNT(*) FROM metadata.query_performance ${whereClause}`;
+    const countResult = await pool.query(countQuery, params);
+    const total = parseInt(countResult.rows[0].count);
+
+    params.push(limit, offset);
+    const dataQuery = `
+      SELECT *
+      FROM metadata.query_performance
+      ${whereClause}
+      ORDER BY captured_at DESC, query_efficiency_score DESC NULLS LAST
+      LIMIT $${paramCount} OFFSET $${paramCount + 1}
+    `;
+
+    const result = await pool.query(dataQuery, params);
+
+    const totalPages = Math.ceil(total / limit);
+
+    res.json({
+      data: result.rows,
+      pagination: {
+        total,
+        totalPages,
+        currentPage: page,
+        limit,
+      },
+    });
+  } catch (err) {
+    console.error("Error getting query performance data:", err);
+    res.status(500).json({
+      error: "Error al obtener datos de rendimiento de queries",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/query-performance/metrics", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        COUNT(*) as total_queries,
+        COUNT(*) FILTER (WHERE performance_tier = 'EXCELLENT') as excellent_count,
+        COUNT(*) FILTER (WHERE performance_tier = 'GOOD') as good_count,
+        COUNT(*) FILTER (WHERE performance_tier = 'FAIR') as fair_count,
+        COUNT(*) FILTER (WHERE performance_tier = 'POOR') as poor_count,
+        COUNT(*) FILTER (WHERE is_long_running = true) as long_running_count,
+        COUNT(*) FILTER (WHERE is_blocking = true) as blocking_count,
+        ROUND(AVG(query_efficiency_score)::numeric, 2) as avg_efficiency
+      FROM metadata.query_performance
+      WHERE captured_at > NOW() - INTERVAL '24 hours'
+    `);
+
+    res.json(result.rows[0] || {});
+  } catch (err) {
+    console.error("Error getting query performance metrics:", err);
+    res.status(500).json({
+      error: "Error al obtener métricas de rendimiento de queries",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/maintenance/items", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = (page - 1) * limit;
+    const maintenance_type = req.query.maintenance_type || "";
+    const status = req.query.status || "";
+    const db_engine = req.query.db_engine || "";
+
+    const whereConditions = [];
+    const params = [];
+    let paramCount = 1;
+
+    if (maintenance_type) {
+      whereConditions.push(`maintenance_type = $${paramCount}`);
+      params.push(maintenance_type);
+      paramCount++;
+    }
+
+    if (status) {
+      whereConditions.push(`status = $${paramCount}`);
+      params.push(status);
+      paramCount++;
+    }
+
+    if (db_engine) {
+      whereConditions.push(`db_engine = $${paramCount}`);
+      params.push(db_engine);
+      paramCount++;
+    }
+
+    const whereClause =
+      whereConditions.length > 0
+        ? "WHERE " + whereConditions.join(" AND ")
+        : "";
+
+    const countQuery = `SELECT COUNT(*) FROM metadata.maintenance_control ${whereClause}`;
+    const countResult = await pool.query(countQuery, params);
+    const total = parseInt(countResult.rows[0].count);
+
+    params.push(limit, offset);
+    const dataQuery = `
+      SELECT *
+      FROM metadata.maintenance_control
+      ${whereClause}
+      ORDER BY 
+        CASE status
+          WHEN 'PENDING' THEN 1
+          WHEN 'RUNNING' THEN 2
+          WHEN 'COMPLETED' THEN 3
+          WHEN 'FAILED' THEN 4
+          ELSE 5
+        END,
+        priority DESC NULLS LAST,
+        impact_score DESC NULLS LAST,
+        next_maintenance_date ASC NULLS LAST
+      LIMIT $${paramCount} OFFSET $${paramCount + 1}
+    `;
+
+    const result = await pool.query(dataQuery, params);
+
+    const totalPages = Math.ceil(total / limit);
+
+    res.json({
+      data: result.rows,
+      pagination: {
+        total,
+        totalPages,
+        currentPage: page,
+        limit,
+      },
+    });
+  } catch (err) {
+    console.error("Error getting maintenance items:", err);
+    res.status(500).json({
+      error: "Error al obtener items de mantenimiento",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/maintenance/metrics", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        COUNT(*) FILTER (WHERE status = 'PENDING') as total_pending,
+        COUNT(*) FILTER (WHERE status = 'COMPLETED') as total_completed,
+        COUNT(*) FILTER (WHERE status = 'FAILED') as total_failed,
+        COUNT(*) FILTER (WHERE status = 'RUNNING') as total_running,
+        SUM(space_reclaimed_mb) as total_space_reclaimed_mb,
+        ROUND(AVG(impact_score)::numeric, 2) as avg_impact_score,
+        COUNT(*) FILTER (WHERE status = 'COMPLETED' AND (space_reclaimed_mb > 0 OR performance_improvement_pct > 0)) as objects_improved
+      FROM metadata.maintenance_control
+    `);
+
+    res.json(result.rows[0] || {});
+  } catch (err) {
+    console.error("Error getting maintenance metrics:", err);
+    res.status(500).json({
+      error: "Error al obtener métricas de mantenimiento",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/column-catalog/columns", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = (page - 1) * limit;
+    const schema_name = req.query.schema_name || "";
+    const table_name = req.query.table_name || "";
+    const db_engine = req.query.db_engine || "";
+    const data_type = req.query.data_type || "";
+    const sensitivity_level = req.query.sensitivity_level || "";
+    const contains_pii = req.query.contains_pii || "";
+    const contains_phi = req.query.contains_phi || "";
+    const search = req.query.search || "";
+
+    const whereConditions = [];
+    const params = [];
+    let paramCount = 1;
+
+    if (schema_name) {
+      whereConditions.push(`schema_name = $${paramCount}`);
+      params.push(schema_name);
+      paramCount++;
+    }
+
+    if (table_name) {
+      whereConditions.push(`table_name = $${paramCount}`);
+      params.push(table_name);
+      paramCount++;
+    }
+
+    if (db_engine) {
+      whereConditions.push(`db_engine = $${paramCount}`);
+      params.push(db_engine);
+      paramCount++;
+    }
+
+    if (data_type) {
+      whereConditions.push(`data_type ILIKE $${paramCount}`);
+      params.push(`%${data_type}%`);
+      paramCount++;
+    }
+
+    if (sensitivity_level) {
+      whereConditions.push(`sensitivity_level = $${paramCount}`);
+      params.push(sensitivity_level);
+      paramCount++;
+    }
+
+    if (contains_pii !== "") {
+      whereConditions.push(`contains_pii = $${paramCount}`);
+      params.push(contains_pii === "true");
+      paramCount++;
+    }
+
+    if (contains_phi !== "") {
+      whereConditions.push(`contains_phi = $${paramCount}`);
+      params.push(contains_phi === "true");
+      paramCount++;
+    }
+
+    if (search) {
+      whereConditions.push(`column_name ILIKE $${paramCount}`);
+      params.push(`%${search}%`);
+      paramCount++;
+    }
+
+    const whereClause =
+      whereConditions.length > 0
+        ? "WHERE " + whereConditions.join(" AND ")
+        : "";
+
+    const countQuery = `SELECT COUNT(*) FROM metadata.column_catalog ${whereClause}`;
+    const countResult = await pool.query(countQuery, params);
+    const total = parseInt(countResult.rows[0].count);
+
+    params.push(limit, offset);
+    const dataQuery = `
+      SELECT *
+      FROM metadata.column_catalog
+      ${whereClause}
+      ORDER BY schema_name, table_name, ordinal_position
+      LIMIT $${paramCount} OFFSET $${paramCount + 1}
+    `;
+
+    const result = await pool.query(dataQuery, params);
+
+    const totalPages = Math.ceil(total / limit);
+
+    res.json({
+      data: result.rows,
+      pagination: {
+        total,
+        totalPages,
+        currentPage: page,
+        limit,
+      },
+    });
+  } catch (err) {
+    console.error("Error getting column catalog data:", err);
+    res.status(500).json({
+      error: "Error al obtener datos del catálogo de columnas",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/column-catalog/metrics", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        COUNT(*) as total_columns,
+        COUNT(*) FILTER (WHERE contains_pii = true) as pii_columns,
+        COUNT(*) FILTER (WHERE contains_phi = true) as phi_columns,
+        COUNT(*) FILTER (WHERE sensitivity_level = 'HIGH') as high_sensitivity,
+        COUNT(*) FILTER (WHERE is_primary_key = true) as primary_keys,
+        COUNT(*) FILTER (WHERE is_indexed = true) as indexed_columns
+      FROM metadata.column_catalog
+    `);
+
+    res.json(result.rows[0] || {});
+  } catch (err) {
+    console.error("Error getting column catalog metrics:", err);
+    res.status(500).json({
+      error: "Error al obtener métricas del catálogo de columnas",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/column-catalog/schemas", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT DISTINCT schema_name
+      FROM metadata.column_catalog
+      ORDER BY schema_name
+    `);
+
+    res.json(result.rows.map((row) => row.schema_name));
+  } catch (err) {
+    console.error("Error getting schemas:", err);
+    res.status(500).json({
+      error: "Error al obtener schemas",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/column-catalog/tables/:schemaName", async (req, res) => {
+  try {
+    const schemaName = req.params.schemaName;
+    const result = await pool.query(
+      `
+        SELECT DISTINCT table_name
+        FROM metadata.column_catalog
+        WHERE schema_name = $1
+        ORDER BY table_name
+      `,
+      [schemaName]
+    );
+
+    res.json(result.rows.map((row) => row.table_name));
+  } catch (err) {
+    console.error("Error getting tables:", err);
+    res.status(500).json({
+      error: "Error al obtener tablas",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/catalog-locks/locks", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        lock_name,
+        acquired_at,
+        acquired_by,
+        expires_at,
+        session_id
+      FROM metadata.catalog_locks
+      ORDER BY acquired_at DESC
+    `);
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Error getting catalog locks:", err);
+    res.status(500).json({
+      error: "Error al obtener locks del catálogo",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/catalog-locks/metrics", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        COUNT(*) as total_locks,
+        COUNT(*) FILTER (WHERE expires_at > NOW()) as active_locks,
+        COUNT(*) FILTER (WHERE expires_at <= NOW()) as expired_locks,
+        COUNT(DISTINCT acquired_by) as unique_hosts
+      FROM metadata.catalog_locks
+    `);
+
+    res.json(result.rows[0] || {});
+  } catch (err) {
+    console.error("Error getting catalog locks metrics:", err);
+    res.status(500).json({
+      error: "Error al obtener métricas de locks",
+      details: err.message,
+    });
+  }
+});
+
+app.delete("/api/catalog-locks/locks/:lockName", async (req, res) => {
+  try {
+    const lockName = req.params.lockName;
+    const result = await pool.query(
+      `DELETE FROM metadata.catalog_locks WHERE lock_name = $1 RETURNING lock_name`,
+      [lockName]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({
+        error: "Lock not found",
+        details: `Lock "${lockName}" does not exist`,
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Lock "${lockName}" has been released`,
+      lock_name: result.rows[0].lock_name,
+    });
+  } catch (err) {
+    console.error("Error unlocking lock:", err);
+    res.status(500).json({
+      error: "Error al liberar lock",
+      details: err.message,
+    });
+  }
+});
+
+app.post("/api/catalog-locks/clean-expired", async (req, res) => {
+  try {
+    const result = await pool.query(
+      `DELETE FROM metadata.catalog_locks WHERE expires_at <= NOW() RETURNING lock_name`
+    );
+
+    res.json({
+      success: true,
+      message: `Cleaned ${result.rowCount} expired lock(s)`,
+      cleaned_count: result.rowCount,
+    });
+  } catch (err) {
+    console.error("Error cleaning expired locks:", err);
+    res.status(500).json({
+      error: "Error al limpiar locks expirados",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/data-lineage/mariadb", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = (page - 1) * limit;
+    const server_name = req.query.server_name || "";
+    const database_name = req.query.database_name || "";
+    const object_type = req.query.object_type || "";
+    const relationship_type = req.query.relationship_type || "";
+    const search = req.query.search || "";
+
+    const whereConditions = [];
+    const params = [];
+    let paramCount = 1;
+
+    if (server_name) {
+      whereConditions.push(`server_name = $${paramCount}`);
+      params.push(server_name);
+      paramCount++;
+    }
+
+    if (database_name) {
+      whereConditions.push(`database_name = $${paramCount}`);
+      params.push(database_name);
+      paramCount++;
+    }
+
+    if (object_type) {
+      whereConditions.push(`object_type = $${paramCount}`);
+      params.push(object_type);
+      paramCount++;
+    }
+
+    if (relationship_type) {
+      whereConditions.push(`relationship_type = $${paramCount}`);
+      params.push(relationship_type);
+      paramCount++;
+    }
+
+    if (search) {
+      whereConditions.push(
+        `(object_name ILIKE $${paramCount} OR target_object_name ILIKE $${paramCount})`
+      );
+      params.push(`%${search}%`);
+      paramCount++;
+    }
+
+    const whereClause =
+      whereConditions.length > 0
+        ? "WHERE " + whereConditions.join(" AND ")
+        : "";
+
+    const countQuery = `SELECT COUNT(*) FROM metadata.mdb_lineage ${whereClause}`;
+    const countResult = await pool.query(countQuery, params);
+    const total = parseInt(countResult.rows[0].count);
+
+    params.push(limit, offset);
+    const dataQuery = `
+      SELECT *
+      FROM metadata.mdb_lineage
+      ${whereClause}
+      ORDER BY dependency_level, confidence_score DESC, last_seen_at DESC
+      LIMIT $${paramCount} OFFSET $${paramCount + 1}
+    `;
+
+    const result = await pool.query(dataQuery, params);
+
+    const totalPages = Math.ceil(total / limit);
+
+    res.json({
+      data: result.rows,
+      pagination: {
+        total,
+        totalPages,
+        currentPage: page,
+        limit,
+      },
+    });
+  } catch (err) {
+    console.error("Error getting MariaDB lineage data:", err);
+    res.status(500).json({
+      error: "Error al obtener datos de lineage de MariaDB",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/data-lineage/mariadb/metrics", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        COUNT(*) as total_relationships,
+        COUNT(DISTINCT object_name) as unique_objects,
+        COUNT(DISTINCT server_name) as unique_servers,
+        COUNT(*) FILTER (WHERE confidence_score >= 0.8) as high_confidence,
+        ROUND(AVG(confidence_score)::numeric, 4) as avg_confidence
+      FROM metadata.mdb_lineage
+    `);
+
+    res.json(result.rows[0] || {});
+  } catch (err) {
+    console.error("Error getting MariaDB lineage metrics:", err);
+    res.status(500).json({
+      error: "Error al obtener métricas de lineage de MariaDB",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/data-lineage/mariadb/servers", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT DISTINCT server_name
+      FROM metadata.mdb_lineage
+      WHERE server_name IS NOT NULL
+      ORDER BY server_name
+    `);
+
+    res.json(result.rows.map((row) => row.server_name));
+  } catch (err) {
+    console.error("Error getting MariaDB servers:", err);
+    res.status(500).json({
+      error: "Error al obtener servidores",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/data-lineage/mariadb/databases/:serverName", async (req, res) => {
+  try {
+    const serverName = req.params.serverName;
+    const result = await pool.query(
+      `
+        SELECT DISTINCT database_name
+        FROM metadata.mdb_lineage
+        WHERE server_name = $1 AND database_name IS NOT NULL
+        ORDER BY database_name
+      `,
+      [serverName]
+    );
+
+    res.json(result.rows.map((row) => row.database_name));
+  } catch (err) {
+    console.error("Error getting MariaDB databases:", err);
+    res.status(500).json({
+      error: "Error al obtener bases de datos",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/data-lineage/mssql", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = (page - 1) * limit;
+    const server_name = req.query.server_name || "";
+    const instance_name = req.query.instance_name || "";
+    const database_name = req.query.database_name || "";
+    const object_type = req.query.object_type || "";
+    const relationship_type = req.query.relationship_type || "";
+    const search = req.query.search || "";
+
+    const whereConditions = [];
+    const params = [];
+    let paramCount = 1;
+
+    if (server_name) {
+      whereConditions.push(`server_name = $${paramCount}`);
+      params.push(server_name);
+      paramCount++;
+    }
+
+    if (instance_name) {
+      whereConditions.push(`instance_name = $${paramCount}`);
+      params.push(instance_name);
+      paramCount++;
+    }
+
+    if (database_name) {
+      whereConditions.push(`database_name = $${paramCount}`);
+      params.push(database_name);
+      paramCount++;
+    }
+
+    if (object_type) {
+      whereConditions.push(`object_type = $${paramCount}`);
+      params.push(object_type);
+      paramCount++;
+    }
+
+    if (relationship_type) {
+      whereConditions.push(`relationship_type = $${paramCount}`);
+      params.push(relationship_type);
+      paramCount++;
+    }
+
+    if (search) {
+      whereConditions.push(
+        `(object_name ILIKE $${paramCount} OR target_object_name ILIKE $${paramCount})`
+      );
+      params.push(`%${search}%`);
+      paramCount++;
+    }
+
+    const whereClause =
+      whereConditions.length > 0
+        ? "WHERE " + whereConditions.join(" AND ")
+        : "";
+
+    const countQuery = `SELECT COUNT(*) FROM metadata.mssql_lineage ${whereClause}`;
+    const countResult = await pool.query(countQuery, params);
+    const total = parseInt(countResult.rows[0].count);
+
+    params.push(limit, offset);
+    const dataQuery = `
+      SELECT *
+      FROM metadata.mssql_lineage
+      ${whereClause}
+      ORDER BY dependency_level, confidence_score DESC, last_seen_at DESC
+      LIMIT $${paramCount} OFFSET $${paramCount + 1}
+    `;
+
+    const result = await pool.query(dataQuery, params);
+
+    const totalPages = Math.ceil(total / limit);
+
+    res.json({
+      data: result.rows,
+      pagination: {
+        total,
+        totalPages,
+        currentPage: page,
+        limit,
+      },
+    });
+  } catch (err) {
+    console.error("Error getting MSSQL lineage data:", err);
+    res.status(500).json({
+      error: "Error al obtener datos de lineage de MSSQL",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/data-lineage/mssql/metrics", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        COUNT(*) as total_relationships,
+        COUNT(DISTINCT object_name) as unique_objects,
+        COUNT(DISTINCT server_name) as unique_servers,
+        COUNT(*) FILTER (WHERE confidence_score >= 0.8) as high_confidence,
+        ROUND(AVG(confidence_score)::numeric, 4) as avg_confidence,
+        SUM(COALESCE(execution_count, 0)) as total_executions
+      FROM metadata.mssql_lineage
+    `);
+
+    res.json(result.rows[0] || {});
+  } catch (err) {
+    console.error("Error getting MSSQL lineage metrics:", err);
+    res.status(500).json({
+      error: "Error al obtener métricas de lineage de MSSQL",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/data-lineage/mssql/servers", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT DISTINCT server_name
+      FROM metadata.mssql_lineage
+      WHERE server_name IS NOT NULL
+      ORDER BY server_name
+    `);
+
+    res.json(result.rows.map((row) => row.server_name));
+  } catch (err) {
+    console.error("Error getting MSSQL servers:", err);
+    res.status(500).json({
+      error: "Error al obtener servidores",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/data-lineage/mssql/instances/:serverName", async (req, res) => {
+  try {
+    const serverName = req.params.serverName;
+    const result = await pool.query(
+      `
+        SELECT DISTINCT instance_name
+        FROM metadata.mssql_lineage
+        WHERE server_name = $1 AND instance_name IS NOT NULL
+        ORDER BY instance_name
+      `,
+      [serverName]
+    );
+
+    res.json(result.rows.map((row) => row.instance_name));
+  } catch (err) {
+    console.error("Error getting MSSQL instances:", err);
+    res.status(500).json({
+      error: "Error al obtener instancias",
+      details: err.message,
+    });
+  }
+});
+
+app.get(
+  "/api/data-lineage/mssql/databases/:serverName/:instanceName",
+  async (req, res) => {
+    try {
+      const serverName = req.params.serverName;
+      const instanceName = req.params.instanceName;
+      const result = await pool.query(
+        `
+        SELECT DISTINCT database_name
+        FROM metadata.mssql_lineage
+        WHERE server_name = $1 AND instance_name = $2 AND database_name IS NOT NULL
+        ORDER BY database_name
+      `,
+        [serverName, instanceName]
+      );
+
+      res.json(result.rows.map((row) => row.database_name));
+    } catch (err) {
+      console.error("Error getting MSSQL databases:", err);
+      res.status(500).json({
+        error: "Error al obtener bases de datos",
+        details: err.message,
+      });
+    }
+  }
+);
+
+app.get("/api/governance-catalog/mariadb", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = (page - 1) * limit;
+    const server_name = req.query.server_name || "";
+    const database_name = req.query.database_name || "";
+    const health_status = req.query.health_status || "";
+    const access_frequency = req.query.access_frequency || "";
+    const search = req.query.search || "";
+
+    const whereConditions = [];
+    const params = [];
+    let paramCount = 1;
+
+    if (server_name) {
+      whereConditions.push(`server_name = $${paramCount}`);
+      params.push(server_name);
+      paramCount++;
+    }
+
+    if (database_name) {
+      whereConditions.push(`database_name = $${paramCount}`);
+      params.push(database_name);
+      paramCount++;
+    }
+
+    if (health_status) {
+      whereConditions.push(`health_status = $${paramCount}`);
+      params.push(health_status);
+      paramCount++;
+    }
+
+    if (access_frequency) {
+      whereConditions.push(`access_frequency = $${paramCount}`);
+      params.push(access_frequency);
+      paramCount++;
+    }
+
+    if (search) {
+      whereConditions.push(`table_name ILIKE $${paramCount}`);
+      params.push(`%${search}%`);
+      paramCount++;
+    }
+
+    const whereClause =
+      whereConditions.length > 0
+        ? "WHERE " + whereConditions.join(" AND ")
+        : "";
+
+    const countQuery = `SELECT COUNT(*) FROM metadata.data_governance_catalog_mariadb ${whereClause}`;
+    const countResult = await pool.query(countQuery, params);
+    const total = parseInt(countResult.rows[0].count);
+
+    params.push(limit, offset);
+    const dataQuery = `
+      SELECT *
+      FROM metadata.data_governance_catalog_mariadb
+      ${whereClause}
+      ORDER BY server_name, database_name, schema_name, table_name
+      LIMIT $${paramCount} OFFSET $${paramCount + 1}
+    `;
+
+    const result = await pool.query(dataQuery, params);
+
+    const totalPages = Math.ceil(total / limit);
+
+    res.json({
+      data: result.rows,
+      pagination: {
+        total,
+        totalPages,
+        currentPage: page,
+        limit,
+      },
+    });
+  } catch (err) {
+    console.error("Error getting MariaDB governance catalog:", err);
+    res.status(500).json({
+      error: "Error al obtener catálogo de governance de MariaDB",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/governance-catalog/mariadb/metrics", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        COUNT(*) as total_tables,
+        SUM(COALESCE(total_size_mb, 0)) as total_size_mb,
+        COUNT(*) FILTER (WHERE health_status IN ('EXCELLENT', 'HEALTHY')) as healthy_count,
+        COUNT(*) FILTER (WHERE health_status = 'WARNING') as warning_count,
+        COUNT(*) FILTER (WHERE health_status = 'CRITICAL') as critical_count,
+        COUNT(DISTINCT server_name) as unique_servers
+      FROM metadata.data_governance_catalog_mariadb
+    `);
+
+    res.json(result.rows[0] || {});
+  } catch (err) {
+    console.error("Error getting MariaDB governance metrics:", err);
+    res.status(500).json({
+      error: "Error al obtener métricas de governance de MariaDB",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/governance-catalog/mariadb/servers", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT DISTINCT server_name
+      FROM metadata.data_governance_catalog_mariadb
+      WHERE server_name IS NOT NULL
+      ORDER BY server_name
+    `);
+
+    res.json(result.rows.map((row) => row.server_name));
+  } catch (err) {
+    console.error("Error getting MariaDB servers:", err);
+    res.status(500).json({
+      error: "Error al obtener servidores",
+      details: err.message,
+    });
+  }
+});
+
+app.get(
+  "/api/governance-catalog/mariadb/databases/:serverName",
+  async (req, res) => {
+    try {
+      const serverName = req.params.serverName;
+      const result = await pool.query(
+        `
+        SELECT DISTINCT database_name
+        FROM metadata.data_governance_catalog_mariadb
+        WHERE server_name = $1 AND database_name IS NOT NULL
+        ORDER BY database_name
+      `,
+        [serverName]
+      );
+
+      res.json(result.rows.map((row) => row.database_name));
+    } catch (err) {
+      console.error("Error getting MariaDB databases:", err);
+      res.status(500).json({
+        error: "Error al obtener bases de datos",
+        details: err.message,
+      });
+    }
+  }
+);
+
+app.get("/api/governance-catalog/mssql", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = (page - 1) * limit;
+    const server_name = req.query.server_name || "";
+    const database_name = req.query.database_name || "";
+    const object_type = req.query.object_type || "";
+    const health_status = req.query.health_status || "";
+    const access_frequency = req.query.access_frequency || "";
+    const search = req.query.search || "";
+
+    const whereConditions = [];
+    const params = [];
+    let paramCount = 1;
+
+    if (server_name) {
+      whereConditions.push(`server_name = $${paramCount}`);
+      params.push(server_name);
+      paramCount++;
+    }
+
+    if (database_name) {
+      whereConditions.push(`database_name = $${paramCount}`);
+      params.push(database_name);
+      paramCount++;
+    }
+
+    if (object_type) {
+      whereConditions.push(`object_type = $${paramCount}`);
+      params.push(object_type);
+      paramCount++;
+    }
+
+    if (health_status) {
+      whereConditions.push(`health_status = $${paramCount}`);
+      params.push(health_status);
+      paramCount++;
+    }
+
+    if (access_frequency) {
+      whereConditions.push(`access_frequency = $${paramCount}`);
+      params.push(access_frequency);
+      paramCount++;
+    }
+
+    if (search) {
+      whereConditions.push(
+        `(object_name ILIKE $${paramCount} OR table_name ILIKE $${paramCount})`
+      );
+      params.push(`%${search}%`);
+      paramCount++;
+    }
+
+    const whereClause =
+      whereConditions.length > 0
+        ? "WHERE " + whereConditions.join(" AND ")
+        : "";
+
+    const countQuery = `SELECT COUNT(*) FROM metadata.data_governance_catalog_mssql ${whereClause}`;
+    const countResult = await pool.query(countQuery, params);
+    const total = parseInt(countResult.rows[0].count);
+
+    params.push(limit, offset);
+    const dataQuery = `
+      SELECT *
+      FROM metadata.data_governance_catalog_mssql
+      ${whereClause}
+      ORDER BY server_name, database_name, schema_name, object_name
+      LIMIT $${paramCount} OFFSET $${paramCount + 1}
+    `;
+
+    const result = await pool.query(dataQuery, params);
+
+    const totalPages = Math.ceil(total / limit);
+
+    res.json({
+      data: result.rows,
+      pagination: {
+        total,
+        totalPages,
+        currentPage: page,
+        limit,
+      },
+    });
+  } catch (err) {
+    console.error("Error getting MSSQL governance catalog:", err);
+    res.status(500).json({
+      error: "Error al obtener catálogo de governance de MSSQL",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/governance-catalog/mssql/metrics", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        COUNT(*) as total_objects,
+        SUM(COALESCE(table_size_mb, 0)) as total_size_mb,
+        COUNT(*) FILTER (WHERE health_status IN ('EXCELLENT', 'HEALTHY')) as healthy_count,
+        COUNT(*) FILTER (WHERE health_status = 'WARNING') as warning_count,
+        COUNT(*) FILTER (WHERE health_status = 'CRITICAL') as critical_count,
+        COUNT(DISTINCT server_name) as unique_servers
+      FROM metadata.data_governance_catalog_mssql
+    `);
+
+    res.json(result.rows[0] || {});
+  } catch (err) {
+    console.error("Error getting MSSQL governance metrics:", err);
+    res.status(500).json({
+      error: "Error al obtener métricas de governance de MSSQL",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/governance-catalog/mssql/servers", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT DISTINCT server_name
+      FROM metadata.data_governance_catalog_mssql
+      WHERE server_name IS NOT NULL
+      ORDER BY server_name
+    `);
+
+    res.json(result.rows.map((row) => row.server_name));
+  } catch (err) {
+    console.error("Error getting MSSQL servers:", err);
+    res.status(500).json({
+      error: "Error al obtener servidores",
+      details: err.message,
+    });
+  }
+});
+
+app.get(
+  "/api/governance-catalog/mssql/databases/:serverName",
+  async (req, res) => {
+    try {
+      const serverName = req.params.serverName;
+      const result = await pool.query(
+        `
+        SELECT DISTINCT database_name
+        FROM metadata.data_governance_catalog_mssql
+        WHERE server_name = $1 AND database_name IS NOT NULL
+        ORDER BY database_name
+      `,
+        [serverName]
+      );
+
+      res.json(result.rows.map((row) => row.database_name));
+    } catch (err) {
+      console.error("Error getting MSSQL databases:", err);
+      res.status(500).json({
+        error: "Error al obtener bases de datos",
+        details: err.message,
+      });
+    }
+  }
+);
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);

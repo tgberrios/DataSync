@@ -45,6 +45,7 @@ void StreamingData::run() {
                "Launching transfer threads (MariaDB, MSSQL)");
   threads.emplace_back(&StreamingData::mariaTransferThread, this);
   threads.emplace_back(&StreamingData::mssqlTransferThread, this);
+  threads.emplace_back(&StreamingData::mongoTransferThread, this);
 
   Logger::info(LogCategory::MONITORING,
                "Transfer threads launched successfully");
@@ -401,6 +402,22 @@ void StreamingData::catalogSyncThread() {
         }
       });
 
+      syncThreads.emplace_back([this, &exceptions, &exceptionMutex]() {
+        try {
+          Logger::info(LogCategory::MONITORING, "Starting MongoDB catalog sync");
+          catalogManager.syncCatalogMongoDBToPostgres();
+          Logger::info(LogCategory::MONITORING,
+                       "MongoDB catalog sync completed successfully");
+        } catch (const std::exception &e) {
+          Logger::error(
+              LogCategory::MONITORING, "catalogSyncThread",
+              "ERROR in MongoDB catalog sync: " + std::string(e.what()) +
+                  " - MongoDB catalog may be out of sync");
+          std::lock_guard<std::mutex> lock(exceptionMutex);
+          exceptions.push_back(std::current_exception());
+        }
+      });
+
       for (auto &thread : syncThreads) {
         thread.join();
       }
@@ -529,6 +546,41 @@ void StreamingData::mssqlTransferThread() {
   Logger::info(LogCategory::MONITORING, "MSSQL transfer thread stopped");
 }
 
+// MongoDB transfer thread that runs continuously while the system is running.
+// Performs periodic data transfer from MongoDB to PostgreSQL using TRUNCATE +
+// FULL_LOAD strategy. Verifies if collections need sync (24+ hours since last
+// sync). Measures and logs transfer duration. Sleeps for 1 hour between cycles
+// to check for collections that need sync. Handles exceptions by logging errors
+// and continuing to the next cycle. This thread is responsible for keeping
+// MongoDB data synchronized with PostgreSQL.
+void StreamingData::mongoTransferThread() {
+  Logger::info(LogCategory::MONITORING, "MongoDB transfer thread started");
+  while (running) {
+    try {
+      Logger::info(LogCategory::MONITORING,
+                   "Starting MongoDB transfer cycle");
+
+      auto startTime = std::chrono::high_resolution_clock::now();
+      mongoToPg.transferDataMongoDBToPostgresParallel();
+      auto endTime = std::chrono::high_resolution_clock::now();
+
+      auto duration =
+          std::chrono::duration_cast<std::chrono::seconds>(endTime - startTime);
+      Logger::info(LogCategory::MONITORING,
+                   "MongoDB transfer cycle completed successfully in " +
+                       std::to_string(duration.count()) + " seconds");
+    } catch (const std::exception &e) {
+      Logger::error(
+          LogCategory::MONITORING, "mongoTransferThread",
+          "CRITICAL ERROR in MongoDB transfer cycle: " + std::string(e.what()) +
+              " - MongoDB data sync failed, retrying in 1 hour");
+    }
+
+    std::this_thread::sleep_for(std::chrono::seconds(3600));
+  }
+  Logger::info(LogCategory::MONITORING, "MongoDB transfer thread stopped");
+}
+
 // Data quality validation thread that runs continuously while the system is
 // running. Validates tables for MariaDB, MSSQL, and PostgreSQL engines by
 // calling validateTablesForEngine for each. Creates a PostgreSQL connection
@@ -572,6 +624,7 @@ void StreamingData::qualityThread() {
       validateTablesForEngine(*pgConn, "MariaDB");
       validateTablesForEngine(*pgConn, "MSSQL");
       validateTablesForEngine(*pgConn, "PostgreSQL");
+      validateTablesForEngine(*pgConn, "MongoDB");
 
       Logger::info(LogCategory::MONITORING,
                    "Data quality validation cycle completed successfully");

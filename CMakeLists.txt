@@ -55,6 +55,7 @@ add_executable(DataSync
     src/engines/mariadb_engine.cpp
     src/engines/mssql_engine.cpp
     src/engines/postgres_engine.cpp
+    src/engines/mongodb_engine.cpp
     src/catalog/metadata_repository.cpp
     src/catalog/catalog_cleaner.cpp
     src/catalog/catalog_manager.cpp
@@ -62,6 +63,7 @@ add_executable(DataSync
     src/sync/DatabaseToPostgresSync.cpp
     src/sync/MariaDBToPostgres.cpp
     src/sync/MSSQLToPostgres.cpp
+    src/sync/MongoDBToPostgres.cpp
     src/sync/StreamingData.cpp
     src/sync/TableProcessorThreadPool.cpp
 )

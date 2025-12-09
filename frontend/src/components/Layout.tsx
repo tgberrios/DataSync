@@ -88,8 +88,32 @@ const Layout = () => {
         <NavItem to="/catalog">
           ■ Catalog
         </NavItem>
+        <NavItem to="/column-catalog">
+          ■ Column Catalog
+        </NavItem>
+        <NavItem to="/catalog-locks">
+          ■ Catalog Locks
+        </NavItem>
+        <NavItem to="/data-lineage-mariadb">
+          ■ Lineage MariaDB
+        </NavItem>
+        <NavItem to="/data-lineage-mssql">
+          ■ Lineage MSSQL
+        </NavItem>
+        <NavItem to="/governance-catalog-mariadb">
+          ■ Gov Catalog MariaDB
+        </NavItem>
+        <NavItem to="/governance-catalog-mssql">
+          ■ Gov Catalog MSSQL
+        </NavItem>
         <NavItem to="/monitor">
           ■ Monitor
+        </NavItem>
+        <NavItem to="/query-performance">
+          ■ Query Performance
+        </NavItem>
+        <NavItem to="/maintenance">
+          ■ Maintenance
         </NavItem>
         <NavItem to="/live-changes">
           ■ Live Changes
