@@ -44,6 +44,7 @@ add_executable(DataSync
     src/governance/data_classifier.cpp
     src/governance/QueryStoreCollector.cpp
     src/governance/QueryActivityLogger.cpp
+    src/governance/MaintenanceManager.cpp
     src/metrics/MetricsCollector.cpp
     src/utils/connection_utils.cpp
     src/utils/cluster_name_resolver.cpp
