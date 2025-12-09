@@ -222,7 +222,7 @@ void LineageExtractorMSSQL::extractTableDependencies() {
         OBJECT_NAME(d.referencing_id) AS referencing_object,
         OBJECT_SCHEMA_NAME(d.referenced_id) AS referenced_schema,
         OBJECT_NAME(d.referenced_id) AS referenced_object,
-        d.referenced_minor_name AS referenced_column,
+        NULL AS referenced_column,
         d.referencing_class_desc,
         d.referenced_class_desc
       FROM sys.sql_expression_dependencies d
@@ -278,7 +278,7 @@ void LineageExtractorMSSQL::extractStoredProcedureDependencies() {
         OBJECT_NAME(sp.object_id) AS sp_name,
         OBJECT_SCHEMA_NAME(d.referenced_id) AS referenced_schema,
         OBJECT_NAME(d.referenced_id) AS referenced_object,
-        d.referenced_minor_name AS referenced_column,
+        NULL AS referenced_column,
         d.referenced_class_desc
       FROM sys.procedures sp
       INNER JOIN sys.sql_expression_dependencies d ON sp.object_id = d.referencing_id
@@ -332,7 +332,7 @@ void LineageExtractorMSSQL::extractViewDependencies() {
         OBJECT_NAME(v.object_id) AS view_name,
         OBJECT_SCHEMA_NAME(d.referenced_id) AS referenced_schema,
         OBJECT_NAME(d.referenced_id) AS referenced_object,
-        d.referenced_minor_name AS referenced_column,
+        NULL AS referenced_column,
         d.referenced_class_desc
       FROM sys.views v
       INNER JOIN sys.sql_expression_dependencies d ON v.object_id = d.referencing_id
@@ -389,7 +389,7 @@ void LineageExtractorMSSQL::extractSqlExpressionDependencies() {
         OBJECTPROPERTY(d.referencing_id, 'IsProcedure') AS is_procedure,
         OBJECT_SCHEMA_NAME(d.referenced_id) AS referenced_schema,
         OBJECT_NAME(d.referenced_id) AS referenced_object,
-        d.referenced_minor_name AS referenced_column,
+        NULL AS referenced_column,
         d.referencing_class_desc,
         d.referenced_class_desc
       FROM sys.sql_expression_dependencies d
