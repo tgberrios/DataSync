@@ -154,7 +154,7 @@ void LineageExtractorMariaDB::extractForeignKeyDependencies() {
                         "rc.CONSTRAINT_SCHEMA, "
                         "rc.TABLE_NAME, "
                         "kcu.COLUMN_NAME, "
-                        "rc.REFERENCED_TABLE_SCHEMA, "
+                        "kcu.REFERENCED_TABLE_SCHEMA, "
                         "rc.REFERENCED_TABLE_NAME, "
                         "kcu.REFERENCED_COLUMN_NAME, "
                         "rc.CONSTRAINT_NAME "
@@ -162,6 +162,7 @@ void LineageExtractorMariaDB::extractForeignKeyDependencies() {
                         "INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu "
                         "  ON rc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA "
                         "  AND rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME "
+                        "  AND rc.TABLE_NAME = kcu.TABLE_NAME "
                         "WHERE rc.CONSTRAINT_SCHEMA = '" + dbEscaped + "' "
                         "ORDER BY rc.TABLE_NAME, kcu.ORDINAL_POSITION";
 
@@ -176,6 +177,7 @@ void LineageExtractorMariaDB::extractForeignKeyDependencies() {
         edge.object_name = row[1];
         edge.object_type = "TABLE";
         edge.column_name = row[2];
+        std::string refSchema = row[3].empty() ? row[0] : row[3];
         edge.target_object_name = row[4];
         edge.target_object_type = "TABLE";
         edge.target_column_name = row[5];
