@@ -12,78 +12,13 @@
 
 
 ┌─────────────────────────────────────────────────────────────────┐
-│ PRIORITY 3: MEDIUM PRIORITY + LOW COMPLEXITY                   │
-└─────────────────────────────────────────────────────────────────┘
-
-en los governance cada cuanto saca las snapshots ?
-
-5.9. Implementar DataGovernanceMongoDB.cpp
-     [GOVERNANCE - Catálogo específico para MongoDB]
-     [ARCHIVO: src/governance/DataGovernanceMongoDB.cpp]
-     [PRIORIDAD: Baja - Depende de implementación MongoDB]
-
-5.10. Implementar LineageExtractorMongoDB.cpp
-      [LINEAGE - Extracción de dependencias MongoDB]
-      [ARCHIVO: src/governance/LineageExtractorMongoDB.cpp]
-      [PRIORIDAD: Baja - Depende de implementación MongoDB]
-
-
-┌─────────────────────────────────────────────────────────────────┐
-│ PRIORITY 4: MEDIUM PRIORITY + MEDIUM COMPLEXITY                 │
-└─────────────────────────────────────────────────────────────────┘
-
-
-7. bueno ahora que tenemos ese monton nuevas de tablas y todo eso podemos crear mas metricas y dashboard para mostrar salud de muchas cosas etc etc 
-   [MEJORA UX - Crear vistas para visualización de datos]
-   
-
-   
-eso de governance y lineage tambien para oracle y mongo
-   
-   7.11. Data Lineage Visualizer - MongoDB (metadata.mongo_lineage)
-         [LINEAGE - Visualización de dependencias MongoDB]
-         [TABLA: metadata.mongo_lineage]
-         [PRIORIDAD: Media - Útil para entender dependencias]
-   
-   7.13. Governance Catalog - MongoDB (metadata.data_governance_catalog_mongodb)
-         [GOVERNANCE - Vista específica de governance MongoDB]
-         [TABLA: metadata.data_governance_catalog_mongodb]
-         [PRIORIDAD: Baja - Similar a Governance pero específico]
-
-
-┌─────────────────────────────────────────────────────────────────┐
 │ PRIORITY 5: HIGH PRIORITY + HIGH COMPLEXITY                     │
 └─────────────────────────────────────────────────────────────────┘
 
 
-9. ORACLE que pueda jalar deaca
-   [NUEVO MOTOR - Implementar soporte para Oracle]
-   [IMPORTANTE: Amplía capacidades del sistema]
-
 10. monetizar este proyecto !
     [NEGOCIO - Estrategia de monetización]
     [NOTA: Licencia propietaria ya implementada ✓]
-
-┌─────────────────────────────────────────────────────────────────┐
-│ PRIORITY 7: LOW PRIORITY + HIGH COMPLEXITY (Future)             │
-└─────────────────────────────────────────────────────────────────┘
-
-13. OTROS MOTORES que pueda jalar deaca
-    [NUEVO MOTOR - Soporte genérico para otros motores]
-    [NOTA: Muy genérico, definir primero qué motores específicos]
-
-
-
-
-═══════════════════════════════════════════════════════════════════
-NOTAS:
-- Prioridad basada en: impacto en el negocio, facilidad de implementación,
-  dependencias entre tareas, y valor para monetización
-- Complejidad estimada: Baja (<1 día), Media (1-3 días), Alta (>3 días)
-- Tareas de limpieza primero para mantener código limpio
-- Dockerización importante para distribución y monetización
-- Nuevos motores después de estabilizar el sistema actual
-═══════════════════════════════════════════════════════════════════
 
 
 poner bonitos con las tres fases los include porque esos no los emos tramitado 
@@ -91,6 +26,9 @@ poner bonitos con las tres fases los include porque esos no los emos tramitado
 un catalog de tablas con sus columnas como full metadata de las tablas
 
 de maintance metrics talvez todos esos threeshold podrian venir de config
+
+tiene que haber algo mas facil para capturar cual es la que se esta procesando actualmente y el queque
+
 
 
 
@@ -116,3 +54,17 @@ de maintance metrics talvez todos esos threeshold podrian venir de config
     [NOTA: Liquibase es muy complejo, requiere análisis profundo]
 
     otro proyecto igual mejorando en lo que carece!
+
+
+    NORMALIZAR LA DB Y LOS SCHEMAS ETC, CAMBIAR NOMBRE DE COLUMNAS A MAYUS,
+    USAR NOMBRES DE COLUMNAS MEJORES
+
+
+    ANADIR FORMA DE HACER FIRST SETUP DIGAMOS DE LA DB 
+
+    CAMBIAR NOMBRE DE SCHEMA A DATASYNC_METADATA? 
+
+    Y OTRAS VAINAS
+
+
+    NORMALIZAR CSS EN EN EL FRONTEND Y ARREGLAR Y OPTIMIZAR TODA ESA VAINA

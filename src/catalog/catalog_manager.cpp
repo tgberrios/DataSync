@@ -3,6 +3,7 @@
 #include "core/Config.h"
 #include "core/logger.h"
 #include "engines/mongodb_engine.h"
+#include "engines/oracle_engine.h"
 #include "utils/string_utils.h"
 #include <algorithm>
 #include <sql.h>
@@ -326,6 +327,8 @@ void CatalogManager::syncCatalog(const std::string &dbEngine) {
         engine = std::make_unique<PostgreSQLEngine>(connStr);
       else if (dbEngine == "MongoDB")
         engine = std::make_unique<MongoDBEngine>(connStr);
+      else if (dbEngine == "Oracle")
+        engine = std::make_unique<OracleEngine>(connStr);
 
       if (!engine)
         continue;
@@ -379,3 +382,7 @@ void CatalogManager::syncCatalogPostgresToPostgres() {
 // Sync catalog from MongoDB to PostgreSQL. This is a convenience wrapper
 // that calls syncCatalog with "MongoDB" as the database engine parameter.
 void CatalogManager::syncCatalogMongoDBToPostgres() { syncCatalog("MongoDB"); }
+
+// Sync catalog from Oracle to PostgreSQL. This is a convenience wrapper
+// that calls syncCatalog with "Oracle" as the database engine parameter.
+void CatalogManager::syncCatalogOracleToPostgres() { syncCatalog("Oracle"); }

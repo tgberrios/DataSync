@@ -11,6 +11,7 @@
 #include "sync/MSSQLToPostgres.h"
 #include "sync/MariaDBToPostgres.h"
 #include "sync/MongoDBToPostgres.h"
+#include "sync/OracleToPostgres.h"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -38,6 +39,7 @@ private:
   MariaDBToPostgres mariaToPg;
   MSSQLToPostgres mssqlToPg;
   MongoDBToPostgres mongoToPg;
+  OracleToPostgres oracleToPg;
   CatalogManager catalogManager;
   DataQuality dataQuality;
 
@@ -47,6 +49,7 @@ private:
   void mariaTransferThread();
   void mssqlTransferThread();
   void mongoTransferThread();
+  void oracleTransferThread();
   void qualityThread();
   void maintenanceThread();
   void monitoringThread();

@@ -46,6 +46,7 @@ void StreamingData::run() {
   threads.emplace_back(&StreamingData::mariaTransferThread, this);
   threads.emplace_back(&StreamingData::mssqlTransferThread, this);
   threads.emplace_back(&StreamingData::mongoTransferThread, this);
+  threads.emplace_back(&StreamingData::oracleTransferThread, this);
 
   Logger::info(LogCategory::MONITORING,
                "Transfer threads launched successfully");
@@ -343,6 +344,17 @@ void StreamingData::initializationThread() {
                         std::string(e.what()) + " - MSSQL sync may fail");
     }
 
+    try {
+      Logger::info(LogCategory::MONITORING, "Setting up Oracle target tables");
+      oracleToPg.setupTableTargetOracleToPostgres();
+      Logger::info(LogCategory::MONITORING,
+                   "Oracle target tables setup completed");
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::MONITORING, "initializationThread",
+                    "CRITICAL ERROR in Oracle table setup: " +
+                        std::string(e.what()) + " - Oracle sync may fail");
+    }
+
     Logger::info(LogCategory::MONITORING,
                  "System initialization thread completed successfully");
   } catch (const std::exception &e) {
@@ -399,6 +411,22 @@ void StreamingData::catalogSyncThread() {
               LogCategory::MONITORING, "catalogSyncThread",
               "ERROR in MSSQL catalog sync: " + std::string(e.what()) +
                   " - MSSQL catalog may be out of sync");
+          std::lock_guard<std::mutex> lock(exceptionMutex);
+          exceptions.push_back(std::current_exception());
+        }
+      });
+
+      syncThreads.emplace_back([this, &exceptions, &exceptionMutex]() {
+        try {
+          Logger::info(LogCategory::MONITORING, "Starting Oracle catalog sync");
+          catalogManager.syncCatalogOracleToPostgres();
+          Logger::info(LogCategory::MONITORING,
+                       "Oracle catalog sync completed successfully");
+        } catch (const std::exception &e) {
+          Logger::error(
+              LogCategory::MONITORING, "catalogSyncThread",
+              "ERROR in Oracle catalog sync: " + std::string(e.what()) +
+                  " - Oracle catalog may be out of sync");
           std::lock_guard<std::mutex> lock(exceptionMutex);
           exceptions.push_back(std::current_exception());
         }
@@ -581,6 +609,45 @@ void StreamingData::mongoTransferThread() {
     std::this_thread::sleep_for(std::chrono::seconds(3600));
   }
   Logger::info(LogCategory::MONITORING, "MongoDB transfer thread stopped");
+}
+
+// Oracle transfer thread that runs continuously while the system is running.
+// Performs periodic data transfer from Oracle to PostgreSQL using parallel
+// processing. Measures and logs transfer duration. Sleeps for
+// max(5, sync_interval/4) seconds between cycles to avoid overwhelming the
+// system. Handles exceptions by logging errors and continuing to the next
+// cycle. This thread is responsible for keeping Oracle data synchronized with
+// PostgreSQL.
+void StreamingData::oracleTransferThread() {
+  Logger::info(LogCategory::MONITORING, "Oracle transfer thread started");
+  while (running) {
+    try {
+      Logger::info(LogCategory::MONITORING,
+                   "Starting Oracle transfer cycle - sync interval: " +
+                       std::to_string(SyncConfig::getSyncInterval()) +
+                       " seconds");
+
+      auto startTime = std::chrono::high_resolution_clock::now();
+      oracleToPg.transferDataOracleToPostgresParallel();
+      auto endTime = std::chrono::high_resolution_clock::now();
+
+      auto duration =
+          std::chrono::duration_cast<std::chrono::seconds>(endTime - startTime);
+      Logger::info(LogCategory::MONITORING,
+                   "Oracle transfer cycle completed successfully in " +
+                       std::to_string(duration.count()) + " seconds");
+    } catch (const std::exception &e) {
+      Logger::error(
+          LogCategory::MONITORING, "oracleTransferThread",
+          "CRITICAL ERROR in Oracle transfer cycle: " + std::string(e.what()) +
+              " - Oracle data sync failed, retrying in " +
+              std::to_string(SyncConfig::getSyncInterval()) + " seconds");
+    }
+
+    std::this_thread::sleep_for(std::chrono::seconds(
+        std::max(5, static_cast<int>(SyncConfig::getSyncInterval() / 4))));
+  }
+  Logger::info(LogCategory::MONITORING, "Oracle transfer thread stopped");
 }
 
 // Data quality validation thread that runs continuously while the system is
