@@ -2,6 +2,7 @@
 #include "core/database_config.h"
 #include "core/logger.h"
 #include "engines/database_engine.h"
+#include "sync/SchemaSync.h"
 #include "third_party/json.hpp"
 #include <algorithm>
 #include <ctime>
@@ -728,6 +729,43 @@ void MongoDBToPostgres::transferDataMongoDBToPostgresParallel() {
             statusTxn.quote(tableInfo.schema_name) +
             " AND table_name = " + statusTxn.quote(tableInfo.table_name));
         statusTxn.commit();
+
+        try {
+          std::vector<std::string> fields = discoverCollectionFields(
+              tableInfo.connection_string, tableInfo.schema_name,
+              tableInfo.table_name);
+
+          std::vector<ColumnInfo> sourceColumns;
+          for (const auto &field : fields) {
+            ColumnInfo col;
+            col.name = field;
+            std::transform(col.name.begin(), col.name.end(), col.name.begin(),
+                           ::tolower);
+            if (field == "_id") {
+              col.pgType = "TEXT";
+            } else if (field == "_document") {
+              col.pgType = "JSONB";
+            } else {
+              col.pgType = "TEXT";
+            }
+            col.isNullable = true;
+            col.ordinalPosition = sourceColumns.size() + 1;
+            col.isPrimaryKey = (field == "_id");
+            sourceColumns.push_back(col);
+          }
+
+          if (!sourceColumns.empty()) {
+            SchemaSync::syncSchema(conn, tableInfo.schema_name,
+                                   tableInfo.table_name, sourceColumns,
+                                   "MongoDB");
+          }
+        } catch (const std::exception &e) {
+          Logger::warning(
+              LogCategory::TRANSFER, "transferDataMongoDBToPostgresParallel",
+              "Error syncing schema for " + tableInfo.schema_name + "." +
+                  tableInfo.table_name + ": " + std::string(e.what()) +
+                  " - continuing with sync");
+        }
 
         truncateAndLoadCollection(tableInfo);
       } catch (const std::exception &e) {

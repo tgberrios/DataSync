@@ -74,6 +74,7 @@ add_executable(DataSync
     src/sync/MSSQLToPostgres.cpp
     src/sync/MongoDBToPostgres.cpp
     src/sync/OracleToPostgres.cpp
+    src/sync/SchemaSync.cpp
     src/sync/StreamingData.cpp
     src/sync/TableProcessorThreadPool.cpp
 )

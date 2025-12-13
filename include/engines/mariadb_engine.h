@@ -4,6 +4,7 @@
 #include "core/Config.h"
 #include "core/logger.h"
 #include "engines/database_engine.h"
+#include "sync/SchemaSync.h"
 #include "utils/connection_utils.h"
 #include <memory>
 #include <mysql/mysql.h>
@@ -39,6 +40,8 @@ public:
   std::pair<int, int>
   getColumnCounts(const std::string &schema, const std::string &table,
                   const std::string &targetConnStr) override;
+  std::vector<ColumnInfo> getTableColumns(const std::string &schema,
+                                          const std::string &table);
 
 private:
   std::unique_ptr<MySQLConnection> createConnection();

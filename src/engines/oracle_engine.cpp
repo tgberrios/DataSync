@@ -1,7 +1,9 @@
 #include "engines/oracle_engine.h"
+#include "sync/OracleToPostgres.h"
 #include <algorithm>
 #include <pqxx/pqxx>
 #include <sstream>
+#include <unordered_set>
 
 OCIConnection::OCIConnection(const std::string &connectionString) {
   sword status;
@@ -691,4 +693,131 @@ OracleEngine::getColumnCounts(const std::string &schema,
   }
 
   return {sourceCount, targetCount};
+}
+
+std::vector<ColumnInfo>
+OracleEngine::getTableColumns(const std::string &schema,
+                              const std::string &table) {
+  std::vector<ColumnInfo> columns;
+  if (schema.empty() || table.empty()) {
+    Logger::error(LogCategory::DATABASE, "OracleEngine",
+                  "getTableColumns: schema and table must not be empty");
+    return columns;
+  }
+
+  auto conn = createConnection();
+  if (!conn || !conn->isValid()) {
+    Logger::error(LogCategory::DATABASE, "OracleEngine",
+                  "getTableColumns: connection is invalid");
+    return columns;
+  }
+
+  std::string upperSchema = schema;
+  std::transform(upperSchema.begin(), upperSchema.end(), upperSchema.begin(),
+                 ::toupper);
+  std::string upperTable = table;
+  std::transform(upperTable.begin(), upperTable.end(), upperTable.begin(),
+                 ::toupper);
+
+  std::string escapedSchema;
+  for (char c : upperSchema) {
+    if (c == '\'') {
+      escapedSchema += "''";
+    } else if (c >= 32 && c <= 126 && c != ';' && c != '-' && c != '\\') {
+      escapedSchema += c;
+    }
+  }
+  if (escapedSchema.empty()) {
+    Logger::error(LogCategory::DATABASE, "OracleEngine",
+                  "getTableColumns: escaped schema is empty");
+    return columns;
+  }
+
+  std::string escapedTable;
+  for (char c : upperTable) {
+    if (c == '\'') {
+      escapedTable += "''";
+    } else if (c >= 32 && c <= 126 && c != ';' && c != '-' && c != '\\') {
+      escapedTable += c;
+    }
+  }
+  if (escapedTable.empty()) {
+    Logger::error(LogCategory::DATABASE, "OracleEngine",
+                  "getTableColumns: escaped table is empty");
+    return columns;
+  }
+
+  std::string query =
+      "SELECT column_name, data_type, data_length, data_precision, "
+      "data_scale, nullable, data_default, column_id "
+      "FROM all_tab_columns WHERE UPPER(owner) = '" +
+      escapedSchema + "' AND UPPER(table_name) = '" + escapedTable +
+      "' ORDER BY column_id";
+
+  auto results = executeQuery(conn.get(), query);
+
+  std::vector<std::string> pkColumns = detectPrimaryKey(schema, table);
+  std::unordered_set<std::string> pkSet(pkColumns.begin(), pkColumns.end());
+
+  for (const auto &row : results) {
+    if (row.size() < 8)
+      continue;
+
+    ColumnInfo col;
+    col.name = row[0];
+    std::transform(col.name.begin(), col.name.end(), col.name.begin(),
+                   ::tolower);
+    col.dataType = row[1];
+    col.maxLength = row.size() > 2 ? row[2] : "";
+    col.numericPrecision = row.size() > 3 ? row[3] : "";
+    col.numericScale = row.size() > 4 ? row[4] : "";
+    col.isNullable = (row.size() > 5 && row[5] == "Y");
+    col.defaultValue = row.size() > 6 ? row[6] : "";
+    try {
+      col.ordinalPosition = std::stoi(row[7]);
+    } catch (...) {
+      col.ordinalPosition = 0;
+    }
+    col.isPrimaryKey = pkSet.find(row[0]) != pkSet.end();
+
+    std::string pgType = "TEXT";
+    if (OracleToPostgres::dataTypeMap.count(col.dataType)) {
+      pgType = OracleToPostgres::dataTypeMap[col.dataType];
+      if (pgType == "VARCHAR" && !col.maxLength.empty() &&
+          col.maxLength != "NULL") {
+        try {
+          if (!col.maxLength.empty() && col.maxLength.length() <= 10) {
+            int len = std::stoi(col.maxLength);
+            if (len > 0 && len <= 10485760) {
+              pgType = "VARCHAR(" + std::to_string(len) + ")";
+            }
+          }
+        } catch (...) {
+        }
+      } else if (pgType == "NUMERIC" && !col.numericPrecision.empty() &&
+                 col.numericPrecision != "NULL") {
+        try {
+          if (!col.numericPrecision.empty() &&
+              col.numericPrecision.length() <= 10) {
+            int prec = std::stoi(col.numericPrecision);
+            int scale = 0;
+            if (!col.numericScale.empty() && col.numericScale != "NULL" &&
+                col.numericScale.length() <= 10) {
+              scale = std::stoi(col.numericScale);
+            }
+            if (prec > 0 && prec <= 1000 && scale >= 0 && scale <= prec) {
+              pgType = "NUMERIC(" + std::to_string(prec) + "," +
+                       std::to_string(scale) + ")";
+            }
+          }
+        } catch (...) {
+        }
+      }
+    }
+
+    col.pgType = pgType;
+    columns.push_back(col);
+  }
+
+  return columns;
 }

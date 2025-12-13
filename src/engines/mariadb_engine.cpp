@@ -1,8 +1,10 @@
 #include "engines/mariadb_engine.h"
+#include "sync/MariaDBToPostgres.h"
 #include <algorithm>
 #include <chrono>
 #include <pqxx/pqxx>
 #include <thread>
+#include <unordered_set>
 
 // Constructor for MySQLConnection. Initializes a MySQL connection using the
 // provided connection parameters. Parses the port from the params, defaulting
@@ -476,4 +478,116 @@ MariaDBEngine::getColumnCounts(const std::string &schema,
                       table + ": " + std::string(e.what()));
     return {sourceCount, 0};
   }
+}
+
+std::vector<ColumnInfo>
+MariaDBEngine::getTableColumns(const std::string &schema,
+                               const std::string &table) {
+  std::vector<ColumnInfo> columns;
+  if (schema.empty() || table.empty()) {
+    Logger::error(LogCategory::DATABASE, "MariaDBEngine",
+                  "getTableColumns: schema and table must not be empty");
+    return columns;
+  }
+
+  auto conn = createConnection();
+  if (!conn || !conn->isValid()) {
+    Logger::error(LogCategory::DATABASE, "MariaDBEngine",
+                  "getTableColumns: connection is invalid");
+    return columns;
+  }
+
+  MYSQL *mysqlConn = conn->get();
+  if (!mysqlConn) {
+    Logger::error(LogCategory::DATABASE, "MariaDBEngine",
+                  "getTableColumns: MySQL connection is null");
+    return columns;
+  }
+
+  size_t schemaEscapedLen = schema.length() * 2 + 1;
+  std::vector<char> escapedSchemaBuf(schemaEscapedLen);
+  size_t tableEscapedLen = table.length() * 2 + 1;
+  std::vector<char> escapedTableBuf(tableEscapedLen);
+
+  unsigned long schemaLen = mysql_real_escape_string(
+      mysqlConn, escapedSchemaBuf.data(), schema.c_str(), schema.length());
+  unsigned long tableLen = mysql_real_escape_string(
+      mysqlConn, escapedTableBuf.data(), table.c_str(), table.length());
+
+  if (schemaLen == (unsigned long)-1 || tableLen == (unsigned long)-1) {
+    Logger::error(LogCategory::DATABASE, "MariaDBEngine",
+                  "getTableColumns: mysql_real_escape_string failed");
+    return columns;
+  }
+
+  std::string escapedSchema(escapedSchemaBuf.data(), schemaLen);
+  std::string escapedTable(escapedTableBuf.data(), tableLen);
+
+  std::string query =
+      "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_KEY, EXTRA, "
+      "CHARACTER_MAXIMUM_LENGTH, COLUMN_DEFAULT, ORDINAL_POSITION "
+      "FROM information_schema.columns "
+      "WHERE TABLE_SCHEMA = '" +
+      escapedSchema + "' AND TABLE_NAME = '" + escapedTable +
+      "' ORDER BY ORDINAL_POSITION";
+
+  auto results = executeQuery(conn->get(), query);
+
+  std::vector<std::string> pkColumns = detectPrimaryKey(schema, table);
+  std::unordered_set<std::string> pkSet(pkColumns.begin(), pkColumns.end());
+
+  for (const auto &row : results) {
+    if (row.size() < 8)
+      continue;
+
+    ColumnInfo col;
+    col.name = row[0];
+    std::transform(col.name.begin(), col.name.end(), col.name.begin(),
+                   ::tolower);
+    col.dataType = row[1];
+    col.isNullable = (row[2] == "YES");
+    std::string columnKey = row[3];
+    std::string extra = row[4];
+    col.maxLength = row.size() > 5 ? row[5] : "";
+    col.defaultValue = row.size() > 6 ? row[6] : "";
+    try {
+      col.ordinalPosition = std::stoi(row[7]);
+    } catch (...) {
+      col.ordinalPosition = 0;
+    }
+    col.isPrimaryKey = pkSet.find(row[0]) != pkSet.end();
+
+    std::string pgType = "TEXT";
+    if (extra == "auto_increment") {
+      pgType = (col.dataType == "bigint") ? "BIGINT" : "INTEGER";
+    } else if (col.dataType == "timestamp" || col.dataType == "datetime") {
+      pgType = "TIMESTAMP";
+    } else if (col.dataType == "date") {
+      pgType = "DATE";
+    } else if (col.dataType == "time") {
+      pgType = "TIME";
+    } else if (col.dataType == "char" || col.dataType == "varchar") {
+      if (!col.maxLength.empty() && col.maxLength != "NULL") {
+        try {
+          size_t length = std::stoul(col.maxLength);
+          if (length >= 1 && length <= 65535) {
+            pgType = col.dataType + "(" + col.maxLength + ")";
+          } else {
+            pgType = "VARCHAR";
+          }
+        } catch (...) {
+          pgType = "VARCHAR";
+        }
+      } else {
+        pgType = "VARCHAR";
+      }
+    } else if (MariaDBToPostgres::dataTypeMap.count(col.dataType)) {
+      pgType = MariaDBToPostgres::dataTypeMap[col.dataType];
+    }
+
+    col.pgType = pgType;
+    columns.push_back(col);
+  }
+
+  return columns;
 }
