@@ -1,40 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import styled from 'styled-components';
 import { queryPerformanceApi } from '../services/api';
-
-const QueryPerformanceContainer = styled.div`
-  background-color: white;
-  color: #333;
-  padding: 20px;
-  font-family: monospace;
-  animation: fadeIn 0.25s ease-in;
-`;
-
-const Header = styled.div`
-  border: 2px solid #333;
-  padding: 15px;
-  text-align: center;
-  margin-bottom: 30px;
-  font-size: 1.5em;
-  font-weight: bold;
-  background: linear-gradient(135deg, #f5f5f5 0%, #ffffff 50%, #f5f5f5 100%);
-  border-radius: 6px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-  position: relative;
-  overflow: hidden;
-  animation: slideUp 0.3s ease-out;
-  
-  &::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -100%;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(10, 25, 41, 0.1), transparent);
-    animation: shimmer 3s infinite;
-  }
-`;
+import { Container, Header, Select, FiltersContainer, Input, Pagination, PageButton, LoadingOverlay, ErrorMessage } from './shared/BaseComponents';
+import { usePagination } from '../hooks/usePagination';
+import { useTableFilters } from '../hooks/useTableFilters';
+import { extractApiError } from '../utils/errorHandler';
 
 const MetricsGrid = styled.div`
   display: grid;
@@ -74,55 +44,6 @@ const MetricValue = styled.div`
   color: #0d1b2a;
 `;
 
-const FiltersContainer = styled.div`
-  display: flex;
-  gap: 10px;
-  margin-bottom: 20px;
-  flex-wrap: wrap;
-  animation: slideUp 0.25s ease-out;
-  animation-delay: 0.15s;
-  animation-fill-mode: both;
-`;
-
-const FilterSelect = styled.select`
-  padding: 8px 12px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  background: white;
-  color: #333;
-  font-family: monospace;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  font-size: 0.9em;
-  
-  &:hover {
-    background: #f5f5f5;
-    border-color: rgba(10, 25, 41, 0.3);
-  }
-  
-  &:focus {
-    outline: none;
-    border-color: #0d1b2a;
-    box-shadow: 0 0 0 3px rgba(10, 25, 41, 0.1);
-  }
-`;
-
-const SearchInput = styled.input`
-  flex: 1;
-  min-width: 200px;
-  padding: 8px 12px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  font-family: monospace;
-  font-size: 0.9em;
-  transition: all 0.2s ease;
-  
-  &:focus {
-    outline: none;
-    border-color: #0d1b2a;
-    box-shadow: 0 0 0 3px rgba(10, 25, 41, 0.1);
-  }
-`;
 
 const QueryTable = styled.div`
   border: 1px solid #ddd;
@@ -252,68 +173,18 @@ const QueryText = styled.pre`
   }
 `;
 
-const Pagination = styled.div`
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 10px;
-  margin-top: 20px;
-  animation: slideUp 0.25s ease-out;
-  animation-delay: 0.25s;
-  animation-fill-mode: both;
-`;
 
-const PageButton = styled.button<{ $active?: boolean; $disabled?: boolean }>`
-  padding: 8px 16px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  background: ${props => props.$active ? '#0d1b2a' : 'white'};
-  color: ${props => props.$active ? 'white' : '#333'};
-  cursor: ${props => props.$disabled ? 'not-allowed' : 'pointer'};
-  font-family: monospace;
-  transition: all 0.2s ease;
-  opacity: ${props => props.$disabled ? 0.5 : 1};
-  
-  &:hover:not(:disabled) {
-    background: ${props => props.$active ? '#1e3a5f' : '#f5f5f5'};
-    border-color: rgba(10, 25, 41, 0.3);
-    transform: translateY(-2px);
-  }
-  
-  &:disabled {
-    cursor: not-allowed;
-  }
-`;
-
-const Loading = styled.div`
-  text-align: center;
-  padding: 40px;
-  color: #666;
-  font-size: 1.1em;
-`;
-
-const Error = styled.div`
-  background-color: #ffebee;
-  color: #c62828;
-  padding: 15px;
-  border-radius: 6px;
-  margin-bottom: 20px;
-  border: 1px solid #ef9a9a;
-`;
-
+/**
+ * Componente para monitorear el rendimiento de consultas
+ * Muestra métricas de rendimiento, consultas lentas y detalles de ejecución
+ */
 const QueryPerformance = () => {
+  const isMountedRef = useRef(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [queries, setQueries] = useState<any[]>([]);
   const [metrics, setMetrics] = useState<any>({});
   const [openQueryId, setOpenQueryId] = useState<number | null>(null);
-  const [filters, setFilters] = useState({
-    performance_tier: '',
-    operation_type: '',
-    source_type: '',
-    search: ''
-  });
-  const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({
     total: 0,
     totalPages: 0,
@@ -321,70 +192,103 @@ const QueryPerformance = () => {
     limit: 20
   });
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const [queriesData, metricsData] = await Promise.all([
-          queryPerformanceApi.getQueries({
-            page,
-            limit: 20,
-            ...filters
-          }),
-          queryPerformanceApi.getMetrics()
-        ]);
+  const { page, setPage } = usePagination(1, 20);
+  const { filters, setFilter } = useTableFilters({
+    performance_tier: '',
+    operation_type: '',
+    source_type: '',
+    search: ''
+  });
+
+  /**
+   * Obtiene los datos de rendimiento de consultas desde la API
+   */
+  const fetchData = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    
+    try {
+      setLoading(true);
+      setError(null);
+      const [queriesData, metricsData] = await Promise.all([
+        queryPerformanceApi.getQueries({
+          page,
+          limit: 20,
+          performance_tier: filters.performance_tier as string,
+          operation_type: filters.operation_type as string,
+          source_type: filters.source_type as string,
+          search: filters.search as string
+        }),
+        queryPerformanceApi.getMetrics()
+      ]);
+      
+      if (isMountedRef.current) {
         setQueries(queriesData.data || []);
-        setPagination(queriesData.pagination || pagination);
+        setPagination(queriesData.pagination || {
+          total: 0,
+          totalPages: 0,
+          currentPage: 1,
+          limit: 20
+        });
         setMetrics(metricsData || {});
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Error loading query performance data');
-      } finally {
+      }
+    } catch (err) {
+      if (isMountedRef.current) {
+        setError(extractApiError(err));
+      }
+    } finally {
+      if (isMountedRef.current) {
         setLoading(false);
       }
-    };
+    }
+  }, [page, filters.performance_tier, filters.operation_type, filters.source_type, filters.search]);
 
+  useEffect(() => {
+    isMountedRef.current = true;
     fetchData();
+    
     const interval = setInterval(fetchData, 30000);
-    return () => clearInterval(interval);
-  }, [page, filters]);
+    return () => {
+      isMountedRef.current = false;
+      clearInterval(interval);
+    };
+  }, [fetchData]);
 
-  const toggleQuery = (id: number) => {
-    setOpenQueryId(openQueryId === id ? null : id);
-  };
+  /**
+   * Alterna la expansión de una consulta
+   */
+  const toggleQuery = useCallback((id: number) => {
+    setOpenQueryId(prev => prev === id ? null : id);
+  }, []);
 
-  const formatTime = (ms: number | string | null | undefined) => {
+  /**
+   * Formatea un tiempo en milisegundos a formato legible
+   */
+  const formatTime = useCallback((ms: number | string | null | undefined) => {
     if (!ms) return 'N/A';
     const numMs = Number(ms);
     if (isNaN(numMs)) return 'N/A';
     if (numMs < 1) return `${(numMs * 1000).toFixed(2)}μs`;
     if (numMs < 1000) return `${numMs.toFixed(2)}ms`;
     return `${(numMs / 1000).toFixed(2)}s`;
-  };
+  }, []);
 
-  const formatNumber = (num: number | string | null | undefined) => {
+  /**
+   * Formatea un número a formato legible (K, M)
+   */
+  const formatNumber = useCallback((num: number | string | null | undefined) => {
     if (num === null || num === undefined) return 'N/A';
     const numVal = Number(num);
     if (isNaN(numVal)) return 'N/A';
     if (numVal >= 1000000) return `${(numVal / 1000000).toFixed(2)}M`;
     if (numVal >= 1000) return `${(numVal / 1000).toFixed(2)}K`;
     return numVal.toString();
-  };
-
-  if (loading && queries.length === 0) {
-    return (
-      <QueryPerformanceContainer>
-        <Header>Query Performance</Header>
-        <Loading>Loading query performance data...</Loading>
-      </QueryPerformanceContainer>
-    );
-  }
+  }, []);
 
   return (
-    <QueryPerformanceContainer>
+    <Container>
       <Header>Query Performance</Header>
       
-      {error && <Error>{error}</Error>}
+      {error && <ErrorMessage>{error}</ErrorMessage>}
       
       <MetricsGrid>
         <MetricCard>
@@ -422,10 +326,10 @@ const QueryPerformance = () => {
       </MetricsGrid>
 
       <FiltersContainer>
-        <FilterSelect
-          value={filters.performance_tier}
+        <Select
+          value={filters.performance_tier as string}
           onChange={(e) => {
-            setFilters({ ...filters, performance_tier: e.target.value });
+            setFilter('performance_tier', e.target.value);
             setPage(1);
           }}
         >
@@ -434,12 +338,12 @@ const QueryPerformance = () => {
           <option value="GOOD">Good</option>
           <option value="FAIR">Fair</option>
           <option value="POOR">Poor</option>
-        </FilterSelect>
+        </Select>
         
-        <FilterSelect
-          value={filters.operation_type}
+        <Select
+          value={filters.operation_type as string}
           onChange={(e) => {
-            setFilters({ ...filters, operation_type: e.target.value });
+            setFilter('operation_type', e.target.value);
             setPage(1);
           }}
         >
@@ -448,26 +352,26 @@ const QueryPerformance = () => {
           <option value="INSERT">INSERT</option>
           <option value="UPDATE">UPDATE</option>
           <option value="DELETE">DELETE</option>
-        </FilterSelect>
+        </Select>
         
-        <FilterSelect
-          value={filters.source_type}
+        <Select
+          value={filters.source_type as string}
           onChange={(e) => {
-            setFilters({ ...filters, source_type: e.target.value });
+            setFilter('source_type', e.target.value);
             setPage(1);
           }}
         >
           <option value="">All Sources</option>
           <option value="snapshot">Snapshot</option>
           <option value="activity">Activity</option>
-        </FilterSelect>
+        </Select>
         
-        <SearchInput
+        <Input
           type="text"
           placeholder="Search query text..."
-          value={filters.search}
+          value={filters.search as string}
           onChange={(e) => {
-            setFilters({ ...filters, search: e.target.value });
+            setFilter('search', e.target.value);
             setPage(1);
           }}
         />
@@ -582,10 +486,14 @@ const QueryPerformance = () => {
         )}
       </QueryTable>
 
+      {loading && queries.length === 0 && (
+        <LoadingOverlay>Loading query performance data...</LoadingOverlay>
+      )}
+
       {pagination.totalPages > 1 && (
         <Pagination>
           <PageButton
-            onClick={() => setPage(p => Math.max(1, p - 1))}
+            onClick={() => setPage(Math.max(1, page - 1))}
             disabled={page === 1}
           >
             Previous
@@ -594,14 +502,14 @@ const QueryPerformance = () => {
             Page {pagination.currentPage} of {pagination.totalPages} ({pagination.total} total)
           </span>
           <PageButton
-            onClick={() => setPage(p => Math.min(pagination.totalPages, p + 1))}
+            onClick={() => setPage(Math.min(pagination.totalPages, page + 1))}
             disabled={page === pagination.totalPages}
           >
             Next
           </PageButton>
         </Pagination>
       )}
-    </QueryPerformanceContainer>
+    </Container>
   );
 };
 

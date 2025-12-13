@@ -1,85 +1,41 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import styled from 'styled-components';
+import {
+  Container,
+  Header,
+  ErrorMessage,
+  LoadingOverlay,
+  Grid,
+  Value,
+  Button,
+} from './shared/BaseComponents';
+import { usePagination } from '../hooks/usePagination';
 import { monitorApi } from '../services/api';
-
-const LiveChangesContainer = styled.div`
-  background-color: white;
-  color: #333;
-  padding: 20px;
-  font-family: monospace;
-  animation: fadeIn 0.25s ease-in;
-`;
-
-const Header = styled.div`
-  border: 2px solid #333;
-  padding: 15px 20px;
-  text-align: center;
-  margin-bottom: 30px;
-  font-size: 1.5em;
-  font-weight: bold;
-  background: linear-gradient(135deg, #f5f5f5 0%, #ffffff 50%, #f5f5f5 100%);
-  border-radius: 6px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-  position: relative;
-  overflow: hidden;
-  animation: slideUp 0.3s ease-out;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  
-  &::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -100%;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(10, 25, 41, 0.1), transparent);
-    animation: shimmer 3s infinite;
-  }
-`;
+import { extractApiError } from '../utils/errorHandler';
+import { theme } from '../theme/theme';
 
 const ControlsContainer = styled.div`
   display: flex;
-  gap: 15px;
+  gap: ${theme.spacing.md};
   align-items: center;
 `;
 
-const RefreshToggle = styled.button`
-  background-color: #0d1b2a;
-  color: white;
-  border: none;
-  padding: 8px 16px;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 0.9em;
-  font-weight: 500;
-  transition: all 0.2s ease;
+const RefreshToggle = styled(Button)`
   height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
-  
-  &:hover {
-    background-color: #1e3a5f;
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(13, 27, 42, 0.3);
-  }
-  
-  &:active {
-    transform: translateY(0);
-  }
 `;
 
 const SearchInput = styled.input`
   padding: 8px 12px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
+  border: 1px solid ${theme.colors.border.medium};
+  border-radius: ${theme.borderRadius.md};
   font-size: 0.9em;
-  font-family: monospace;
+  font-family: ${theme.fonts.primary};
   width: 200px;
   height: 36px;
-  transition: all 0.2s ease;
+  transition: all ${theme.transitions.normal};
   
   &:hover {
     border-color: rgba(10, 25, 41, 0.3);
@@ -87,7 +43,7 @@ const SearchInput = styled.input`
   
   &:focus {
     outline: none;
-    border-color: #0d1b2a;
+    border-color: ${theme.colors.primary.main};
     box-shadow: 0 0 0 3px rgba(10, 25, 41, 0.1);
     transform: translateY(-1px);
   }
@@ -95,13 +51,13 @@ const SearchInput = styled.input`
 
 const FilterSelect = styled.select`
   padding: 8px 12px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
+  border: 1px solid ${theme.colors.border.medium};
+  border-radius: ${theme.borderRadius.md};
   font-size: 0.9em;
-  font-family: monospace;
-  background-color: white;
+  font-family: ${theme.fonts.primary};
+  background-color: ${theme.colors.background.main};
   height: 36px;
-  transition: all 0.2s ease;
+  transition: all ${theme.transitions.normal};
   cursor: pointer;
   
   &:hover {
@@ -110,44 +66,30 @@ const FilterSelect = styled.select`
   
   &:focus {
     outline: none;
-    border-color: #0d1b2a;
+    border-color: ${theme.colors.primary.main};
     box-shadow: 0 0 0 3px rgba(10, 25, 41, 0.1);
   }
 `;
 
-const StatsContainer = styled.div`
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 20px;
-  margin-bottom: 30px;
+const StatsContainer = styled(Grid)`
+  margin-bottom: ${theme.spacing.xxl};
   animation: slideUp 0.25s ease-out;
   animation-delay: 0.1s;
   animation-fill-mode: both;
 `;
 
-const StatCard = styled.div`
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  padding: 20px;
-  background: linear-gradient(135deg, #fafafa 0%, #ffffff 100%);
+const StatCard = styled(Value)`
+  padding: ${theme.spacing.lg};
   text-align: center;
-  transition: all 0.2s ease;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
-  
-  &:hover {
-    transform: translateY(-5px);
-    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
-    border-color: rgba(10, 25, 41, 0.2);
-    background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
-  }
+  min-height: 100px;
 `;
 
 const StatValue = styled.div`
   font-size: 2em;
   font-weight: bold;
-  color: #0d1b2a;
+  color: ${theme.colors.text.primary};
   margin-bottom: 5px;
-  transition: all 0.2s ease;
+  transition: all ${theme.transitions.normal};
   
   ${StatCard}:hover & {
     transform: scale(1.1);
@@ -156,7 +98,7 @@ const StatValue = styled.div`
 
 const StatLabel = styled.div`
   font-size: 0.9em;
-  color: #666;
+  color: ${theme.colors.text.secondary};
   text-transform: uppercase;
   letter-spacing: 0.5px;
   font-weight: 500;
@@ -165,24 +107,24 @@ const StatLabel = styled.div`
 const ProcessingList = styled.div`
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: ${theme.spacing.sm};
   animation: slideUp 0.25s ease-out;
   animation-delay: 0.2s;
   animation-fill-mode: both;
 `;
 
 const ProcessingItem = styled.div`
-  border: 1px solid #eee;
-  border-radius: 6px;
-  background-color: #fafafa;
+  border: 1px solid ${theme.colors.border.light};
+  border-radius: ${theme.borderRadius.md};
+  background-color: ${theme.colors.background.secondary};
   overflow: hidden;
-  transition: all 0.2s ease;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
+  transition: all ${theme.transitions.normal};
+  box-shadow: ${theme.shadows.sm};
   
   &:hover {
     border-color: rgba(10, 25, 41, 0.2);
-    background-color: #ffffff;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    background-color: ${theme.colors.background.main};
+    box-shadow: ${theme.shadows.md};
     transform: translateY(-2px);
   }
 `;
@@ -195,16 +137,16 @@ const ProcessingSummary = styled.div`
   cursor: pointer;
   gap: 10px;
   font-size: 0.9em;
-  transition: all 0.2s ease;
+  transition: all ${theme.transitions.normal};
   
   &:hover {
-    background: linear-gradient(90deg, #f0f0f0 0%, #f8f9fa 100%);
+    background: linear-gradient(90deg, ${theme.colors.background.secondary} 0%, ${theme.colors.background.tertiary} 100%);
   }
 `;
 
 const DataCell = styled.div`
-  background-color: #f0f0f0;
-  border-radius: 4px;
+  background-color: ${theme.colors.background.secondary};
+  border-radius: ${theme.borderRadius.sm};
   padding: 8px 10px;
   text-align: center;
   font-size: 0.95em;
@@ -223,97 +165,56 @@ const ProcessingDetails = styled.div<{ $isOpen: boolean }>`
   max-height: ${props => props.$isOpen ? '400px' : '0'};
   opacity: ${props => props.$isOpen ? '1' : '0'};
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-  border-top: ${props => props.$isOpen ? '1px solid #eee' : 'none'};
-  background-color: white;
+  border-top: ${props => props.$isOpen ? `1px solid ${theme.colors.border.light}` : 'none'};
+  background-color: ${theme.colors.background.main};
   overflow: hidden;
-  animation: ${props => props.$isOpen ? 'fadeIn 0.2s ease-in' : 'none'};
 `;
 
 const DetailGrid = styled.div`
   display: grid;
   grid-template-columns: 150px 1fr;
-  padding: 15px;
-  gap: 10px;
+  padding: ${theme.spacing.md};
+  gap: ${theme.spacing.sm};
   font-size: 0.9em;
 `;
 
 const DetailLabel = styled.div`
-  color: #666;
+  color: ${theme.colors.text.secondary};
   font-weight: 500;
 `;
 
 const DetailValue = styled.div`
-  color: #333;
-`;
-
-
-const LoadingSpinner = styled.div`
-  text-align: center;
-  padding: 40px;
-  color: #666;
-  font-size: 1.1em;
-`;
-
-const ErrorMessage = styled.div`
-  color: #f44336;
-  padding: 20px;
-  text-align: center;
-  background-color: #ffebee;
-  border-radius: 4px;
-  margin: 20px 0;
-`;
-
-const EmptyState = styled.div`
-  text-align: center;
-  padding: 40px;
-  color: #666;
-  font-size: 1.1em;
+  color: ${theme.colors.text.primary};
 `;
 
 const PaginationContainer = styled.div`
   display: flex;
   justify-content: center;
   align-items: center;
-  gap: 10px;
-  margin-top: 20px;
-  padding: 15px;
-  background-color: #f8f8f8;
-  border-radius: 4px;
+  gap: ${theme.spacing.sm};
+  margin-top: ${theme.spacing.lg};
+  padding: ${theme.spacing.md};
+  background-color: ${theme.colors.background.secondary};
+  border-radius: ${theme.borderRadius.sm};
 `;
 
-const PaginationButton = styled.button`
-  background-color: ${props => props.$active ? '#0d1b2a' : 'white'};
-  color: ${props => props.$active ? 'white' : '#333'};
-  border: 1px solid #ddd;
+const PaginationButton = styled(Button)`
   padding: 8px 14px;
-  border-radius: 6px;
-  cursor: pointer;
   font-size: 0.9em;
-  font-weight: ${props => props.$active ? 'bold' : '500'};
-  transition: all 0.2s ease;
-  
-  &:hover:not(:disabled) {
-    background-color: ${props => props.$active ? '#1e3a5f' : '#f5f5f5'};
-    transform: translateY(-2px);
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-    border-color: ${props => props.$active ? '#0d1b2a' : 'rgba(10, 25, 41, 0.3)'};
-  }
-  
-  &:disabled {
-    background-color: #f0f0f0;
-    color: #999;
-    cursor: not-allowed;
-    opacity: 0.5;
-  }
 `;
 
 const PaginationInfo = styled.div`
   font-size: 0.9em;
-  color: #666;
-  margin: 0 10px;
+  color: ${theme.colors.text.secondary};
+  margin: 0 ${theme.spacing.sm};
 `;
 
+/**
+ * Live Changes component
+ * Displays real-time processing events and changes from database synchronization
+ */
 const LiveChanges = () => {
+  const { page, limit, setPage } = usePagination(1, 20);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [processings, setProcessings] = useState<any[]>([]);
@@ -324,72 +225,76 @@ const LiveChanges = () => {
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [engineFilter, setEngineFilter] = useState('ALL');
   const [strategyFilter, setStrategyFilter] = useState('ALL');
-  const [currentPage, setCurrentPage] = useState(1);
   const [pagination, setPagination] = useState<any>({});
+  const isMountedRef = useRef(true);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setError(null);
-        const [processingsResponse, statsData] = await Promise.all([
-          monitorApi.getProcessingLogs(currentPage, 20, strategyFilter !== 'ALL' ? strategyFilter : undefined),
-          monitorApi.getProcessingStats()
-        ]);
-        setProcessings(processingsResponse.data);
-        setPagination(processingsResponse.pagination);
-        setStats(statsData);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Error loading data');
-      } finally {
+  const fetchData = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    try {
+      setError(null);
+      const [processingsResponse, statsData] = await Promise.all([
+        monitorApi.getProcessingLogs(page, limit, strategyFilter !== 'ALL' ? strategyFilter : undefined),
+        monitorApi.getProcessingStats()
+      ]);
+      if (isMountedRef.current) {
+        setProcessings(processingsResponse.data || []);
+        setPagination(processingsResponse.pagination || {});
+        setStats(statsData || {});
+      }
+    } catch (err) {
+      if (isMountedRef.current) {
+        setError(extractApiError(err));
+      }
+    } finally {
+      if (isMountedRef.current) {
         setLoading(false);
       }
-    };
+    }
+  }, [page, limit, strategyFilter, searchTerm]);
 
+  useEffect(() => {
+    isMountedRef.current = true;
     fetchData();
     
+    let interval: NodeJS.Timeout | null = null;
     if (!isPaused) {
-      const interval = setInterval(fetchData, 5000); // Refresh every 5 seconds
-      return () => clearInterval(interval);
+      interval = setInterval(() => {
+        if (isMountedRef.current) {
+          fetchData();
+        }
+      }, 5000);
     }
-  }, [isPaused, currentPage, strategyFilter]);
+    
+    return () => {
+      isMountedRef.current = false;
+      if (interval) {
+        clearInterval(interval);
+      }
+    };
+  }, [fetchData, isPaused]);
 
-  const toggleProcessing = (id: number) => {
-    setOpenProcessingId(openProcessingId === id ? null : id);
-  };
+  const toggleProcessing = useCallback((id: number) => {
+    setOpenProcessingId(prev => prev === id ? null : id);
+  }, []);
 
-  const toggleRefresh = () => {
-    setIsPaused(!isPaused);
-  };
+  const toggleRefresh = useCallback(() => {
+    setIsPaused(prev => !prev);
+  }, []);
 
-  const handlePageChange = (page: number) => {
-    setCurrentPage(page);
-    setOpenProcessingId(null); // Close any open details
-  };
+  const handlePageChange = useCallback((newPage: number) => {
+    setPage(newPage);
+    setOpenProcessingId(null);
+  }, [setPage]);
 
-  const handlePrevPage = () => {
-    if (pagination.hasPrev) {
-      setCurrentPage(currentPage - 1);
-      setOpenProcessingId(null);
-    }
-  };
-
-  const handleNextPage = () => {
-    if (pagination.hasNext) {
-      setCurrentPage(currentPage + 1);
-      setOpenProcessingId(null);
-    }
-  };
-
-  const formatTimestamp = (timestamp: string) => {
+  const formatTimestamp = useCallback((timestamp: string) => {
     return new Date(timestamp).toISOString();
-  };
+  }, []);
 
-  // Filter and search logic
   const filteredProcessings = processings.filter(processing => {
     const matchesSearch = searchTerm === '' || 
-      processing.schema_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      processing.table_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      processing.db_engine.toLowerCase().includes(searchTerm.toLowerCase());
+      (processing.schema_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      processing.table_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      processing.db_engine?.toLowerCase().includes(searchTerm.toLowerCase()));
     
     const matchesStatus = statusFilter === 'ALL' || processing.status === statusFilter;
     const matchesEngine = engineFilter === 'ALL' || processing.db_engine === engineFilter;
@@ -398,8 +303,17 @@ const LiveChanges = () => {
     return matchesSearch && matchesStatus && matchesEngine && matchesStrategy;
   });
 
+  if (loading && processings.length === 0) {
+    return (
+      <Container>
+        <Header>[*] Live Changes</Header>
+        <LoadingOverlay>Loading live changes...</LoadingOverlay>
+      </Container>
+    );
+  }
+
   return (
-    <LiveChangesContainer>
+    <Container>
       <Header>
         <div>[*] Live Changes</div>
         <ControlsContainer>
@@ -436,30 +350,17 @@ const LiveChanges = () => {
             <option value="PK">PK</option>
             <option value="OFFSET">OFFSET</option>
           </FilterSelect>
-          <RefreshToggle 
-            onClick={toggleRefresh}
-            $isPaused={isPaused}
-          >
+          <RefreshToggle onClick={toggleRefresh}>
             {isPaused ? '[>] Resume' : '[||] Pause'}
           </RefreshToggle>
         </ControlsContainer>
       </Header>
 
-      {loading && (
-        <LoadingSpinner>
-          Loading live changes...
-        </LoadingSpinner>
-      )}
-
-      {error && (
-        <ErrorMessage>
-          {error}
-        </ErrorMessage>
-      )}
+      {error && <ErrorMessage>{error}</ErrorMessage>}
 
       {!loading && !error && (
         <>
-          <StatsContainer>
+          <StatsContainer $columns="repeat(auto-fit, minmax(200px, 1fr))">
             <StatCard>
               <StatValue>{stats.total || 0}</StatValue>
               <StatLabel>Total Events</StatLabel>
@@ -484,9 +385,9 @@ const LiveChanges = () => {
 
           <ProcessingList>
             {filteredProcessings.length === 0 ? (
-              <EmptyState>
+              <div style={{ padding: '40px', textAlign: 'center', color: theme.colors.text.secondary }}>
                 No processing events found
-              </EmptyState>
+              </div>
             ) : (
               filteredProcessings.map((processing) => (
                 <ProcessingItem key={processing.id}>
@@ -502,11 +403,11 @@ const LiveChanges = () => {
                     {processing.pk_strategy === 'PK' ? (
                       <>
                         <DataCell>
-                          <div style={{ fontSize: '0.8em', color: '#666', marginBottom: '2px' }}>Old PK</div>
+                          <div style={{ fontSize: '0.8em', color: theme.colors.text.secondary, marginBottom: '2px' }}>Old PK</div>
                           {processing.old_pk || '0'}
                         </DataCell>
                         <DataCell>
-                          <div style={{ fontSize: '0.8em', color: '#666', marginBottom: '2px' }}>New PK</div>
+                          <div style={{ fontSize: '0.8em', color: theme.colors.text.secondary, marginBottom: '2px' }}>New PK</div>
                           {processing.new_pk || '0'}
                         </DataCell>
                         <DataCell style={{ visibility: 'hidden' }} />
@@ -515,11 +416,11 @@ const LiveChanges = () => {
                     ) : (
                       <>
                         <DataCell>
-                          <div style={{ fontSize: '0.8em', color: '#666', marginBottom: '2px' }}>Old Offset</div>
+                          <div style={{ fontSize: '0.8em', color: theme.colors.text.secondary, marginBottom: '2px' }}>Old Offset</div>
                           {processing.old_offset || '0'}
                         </DataCell>
                         <DataCell>
-                          <div style={{ fontSize: '0.8em', color: '#666', marginBottom: '2px' }}>New Offset</div>
+                          <div style={{ fontSize: '0.8em', color: theme.colors.text.secondary, marginBottom: '2px' }}>New Offset</div>
                           {processing.new_offset || '1000'}
                         </DataCell>
                         <DataCell style={{ visibility: 'hidden' }} />
@@ -572,7 +473,7 @@ const LiveChanges = () => {
           {pagination.totalPages > 1 && (
             <PaginationContainer>
               <PaginationButton 
-                onClick={handlePrevPage} 
+                onClick={() => handlePageChange(Math.max(1, page - 1))} 
                 disabled={!pagination.hasPrev}
               >
                 {'[<]'} Prev
@@ -584,7 +485,7 @@ const LiveChanges = () => {
                   <PaginationButton
                     key={pageNum}
                     onClick={() => handlePageChange(pageNum)}
-                    $active={currentPage === pageNum}
+                    $variant={page === pageNum ? 'primary' : 'secondary'}
                   >
                     {pageNum}
                   </PaginationButton>
@@ -592,21 +493,21 @@ const LiveChanges = () => {
               })}
               
               <PaginationButton 
-                onClick={handleNextPage} 
+                onClick={() => handlePageChange(Math.min(pagination.totalPages, page + 1))} 
                 disabled={!pagination.hasNext}
               >
                 Next {'[>]'}
               </PaginationButton>
               
               <PaginationInfo>
-                Page {pagination.page} of {pagination.totalPages} 
+                Page {pagination.page || page} of {pagination.totalPages} 
                 ({pagination.total} total events)
               </PaginationInfo>
             </PaginationContainer>
           )}
         </>
       )}
-    </LiveChangesContainer>
+    </Container>
   );
 };
 

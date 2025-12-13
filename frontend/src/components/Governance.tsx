@@ -1,266 +1,54 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import styled from 'styled-components';
+import {
+  Container,
+  Header,
+  ErrorMessage,
+  LoadingOverlay,
+  Select,
+  Pagination,
+  PageButton,
+} from './shared/BaseComponents';
+import { usePagination } from '../hooks/usePagination';
+import { useTableFilters } from '../hooks/useTableFilters';
 import { governanceApi } from '../services/api';
-
-const GovernanceContainer = styled.div`
-  background-color: white;
-  color: #333;
-  padding: 20px;
-  font-family: monospace;
-  animation: fadeIn 0.25s ease-in;
-`;
-
-const Header = styled.div`
-  border: 2px solid #333;
-  padding: 15px;
-  text-align: center;
-  margin-bottom: 30px;
-  font-size: 1.5em;
-  font-weight: bold;
-  background: linear-gradient(135deg, #f5f5f5 0%, #ffffff 50%, #f5f5f5 100%);
-  border-radius: 6px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-  position: relative;
-  overflow: hidden;
-  animation: slideUp 0.3s ease-out;
-  
-  &::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -100%;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(10, 25, 41, 0.1), transparent);
-    animation: shimmer 3s infinite;
-  }
-`;
+import { extractApiError } from '../utils/errorHandler';
+import { theme } from '../theme/theme';
 
 const FiltersContainer = styled.div`
   display: flex;
-  gap: 15px;
-  margin-bottom: 20px;
-  padding: 15px;
-  background: #f5f5f5;
-  border-radius: 6px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
+  gap: ${theme.spacing.md};
+  margin-bottom: ${theme.spacing.lg};
+  padding: ${theme.spacing.md};
+  background: ${theme.colors.background.secondary};
+  border-radius: ${theme.borderRadius.md};
+  box-shadow: ${theme.shadows.sm};
   animation: slideUp 0.25s ease-out;
   animation-delay: 0.1s;
   animation-fill-mode: both;
   flex-wrap: wrap;
 `;
 
-const Select = styled.select`
-  padding: 8px 12px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  font-family: monospace;
-  transition: all 0.2s ease;
-  background: white;
-  cursor: pointer;
-  
-  &:hover {
-    border-color: rgba(10, 25, 41, 0.3);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-  }
-  
-  &:focus {
-    outline: none;
-    border-color: #0d1b2a;
-    box-shadow: 0 0 0 3px rgba(10, 25, 41, 0.1);
-  }
-`;
-
-const Table = styled.table`
-  width: 100%;
-  border-collapse: collapse;
-  margin-top: 20px;
-  background: white;
-`;
-
-  const Th = styled.th<{ sortable?: boolean }>`
-  padding: 12px;
-  text-align: left;
-  border-bottom: 2px solid #333;
-  background: #f5f5f5;
-  white-space: nowrap;
-  cursor: ${props => props.sortable ? 'pointer' : 'default'};
-  
-  &:hover {
-    background: ${props => props.sortable ? '#e0e0e0' : '#f5f5f5'};
-  }
-`;
-
-const Td = styled.td`
-  padding: 12px;
-  border-bottom: 1px solid #ddd;
-`;
-
-const Badge = styled.span<{ type: string }>`
-  padding: 4px 10px;
-  border-radius: 6px;
-  font-size: 0.9em;
-  font-weight: 500;
-  display: inline-block;
-  transition: all 0.2s ease;
-  
-  &:hover {
-    transform: scale(1.05);
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
-  }
-  background-color: ${props => {
-    switch (props.type) {
-      // Health Status
-      case 'EXCELLENT': return '#e8f5e9';
-      case 'HEALTHY': return '#e8f5e9';
-      case 'WARNING': return '#fff3e0';
-      case 'CRITICAL': return '#ffebee';
-      case 'EMERGENCY': return '#fce4ec';
-      // Access Frequency
-      case 'REAL_TIME': return '#e1f5fe';
-      case 'HIGH': return '#e3f2fd';
-      case 'MEDIUM': return '#f3e5f5';
-      case 'LOW': return '#fafafa';
-      case 'RARE': return '#f5f5f5';
-      case 'ARCHIVED': return '#eeeeee';
-      // Sensitivity Level
-      case 'PUBLIC_SENSITIVITY': return '#f1f8e9';
-      case 'LOW_SENSITIVITY': return '#f1f8e9';
-      case 'MEDIUM_SENSITIVITY': return '#fff3e0';
-      case 'HIGH_SENSITIVITY': return '#ffebee';
-      case 'CRITICAL_SENSITIVITY': return '#fce4ec';
-      // Data Category
-      case 'TRANSACTIONAL': return '#e8eaf6';
-      case 'ANALYTICAL': return '#f3e5f5';
-      case 'REFERENCE': return '#e0f2f1';
-      case 'MASTER_DATA': return '#e8f5e9';
-      case 'OPERATIONAL': return '#fff3e0';
-      case 'TEMPORAL': return '#e1f5fe';
-      case 'GEOSPATIAL': return '#f1f8e9';
-      case 'FINANCIAL': return '#ffebee';
-      case 'COMPLIANCE': return '#fce4ec';
-      case 'TECHNICAL': return '#f5f5f5';
-      case 'SPORTS': return '#e3f2fd';
-      default: return '#f5f5f5';
-    }
-  }};
-  color: ${props => {
-    switch (props.type) {
-      // Health Status
-      case 'EXCELLENT': return '#1b5e20';
-      case 'HEALTHY': return '#2e7d32';
-      case 'WARNING': return '#ef6c00';
-      case 'CRITICAL': return '#c62828';
-      case 'EMERGENCY': return '#ad1457';
-      // Access Frequency
-      case 'REAL_TIME': return '#0277bd';
-      case 'HIGH': return '#1565c0';
-      case 'MEDIUM': return '#6a1b9a';
-      case 'LOW': return '#616161';
-      case 'RARE': return '#757575';
-      case 'ARCHIVED': return '#9e9e9e';
-      // Sensitivity Level
-      case 'PUBLIC_SENSITIVITY': return '#388e3c';
-      case 'LOW_SENSITIVITY': return '#558b2f';
-      case 'MEDIUM_SENSITIVITY': return '#ef6c00';
-      case 'HIGH_SENSITIVITY': return '#c62828';
-      case 'CRITICAL_SENSITIVITY': return '#ad1457';
-      // Data Category
-      case 'TRANSACTIONAL': return '#3949ab';
-      case 'ANALYTICAL': return '#7b1fa2';
-      case 'REFERENCE': return '#00796b';
-      case 'MASTER_DATA': return '#2e7d32';
-      case 'OPERATIONAL': return '#f57c00';
-      case 'TEMPORAL': return '#0277bd';
-      case 'GEOSPATIAL': return '#388e3c';
-      case 'FINANCIAL': return '#d32f2f';
-      case 'COMPLIANCE': return '#c2185b';
-      case 'TECHNICAL': return '#616161';
-      case 'SPORTS': return '#1976d2';
-      default: return '#757575';
-    }
-  }};
-`;
-
-const QualityScore = styled.span<{ score: number }>`
-  padding: 4px 10px;
-  border-radius: 6px;
-  font-size: 0.9em;
-  font-weight: 500;
-  display: inline-block;
-  transition: all 0.2s ease;
-  
-  &:hover {
-    transform: scale(1.05);
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
-  }
-  background-color: ${props => {
-    if (props.score >= 90) return '#e8f5e9';
-    if (props.score >= 70) return '#f1f8e9';
-    if (props.score >= 50) return '#fff3e0';
-    return '#ffebee';
-  }};
-  color: ${props => {
-    if (props.score >= 90) return '#2e7d32';
-    if (props.score >= 70) return '#558b2f';
-    if (props.score >= 50) return '#ef6c00';
-    return '#c62828';
-  }};
-`;
-
-const Pagination = styled.div`
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 10px;
-  margin-top: 20px;
-  padding: 15px;
-`;
-
-const PageButton = styled.button<{ active?: boolean }>`
-  padding: 8px 14px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  background: ${props => props.active ? '#0d1b2a' : 'white'};
-  color: ${props => props.active ? 'white' : '#333'};
-  cursor: pointer;
-  font-family: monospace;
-  transition: all 0.2s ease;
-  font-weight: ${props => props.active ? 'bold' : 'normal'};
-  
-  &:hover:not(:disabled) {
-    background: ${props => props.active ? '#1e3a5f' : '#f5f5f5'};
-    transform: translateY(-2px);
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-    border-color: ${props => props.active ? '#0d1b2a' : 'rgba(10, 25, 41, 0.3)'};
-  }
-  
-  &:disabled {
-    cursor: not-allowed;
-    opacity: 0.5;
-  }
-`;
-
 const GovernanceList = styled.div`
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: ${theme.spacing.sm};
 `;
 
 const GovernanceItem = styled.div`
-  border: 1px solid #eee;
-  border-radius: 6px;
-  background-color: #fafafa;
+  border: 1px solid ${theme.colors.border.light};
+  border-radius: ${theme.borderRadius.md};
+  background-color: ${theme.colors.background.secondary};
   overflow: hidden;
-  transition: all 0.2s ease;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
+  transition: all ${theme.transitions.normal};
+  box-shadow: ${theme.shadows.sm};
   animation: slideUp 0.25s ease-out;
   animation-fill-mode: both;
   
   &:hover {
     border-color: rgba(10, 25, 41, 0.2);
-    background-color: #ffffff;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    background-color: ${theme.colors.background.main};
+    box-shadow: ${theme.shadows.md};
     transform: translateY(-2px);
   }
   
@@ -271,7 +59,7 @@ const GovernanceItem = styled.div`
   &:nth-child(5) { animation-delay: 0.15s; }
 `;
 
-  const GovernanceSummary = styled.div`
+const GovernanceSummary = styled.div`
   display: grid;
   grid-template-columns: 200px 100px 120px 120px 100px 100px 80px 80px 80px 100px 150px;
   align-items: center;
@@ -281,10 +69,10 @@ const GovernanceItem = styled.div`
   font-size: 0.9em;
   overflow-x: auto;
   min-width: 100%;
-  transition: all 0.2s ease;
+  transition: all ${theme.transitions.normal};
   
   &:hover {
-    background: linear-gradient(90deg, #f0f0f0 0%, #f8f9fa 100%);
+    background: linear-gradient(90deg, ${theme.colors.background.secondary} 0%, ${theme.colors.background.tertiary} 100%);
   }
   
   & > div {
@@ -298,32 +86,32 @@ const GovernanceDetails = styled.div<{ $isOpen: boolean }>`
   max-height: ${props => props.$isOpen ? '800px' : '0'};
   opacity: ${props => props.$isOpen ? '1' : '0'};
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-  border-top: ${props => props.$isOpen ? '1px solid #eee' : 'none'};
-  background-color: white;
+  border-top: ${props => props.$isOpen ? `1px solid ${theme.colors.border.light}` : 'none'};
+  background-color: ${theme.colors.background.main};
   overflow: hidden;
 `;
 
 const DetailsGrid = styled.div`
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  padding: 15px;
-  gap: 15px;
+  padding: ${theme.spacing.md};
+  gap: ${theme.spacing.md};
 `;
 
 const DetailCard = styled.div`
-  background: white;
-  border: 1px solid #eee;
-  border-radius: 6px;
-  padding: 12px;
-  transition: all 0.2s ease;
+  background: ${theme.colors.background.main};
+  border: 1px solid ${theme.colors.border.light};
+  border-radius: ${theme.borderRadius.md};
+  padding: ${theme.spacing.sm};
+  transition: all ${theme.transitions.normal};
   animation: fadeIn 0.2s ease-in;
   animation-fill-mode: both;
   
   &:hover {
     transform: translateY(-3px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    box-shadow: ${theme.shadows.md};
     border-color: rgba(10, 25, 41, 0.2);
-    background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+    background: linear-gradient(135deg, ${theme.colors.background.main} 0%, ${theme.colors.background.tertiary} 100%);
   }
   
   &:nth-child(1) { animation-delay: 0.1s; }
@@ -335,7 +123,7 @@ const DetailCard = styled.div`
 `;
 
 const DetailLabel = styled.div`
-  color: #666;
+  color: ${theme.colors.text.secondary};
   font-size: 0.85em;
   margin-bottom: 5px;
   font-weight: 500;
@@ -344,6 +132,111 @@ const DetailLabel = styled.div`
 const DetailValue = styled.div`
   font-size: 1.1em;
   font-weight: 500;
+  color: ${theme.colors.text.primary};
+`;
+
+const Badge = styled.span<{ type: string }>`
+  padding: 4px 10px;
+  border-radius: ${theme.borderRadius.md};
+  font-size: 0.9em;
+  font-weight: 500;
+  display: inline-block;
+  transition: all ${theme.transitions.normal};
+  
+  &:hover {
+    transform: scale(1.05);
+    box-shadow: ${theme.shadows.sm};
+  }
+  background-color: ${props => {
+    switch (props.type) {
+      case 'EXCELLENT': return theme.colors.status.success.bg;
+      case 'HEALTHY': return theme.colors.status.success.bg;
+      case 'WARNING': return theme.colors.status.warning.bg;
+      case 'CRITICAL': return theme.colors.status.error.bg;
+      case 'EMERGENCY': return '#fce4ec';
+      case 'REAL_TIME': return '#e1f5fe';
+      case 'HIGH': return '#e3f2fd';
+      case 'MEDIUM': return '#f3e5f5';
+      case 'LOW': return theme.colors.background.secondary;
+      case 'RARE': return theme.colors.background.secondary;
+      case 'ARCHIVED': return '#eeeeee';
+      case 'PUBLIC_SENSITIVITY': return '#f1f8e9';
+      case 'LOW_SENSITIVITY': return '#f1f8e9';
+      case 'MEDIUM_SENSITIVITY': return theme.colors.status.warning.bg;
+      case 'HIGH_SENSITIVITY': return theme.colors.status.error.bg;
+      case 'CRITICAL_SENSITIVITY': return '#fce4ec';
+      case 'TRANSACTIONAL': return '#e8eaf6';
+      case 'ANALYTICAL': return '#f3e5f5';
+      case 'REFERENCE': return '#e0f2f1';
+      case 'MASTER_DATA': return theme.colors.status.success.bg;
+      case 'OPERATIONAL': return theme.colors.status.warning.bg;
+      case 'TEMPORAL': return '#e1f5fe';
+      case 'GEOSPATIAL': return '#f1f8e9';
+      case 'FINANCIAL': return theme.colors.status.error.bg;
+      case 'COMPLIANCE': return '#fce4ec';
+      case 'TECHNICAL': return theme.colors.background.secondary;
+      case 'SPORTS': return '#e3f2fd';
+      default: return theme.colors.background.secondary;
+    }
+  }};
+  color: ${props => {
+    switch (props.type) {
+      case 'EXCELLENT': return '#1b5e20';
+      case 'HEALTHY': return '#2e7d32';
+      case 'WARNING': return theme.colors.status.warning.text;
+      case 'CRITICAL': return theme.colors.status.error.text;
+      case 'EMERGENCY': return '#ad1457';
+      case 'REAL_TIME': return '#0277bd';
+      case 'HIGH': return '#1565c0';
+      case 'MEDIUM': return '#6a1b9a';
+      case 'LOW': return '#616161';
+      case 'RARE': return '#757575';
+      case 'ARCHIVED': return '#9e9e9e';
+      case 'PUBLIC_SENSITIVITY': return '#388e3c';
+      case 'LOW_SENSITIVITY': return '#558b2f';
+      case 'MEDIUM_SENSITIVITY': return theme.colors.status.warning.text;
+      case 'HIGH_SENSITIVITY': return theme.colors.status.error.text;
+      case 'CRITICAL_SENSITIVITY': return '#ad1457';
+      case 'TRANSACTIONAL': return '#3949ab';
+      case 'ANALYTICAL': return '#7b1fa2';
+      case 'REFERENCE': return '#00796b';
+      case 'MASTER_DATA': return '#2e7d32';
+      case 'OPERATIONAL': return '#f57c00';
+      case 'TEMPORAL': return '#0277bd';
+      case 'GEOSPATIAL': return '#388e3c';
+      case 'FINANCIAL': return '#d32f2f';
+      case 'COMPLIANCE': return '#c2185b';
+      case 'TECHNICAL': return '#616161';
+      case 'SPORTS': return '#1976d2';
+      default: return theme.colors.text.secondary;
+    }
+  }};
+`;
+
+const QualityScore = styled.span<{ score: number }>`
+  padding: 4px 10px;
+  border-radius: ${theme.borderRadius.md};
+  font-size: 0.9em;
+  font-weight: 500;
+  display: inline-block;
+  transition: all ${theme.transitions.normal};
+  
+  &:hover {
+    transform: scale(1.05);
+    box-shadow: ${theme.shadows.sm};
+  }
+  background-color: ${props => {
+    if (props.score >= 90) return theme.colors.status.success.bg;
+    if (props.score >= 70) return '#f1f8e9';
+    if (props.score >= 50) return theme.colors.status.warning.bg;
+    return theme.colors.status.error.bg;
+  }};
+  color: ${props => {
+    if (props.score >= 90) return theme.colors.status.success.text;
+    if (props.score >= 70) return '#558b2f';
+    if (props.score >= 50) return theme.colors.status.warning.text;
+    return theme.colors.status.error.text;
+  }};
 `;
 
 const Tooltip = styled.div`
@@ -364,18 +257,18 @@ const TooltipContent = styled.div`
   bottom: 125%;
   left: 50%;
   transform: translateX(-50%);
-  background-color: #333;
-  color: white;
+  background-color: ${theme.colors.text.primary};
+  color: ${theme.colors.text.white};
   text-align: center;
-  border-radius: 4px;
+  border-radius: ${theme.borderRadius.sm};
   padding: 8px 12px;
   font-size: 0.85em;
   white-space: nowrap;
   min-width: 200px;
   max-width: 300px;
   white-space: normal;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-  transition: opacity 0.3s;
+  box-shadow: ${theme.shadows.lg};
+  transition: opacity ${theme.transitions.normal};
   
   &:after {
     content: "";
@@ -385,82 +278,25 @@ const TooltipContent = styled.div`
     margin-left: -5px;
     border-width: 5px;
     border-style: solid;
-    border-color: #333 transparent transparent transparent;
+    border-color: ${theme.colors.text.primary} transparent transparent transparent;
   }
 `;
 
-const formatDate = (date: string) => {
-  if (!date) return '-';
-  return new Date(date).toLocaleString();
-};
+const CriticalStatusBox = styled.div`
+  margin: ${theme.spacing.md};
+  padding: ${theme.spacing.md};
+  backgroundColor: ${theme.colors.status.error.bg};
+  border: 1px solid ${theme.colors.status.error.text};
+  borderRadius: ${theme.borderRadius.sm};
+`;
 
-const formatSize = (mb: number | null | undefined) => {
-  if (mb == null) return '-';
-  const size = Number(mb);
-  if (isNaN(size)) return '-';
-  if (size >= 1024) {
-    return `${(size / 1024).toFixed(2)} GB`;
-  }
-  return `${size.toFixed(2)} MB`;
-};
-
-const formatNumber = (num: number) => {
-  return num?.toLocaleString() || '0';
-};
-
-const getCategoryDescription = (category: string) => {
-  const descriptions: { [key: string]: string } = {
-    'TRANSACTIONAL': 'Data that represents business transactions and events that occur in real-time',
-    'ANALYTICAL': 'Data used for analysis, reporting, and business intelligence purposes',
-    'REFERENCE': 'Lookup tables and master data used across multiple systems',
-    'MASTER_DATA': 'Core business entities like customers, products, and suppliers',
-    'OPERATIONAL': 'Data used for day-to-day operational processes and workflows',
-    'TEMPORAL': 'Time-series data that tracks changes over time',
-    'GEOSPATIAL': 'Location-based data including coordinates and geographic information',
-    'FINANCIAL': 'Financial transactions, accounts, and monetary data',
-    'COMPLIANCE': 'Data required for regulatory compliance and auditing',
-    'TECHNICAL': 'System-generated data for technical monitoring and maintenance',
-    'SPORTS': 'Sports-related data including scores, statistics, and player information'
-  };
-  return descriptions[category] || 'Data category classification';
-};
-
-const getHealthDescription = (health: string) => {
-  const descriptions: { [key: string]: string } = {
-    'EXCELLENT': 'Optimal data quality with no issues detected',
-    'HEALTHY': 'Good data quality with minor or no issues',
-    'WARNING': 'Some data quality issues detected that need attention',
-    'CRITICAL': 'Significant data quality issues requiring immediate attention',
-    'EMERGENCY': 'Severe data quality issues that may impact system functionality'
-  };
-  return descriptions[health] || 'Health status of the data';
-};
-
-const getSensitivityDescription = (sensitivity: string) => {
-  const descriptions: { [key: string]: string } = {
-    'PUBLIC': 'Data that can be freely shared and accessed by anyone',
-    'LOW': 'Data with minimal sensitivity requirements',
-    'MEDIUM': 'Data with moderate sensitivity requiring controlled access',
-    'HIGH': 'Data with high sensitivity requiring strict access controls',
-    'CRITICAL': 'Data with critical sensitivity requiring maximum security measures'
-  };
-  return descriptions[sensitivity] || 'Data sensitivity level';
-};
-
+/**
+ * Governance component
+ * Displays data governance catalog with filtering, sorting, and detailed information
+ */
 const Governance = () => {
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [data, setData] = useState<any[]>([]);
-  const [openItemId, setOpenItemId] = useState<number | null>(null);
-  const [page, setPage] = useState(1);
-  const [pagination, setPagination] = useState({
-    total: 0,
-    totalPages: 0,
-    currentPage: 1,
-    limit: 10
-  });
-
-  const [filter, setFilter] = useState({
+  const { page, limit, setPage } = usePagination(1, 10);
+  const { filters, setFilter } = useTableFilters({
     engine: '',
     category: '',
     health: '',
@@ -468,58 +304,173 @@ const Governance = () => {
     sensitivity: ''
   });
   
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<any[]>([]);
+  const [openItemId, setOpenItemId] = useState<number | null>(null);
+  const [pagination, setPagination] = useState({
+    total: 0,
+    totalPages: 0,
+    currentPage: 1,
+    limit: 10
+  });
   const [sort, setSort] = useState({
     field: 'health_status',
     direction: 'desc'
   });
+  const isMountedRef = useRef(true);
 
-  const toggleItem = (id: number) => {
-    setOpenItemId(openItemId === id ? null : id);
-  };
+  const fetchData = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    try {
+      setLoading(true);
+      setError(null);
+      const response = await governanceApi.getGovernanceData({
+        page,
+        limit,
+        engine: filters.engine as string,
+        category: filters.category as string,
+        health: filters.health as string,
+        domain: filters.domain as string,
+        sensitivity: filters.sensitivity as string
+      });
+      if (isMountedRef.current) {
+        setData(response.data || []);
+        setPagination(response.pagination || {
+          total: 0,
+          totalPages: 0,
+          currentPage: 1,
+          limit: 20
+        });
+      }
+    } catch (err) {
+      if (isMountedRef.current) {
+        setError(extractApiError(err));
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
+    }
+  }, [
+    page, 
+    limit, 
+    filters.engine, 
+    filters.category, 
+    filters.health, 
+    filters.domain, 
+    filters.sensitivity, 
+    sort.field, 
+    sort.direction
+  ]);
 
-  const handleSort = (field: string) => {
+  useEffect(() => {
+    isMountedRef.current = true;
+    fetchData();
+    const interval = setInterval(() => {
+      if (isMountedRef.current) {
+        fetchData();
+      }
+    }, 30000);
+    return () => {
+      isMountedRef.current = false;
+      clearInterval(interval);
+    };
+  }, [fetchData]);
+
+  const toggleItem = useCallback((id: number) => {
+    setOpenItemId(prev => prev === id ? null : id);
+  }, []);
+
+  const handleSort = useCallback((field: string) => {
     setSort(prev => ({
       field,
       direction: prev.field === field && prev.direction === 'asc' ? 'desc' : 'asc'
     }));
-  };
+  }, []);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const response = await governanceApi.getGovernanceData({
-          page,
-          limit: 10,
-          ...filter,
-          sort_field: sort.field,
-          sort_direction: sort.direction
-        });
-        setData(response.data);
-        setPagination(response.pagination);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Error loading governance data');
-      } finally {
-        setLoading(false);
-        }
-      };
+  const formatDate = useCallback((date: string) => {
+    if (!date) return '-';
+    return new Date(date).toLocaleString();
+  }, []);
 
-    fetchData();
-    const interval = setInterval(fetchData, 30000);
-    return () => clearInterval(interval);
-  }, [page, filter, sort]);
+  const formatSize = useCallback((mb: number | null | undefined) => {
+    if (mb == null) return '-';
+    const size = Number(mb);
+    if (isNaN(size)) return '-';
+    if (size >= 1024) {
+      return `${(size / 1024).toFixed(2)} GB`;
+    }
+    return `${size.toFixed(2)} MB`;
+  }, []);
+
+  const formatNumber = useCallback((num: number) => {
+    return num?.toLocaleString() || '0';
+  }, []);
+
+  const getCategoryDescription = useCallback((category: string) => {
+    const descriptions: { [key: string]: string } = {
+      'TRANSACTIONAL': 'Data that represents business transactions and events that occur in real-time',
+      'ANALYTICAL': 'Data used for analysis, reporting, and business intelligence purposes',
+      'REFERENCE': 'Lookup tables and master data used across multiple systems',
+      'MASTER_DATA': 'Core business entities like customers, products, and suppliers',
+      'OPERATIONAL': 'Data used for day-to-day operational processes and workflows',
+      'TEMPORAL': 'Time-series data that tracks changes over time',
+      'GEOSPATIAL': 'Location-based data including coordinates and geographic information',
+      'FINANCIAL': 'Financial transactions, accounts, and monetary data',
+      'COMPLIANCE': 'Data required for regulatory compliance and auditing',
+      'TECHNICAL': 'System-generated data for technical monitoring and maintenance',
+      'SPORTS': 'Sports-related data including scores, statistics, and player information'
+    };
+    return descriptions[category] || 'Data category classification';
+  }, []);
+
+  const getHealthDescription = useCallback((health: string) => {
+    const descriptions: { [key: string]: string } = {
+      'EXCELLENT': 'Optimal data quality with no issues detected',
+      'HEALTHY': 'Good data quality with minor or no issues',
+      'WARNING': 'Some data quality issues detected that need attention',
+      'CRITICAL': 'Significant data quality issues requiring immediate attention',
+      'EMERGENCY': 'Severe data quality issues that may impact system functionality'
+    };
+    return descriptions[health] || 'Health status of the data';
+  }, []);
+
+  const getSensitivityDescription = useCallback((sensitivity: string) => {
+    const descriptions: { [key: string]: string } = {
+      'PUBLIC': 'Data that can be freely shared and accessed by anyone',
+      'LOW': 'Data with minimal sensitivity requirements',
+      'MEDIUM': 'Data with moderate sensitivity requiring controlled access',
+      'HIGH': 'Data with high sensitivity requiring strict access controls',
+      'CRITICAL': 'Data with critical sensitivity requiring maximum security measures'
+    };
+    return descriptions[sensitivity] || 'Data sensitivity level';
+  }, []);
+
+  const handleFilterChange = useCallback((key: string, value: string) => {
+    setFilter(key as any, value);
+    setPage(1);
+  }, [setFilter, setPage]);
+
+  if (loading && data.length === 0) {
+    return (
+      <Container>
+        <Header>Data Governance Catalog</Header>
+        <LoadingOverlay>Loading governance data...</LoadingOverlay>
+      </Container>
+    );
+  }
 
   return (
-    <GovernanceContainer>
-      <Header>
-        Data Governance Catalog
-      </Header>
+    <Container>
+      <Header>Data Governance Catalog</Header>
+
+      {error && <ErrorMessage>{error}</ErrorMessage>}
 
       <FiltersContainer>
         <Select 
-          value={filter.engine}
-          onChange={(e) => setFilter({...filter, engine: e.target.value})}
+          value={filters.engine as string}
+          onChange={(e) => handleFilterChange('engine', e.target.value)}
         >
           <option value="">All Engines</option>
           <option value="PostgreSQL">PostgreSQL</option>
@@ -529,8 +480,8 @@ const Governance = () => {
         </Select>
 
         <Select
-          value={filter.category}
-          onChange={(e) => setFilter({...filter, category: e.target.value})}
+          value={filters.category as string}
+          onChange={(e) => handleFilterChange('category', e.target.value)}
         >
           <option value="">All Categories</option>
           <option value="TRANSACTIONAL">Transactional</option>
@@ -547,8 +498,8 @@ const Governance = () => {
         </Select>
 
         <Select
-          value={filter.health}
-          onChange={(e) => setFilter({...filter, health: e.target.value})}
+          value={filters.health as string}
+          onChange={(e) => handleFilterChange('health', e.target.value)}
         >
           <option value="">All Health Status</option>
           <option value="EXCELLENT">Excellent</option>
@@ -559,8 +510,8 @@ const Governance = () => {
         </Select>
 
         <Select
-          value={filter.sensitivity}
-          onChange={(e) => setFilter({...filter, sensitivity: e.target.value})}
+          value={filters.sensitivity as string}
+          onChange={(e) => handleFilterChange('sensitivity', e.target.value)}
         >
           <option value="">All Sensitivity</option>
           <option value="PUBLIC">Public</option>
@@ -571,8 +522,8 @@ const Governance = () => {
         </Select>
 
         <Select
-          value={filter.domain}
-          onChange={(e) => setFilter({...filter, domain: e.target.value})}
+          value={filters.domain as string}
+          onChange={(e) => handleFilterChange('domain', e.target.value)}
         >
           <option value="">All Domains</option>
           <option value="CUSTOMER">Customer</option>
@@ -625,23 +576,11 @@ const Governance = () => {
         </Select>
       </FiltersContainer>
 
-      {loading && (
-        <div style={{ textAlign: 'center', padding: '20px', color: '#666' }}>
-          Loading governance data...
-        </div>
-      )}
-
-      {error && (
-        <div style={{ color: 'red', padding: '20px', textAlign: 'center' }}>
-          {error}
-        </div>
-      )}
-
       {!loading && !error && (
         <>
           <GovernanceList>
             {data.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '20px', color: '#666' }}>
+              <div style={{ textAlign: 'center', padding: '20px', color: theme.colors.text.secondary }}>
                 No governance data found
               </div>
             ) : (
@@ -703,7 +642,7 @@ const Governance = () => {
                         {item.access_frequency}
                       </Badge>
                     </div>
-                    <div style={{ textAlign: 'right', color: '#666', fontSize: '0.85em' }}>
+                    <div style={{ textAlign: 'right', color: theme.colors.text.secondary, fontSize: '0.85em' }}>
                       {formatDate(item.last_analyzed)}
                     </div>
                   </GovernanceSummary>
@@ -885,24 +824,17 @@ const Governance = () => {
                       )}
                     </DetailsGrid>
                     
-                    {/* Critical Status Explanation */}
                     {item.health_status === 'CRITICAL' && (
-                      <div style={{ 
-                        margin: '15px', 
-                        padding: '15px', 
-                        backgroundColor: '#ffebee', 
-                        border: '1px solid #f44336', 
-                        borderRadius: '4px' 
-                      }}>
+                      <CriticalStatusBox>
                         <div style={{ 
                           fontWeight: 'bold', 
-                          color: '#c62828', 
+                          color: theme.colors.status.error.text, 
                           marginBottom: '10px',
                           fontSize: '1.1em'
                         }}>
                           ■ CRITICAL STATUS REASONS:
                         </div>
-                        <div style={{ color: '#333', lineHeight: '1.5' }}>
+                        <div style={{ color: theme.colors.text.primary, lineHeight: '1.5' }}>
                           {item.data_quality_score < 50 && (
                             <div>• Low data quality score ({item.data_quality_score}%)</div>
                           )}
@@ -930,7 +862,7 @@ const Governance = () => {
                             <div>• Manual classification or business rule violation</div>
                           )}
                         </div>
-                      </div>
+                      </CriticalStatusBox>
                     )}
                   </GovernanceDetails>
                 </GovernanceItem>
@@ -938,39 +870,41 @@ const Governance = () => {
             )}
           </GovernanceList>
 
-          <Pagination>
-            <PageButton
-              disabled={page === 1}
-              onClick={() => setPage(page - 1)}
-            >
-              Previous
-            </PageButton>
-            
-            {Array.from({ length: pagination.totalPages }, (_, i) => i + 1)
-              .filter(p => Math.abs(p - page) <= 2 || p === 1 || p === pagination.totalPages)
-              .map((p, i, arr) => (
-                <React.Fragment key={p}>
-                  {i > 0 && arr[i - 1] !== p - 1 && <span>...</span>}
-                  <PageButton
-                    active={p === page}
-                    onClick={() => setPage(p)}
-                  >
-                    {p}
-                  </PageButton>
-                </React.Fragment>
-              ))
-            }
-            
-            <PageButton
-              disabled={page === pagination.totalPages}
-              onClick={() => setPage(page + 1)}
-            >
-              Next
-            </PageButton>
-          </Pagination>
+          {pagination.totalPages > 1 && (
+            <Pagination>
+              <PageButton
+                disabled={page === 1}
+                onClick={() => setPage(Math.max(1, page - 1))}
+              >
+                Previous
+              </PageButton>
+              
+              {Array.from({ length: pagination.totalPages }, (_, i) => i + 1)
+                .filter(p => Math.abs(p - page) <= 2 || p === 1 || p === pagination.totalPages)
+                .map((p, i, arr) => (
+                  <React.Fragment key={p}>
+                    {i > 0 && arr[i - 1] !== p - 1 && <span>...</span>}
+                    <PageButton
+                      $active={p === page}
+                      onClick={() => setPage(p)}
+                    >
+                      {p}
+                    </PageButton>
+                  </React.Fragment>
+                ))
+              }
+              
+              <PageButton
+                disabled={page === pagination.totalPages}
+                onClick={() => setPage(Math.min(pagination.totalPages, page + 1))}
+              >
+                Next
+              </PageButton>
+            </Pagination>
+          )}
         </>
       )}
-    </GovernanceContainer>
+    </Container>
   );
 };
 

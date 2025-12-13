@@ -1,118 +1,68 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import styled from 'styled-components';
+import {
+  Container,
+  Header,
+  ErrorMessage,
+  LoadingOverlay,
+  Grid,
+  Value,
+  Button,
+} from './shared/BaseComponents';
 import { catalogLocksApi } from '../services/api';
+import { extractApiError } from '../utils/errorHandler';
+import { theme } from '../theme/theme';
 
-const CatalogLocksContainer = styled.div`
-  background-color: white;
-  color: #333;
-  padding: 20px;
-  font-family: monospace;
-  animation: fadeIn 0.25s ease-in;
-`;
-
-const Header = styled.div`
-  border: 2px solid #333;
-  padding: 15px;
-  text-align: center;
-  margin-bottom: 30px;
-  font-size: 1.5em;
-  font-weight: bold;
-  background: linear-gradient(135deg, #f5f5f5 0%, #ffffff 50%, #f5f5f5 100%);
-  border-radius: 6px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-  position: relative;
-  overflow: hidden;
-  animation: slideUp 0.3s ease-out;
-  
-  &::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -100%;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(10, 25, 41, 0.1), transparent);
-    animation: shimmer 3s infinite;
-  }
-`;
-
-const MetricsGrid = styled.div`
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 15px;
-  margin-bottom: 30px;
+const MetricsGrid = styled(Grid)`
+  margin-bottom: ${theme.spacing.xxl};
   animation: slideUp 0.25s ease-out;
   animation-delay: 0.1s;
   animation-fill-mode: both;
 `;
 
-const MetricCard = styled.div`
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  padding: 15px;
-  background: linear-gradient(135deg, #fafafa 0%, #ffffff 100%);
-  transition: all 0.2s ease;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
-  
-  &:hover {
-    border-color: rgba(10, 25, 41, 0.3);
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-  }
+const MetricCard = styled(Value)`
+  padding: ${theme.spacing.md};
+  min-height: 80px;
 `;
 
 const MetricLabel = styled.div`
   font-size: 0.85em;
-  color: #666;
-  margin-bottom: 8px;
+  color: ${theme.colors.text.secondary};
+  margin-bottom: ${theme.spacing.xs};
   font-weight: 500;
 `;
 
 const MetricValue = styled.div`
   font-size: 1.5em;
   font-weight: bold;
-  color: #0d1b2a;
+  color: ${theme.colors.text.primary};
 `;
 
 const ActionBar = styled.div`
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 20px;
-  gap: 10px;
+  margin-bottom: ${theme.spacing.lg};
+  gap: ${theme.spacing.sm};
   animation: slideUp 0.25s ease-out;
   animation-delay: 0.15s;
   animation-fill-mode: both;
 `;
 
-const ActionButton = styled.button<{ $danger?: boolean }>`
-  padding: 10px 20px;
-  border: 1px solid ${props => props.$danger ? '#c62828' : '#0d1b2a'};
-  border-radius: 6px;
-  background: ${props => props.$danger ? '#ffebee' : '#0d1b2a'};
-  color: ${props => props.$danger ? '#c62828' : 'white'};
-  cursor: pointer;
-  font-family: monospace;
-  font-size: 0.9em;
-  font-weight: 500;
-  transition: all 0.2s ease;
+const DangerButton = styled(Button)`
+  background-color: ${theme.colors.status.error.bg};
+  color: ${theme.colors.status.error.text};
+  border-color: ${theme.colors.status.error.text};
   
-  &:hover {
-    background: ${props => props.$danger ? '#ffcdd2' : '#1e3a5f'};
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  }
-  
-  &:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    transform: none;
+  &:hover:not(:disabled) {
+    background-color: #ffcdd2;
+    border-color: ${theme.colors.status.error.text};
   }
 `;
 
 const LocksTable = styled.div`
-  border: 1px solid #ddd;
-  border-radius: 6px;
+  border: 1px solid ${theme.colors.border.medium};
+  border-radius: ${theme.borderRadius.md};
   overflow: hidden;
   animation: slideUp 0.25s ease-out;
   animation-delay: 0.2s;
@@ -122,11 +72,11 @@ const LocksTable = styled.div`
 const TableHeader = styled.div`
   display: grid;
   grid-template-columns: 200px 150px 150px 150px 100px 1fr 120px;
-  background: linear-gradient(135deg, #f5f5f5 0%, #ffffff 100%);
+  background: ${theme.colors.gradient.primary};
   padding: 12px 15px;
   font-weight: bold;
   font-size: 0.85em;
-  border-bottom: 2px solid #ddd;
+  border-bottom: 2px solid ${theme.colors.border.dark};
   gap: 10px;
 `;
 
@@ -134,24 +84,24 @@ const TableRow = styled.div<{ $expired?: boolean; $warning?: boolean }>`
   display: grid;
   grid-template-columns: 200px 150px 150px 150px 100px 1fr 120px;
   padding: 12px 15px;
-  border-bottom: 1px solid #eee;
-  transition: all 0.2s ease;
+  border-bottom: 1px solid ${theme.colors.border.light};
+  transition: all ${theme.transitions.normal};
   gap: 10px;
   align-items: center;
   font-size: 0.85em;
   background-color: ${props => {
-    if (props.$expired) return '#ffebee';
-    if (props.$warning) return '#fff3e0';
-    return 'white';
+    if (props.$expired) return theme.colors.status.error.bg;
+    if (props.$warning) return theme.colors.status.warning.bg;
+    return theme.colors.background.main;
   }};
   
   &:hover {
     background: ${props => {
       if (props.$expired) return '#ffcdd2';
       if (props.$warning) return '#ffe0b2';
-      return '#f0f0f0';
+      return theme.colors.background.secondary;
     }};
-    border-left: 3px solid #0d1b2a;
+    border-left: 3px solid ${theme.colors.primary.main};
   }
   
   &:last-child {
@@ -167,147 +117,139 @@ const TableCell = styled.div`
 
 const Badge = styled.span<{ $status?: string }>`
   padding: 4px 10px;
-  border-radius: 6px;
+  border-radius: ${theme.borderRadius.md};
   font-size: 0.75em;
   font-weight: 500;
   display: inline-block;
-  transition: all 0.2s ease;
+  transition: all ${theme.transitions.normal};
   
   ${props => {
     switch (props.$status) {
-      case 'active': return 'background-color: #e8f5e9; color: #2e7d32;';
-      case 'expired': return 'background-color: #ffebee; color: #c62828;';
-      case 'warning': return 'background-color: #fff3e0; color: #ef6c00;';
-      default: return 'background-color: #f5f5f5; color: #757575;';
+      case 'active': return `background-color: ${theme.colors.status.success.bg}; color: ${theme.colors.status.success.text};`;
+      case 'expired': return `background-color: ${theme.colors.status.error.bg}; color: ${theme.colors.status.error.text};`;
+      case 'warning': return `background-color: ${theme.colors.status.warning.bg}; color: ${theme.colors.status.warning.text};`;
+      default: return `background-color: ${theme.colors.background.secondary}; color: ${theme.colors.text.secondary};`;
     }
   }}
   
   &:hover {
     transform: scale(1.05);
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+    box-shadow: ${theme.shadows.sm};
   }
 `;
 
-const UnlockButton = styled.button`
+const UnlockButton = styled(Button)`
   padding: 6px 12px;
-  border: 1px solid #c62828;
-  border-radius: 6px;
-  background: #ffebee;
-  color: #c62828;
-  cursor: pointer;
-  font-family: monospace;
   font-size: 0.8em;
-  font-weight: 500;
-  transition: all 0.2s ease;
+  background-color: ${theme.colors.status.error.bg};
+  color: ${theme.colors.status.error.text};
+  border-color: ${theme.colors.status.error.text};
   
-  &:hover {
-    background: #ffcdd2;
-    transform: translateY(-2px);
-    box-shadow: 0 2px 8px rgba(198, 40, 40, 0.3);
-  }
-  
-  &:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    transform: none;
+  &:hover:not(:disabled) {
+    background-color: #ffcdd2;
+    border-color: ${theme.colors.status.error.text};
   }
 `;
 
-const Loading = styled.div`
-  text-align: center;
-  padding: 40px;
-  color: #666;
-  font-size: 1.1em;
+const SuccessMessage = styled.div`
+  background-color: ${theme.colors.status.success.bg};
+  color: ${theme.colors.status.success.text};
+  padding: ${theme.spacing.md};
+  border-radius: ${theme.borderRadius.md};
+  margin-bottom: ${theme.spacing.lg};
+  border: 1px solid ${theme.colors.status.success.text};
 `;
 
-const Error = styled.div`
-  background-color: #ffebee;
-  color: #c62828;
-  padding: 15px;
-  border-radius: 6px;
-  margin-bottom: 20px;
-  border: 1px solid #ef9a9a;
-`;
-
-const Success = styled.div`
-  background-color: #e8f5e9;
-  color: #2e7d32;
-  padding: 15px;
-  border-radius: 6px;
-  margin-bottom: 20px;
-  border: 1px solid #a5d6a7;
-`;
-
+/**
+ * Catalog Locks Monitor component
+ * Displays and manages database locks used to prevent race conditions during catalog operations
+ */
 const CatalogLocks = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [locks, setLocks] = useState<any[]>([]);
   const [metrics, setMetrics] = useState<any>({});
+  const isMountedRef = useRef(true);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        setSuccess(null);
-        const [locksData, metricsData] = await Promise.all([
-          catalogLocksApi.getLocks(),
-          catalogLocksApi.getMetrics()
-        ]);
+  const fetchData = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    try {
+      setLoading(true);
+      setError(null);
+      setSuccess(null);
+      const [locksData, metricsData] = await Promise.all([
+        catalogLocksApi.getLocks(),
+        catalogLocksApi.getMetrics()
+      ]);
+      if (isMountedRef.current) {
         setLocks(locksData || []);
         setMetrics(metricsData || {});
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Error loading catalog locks');
-      } finally {
+      }
+    } catch (err) {
+      if (isMountedRef.current) {
+        setError(extractApiError(err));
+      }
+    } finally {
+      if (isMountedRef.current) {
         setLoading(false);
       }
-    };
-
-    fetchData();
-    const interval = setInterval(fetchData, 5000);
-    return () => clearInterval(interval);
+    }
   }, []);
 
-  const handleUnlock = async (lockName: string) => {
+  useEffect(() => {
+    isMountedRef.current = true;
+    fetchData();
+    const interval = setInterval(() => {
+      if (isMountedRef.current) {
+        fetchData();
+      }
+    }, 5000);
+    return () => {
+      isMountedRef.current = false;
+      clearInterval(interval);
+    };
+  }, [fetchData]);
+
+  const handleUnlock = useCallback(async (lockName: string) => {
     if (!confirm(`Are you sure you want to force unlock "${lockName}"? This may interrupt operations.`)) {
       return;
     }
 
     try {
+      if (!isMountedRef.current) return;
       setError(null);
       setSuccess(null);
       await catalogLocksApi.unlock(lockName);
-      setSuccess(`Lock "${lockName}" has been released successfully`);
-      const [locksData, metricsData] = await Promise.all([
-        catalogLocksApi.getLocks(),
-        catalogLocksApi.getMetrics()
-      ]);
-      setLocks(locksData || []);
-      setMetrics(metricsData || {});
+      if (isMountedRef.current) {
+        setSuccess(`Lock "${lockName}" has been released successfully`);
+        await fetchData();
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error unlocking lock');
+      if (isMountedRef.current) {
+        setError(extractApiError(err));
+      }
     }
-  };
+  }, [fetchData]);
 
-  const handleCleanExpired = async () => {
+  const handleCleanExpired = useCallback(async () => {
     try {
+      if (!isMountedRef.current) return;
       setError(null);
       setSuccess(null);
       const result = await catalogLocksApi.cleanExpired();
-      setSuccess(result.message || 'Expired locks cleaned successfully');
-      const [locksData, metricsData] = await Promise.all([
-        catalogLocksApi.getLocks(),
-        catalogLocksApi.getMetrics()
-      ]);
-      setLocks(locksData || []);
-      setMetrics(metricsData || {});
+      if (isMountedRef.current) {
+        setSuccess(result.message || 'Expired locks cleaned successfully');
+        await fetchData();
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error cleaning expired locks');
+      if (isMountedRef.current) {
+        setError(extractApiError(err));
+      }
     }
-  };
+  }, [fetchData]);
 
-  const getLockStatus = (expiresAt: string) => {
+  const getLockStatus = useCallback((expiresAt: string) => {
     if (!expiresAt) return { status: 'unknown', label: 'Unknown' };
     const expires = new Date(expiresAt);
     const now = new Date();
@@ -321,9 +263,9 @@ const CatalogLocks = () => {
     } else {
       return { status: 'active', label: 'Active' };
     }
-  };
+  }, []);
 
-  const formatTimeRemaining = (expiresAt: string) => {
+  const formatTimeRemaining = useCallback((expiresAt: string) => {
     if (!expiresAt) return 'N/A';
     const expires = new Date(expiresAt);
     const now = new Date();
@@ -342,19 +284,19 @@ const CatalogLocks = () => {
     if (days > 0) return `${days}d ${hours % 24}h`;
     if (hours > 0) return `${hours}h ${mins % 60}m`;
     return `${mins}m`;
-  };
+  }, []);
 
-  const formatDate = (date: string | null | undefined) => {
+  const formatDate = useCallback((date: string | null | undefined) => {
     if (!date) return 'N/A';
     return new Date(date).toLocaleString();
-  };
+  }, []);
 
   if (loading && locks.length === 0) {
     return (
-      <CatalogLocksContainer>
+      <Container>
         <Header>Catalog Locks Monitor</Header>
-        <Loading>Loading catalog locks...</Loading>
-      </CatalogLocksContainer>
+        <LoadingOverlay>Loading catalog locks...</LoadingOverlay>
+      </Container>
     );
   }
 
@@ -363,19 +305,14 @@ const CatalogLocks = () => {
     return new Date(lock.expires_at) < new Date();
   });
 
-  const activeLocks = locks.filter(lock => {
-    if (!lock.expires_at) return true;
-    return new Date(lock.expires_at) >= new Date();
-  });
-
   return (
-    <CatalogLocksContainer>
+    <Container>
       <Header>Catalog Locks Monitor</Header>
       
-      {error && <Error>{error}</Error>}
-      {success && <Success>{success}</Success>}
+      {error && <ErrorMessage>{error}</ErrorMessage>}
+      {success && <SuccessMessage>{success}</SuccessMessage>}
       
-      <MetricsGrid>
+      <MetricsGrid $columns="repeat(auto-fit, minmax(200px, 1fr))">
         <MetricCard>
           <MetricLabel>Total Locks</MetricLabel>
           <MetricValue>{metrics.total_locks || 0}</MetricValue>
@@ -395,12 +332,12 @@ const CatalogLocks = () => {
       </MetricsGrid>
 
       <ActionBar>
-        <div style={{ fontSize: '0.9em', color: '#666' }}>
+        <div style={{ fontSize: '0.9em', color: theme.colors.text.secondary }}>
           Locks are used to prevent race conditions during catalog operations. Expired locks are automatically cleaned.
         </div>
-        <ActionButton $danger onClick={handleCleanExpired} disabled={expiredLocks.length === 0}>
+        <DangerButton onClick={handleCleanExpired} disabled={expiredLocks.length === 0}>
           Clean Expired ({expiredLocks.length})
-        </ActionButton>
+        </DangerButton>
       </ActionBar>
 
       <LocksTable>
@@ -414,7 +351,7 @@ const CatalogLocks = () => {
           <TableCell>Actions</TableCell>
         </TableHeader>
         {locks.length === 0 ? (
-          <div style={{ padding: '40px', textAlign: 'center', color: '#666' }}>
+          <div style={{ padding: '40px', textAlign: 'center', color: theme.colors.text.secondary }}>
             No active locks. Locks will appear here when catalog operations are running.
           </div>
         ) : (
@@ -445,9 +382,8 @@ const CatalogLocks = () => {
           })
         )}
       </LocksTable>
-    </CatalogLocksContainer>
+    </Container>
   );
 };
 
 export default CatalogLocks;
-

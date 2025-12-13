@@ -1,40 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import styled from 'styled-components';
 import { qualityApi } from '../services/api';
-
-const QualityContainer = styled.div`
-  background-color: white;
-  color: #333;
-  padding: 20px;
-  font-family: monospace;
-  animation: fadeIn 0.25s ease-in;
-`;
-
-const Header = styled.div`
-  border: 2px solid #333;
-  padding: 15px;
-  text-align: center;
-  margin-bottom: 30px;
-  font-size: 1.5em;
-  font-weight: bold;
-  background: linear-gradient(135deg, #f5f5f5 0%, #ffffff 50%, #f5f5f5 100%);
-  border-radius: 6px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-  position: relative;
-  overflow: hidden;
-  animation: slideUp 0.3s ease-out;
-  
-  &::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -100%;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(10, 25, 41, 0.1), transparent);
-    animation: shimmer 3s infinite;
-  }
-`;
+import { Container, Header, Select, FiltersContainer, Pagination, PageButton, LoadingOverlay, ErrorMessage } from './shared/BaseComponents';
+import { usePagination } from '../hooks/usePagination';
+import { useTableFilters } from '../hooks/useTableFilters';
+import { extractApiError } from '../utils/errorHandler';
 
 const QualityList = styled.div`
   display: flex;
@@ -218,7 +188,7 @@ const ValidationStatus = styled.span<{ $status: string }>`
     }
   }};
   color: ${props => {
-    switch (props.status) {
+    switch (props.$status) {
       case 'PASSED': return '#2e7d32';
       case 'WARNING': return '#ef6c00';
       case 'FAILED': return '#c62828';
@@ -264,89 +234,17 @@ const ErrorDetails = styled.pre`
   white-space: pre-wrap;
 `;
 
-const FiltersContainer = styled.div`
-  display: flex;
-  gap: 15px;
-  margin-bottom: 20px;
-  padding: 15px;
-  background: #f5f5f5;
-  border-radius: 6px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
-  animation: slideUp 0.25s ease-out;
-  animation-delay: 0.15s;
-  animation-fill-mode: both;
-  flex-wrap: wrap;
-`;
 
-const Select = styled.select`
-  padding: 8px 12px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  font-family: monospace;
-  transition: all 0.2s ease;
-  background: white;
-  cursor: pointer;
-  
-  &:hover {
-    border-color: rgba(10, 25, 41, 0.3);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-  }
-  
-  &:focus {
-    outline: none;
-    border-color: #0d1b2a;
-    box-shadow: 0 0 0 3px rgba(10, 25, 41, 0.1);
-  }
-`;
-
-const Pagination = styled.div`
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 10px;
-  margin-top: 20px;
-  padding: 15px;
-  font-size: 0.9em;
-  animation: slideUp 0.25s ease-out;
-  animation-delay: 0.2s;
-  animation-fill-mode: both;
-`;
-
-const PageButton = styled.button<{ $active?: boolean }>`
-  padding: 8px 14px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  background: ${props => props.$active ? '#0d1b2a' : 'white'};
-  color: ${props => props.$active ? 'white' : '#333'};
-  cursor: pointer;
-  transition: all 0.2s ease;
-  font-weight: ${props => props.$active ? 'bold' : 'normal'};
-  
-  &:hover:not(:disabled) {
-    background: ${props => props.$active ? '#1e3a5f' : '#f5f5f5'};
-    transform: translateY(-2px);
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-    border-color: ${props => props.$active ? '#0d1b2a' : 'rgba(10, 25, 41, 0.3)'};
-  }
-  
-  &:disabled {
-    cursor: not-allowed;
-    opacity: 0.5;
-  }
-`;
-
+/**
+ * Componente para monitorear la calidad de los datos
+ * Muestra métricas de calidad, validaciones y detalles de problemas encontrados
+ */
 const Quality = () => {
+  const isMountedRef = useRef(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [qualityData, setQualityData] = useState<any[]>([]);
   const [openItemId, setOpenItemId] = useState<number | null>(null);
-  
-  // Filtros y paginación
-  const [filter, setFilter] = useState({
-    engine: '',
-    status: ''
-  });
-  const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({
     total: 0,
     totalPages: 0,
@@ -354,48 +252,84 @@ const Quality = () => {
     limit: 10
   });
 
-  useEffect(() => {
-    const fetchQualityData = async () => {
-      try {
-        setError(null);
-        const response = await qualityApi.getQualityMetrics({
-          page,
-          limit: 10,
-          engine: filter.engine,
-          status: filter.status
-        });
+  const { page, setPage } = usePagination(1, 10);
+  const { filters, setFilter } = useTableFilters({
+    engine: '',
+    status: ''
+  });
+
+  /**
+   * Obtiene los datos de calidad desde la API
+   */
+  const fetchQualityData = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    
+    try {
+      setError(null);
+      setLoading(true);
+      const response = await qualityApi.getQualityMetrics({
+        page,
+        limit: 10,
+        search: filters.engine as string ? `engine:${filters.engine}` : undefined,
+        status: filters.status as string || undefined
+      });
+      
+      if (isMountedRef.current) {
         setQualityData(response.data);
         setPagination(response.pagination);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Error loading quality data');
-      } finally {
+      }
+    } catch (err) {
+      if (isMountedRef.current) {
+        setError(extractApiError(err));
+      }
+    } finally {
+      if (isMountedRef.current) {
         setLoading(false);
       }
-    };
+    }
+  }, [page, filters.engine, filters.status]);
 
+  useEffect(() => {
+    isMountedRef.current = true;
     fetchQualityData();
-    // Actualizar cada 30 segundos
-    const interval = setInterval(fetchQualityData, 30000);
-    return () => clearInterval(interval);
-  }, [page, filter]);
+    
+    const interval = setInterval(() => {
+      if (isMountedRef.current) {
+        fetchQualityData();
+      }
+    }, 30000);
+    return () => {
+      isMountedRef.current = false;
+      clearInterval(interval);
+    };
+  }, [fetchQualityData]);
 
-  const toggleItem = (id: number) => {
-    setOpenItemId(openItemId === id ? null : id);
-  };
+  /**
+   * Alterna la expansión de un item de calidad
+   */
+  const toggleItem = useCallback((id: number) => {
+    setOpenItemId(prev => prev === id ? null : id);
+  }, []);
 
-  const formatNumber = (num: number) => num.toLocaleString();
+  /**
+   * Formatea un número con separadores de miles
+   */
+  const formatNumber = useCallback((num: number) => num.toLocaleString(), []);
 
 
   return (
-    <QualityContainer>
+    <Container>
       <Header>
         Data Quality Monitor
       </Header>
 
       <FiltersContainer>
         <Select 
-          value={filter.engine}
-          onChange={(e) => setFilter({...filter, engine: e.target.value})}
+          value={filters.engine as string}
+          onChange={(e) => {
+            setFilter('engine', e.target.value);
+            setPage(1);
+          }}
         >
           <option value="">All Engines</option>
           <option value="PostgreSQL">PostgreSQL</option>
@@ -405,8 +339,11 @@ const Quality = () => {
         </Select>
 
         <Select
-          value={filter.status}
-          onChange={(e) => setFilter({...filter, status: e.target.value})}
+          value={filters.status as string}
+          onChange={(e) => {
+            setFilter('status', e.target.value);
+            setPage(1);
+          }}
         >
           <option value="">All Status</option>
           <option value="PASSED">Passed</option>
@@ -415,17 +352,8 @@ const Quality = () => {
         </Select>
       </FiltersContainer>
 
-      {loading && (
-        <div style={{ textAlign: 'center', padding: '20px', color: '#666' }}>
-          Loading quality metrics...
-        </div>
-      )}
-
-      {error && (
-        <div style={{ color: 'red', padding: '20px', textAlign: 'center' }}>
-          {error}
-        </div>
-      )}
+      {loading && <LoadingOverlay>Loading quality metrics...</LoadingOverlay>}
+      {error && <ErrorMessage>{error}</ErrorMessage>}
 
       {!loading && !error && (
         <>
@@ -528,39 +456,41 @@ const Quality = () => {
             )}
           </QualityList>
 
-          <Pagination>
-            <PageButton
-              disabled={page === 1}
-              onClick={() => setPage(page - 1)}
-            >
-              Previous
-            </PageButton>
-            
-            {Array.from({ length: pagination.totalPages }, (_, i) => i + 1)
-              .filter(p => Math.abs(p - page) <= 2 || p === 1 || p === pagination.totalPages)
-              .map((p, i, arr) => (
-                <React.Fragment key={p}>
-                  {i > 0 && arr[i - 1] !== p - 1 && <span>...</span>}
-                  <PageButton
-                    $active={p === page}
-                    onClick={() => setPage(p)}
-                  >
-                    {p}
-                  </PageButton>
-                </React.Fragment>
-              ))
-            }
-            
-            <PageButton
-              disabled={page === pagination.totalPages}
-              onClick={() => setPage(page + 1)}
-            >
-              Next
-            </PageButton>
-          </Pagination>
+          {pagination.totalPages > 1 && (
+            <Pagination>
+              <PageButton
+                disabled={page === 1}
+                onClick={() => setPage(page - 1)}
+              >
+                Previous
+              </PageButton>
+              
+              {Array.from({ length: pagination.totalPages }, (_, i) => i + 1)
+                .filter(p => Math.abs(p - page) <= 2 || p === 1 || p === pagination.totalPages)
+                .map((p, i, arr) => (
+                  <React.Fragment key={p}>
+                    {i > 0 && arr[i - 1] !== p - 1 && <span>...</span>}
+                    <PageButton
+                      $active={p === page}
+                      onClick={() => setPage(p)}
+                    >
+                      {p}
+                    </PageButton>
+                  </React.Fragment>
+                ))
+              }
+              
+              <PageButton
+                disabled={page === pagination.totalPages}
+                onClick={() => setPage(page + 1)}
+              >
+                Next
+              </PageButton>
+            </Pagination>
+          )}
         </>
       )}
-    </QualityContainer>
+    </Container>
   );
 };
 

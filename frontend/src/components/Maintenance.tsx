@@ -1,84 +1,52 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import styled from 'styled-components';
+import {
+  Container,
+  Header,
+  ErrorMessage,
+  LoadingOverlay,
+  Grid,
+  Value,
+  Select,
+  Pagination,
+  PageButton,
+} from './shared/BaseComponents';
+import { usePagination } from '../hooks/usePagination';
+import { useTableFilters } from '../hooks/useTableFilters';
 import { maintenanceApi } from '../services/api';
+import { extractApiError } from '../utils/errorHandler';
+import { theme } from '../theme/theme';
 
-const MaintenanceContainer = styled.div`
-  background-color: white;
-  color: #333;
-  padding: 20px;
-  font-family: monospace;
-  animation: fadeIn 0.25s ease-in;
-`;
-
-const Header = styled.div`
-  border: 2px solid #333;
-  padding: 15px;
-  text-align: center;
-  margin-bottom: 30px;
-  font-size: 1.5em;
-  font-weight: bold;
-  background: linear-gradient(135deg, #f5f5f5 0%, #ffffff 50%, #f5f5f5 100%);
-  border-radius: 6px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-  position: relative;
-  overflow: hidden;
-  animation: slideUp 0.3s ease-out;
-  
-  &::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -100%;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(10, 25, 41, 0.1), transparent);
-    animation: shimmer 3s infinite;
-  }
-`;
-
-const MetricsGrid = styled.div`
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 15px;
-  margin-bottom: 30px;
+const MetricsGrid = styled(Grid)`
+  margin-bottom: ${theme.spacing.xxl};
   animation: slideUp 0.25s ease-out;
   animation-delay: 0.1s;
   animation-fill-mode: both;
 `;
 
-const MetricCard = styled.div`
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  padding: 15px;
-  background: linear-gradient(135deg, #fafafa 0%, #ffffff 100%);
-  transition: all 0.2s ease;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
-  
-  &:hover {
-    border-color: rgba(10, 25, 41, 0.3);
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-  }
+const MetricCard = styled(Value)`
+  padding: ${theme.spacing.md};
+  min-height: 80px;
 `;
 
 const MetricLabel = styled.div`
   font-size: 0.85em;
-  color: #666;
-  margin-bottom: 8px;
+  color: ${theme.colors.text.secondary};
+  margin-bottom: ${theme.spacing.xs};
   font-weight: 500;
 `;
 
 const MetricValue = styled.div`
   font-size: 1.5em;
   font-weight: bold;
-  color: #0d1b2a;
+  color: ${theme.colors.text.primary};
 `;
 
 const TabsContainer = styled.div`
   display: flex;
-  gap: 10px;
-  margin-bottom: 20px;
-  border-bottom: 2px solid #ddd;
+  gap: ${theme.spacing.sm};
+  margin-bottom: ${theme.spacing.lg};
+  border-bottom: 2px solid ${theme.colors.border.medium};
   animation: slideUp 0.25s ease-out;
   animation-delay: 0.15s;
   animation-fill-mode: both;
@@ -87,58 +55,35 @@ const TabsContainer = styled.div`
 const Tab = styled.button<{ $active: boolean }>`
   padding: 12px 24px;
   border: none;
-  background: ${props => props.$active ? '#0d1b2a' : 'transparent'};
-  color: ${props => props.$active ? 'white' : '#666'};
+  background: ${props => props.$active ? theme.colors.primary.main : 'transparent'};
+  color: ${props => props.$active ? theme.colors.text.white : theme.colors.text.secondary};
   cursor: pointer;
-  font-family: monospace;
+  font-family: ${theme.fonts.primary};
   font-size: 0.95em;
   font-weight: ${props => props.$active ? 'bold' : 'normal'};
-  border-bottom: ${props => props.$active ? '3px solid #1e3a5f' : '3px solid transparent'};
-  transition: all 0.2s ease;
+  border-bottom: ${props => props.$active ? `3px solid ${theme.colors.primary.dark}` : '3px solid transparent'};
+  transition: all ${theme.transitions.normal};
   margin-bottom: -2px;
   
   &:hover {
-    background: ${props => props.$active ? '#1e3a5f' : '#f5f5f5'};
-    color: ${props => props.$active ? 'white' : '#333'};
+    background: ${props => props.$active ? theme.colors.primary.light : theme.colors.background.secondary};
+    color: ${props => props.$active ? theme.colors.text.white : theme.colors.text.primary};
   }
 `;
 
 const FiltersContainer = styled.div`
   display: flex;
-  gap: 10px;
-  margin-bottom: 20px;
+  gap: ${theme.spacing.sm};
+  margin-bottom: ${theme.spacing.lg};
   flex-wrap: wrap;
   animation: slideUp 0.25s ease-out;
   animation-delay: 0.2s;
   animation-fill-mode: both;
 `;
 
-const FilterSelect = styled.select`
-  padding: 8px 12px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  background: white;
-  color: #333;
-  font-family: monospace;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  font-size: 0.9em;
-  
-  &:hover {
-    background: #f5f5f5;
-    border-color: rgba(10, 25, 41, 0.3);
-  }
-  
-  &:focus {
-    outline: none;
-    border-color: #0d1b2a;
-    box-shadow: 0 0 0 3px rgba(10, 25, 41, 0.1);
-  }
-`;
-
 const MaintenanceTable = styled.div`
-  border: 1px solid #ddd;
-  border-radius: 6px;
+  border: 1px solid ${theme.colors.border.medium};
+  border-radius: ${theme.borderRadius.md};
   overflow: hidden;
   animation: slideUp 0.25s ease-out;
   animation-delay: 0.25s;
@@ -148,11 +93,11 @@ const MaintenanceTable = styled.div`
 const TableHeader = styled.div`
   display: grid;
   grid-template-columns: 120px 100px 150px 120px 120px 100px 100px 100px 1fr 100px;
-  background: linear-gradient(135deg, #f5f5f5 0%, #ffffff 100%);
+  background: ${theme.colors.gradient.primary};
   padding: 12px 15px;
   font-weight: bold;
   font-size: 0.85em;
-  border-bottom: 2px solid #ddd;
+  border-bottom: 2px solid ${theme.colors.border.dark};
   gap: 10px;
 `;
 
@@ -160,16 +105,16 @@ const TableRow = styled.div`
   display: grid;
   grid-template-columns: 120px 100px 150px 120px 120px 100px 100px 100px 1fr 100px;
   padding: 12px 15px;
-  border-bottom: 1px solid #eee;
-  transition: all 0.2s ease;
+  border-bottom: 1px solid ${theme.colors.border.light};
+  transition: all ${theme.transitions.normal};
   cursor: pointer;
   gap: 10px;
   align-items: center;
   font-size: 0.85em;
   
   &:hover {
-    background: linear-gradient(90deg, #f0f0f0 0%, #f8f9fa 100%);
-    border-left: 3px solid #0d1b2a;
+    background: linear-gradient(90deg, ${theme.colors.background.secondary} 0%, ${theme.colors.background.tertiary} 100%);
+    border-left: 3px solid ${theme.colors.primary.main};
   }
   
   &:last-child {
@@ -185,32 +130,32 @@ const TableCell = styled.div`
 
 const Badge = styled.span<{ $status?: string; $type?: string }>`
   padding: 4px 10px;
-  border-radius: 6px;
+  border-radius: ${theme.borderRadius.md};
   font-size: 0.8em;
   font-weight: 500;
   display: inline-block;
-  transition: all 0.2s ease;
+  transition: all ${theme.transitions.normal};
   
   ${props => {
     if (props.$status) {
       switch (props.$status) {
-        case 'PENDING': return 'background-color: #fff3e0; color: #ef6c00;';
-        case 'RUNNING': return 'background-color: #e3f2fd; color: #1565c0;';
-        case 'COMPLETED': return 'background-color: #e8f5e9; color: #2e7d32;';
-        case 'FAILED': return 'background-color: #ffebee; color: #c62828;';
-        case 'SKIPPED': return 'background-color: #f5f5f5; color: #757575;';
-        default: return 'background-color: #f5f5f5; color: #757575;';
+        case 'PENDING': return `background-color: ${theme.colors.status.warning.bg}; color: ${theme.colors.status.warning.text};`;
+        case 'RUNNING': return `background-color: #e3f2fd; color: #1565c0;`;
+        case 'COMPLETED': return `background-color: ${theme.colors.status.success.bg}; color: ${theme.colors.status.success.text};`;
+        case 'FAILED': return `background-color: ${theme.colors.status.error.bg}; color: ${theme.colors.status.error.text};`;
+        case 'SKIPPED': return `background-color: ${theme.colors.background.secondary}; color: ${theme.colors.text.secondary};`;
+        default: return `background-color: ${theme.colors.background.secondary}; color: ${theme.colors.text.secondary};`;
       }
     }
     if (props.$type) {
-      return 'background-color: #f0f0f0; color: #333;';
+      return `background-color: ${theme.colors.background.secondary}; color: ${theme.colors.text.primary};`;
     }
-    return 'background-color: #f5f5f5; color: #757575;';
+    return `background-color: ${theme.colors.background.secondary}; color: ${theme.colors.text.secondary};`;
   }}
   
   &:hover {
     transform: scale(1.05);
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+    box-shadow: ${theme.shadows.sm};
   }
 `;
 
@@ -218,195 +163,185 @@ const MaintenanceDetails = styled.div<{ $isOpen: boolean }>`
   max-height: ${props => props.$isOpen ? '800px' : '0'};
   opacity: ${props => props.$isOpen ? '1' : '0'};
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-  border-top: ${props => props.$isOpen ? '1px solid #eee' : 'none'};
-  background-color: white;
+  border-top: ${props => props.$isOpen ? `1px solid ${theme.colors.border.light}` : 'none'};
+  background-color: ${theme.colors.background.main};
   overflow: hidden;
 `;
 
 const DetailGrid = styled.div`
   display: grid;
   grid-template-columns: 200px 1fr;
-  padding: 15px;
-  gap: 10px;
+  padding: ${theme.spacing.md};
+  gap: ${theme.spacing.sm};
   font-size: 0.9em;
 `;
 
 const DetailLabel = styled.div`
-  color: #666;
+  color: ${theme.colors.text.secondary};
   font-weight: 500;
 `;
 
 const DetailValue = styled.div`
-  color: #333;
+  color: ${theme.colors.text.primary};
 `;
 
 const MetricsComparison = styled.div`
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 20px;
-  padding: 15px;
-  background: #f8f8f8;
-  border-radius: 6px;
-  margin: 15px;
+  gap: ${theme.spacing.lg};
+  padding: ${theme.spacing.md};
+  background: ${theme.colors.background.secondary};
+  border-radius: ${theme.borderRadius.md};
+  margin: ${theme.spacing.md};
 `;
 
 const MetricsColumn = styled.div`
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  padding: 15px;
-  background: white;
+  border: 1px solid ${theme.colors.border.medium};
+  border-radius: ${theme.borderRadius.md};
+  padding: ${theme.spacing.md};
+  background: ${theme.colors.background.main};
 `;
 
 const MetricsTitle = styled.div`
   font-weight: bold;
-  margin-bottom: 10px;
-  color: #0d1b2a;
-  border-bottom: 2px solid #0d1b2a;
+  margin-bottom: ${theme.spacing.sm};
+  color: ${theme.colors.text.primary};
+  border-bottom: 2px solid ${theme.colors.border.dark};
   padding-bottom: 5px;
 `;
 
-const Pagination = styled.div`
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 10px;
-  margin-top: 20px;
-  animation: slideUp 0.25s ease-out;
-  animation-delay: 0.3s;
-  animation-fill-mode: both;
-`;
-
-const PageButton = styled.button<{ $active?: boolean; $disabled?: boolean }>`
-  padding: 8px 16px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  background: ${props => props.$active ? '#0d1b2a' : 'white'};
-  color: ${props => props.$active ? 'white' : '#333'};
-  cursor: ${props => props.$disabled ? 'not-allowed' : 'pointer'};
-  font-family: monospace;
-  transition: all 0.2s ease;
-  opacity: ${props => props.$disabled ? 0.5 : 1};
-  
-  &:hover:not(:disabled) {
-    background: ${props => props.$active ? '#1e3a5f' : '#f5f5f5'};
-    border-color: rgba(10, 25, 41, 0.3);
-    transform: translateY(-2px);
-  }
-  
-  &:disabled {
-    cursor: not-allowed;
-  }
-`;
-
-const Loading = styled.div`
-  text-align: center;
-  padding: 40px;
-  color: #666;
-  font-size: 1.1em;
-`;
-
-const Error = styled.div`
-  background-color: #ffebee;
-  color: #c62828;
-  padding: 15px;
-  border-radius: 6px;
-  margin-bottom: 20px;
-  border: 1px solid #ef9a9a;
-`;
-
+/**
+ * Maintenance component
+ * Displays database maintenance operations with filtering, tabs, and detailed metrics
+ */
 const Maintenance = () => {
+  const { page, limit, setPage } = usePagination(1, 20);
+  const { filters, setFilter } = useTableFilters({
+    maintenance_type: '',
+    status: '',
+    db_engine: ''
+  });
+  
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [maintenanceItems, setMaintenanceItems] = useState<any[]>([]);
   const [metrics, setMetrics] = useState<any>({});
   const [openItemId, setOpenItemId] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<'pending' | 'completed' | 'all'>('pending');
-  const [filters, setFilters] = useState({
-    maintenance_type: '',
-    status: '',
-    db_engine: ''
-  });
-  const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({
     total: 0,
     totalPages: 0,
     currentPage: 1,
     limit: 20
   });
+  const isMountedRef = useRef(true);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const statusFilter = activeTab === 'pending' ? 'PENDING' : activeTab === 'completed' ? 'COMPLETED' : '';
-        const [itemsData, metricsData] = await Promise.all([
-          maintenanceApi.getMaintenanceItems({
-            page,
-            limit: 20,
-            ...filters,
-            status: statusFilter || filters.status
-          }),
-          maintenanceApi.getMetrics()
-        ]);
+  const fetchData = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    try {
+      setLoading(true);
+      setError(null);
+      const statusFilter = activeTab === 'pending' ? 'PENDING' : activeTab === 'completed' ? 'COMPLETED' : '';
+      const [itemsData, metricsData] = await Promise.all([
+        maintenanceApi.getMaintenanceItems({
+          page,
+          limit,
+          maintenance_type: filters.maintenance_type as string,
+          db_engine: filters.db_engine as string,
+          status: statusFilter || (filters.status as string)
+        }),
+        maintenanceApi.getMetrics()
+      ]);
+      if (isMountedRef.current) {
         setMaintenanceItems(itemsData.data || []);
-        setPagination(itemsData.pagination || pagination);
+        setPagination(itemsData.pagination || {
+          total: 0,
+          totalPages: 0,
+          currentPage: 1,
+          limit: 20
+        });
         setMetrics(metricsData || {});
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Error loading maintenance data');
-      } finally {
+      }
+    } catch (err) {
+      if (isMountedRef.current) {
+        setError(extractApiError(err));
+      }
+    } finally {
+      if (isMountedRef.current) {
         setLoading(false);
       }
-    };
+    }
+  }, [page, limit, filters.maintenance_type, filters.db_engine, filters.status, activeTab]);
 
+  useEffect(() => {
+    isMountedRef.current = true;
     fetchData();
-    const interval = setInterval(fetchData, 30000);
-    return () => clearInterval(interval);
-  }, [page, filters, activeTab]);
+    const interval = setInterval(() => {
+      if (isMountedRef.current) {
+        fetchData();
+      }
+    }, 30000);
+    return () => {
+      isMountedRef.current = false;
+      clearInterval(interval);
+    };
+  }, [fetchData]);
 
-  const toggleItem = (id: number) => {
-    setOpenItemId(openItemId === id ? null : id);
-  };
+  const toggleItem = useCallback((id: number) => {
+    setOpenItemId(prev => prev === id ? null : id);
+  }, []);
 
-  const formatBytes = (mb: number | string | null | undefined) => {
+  const formatBytes = useCallback((mb: number | string | null | undefined) => {
     if (mb === null || mb === undefined) return 'N/A';
     const numMb = Number(mb);
     if (isNaN(numMb)) return 'N/A';
     if (numMb < 1) return `${(numMb * 1024).toFixed(2)} KB`;
     if (numMb < 1024) return `${numMb.toFixed(2)} MB`;
     return `${(numMb / 1024).toFixed(2)} GB`;
-  };
+  }, []);
 
-  const formatDate = (date: string | null | undefined) => {
+  const formatDate = useCallback((date: string | null | undefined) => {
     if (!date) return 'N/A';
     return new Date(date).toLocaleString();
-  };
+  }, []);
 
-  const formatDuration = (seconds: number | string | null | undefined) => {
+  const formatDuration = useCallback((seconds: number | string | null | undefined) => {
     if (seconds === null || seconds === undefined) return 'N/A';
     const numSeconds = Number(seconds);
     if (isNaN(numSeconds)) return 'N/A';
     if (numSeconds < 60) return `${numSeconds.toFixed(2)}s`;
     if (numSeconds < 3600) return `${(numSeconds / 60).toFixed(2)}m`;
     return `${(numSeconds / 3600).toFixed(2)}h`;
-  };
+  }, []);
+
+  const formatNumber = useCallback((num: number | null | undefined) => {
+    if (num === null || num === undefined) return 'N/A';
+    if (num >= 1000000) return `${(num / 1000000).toFixed(2)}M`;
+    if (num >= 1000) return `${(num / 1000).toFixed(2)}K`;
+    return num.toString();
+  }, []);
+
+  const handleFilterChange = useCallback((key: string, value: string) => {
+    setFilter(key as any, value);
+    setPage(1);
+  }, [setFilter, setPage]);
 
   if (loading && maintenanceItems.length === 0) {
     return (
-      <MaintenanceContainer>
+      <Container>
         <Header>Maintenance</Header>
-        <Loading>Loading maintenance data...</Loading>
-      </MaintenanceContainer>
+        <LoadingOverlay>Loading maintenance data...</LoadingOverlay>
+      </Container>
     );
   }
 
   return (
-    <MaintenanceContainer>
+    <Container>
       <Header>Maintenance</Header>
       
-      {error && <Error>{error}</Error>}
+      {error && <ErrorMessage>{error}</ErrorMessage>}
       
-      <MetricsGrid>
+      <MetricsGrid $columns="repeat(auto-fit, minmax(180px, 1fr))">
         <MetricCard>
           <MetricLabel>Total Pending</MetricLabel>
           <MetricValue>{metrics.total_pending || 0}</MetricValue>
@@ -446,40 +381,31 @@ const Maintenance = () => {
       </TabsContainer>
 
       <FiltersContainer>
-        <FilterSelect
-          value={filters.maintenance_type}
-          onChange={(e) => {
-            setFilters({ ...filters, maintenance_type: e.target.value });
-            setPage(1);
-          }}
+        <Select
+          value={filters.maintenance_type as string}
+          onChange={(e) => handleFilterChange('maintenance_type', e.target.value)}
         >
           <option value="">All Types</option>
           <option value="VACUUM">VACUUM</option>
           <option value="ANALYZE">ANALYZE</option>
           <option value="REINDEX">REINDEX</option>
           <option value="CLUSTER">CLUSTER</option>
-        </FilterSelect>
+        </Select>
         
-        <FilterSelect
-          value={filters.db_engine}
-          onChange={(e) => {
-            setFilters({ ...filters, db_engine: e.target.value });
-            setPage(1);
-          }}
+        <Select
+          value={filters.db_engine as string}
+          onChange={(e) => handleFilterChange('db_engine', e.target.value)}
         >
           <option value="">All Engines</option>
           <option value="PostgreSQL">PostgreSQL</option>
           <option value="MariaDB">MariaDB</option>
           <option value="MSSQL">MSSQL</option>
-        </FilterSelect>
+        </Select>
         
         {activeTab === 'all' && (
-          <FilterSelect
-            value={filters.status}
-            onChange={(e) => {
-              setFilters({ ...filters, status: e.target.value });
-              setPage(1);
-            }}
+          <Select
+            value={filters.status as string}
+            onChange={(e) => handleFilterChange('status', e.target.value)}
           >
             <option value="">All Status</option>
             <option value="PENDING">PENDING</option>
@@ -487,7 +413,7 @@ const Maintenance = () => {
             <option value="COMPLETED">COMPLETED</option>
             <option value="FAILED">FAILED</option>
             <option value="SKIPPED">SKIPPED</option>
-          </FilterSelect>
+          </Select>
         )}
       </FiltersContainer>
 
@@ -505,7 +431,7 @@ const Maintenance = () => {
           <TableCell>Next Run</TableCell>
         </TableHeader>
         {maintenanceItems.length === 0 ? (
-          <div style={{ padding: '40px', textAlign: 'center', color: '#666' }}>
+          <div style={{ padding: '40px', textAlign: 'center', color: theme.colors.text.secondary }}>
             No maintenance items available. Maintenance operations will appear here once detected.
           </div>
         ) : (
@@ -556,7 +482,7 @@ const Maintenance = () => {
                 {item.error_details && (
                   <>
                     <DetailLabel>Error Details:</DetailLabel>
-                    <DetailValue style={{ color: '#c62828' }}>{item.error_details}</DetailValue>
+                    <DetailValue style={{ color: theme.colors.status.error.text }}>{item.error_details}</DetailValue>
                   </>
                 )}
               </DetailGrid>
@@ -604,7 +530,7 @@ const Maintenance = () => {
       {pagination.totalPages > 1 && (
         <Pagination>
           <PageButton
-            onClick={() => setPage(p => Math.max(1, p - 1))}
+            onClick={() => setPage(Math.max(1, page - 1))}
             disabled={page === 1}
           >
             Previous
@@ -613,23 +539,15 @@ const Maintenance = () => {
             Page {pagination.currentPage} of {pagination.totalPages} ({pagination.total} total)
           </span>
           <PageButton
-            onClick={() => setPage(p => Math.min(pagination.totalPages, p + 1))}
+            onClick={() => setPage(Math.min(pagination.totalPages, page + 1))}
             disabled={page === pagination.totalPages}
           >
             Next
           </PageButton>
         </Pagination>
       )}
-    </MaintenanceContainer>
+    </Container>
   );
 };
 
-const formatNumber = (num: number | null | undefined) => {
-  if (num === null || num === undefined) return 'N/A';
-  if (num >= 1000000) return `${(num / 1000000).toFixed(2)}M`;
-  if (num >= 1000) return `${(num / 1000).toFixed(2)}K`;
-  return num.toString();
-};
-
 export default Maintenance;
-
