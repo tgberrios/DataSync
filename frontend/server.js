@@ -3429,6 +3429,148 @@ app.get(
   }
 );
 
+app.get("/api/api-catalog", async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 20,
+      api_type = "",
+      target_db_engine = "",
+      status = "",
+      active = "",
+      search = "",
+    } = req.query;
+    const offset = (page - 1) * limit;
+
+    let whereConditions = [];
+    let queryParams = [];
+    let paramCount = 0;
+
+    if (api_type) {
+      paramCount++;
+      whereConditions.push(`api_type = $${paramCount}`);
+      queryParams.push(api_type);
+    }
+
+    if (target_db_engine) {
+      paramCount++;
+      whereConditions.push(`target_db_engine = $${paramCount}`);
+      queryParams.push(target_db_engine);
+    }
+
+    if (status) {
+      paramCount++;
+      whereConditions.push(`status = $${paramCount}`);
+      queryParams.push(status);
+    }
+
+    if (active !== "") {
+      paramCount++;
+      whereConditions.push(`active = $${paramCount}`);
+      queryParams.push(active === "true");
+    }
+
+    if (search) {
+      paramCount++;
+      whereConditions.push(
+        `(api_name ILIKE $${paramCount} OR endpoint ILIKE $${paramCount} OR target_schema ILIKE $${paramCount} OR target_table ILIKE $${paramCount})`
+      );
+      queryParams.push(`%${search}%`);
+    }
+
+    const whereClause =
+      whereConditions.length > 0
+        ? `WHERE ${whereConditions.join(" AND ")}`
+        : "";
+
+    const countQuery = `SELECT COUNT(*) FROM metadata.api_catalog ${whereClause}`;
+    const countResult = await pool.query(countQuery, queryParams);
+    const total = parseInt(countResult.rows[0].count);
+
+    paramCount++;
+    const dataQuery = `SELECT * FROM metadata.api_catalog ${whereClause}
+      ORDER BY 
+        CASE status
+          WHEN 'SUCCESS' THEN 1
+          WHEN 'IN_PROGRESS' THEN 2
+          WHEN 'ERROR' THEN 3
+          WHEN 'PENDING' THEN 4
+          ELSE 5
+        END,
+        active DESC,
+        api_name
+      LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
+    queryParams.push(limit, offset);
+
+    const result = await pool.query(dataQuery, queryParams);
+
+    const totalPages = Math.ceil(total / limit);
+
+    res.json({
+      data: result.rows,
+      pagination: {
+        total,
+        totalPages,
+        currentPage: parseInt(page),
+        limit: parseInt(limit),
+      },
+    });
+  } catch (err) {
+    console.error("Error getting API catalog:", err);
+    res.status(500).json({
+      error: "Error al obtener catálogo de APIs",
+      details: err.message,
+    });
+  }
+});
+
+app.patch("/api/api-catalog/active", async (req, res) => {
+  const { api_name, active } = req.body;
+  try {
+    const result = await pool.query(
+      `UPDATE metadata.api_catalog 
+       SET active = $1, updated_at = NOW()
+       WHERE api_name = $2
+       RETURNING *`,
+      [active, api_name]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "API not found" });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("Error updating API active status:", err);
+    res.status(500).json({
+      error: "Error al actualizar estado de API",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/api-catalog/metrics", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        COUNT(*) as total_apis,
+        COUNT(*) FILTER (WHERE active = true) as active_apis,
+        COUNT(*) FILTER (WHERE status = 'SUCCESS') as success_apis,
+        COUNT(*) FILTER (WHERE status = 'ERROR') as error_apis,
+        COUNT(*) FILTER (WHERE status = 'IN_PROGRESS') as in_progress_apis,
+        COUNT(*) FILTER (WHERE status = 'PENDING') as pending_apis,
+        COUNT(DISTINCT api_type) as api_types_count,
+        COUNT(DISTINCT target_db_engine) as target_engines_count
+      FROM metadata.api_catalog
+    `);
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("Error getting API catalog metrics:", err);
+    res.status(500).json({
+      error: "Error al obtener métricas del catálogo de APIs",
+      details: err.message,
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });

@@ -79,6 +79,9 @@ add_executable(DataSync
     src/sync/SchemaSync.cpp
     src/sync/StreamingData.cpp
     src/sync/TableProcessorThreadPool.cpp
+    src/sync/APIToDatabaseSync.cpp
+    src/catalog/api_catalog_repository.cpp
+    src/engines/api_engine.cpp
 )
 
 # Configure executable output directory to project root
@@ -100,4 +103,5 @@ target_link_libraries(DataSync
     bson-1.0
     clntsh
     stdc++fs
+    curl
 )

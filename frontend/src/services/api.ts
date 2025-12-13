@@ -1625,3 +1625,67 @@ export const governanceCatalogOracleApi = {
     }
   },
 };
+
+export const apiCatalogApi = {
+  getAPIs: async (params: {
+    page?: number;
+    limit?: number;
+    api_type?: string;
+    target_db_engine?: string;
+    status?: string;
+    active?: string;
+    search?: string;
+  }) => {
+    try {
+      const response = await api.get("/api-catalog", { params });
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching API catalog:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  updateActive: async (apiName: string, active: boolean) => {
+    try {
+      const response = await api.patch("/api-catalog/active", {
+        api_name: apiName,
+        active: active,
+      });
+      return response.data;
+    } catch (error) {
+      console.error("Error updating API active status:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getMetrics: async () => {
+    try {
+      const response = await api.get("/api-catalog/metrics");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching API catalog metrics:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+};

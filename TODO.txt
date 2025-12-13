@@ -11,6 +11,18 @@
    [IMPORTANTE: Facilita monetización y distribución]
 
 
+
+Alta prioridad (si hay casos de uso)
+PostgreSQL como fuente — Ya existe el engine; falta la sincronización desde PostgreSQL hacia PostgreSQL (útil para replicación entre instancias).
+Snowflake — Data warehouse en la nube (muy usado en analytics).
+BigQuery — Data warehouse de Google Cloud.
+
+Media prioridad
+Redshift — Data warehouse de AWS.
+DB2 — IBM (común en entornos legacy enterprise).
+
+
+y el de mssql de azure
 ┌─────────────────────────────────────────────────────────────────┐
 │ PRIORITY 5: HIGH PRIORITY + HIGH COMPLEXITY                     │
 └─────────────────────────────────────────────────────────────────┘
@@ -98,3 +110,6 @@ Para cada problema encontrado, indica:
 - Impacto potencial
 
 Sé exhaustivo y detallado.
+
+
+hay que meter api catalog a la ui 

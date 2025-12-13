@@ -118,6 +118,9 @@ const Layout = () => {
         <NavItem to="/governance-catalog-oracle">
           ■ Gov Catalog Oracle
         </NavItem>
+        <NavItem to="/api-catalog">
+          ■ API Catalog
+        </NavItem>
         <NavItem to="/monitor">
           ■ Monitor
         </NavItem>

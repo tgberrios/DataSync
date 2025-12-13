@@ -21,6 +21,7 @@ import GovernanceCatalogMariaDB from './components/GovernanceCatalogMariaDB'
 import GovernanceCatalogMSSQL from './components/GovernanceCatalogMSSQL'
 import GovernanceCatalogMongoDB from './components/GovernanceCatalogMongoDB'
 import GovernanceCatalogOracle from './components/GovernanceCatalogOracle'
+import APICatalog from './components/APICatalog'
 
 function App() {
   return (
@@ -39,6 +40,7 @@ function App() {
           <Route path="governance-catalog-mssql" element={<GovernanceCatalogMSSQL />} />
           <Route path="governance-catalog-mongodb" element={<GovernanceCatalogMongoDB />} />
           <Route path="governance-catalog-oracle" element={<GovernanceCatalogOracle />} />
+          <Route path="api-catalog" element={<APICatalog />} />
           <Route path="monitor" element={<Monitor />} />
           <Route path="query-performance" element={<QueryPerformance />} />
           <Route path="maintenance" element={<Maintenance />} />
