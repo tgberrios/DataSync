@@ -21,17 +21,6 @@
     [NOTA: Licencia propietaria ya implementada ✓]
 
 
-poner bonitos con las tres fases los include porque esos no los emos tramitado 
-
-un catalog de tablas con sus columnas como full metadata de las tablas
-
-de maintance metrics talvez todos esos threeshold podrian venir de config
-
-tiene que haber algo mas facil para capturar cual es la que se esta procesando actualmente y el queque
-
-
-
-
    7.5. Backup Control Dashboard (metadata.backup_control_log)
         [DASHBOARD - Visualización de operaciones de backup]
         [TABLA: metadata.backup_control_log]
@@ -122,7 +111,3 @@ Para cada problema encontrado, indica:
 - Impacto potencial
 
 Sé exhaustivo y detallado.
-
-
-
-no puedo matar el proceso!

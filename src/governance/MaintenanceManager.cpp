@@ -55,6 +55,7 @@ MaintenanceManager::MaintenanceManager(
       }
     }
   })");
+  loadThresholdsFromDatabase();
 }
 
 MaintenanceManager::~MaintenanceManager() {}
@@ -1272,6 +1273,57 @@ MaintenanceManager::calculateNextMaintenanceDate(
   }
 
   return now + std::chrono::hours(24);
+}
+
+void MaintenanceManager::loadThresholdsFromDatabase() {
+  try {
+    pqxx::connection conn(metadataConnectionString_);
+    if (!conn.is_open()) {
+      Logger::warning(LogCategory::GOVERNANCE, "MaintenanceManager",
+                      "Failed to connect to metadata database for loading "
+                      "thresholds, using defaults");
+      return;
+    }
+
+    pqxx::work txn(conn);
+    auto results = txn.exec("SELECT value FROM metadata.config WHERE key = "
+                            "'maintenance_thresholds'");
+    txn.commit();
+
+    if (!results.empty() && !results[0][0].is_null()) {
+      std::string valueStr = results[0][0].as<std::string>();
+      if (!valueStr.empty()) {
+        try {
+          json loadedThresholds = json::parse(valueStr);
+          if (!loadedThresholds.empty() && loadedThresholds.is_object()) {
+            defaultThresholds_ = loadedThresholds;
+            Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
+                         "Maintenance thresholds loaded from database");
+            return;
+          }
+        } catch (const json::parse_error &e) {
+          Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
+                        "Failed to parse maintenance_thresholds JSON: " +
+                            std::string(e.what()) + ", using defaults");
+        }
+      }
+    }
+
+    Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
+                 "No maintenance_thresholds found in database, using defaults");
+  } catch (const pqxx::sql_error &e) {
+    Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
+                  "SQL error loading thresholds: " + std::string(e.what()) +
+                      ", using defaults");
+  } catch (const pqxx::broken_connection &e) {
+    Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
+                  "Connection error loading thresholds: " +
+                      std::string(e.what()) + ", using defaults");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
+                  "Error loading thresholds from database: " +
+                      std::string(e.what()) + ", using defaults");
+  }
 }
 
 json MaintenanceManager::getThresholds(const std::string &dbEngine,

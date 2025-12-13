@@ -1665,8 +1665,11 @@ public:
     Logger::info(LogCategory::TRANSFER,
                  "Starting parallel processing for table " + tableKey);
 
+    std::string originalStatus = table.status;
+
     try {
       setTableProcessingState(tableKey, true);
+      updateStatus(pgConn, table.schema_name, table.table_name, "IN_PROGRESS");
 
       MYSQL *mariadbConn = getMariaDBConnection(table.connection_string);
       if (!mariadbConn) {
@@ -2020,6 +2023,7 @@ public:
       Logger::error(LogCategory::TRANSFER, "processTableParallel",
                     "Error in parallel table processing: " +
                         std::string(e.what()));
+      updateStatus(pgConn, table.schema_name, table.table_name, "ERROR");
       removeTableProcessingState(tableKey);
     }
   }
