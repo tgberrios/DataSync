@@ -20,6 +20,7 @@ include_directories(
     /opt/microsoft/msodbcsql/include
     /usr/include/libmongoc-1.0
     /usr/include/libbson-1.0
+    /usr/include
 )
 
 link_directories(
@@ -29,6 +30,7 @@ link_directories(
     /usr/pgsql-13/lib
     /usr/lib64/mysql
     /opt/microsoft/msodbcsql/lib64
+    /usr/lib
 )
 
 add_executable(DataSync
@@ -40,6 +42,7 @@ add_executable(DataSync
     src/governance/DataGovernance.cpp
     src/governance/DataGovernanceMSSQL.cpp
     src/governance/DataGovernanceMariaDB.cpp
+    src/governance/DataGovernanceMongoDB.cpp
     src/governance/DataQuality.cpp
     src/governance/data_classifier.cpp
     src/governance/QueryStoreCollector.cpp
@@ -47,6 +50,7 @@ add_executable(DataSync
     src/governance/MaintenanceManager.cpp
     src/governance/LineageExtractorMSSQL.cpp
     src/governance/LineageExtractorMariaDB.cpp
+    src/governance/LineageExtractorMongoDB.cpp
     src/governance/ColumnCatalogCollector.cpp
     src/metrics/MetricsCollector.cpp
     src/utils/connection_utils.cpp
@@ -56,6 +60,7 @@ add_executable(DataSync
     src/engines/mssql_engine.cpp
     src/engines/postgres_engine.cpp
     src/engines/mongodb_engine.cpp
+    src/engines/oracle_engine.cpp
     src/catalog/metadata_repository.cpp
     src/catalog/catalog_cleaner.cpp
     src/catalog/catalog_manager.cpp
@@ -64,6 +69,7 @@ add_executable(DataSync
     src/sync/MariaDBToPostgres.cpp
     src/sync/MSSQLToPostgres.cpp
     src/sync/MongoDBToPostgres.cpp
+    src/sync/OracleToPostgres.cpp
     src/sync/StreamingData.cpp
     src/sync/TableProcessorThreadPool.cpp
 )
@@ -85,5 +91,6 @@ target_link_libraries(DataSync
     odbc
     mongoc-1.0
     bson-1.0
+    clntsh
     stdc++fs
 )

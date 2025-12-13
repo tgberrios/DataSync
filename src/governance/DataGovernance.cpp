@@ -5,8 +5,10 @@
 #include "governance/ColumnCatalogCollector.h"
 #include "governance/DataGovernanceMSSQL.h"
 #include "governance/DataGovernanceMariaDB.h"
+#include "governance/DataGovernanceMongoDB.h"
 #include "governance/LineageExtractorMSSQL.h"
 #include "governance/LineageExtractorMariaDB.h"
+#include "governance/LineageExtractorMongoDB.h"
 #include "utils/string_utils.h"
 #include "utils/time_utils.h"
 #include <algorithm>
@@ -195,6 +197,39 @@ void DataGovernance::runDiscovery() {
           } catch (const std::exception &e) {
             Logger::error(LogCategory::GOVERNANCE, "runDiscovery",
                           "Error extracting MariaDB lineage: " +
+                              std::string(e.what()));
+          }
+        }
+      }
+
+      std::vector<std::string> mongodbConnections =
+          repo.getConnectionStrings("MongoDB");
+      for (const auto &connStr : mongodbConnections) {
+        if (!connStr.empty()) {
+          try {
+            Logger::info(LogCategory::GOVERNANCE, "runDiscovery",
+                         "Collecting MongoDB governance data for connection");
+            DataGovernanceMongoDB mongodbGov(connStr);
+            mongodbGov.collectGovernanceData();
+            mongodbGov.storeGovernanceData();
+            mongodbGov.generateReport();
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::GOVERNANCE, "runDiscovery",
+                          "Error collecting MongoDB governance data: " +
+                              std::string(e.what()));
+          }
+
+          try {
+            Logger::info(LogCategory::GOVERNANCE, "runDiscovery",
+                         "Extracting MongoDB lineage for connection");
+            LineageExtractorMongoDB lineageExtractor(connStr);
+            lineageExtractor.extractLineage();
+            lineageExtractor.storeLineage();
+            Logger::info(LogCategory::GOVERNANCE, "runDiscovery",
+                         "MongoDB lineage extraction completed");
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::GOVERNANCE, "runDiscovery",
+                          "Error extracting MongoDB lineage: " +
                               std::string(e.what()));
           }
         }

@@ -114,9 +114,9 @@ void MetadataRepository::insertOrUpdateTable(
           "(schema_name, table_name, cluster_name, db_engine, "
           "connection_string, last_sync_time, last_sync_column, "
           "status, active, pk_columns, pk_strategy, "
-          "has_pk) "
+          "has_pk, table_size) "
           "VALUES ($1, $2, '', $3, $4, NULL, $5, 'PENDING', false, $6, $7, "
-          "$8)",
+          "$8, $9)",
           tableInfo.schema, tableInfo.table, dbEngine,
           tableInfo.connectionString, timeColumn, pkColumnsJSON, pkStrategy,
           hasPK, tableSize);

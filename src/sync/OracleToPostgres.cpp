@@ -1,0 +1,653 @@
+#include "sync/OracleToPostgres.h"
+#include "core/database_config.h"
+#include "core/logger.h"
+#include "engines/database_engine.h"
+#include <algorithm>
+#include <cctype>
+#include <pqxx/pqxx>
+#include <sstream>
+
+std::unordered_map<std::string, std::string> OracleToPostgres::dataTypeMap = {
+    {"NUMBER", "NUMERIC"},
+    {"INTEGER", "INTEGER"},
+    {"BINARY_INTEGER", "INTEGER"},
+    {"BIGINT", "BIGINT"},
+    {"SMALLINT", "SMALLINT"},
+    {"FLOAT", "DOUBLE PRECISION"},
+    {"BINARY_FLOAT", "REAL"},
+    {"BINARY_DOUBLE", "DOUBLE PRECISION"},
+    {"VARCHAR2", "VARCHAR"},
+    {"VARCHAR", "VARCHAR"},
+    {"CHAR", "CHAR"},
+    {"NCHAR", "CHAR"},
+    {"NVARCHAR2", "VARCHAR"},
+    {"CLOB", "TEXT"},
+    {"NCLOB", "TEXT"},
+    {"LONG", "TEXT"},
+    {"BLOB", "BYTEA"},
+    {"RAW", "BYTEA"},
+    {"LONG RAW", "BYTEA"},
+    {"BFILE", "BYTEA"},
+    {"DATE", "TIMESTAMP"},
+    {"TIMESTAMP", "TIMESTAMP"},
+    {"TIMESTAMP WITH TIME ZONE", "TIMESTAMP WITH TIME ZONE"},
+    {"TIMESTAMP WITH LOCAL TIME ZONE", "TIMESTAMP"},
+    {"INTERVAL YEAR TO MONTH", "INTERVAL"},
+    {"INTERVAL DAY TO SECOND", "INTERVAL"},
+    {"XMLTYPE", "XML"},
+    {"JSON", "JSONB"}};
+
+std::string
+OracleToPostgres::cleanValueForPostgres(const std::string &value,
+                                        const std::string &columnType) {
+  std::string cleanValue = value;
+  std::string upperType = columnType;
+  std::transform(upperType.begin(), upperType.end(), upperType.begin(),
+                 ::toupper);
+
+  bool isNull =
+      (cleanValue.empty() || cleanValue == "NULL" || cleanValue == "null");
+
+  if (upperType.find("TIMESTAMP") != std::string::npos ||
+      upperType.find("DATE") != std::string::npos) {
+    if (cleanValue.find("0000-") != std::string::npos ||
+        cleanValue.find("1900-01-01") != std::string::npos ||
+        cleanValue.find("1970-01-01") != std::string::npos) {
+      isNull = true;
+    }
+  }
+
+  if (isNull) {
+    if (upperType.find("INTEGER") != std::string::npos ||
+        upperType.find("NUMERIC") != std::string::npos ||
+        upperType.find("REAL") != std::string::npos ||
+        upperType.find("DOUBLE") != std::string::npos) {
+      return "0";
+    } else if (upperType.find("TIMESTAMP") != std::string::npos ||
+               upperType.find("DATE") != std::string::npos) {
+      return "1970-01-01 00:00:00";
+    } else if (upperType.find("BOOLEAN") != std::string::npos) {
+      return "false";
+    } else {
+      return "";
+    }
+  }
+
+  size_t pos = 0;
+  while ((pos = cleanValue.find("'", pos)) != std::string::npos) {
+    cleanValue.replace(pos, 1, "''");
+    pos += 2;
+  }
+
+  return cleanValue;
+}
+
+std::unique_ptr<OCIConnection>
+OracleToPostgres::getOracleConnection(const std::string &connectionString) {
+  if (connectionString.empty()) {
+    Logger::error(LogCategory::TRANSFER, "getOracleConnection",
+                  "Empty connection string provided");
+    return nullptr;
+  }
+
+  auto conn = std::make_unique<OCIConnection>(connectionString);
+  if (!conn->isValid()) {
+    Logger::error(LogCategory::TRANSFER, "getOracleConnection",
+                  "Failed to create Oracle connection");
+    return nullptr;
+  }
+
+  return conn;
+}
+
+std::vector<std::vector<std::string>>
+OracleToPostgres::executeQueryOracle(OCIConnection *conn,
+                                     const std::string &query) {
+  std::vector<std::vector<std::string>> results;
+  if (!conn || !conn->isValid()) {
+    Logger::error(LogCategory::TRANSFER, "executeQueryOracle",
+                  "Invalid Oracle connection");
+    return results;
+  }
+
+  OCIStmt *stmt = nullptr;
+  OCIError *err = conn->getErr();
+  OCISvcCtx *svc = conn->getSvc();
+  OCIEnv *env = conn->getEnv();
+  sword status =
+      OCIHandleAlloc((dvoid *)env, (dvoid **)&stmt, OCI_HTYPE_STMT, 0, nullptr);
+  if (status != OCI_SUCCESS) {
+    Logger::error(LogCategory::TRANSFER, "executeQueryOracle",
+                  "OCIHandleAlloc(STMT) failed");
+    return results;
+  }
+
+  status = OCIStmtPrepare(stmt, err, (OraText *)query.c_str(), query.length(),
+                          OCI_NTV_SYNTAX, OCI_DEFAULT);
+  if (status != OCI_SUCCESS) {
+    Logger::error(LogCategory::TRANSFER, "executeQueryOracle",
+                  "OCIStmtPrepare failed for query: " + query);
+    OCIHandleFree(stmt, OCI_HTYPE_STMT);
+    return results;
+  }
+
+  status = OCIStmtExecute(svc, stmt, err, 0, 0, nullptr, nullptr, OCI_DEFAULT);
+  if (status != OCI_SUCCESS && status != OCI_SUCCESS_WITH_INFO) {
+    Logger::error(LogCategory::TRANSFER, "executeQueryOracle",
+                  "OCIStmtExecute failed for query: " + query);
+    OCIHandleFree(stmt, OCI_HTYPE_STMT);
+    return results;
+  }
+
+  ub4 numCols = 0;
+  OCIAttrGet(stmt, OCI_HTYPE_STMT, &numCols, nullptr, OCI_ATTR_PARAM_COUNT,
+             err);
+
+  std::vector<OCIDefine *> defines(numCols);
+  std::vector<std::vector<char>> buffers(numCols);
+  std::vector<ub2> lengths(numCols);
+  std::vector<sb2> inds(numCols);
+
+  for (ub4 i = 0; i < numCols; ++i) {
+    buffers[i].resize(4000);
+    OCIDefineByPos(stmt, &defines[i], err, i + 1, buffers[i].data(), 4000,
+                   SQLT_STR, &inds[i], &lengths[i], nullptr, OCI_DEFAULT);
+  }
+
+  while (OCIStmtFetch(stmt, err, 1, OCI_FETCH_NEXT, OCI_DEFAULT) ==
+         OCI_SUCCESS) {
+    std::vector<std::string> row;
+    for (ub4 i = 0; i < numCols; ++i) {
+      if (inds[i] == -1) {
+        row.push_back("NULL");
+      } else {
+        row.push_back(std::string(buffers[i].data(), lengths[i]));
+      }
+    }
+    results.push_back(row);
+  }
+
+  OCIHandleFree(stmt, OCI_HTYPE_STMT);
+  return results;
+}
+
+std::vector<DatabaseToPostgresSync::TableInfo>
+OracleToPostgres::getActiveTables(pqxx::connection &pgConn) {
+  std::vector<TableInfo> data;
+
+  try {
+    pqxx::work txn(pgConn);
+    auto results = txn.exec(
+        "SELECT schema_name, table_name, cluster_name, db_engine, "
+        "connection_string, last_sync_time, last_sync_column, "
+        "status, last_processed_pk, pk_strategy, "
+        "pk_columns, has_pk "
+        "FROM metadata.catalog "
+        "WHERE active=true AND db_engine='Oracle' AND status != 'NO_DATA' "
+        "ORDER BY schema_name, table_name;");
+    txn.commit();
+
+    for (const auto &row : results) {
+      if (row.size() < 12)
+        continue;
+
+      TableInfo t;
+      t.schema_name = row[0].is_null() ? "" : row[0].as<std::string>();
+      t.table_name = row[1].is_null() ? "" : row[1].as<std::string>();
+      t.cluster_name = row[2].is_null() ? "" : row[2].as<std::string>();
+      t.db_engine = row[3].is_null() ? "" : row[3].as<std::string>();
+      t.connection_string = row[4].is_null() ? "" : row[4].as<std::string>();
+      t.last_sync_time = row[5].is_null() ? "" : row[5].as<std::string>();
+      t.last_sync_column = row[6].is_null() ? "" : row[6].as<std::string>();
+      t.status = row[7].is_null() ? "" : row[7].as<std::string>();
+      t.last_processed_pk = row[8].is_null() ? "" : row[8].as<std::string>();
+      t.pk_strategy = row[9].is_null() ? "" : row[9].as<std::string>();
+      t.pk_columns = row[10].is_null() ? "" : row[10].as<std::string>();
+      t.has_pk = row[11].is_null() ? false : row[11].as<bool>();
+      data.push_back(t);
+    }
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "getActiveTables",
+                  "ERROR getting active tables: " + std::string(e.what()));
+  }
+
+  return data;
+}
+
+void OracleToPostgres::updateLastOffset(pqxx::connection &pgConn,
+                                        const std::string &schema_name,
+                                        const std::string &table_name,
+                                        long long offset) {
+  try {
+    std::lock_guard<std::mutex> lock(metadataUpdateMutex);
+
+    pqxx::work txn(pgConn);
+    std::string updateQuery = "UPDATE metadata.catalog SET sync_metadata = "
+                              "COALESCE(sync_metadata, '{}'::jsonb) || "
+                              "jsonb_build_object('last_offset', " +
+                              std::to_string(offset) +
+                              ") "
+                              "WHERE schema_name='" +
+                              escapeSQL(schema_name) + "' AND table_name='" +
+                              escapeSQL(table_name) + "'";
+
+    txn.exec(updateQuery);
+    txn.commit();
+
+    Logger::info(LogCategory::TRANSFER, "updateLastOffset",
+                 "Updated last_offset to " + std::to_string(offset) + " for " +
+                     schema_name + "." + table_name);
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "updateLastOffset",
+                  "Error updating last_offset: " + std::string(e.what()));
+  }
+}
+
+long long OracleToPostgres::getLastOffset(pqxx::connection &pgConn,
+                                          const std::string &schema_name,
+                                          const std::string &table_name) {
+  try {
+    pqxx::work txn(pgConn);
+    std::string query =
+        "SELECT sync_metadata->>'last_offset' FROM metadata.catalog "
+        "WHERE schema_name='" +
+        escapeSQL(schema_name) + "' AND table_name='" + escapeSQL(table_name) +
+        "'";
+
+    auto result = txn.exec(query);
+    txn.commit();
+
+    if (!result.empty() && !result[0][0].is_null()) {
+      std::string offsetStr = result[0][0].as<std::string>();
+      if (!offsetStr.empty()) {
+        return std::stoll(offsetStr);
+      }
+    }
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "getLastOffset",
+                  "Error getting last_offset: " + std::string(e.what()));
+  }
+  return 0;
+}
+
+void OracleToPostgres::updateStatus(pqxx::connection &pgConn,
+                                    const std::string &schema_name,
+                                    const std::string &table_name,
+                                    const std::string &status,
+                                    size_t rowCount) {
+  try {
+    pqxx::work txn(pgConn);
+    std::string updateQuery = "UPDATE metadata.catalog SET status='" + status +
+                              "' WHERE schema_name='" + escapeSQL(schema_name) +
+                              "' AND table_name='" + escapeSQL(table_name) +
+                              "'";
+    txn.exec(updateQuery);
+    txn.commit();
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "updateStatus",
+                  "Error updating status: " + std::string(e.what()));
+  }
+}
+
+std::vector<std::string>
+OracleToPostgres::getPrimaryKeyColumns(OCIConnection *conn,
+                                       const std::string &schema_name,
+                                       const std::string &table_name) {
+  std::vector<std::string> pkColumns;
+
+  std::string upperSchema = schema_name;
+  std::transform(upperSchema.begin(), upperSchema.end(), upperSchema.begin(),
+                 ::toupper);
+  std::string upperTable = table_name;
+  std::transform(upperTable.begin(), upperTable.end(), upperTable.begin(),
+                 ::toupper);
+
+  std::string query =
+      "SELECT column_name FROM all_cons_columns WHERE constraint_name = ("
+      "SELECT constraint_name FROM all_constraints "
+      "WHERE UPPER(owner) = '" +
+      escapeSQL(upperSchema) + "' AND UPPER(table_name) = '" +
+      escapeSQL(upperTable) + "' AND constraint_type = 'P') ORDER BY position";
+
+  auto results = executeQueryOracle(conn, query);
+  for (const auto &row : results) {
+    if (!row.empty()) {
+      std::string colName = row[0];
+      std::transform(colName.begin(), colName.end(), colName.begin(),
+                     ::tolower);
+      pkColumns.push_back(colName);
+    }
+  }
+
+  return pkColumns;
+}
+
+void OracleToPostgres::setupTableTargetOracleToPostgres() {
+  Logger::info(LogCategory::TRANSFER, "Starting Oracle table target setup");
+
+  try {
+    pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
+    if (!pgConn.is_open()) {
+      Logger::error(LogCategory::TRANSFER, "setupTableTargetOracleToPostgres",
+                    "CRITICAL ERROR: Cannot establish PostgreSQL connection");
+      return;
+    }
+
+    auto tables = getActiveTables(pgConn);
+    if (tables.empty()) {
+      Logger::info(LogCategory::TRANSFER,
+                   "No active Oracle tables found to setup");
+      return;
+    }
+
+    for (const auto &table : tables) {
+      if (table.db_engine != "Oracle") {
+        continue;
+      }
+
+      auto oracleConn = getOracleConnection(table.connection_string);
+      if (!oracleConn || !oracleConn->isValid()) {
+        Logger::error(LogCategory::TRANSFER, "setupTableTargetOracleToPostgres",
+                      "Failed to get Oracle connection for table " +
+                          table.schema_name + "." + table.table_name);
+        continue;
+      }
+
+      std::string upperSchema = table.schema_name;
+      std::transform(upperSchema.begin(), upperSchema.end(),
+                     upperSchema.begin(), ::toupper);
+      std::string upperTable = table.table_name;
+      std::transform(upperTable.begin(), upperTable.end(), upperTable.begin(),
+                     ::toupper);
+
+      std::string query =
+          "SELECT column_name, data_type, data_length, data_precision, "
+          "data_scale, nullable, data_default "
+          "FROM all_tab_columns WHERE UPPER(owner) = '" +
+          escapeSQL(upperSchema) + "' AND UPPER(table_name) = '" +
+          escapeSQL(upperTable) + "' ORDER BY column_id";
+
+      auto columns = executeQueryOracle(oracleConn.get(), query);
+      if (columns.empty()) {
+        Logger::error(LogCategory::TRANSFER, "setupTableTargetOracleToPostgres",
+                      "No columns found for table " + table.schema_name + "." +
+                          table.table_name);
+        continue;
+      }
+
+      std::string lowerSchema = table.schema_name;
+      std::transform(lowerSchema.begin(), lowerSchema.end(),
+                     lowerSchema.begin(), ::tolower);
+      std::string lowerTable = table.table_name;
+      std::transform(lowerTable.begin(), lowerTable.end(), lowerTable.begin(),
+                     ::tolower);
+
+      {
+        pqxx::work txn(pgConn);
+        txn.exec("CREATE SCHEMA IF NOT EXISTS \"" + lowerSchema + "\";");
+        txn.commit();
+      }
+
+      std::vector<std::string> primaryKeys = getPrimaryKeyColumns(
+          oracleConn.get(), table.schema_name, table.table_name);
+
+      std::string createQuery = "CREATE TABLE IF NOT EXISTS \"" + lowerSchema +
+                                "\".\"" + lowerTable + "\" (";
+
+      for (size_t i = 0; i < columns.size(); ++i) {
+        if (columns[i].size() < 6)
+          continue;
+
+        std::string colName = columns[i][0];
+        std::transform(colName.begin(), colName.end(), colName.begin(),
+                       ::tolower);
+        std::string dataType = columns[i][1];
+        std::string dataLength = columns[i].size() > 2 ? columns[i][2] : "";
+        std::string dataPrecision = columns[i].size() > 3 ? columns[i][3] : "";
+        std::string dataScale = columns[i].size() > 4 ? columns[i][4] : "";
+
+        std::string pgType = "TEXT";
+        if (dataTypeMap.count(dataType)) {
+          pgType = dataTypeMap[dataType];
+          if (pgType == "VARCHAR" && !dataLength.empty() &&
+              dataLength != "NULL") {
+            try {
+              int len = std::stoi(dataLength);
+              if (len > 0) {
+                pgType = "VARCHAR(" + std::to_string(len) + ")";
+              }
+            } catch (...) {
+            }
+          } else if (pgType == "NUMERIC" && !dataPrecision.empty() &&
+                     dataPrecision != "NULL") {
+            try {
+              int prec = std::stoi(dataPrecision);
+              int scale = 0;
+              if (!dataScale.empty() && dataScale != "NULL") {
+                scale = std::stoi(dataScale);
+              }
+              pgType = "NUMERIC(" + std::to_string(prec) + "," +
+                       std::to_string(scale) + ")";
+            } catch (...) {
+            }
+          }
+        }
+
+        if (i > 0)
+          createQuery += ", ";
+        createQuery += "\"" + colName + "\" " + pgType;
+      }
+
+      if (!primaryKeys.empty()) {
+        createQuery += ", PRIMARY KEY (";
+        for (size_t i = 0; i < primaryKeys.size(); ++i) {
+          if (i > 0)
+            createQuery += ", ";
+          createQuery += "\"" + primaryKeys[i] + "\"";
+        }
+        createQuery += ")";
+      }
+      createQuery += ");";
+
+      {
+        pqxx::work txn(pgConn);
+        txn.exec(createQuery);
+        txn.commit();
+      }
+
+      Logger::info(LogCategory::TRANSFER, "setupTableTargetOracleToPostgres",
+                   "Created table " + lowerSchema + "." + lowerTable);
+    }
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "setupTableTargetOracleToPostgres",
+                  "Error in setupTableTargetOracleToPostgres: " +
+                      std::string(e.what()));
+  }
+}
+
+void OracleToPostgres::transferDataOracleToPostgres() {
+  Logger::info(LogCategory::TRANSFER,
+               "Starting Oracle to PostgreSQL data transfer");
+
+  try {
+    pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
+    if (!pgConn.is_open()) {
+      Logger::error(LogCategory::TRANSFER, "transferDataOracleToPostgres",
+                    "CRITICAL ERROR: Cannot establish PostgreSQL connection");
+      return;
+    }
+
+    auto tables = getActiveTables(pgConn);
+    if (tables.empty()) {
+      Logger::info(LogCategory::TRANSFER,
+                   "No active Oracle tables found for data transfer");
+      return;
+    }
+
+    for (const auto &table : tables) {
+      if (table.db_engine != "Oracle") {
+        continue;
+      }
+
+      auto oracleConn = getOracleConnection(table.connection_string);
+      if (!oracleConn || !oracleConn->isValid()) {
+        Logger::error(LogCategory::TRANSFER, "transferDataOracleToPostgres",
+                      "Failed to get Oracle connection for table " +
+                          table.schema_name + "." + table.table_name);
+        continue;
+      }
+
+      std::string upperSchema = table.schema_name;
+      std::transform(upperSchema.begin(), upperSchema.end(),
+                     upperSchema.begin(), ::toupper);
+      std::string upperTable = table.table_name;
+      std::transform(upperTable.begin(), upperTable.end(), upperTable.begin(),
+                     ::toupper);
+
+      std::string lowerSchema = table.schema_name;
+      std::transform(lowerSchema.begin(), lowerSchema.end(),
+                     lowerSchema.begin(), ::tolower);
+      std::string lowerTable = table.table_name;
+      std::transform(lowerTable.begin(), lowerTable.end(), lowerTable.begin(),
+                     ::tolower);
+
+      std::vector<std::string> pkColumns =
+          getPKColumnsFromCatalog(pgConn, table.schema_name, table.table_name);
+      std::string pkStrategy =
+          getPKStrategyFromCatalog(pgConn, table.schema_name, table.table_name);
+      std::string lastProcessedPK = getLastProcessedPKFromCatalog(
+          pgConn, table.schema_name, table.table_name);
+      long long lastOffset =
+          getLastOffset(pgConn, table.schema_name, table.table_name);
+
+      std::string selectQuery =
+          "SELECT * FROM " + upperSchema + "." + upperTable;
+
+      if (pkStrategy == "PK" && !pkColumns.empty() &&
+          !lastProcessedPK.empty()) {
+        std::vector<std::string> lastPKValues = parseLastPK(lastProcessedPK);
+        if (!lastPKValues.empty() && pkColumns.size() == 1) {
+          std::string upperPkCol = pkColumns[0];
+          std::transform(upperPkCol.begin(), upperPkCol.end(),
+                         upperPkCol.begin(), ::toupper);
+          selectQuery += " WHERE " + upperPkCol + " > '" +
+                         escapeSQL(lastPKValues[0]) + "'";
+        }
+        std::string upperPkCol = pkColumns[0];
+        std::transform(upperPkCol.begin(), upperPkCol.end(), upperPkCol.begin(),
+                       ::toupper);
+        selectQuery += " ORDER BY " + upperPkCol;
+        selectQuery += " OFFSET 0 ROWS FETCH NEXT " +
+                       std::to_string(SyncConfig::getChunkSize()) +
+                       " ROWS ONLY";
+      } else if (pkStrategy == "OFFSET") {
+        selectQuery += " ORDER BY ROWID";
+        selectQuery +=
+            " OFFSET " + std::to_string(lastOffset) + " ROWS FETCH NEXT " +
+            std::to_string(SyncConfig::getChunkSize()) + " ROWS ONLY";
+      } else {
+        selectQuery += " ORDER BY ROWID";
+        selectQuery += " OFFSET 0 ROWS FETCH NEXT " +
+                       std::to_string(SyncConfig::getChunkSize()) +
+                       " ROWS ONLY";
+      }
+
+      auto results = executeQueryOracle(oracleConn.get(), selectQuery);
+      if (results.empty()) {
+        updateStatus(pgConn, table.schema_name, table.table_name,
+                     "LISTENING_CHANGES");
+        continue;
+      }
+
+      std::string query =
+          "SELECT column_name FROM all_tab_columns WHERE owner = '" +
+          escapeSQL(upperSchema) + "' AND table_name = '" +
+          escapeSQL(upperTable) + "' ORDER BY column_id";
+      auto columnResults = executeQueryOracle(oracleConn.get(), query);
+
+      std::vector<std::string> columnNames;
+      for (const auto &row : columnResults) {
+        if (!row.empty()) {
+          std::string colName = row[0];
+          std::transform(colName.begin(), colName.end(), colName.begin(),
+                         ::tolower);
+          columnNames.push_back(colName);
+        }
+      }
+
+      if (columnNames.empty()) {
+        Logger::error(LogCategory::TRANSFER, "transferDataOracleToPostgres",
+                      "No column names found for table " + table.schema_name +
+                          "." + table.table_name);
+        continue;
+      }
+
+      std::ostringstream insertQuery;
+      insertQuery << "INSERT INTO \"" << lowerSchema << "\".\"" << lowerTable
+                  << "\" (";
+
+      for (size_t i = 0; i < columnNames.size(); ++i) {
+        if (i > 0)
+          insertQuery << ", ";
+        insertQuery << "\"" << columnNames[i] << "\"";
+      }
+      insertQuery << ") VALUES ";
+
+      for (size_t i = 0; i < results.size(); ++i) {
+        if (i > 0)
+          insertQuery << ", ";
+        insertQuery << "(";
+        for (size_t j = 0; j < columnNames.size() && j < results[i].size();
+             ++j) {
+          if (j > 0)
+            insertQuery << ", ";
+          if (results[i][j] == "NULL" || results[i][j].empty()) {
+            insertQuery << "NULL";
+          } else {
+            insertQuery << "'" << cleanValueForPostgres(results[i][j], "TEXT")
+                        << "'";
+          }
+        }
+        insertQuery << ")";
+      }
+
+      try {
+        pqxx::work txn(pgConn);
+        txn.exec(insertQuery.str());
+        txn.commit();
+
+        if (pkStrategy == "PK" && !pkColumns.empty() && !results.empty()) {
+          std::string lastPK =
+              getLastPKFromResults(results, pkColumns, columnNames);
+          if (!lastPK.empty()) {
+            updateLastProcessedPK(pgConn, table.schema_name, table.table_name,
+                                  lastPK);
+          }
+        } else if (pkStrategy == "OFFSET") {
+          long long newOffset = lastOffset + results.size();
+          updateLastOffset(pgConn, table.schema_name, table.table_name,
+                           newOffset);
+        }
+
+        updateStatus(pgConn, table.schema_name, table.table_name,
+                     "LISTENING_CHANGES", results.size());
+      } catch (const std::exception &e) {
+        Logger::error(LogCategory::TRANSFER, "transferDataOracleToPostgres",
+                      "Error inserting data: " + std::string(e.what()));
+      }
+    }
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "transferDataOracleToPostgres",
+                  "Error in transferDataOracleToPostgres: " +
+                      std::string(e.what()));
+  }
+}
+
+void OracleToPostgres::transferDataOracleToPostgresParallel() {
+  transferDataOracleToPostgres();
+}
+
+void OracleToPostgres::processTableParallel(const TableInfo &table,
+                                            pqxx::connection &pgConn) {
+  transferDataOracleToPostgres();
+}
