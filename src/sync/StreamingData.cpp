@@ -2,6 +2,7 @@
 #include "core/database_config.h"
 #include "governance/QueryActivityLogger.h"
 #include "governance/QueryStoreCollector.h"
+#include <mutex>
 
 // Destructor automatically shuts down the system, ensuring all threads are
 // properly joined and resources are cleaned up.
@@ -55,6 +56,9 @@ void StreamingData::run() {
                "All threads launched successfully - System running");
 
   Logger::info(LogCategory::MONITORING, "Waiting for all threads to complete");
+  std::vector<std::exception_ptr> threadExceptions;
+  std::mutex exceptionMutex;
+
   for (auto &thread : threads) {
     if (thread.joinable()) {
       try {
@@ -63,9 +67,23 @@ void StreamingData::run() {
         Logger::error(LogCategory::MONITORING, "run",
                       "Error joining thread in run(): " +
                           std::string(e.what()));
+        std::lock_guard<std::mutex> lock(exceptionMutex);
+        threadExceptions.push_back(std::current_exception());
+      } catch (...) {
+        Logger::error(LogCategory::MONITORING, "run",
+                      "Unknown error joining thread in run()");
+        std::lock_guard<std::mutex> lock(exceptionMutex);
+        threadExceptions.push_back(std::current_exception());
       }
     }
   }
+
+  if (!threadExceptions.empty()) {
+    Logger::warning(LogCategory::MONITORING, "run",
+                    std::to_string(threadExceptions.size()) +
+                        " threads had exceptions during join");
+  }
+
   Logger::info(LogCategory::MONITORING, "All threads completed");
 }
 
@@ -79,6 +97,9 @@ void StreamingData::shutdown() {
   running = false;
 
   Logger::info(LogCategory::MONITORING, "Waiting for all threads to finish");
+  std::vector<std::exception_ptr> threadExceptions;
+  std::mutex exceptionMutex;
+
   for (auto &thread : threads) {
     if (thread.joinable()) {
       try {
@@ -86,9 +107,23 @@ void StreamingData::shutdown() {
       } catch (const std::exception &e) {
         Logger::error(LogCategory::MONITORING, "shutdown",
                       "Error joining thread: " + std::string(e.what()));
+        std::lock_guard<std::mutex> lock(exceptionMutex);
+        threadExceptions.push_back(std::current_exception());
+      } catch (...) {
+        Logger::error(LogCategory::MONITORING, "shutdown",
+                      "Unknown error joining thread");
+        std::lock_guard<std::mutex> lock(exceptionMutex);
+        threadExceptions.push_back(std::current_exception());
       }
     }
   }
+
+  if (!threadExceptions.empty()) {
+    Logger::warning(LogCategory::MONITORING, "shutdown",
+                    std::to_string(threadExceptions.size()) +
+                        " threads had exceptions during join");
+  }
+
   threads.clear();
   Logger::info(LogCategory::MONITORING, "All threads finished successfully");
 
@@ -157,8 +192,12 @@ void StreamingData::loadConfigFromDatabase(pqxx::connection &pgConn) {
 
       if (key == "chunk_size") {
         try {
+          if (value.empty() || value.length() > 20) {
+            throw std::invalid_argument("Invalid chunk_size value length");
+          }
           size_t newSize = std::stoul(value);
-          if (newSize >= 1 && newSize <= 1024 * 1024 * 1024 &&
+          constexpr size_t MAX_CHUNK_SIZE = 1024ULL * 1024 * 1024;
+          if (newSize >= 1 && newSize <= MAX_CHUNK_SIZE &&
               newSize != SyncConfig::getChunkSize()) {
             Logger::info(LogCategory::MONITORING,
                          "Updating chunk_size from " +
@@ -173,8 +212,12 @@ void StreamingData::loadConfigFromDatabase(pqxx::connection &pgConn) {
         }
       } else if (key == "sync_interval") {
         try {
+          if (value.empty() || value.length() > 10) {
+            throw std::invalid_argument("Invalid sync_interval value length");
+          }
           size_t newInterval = std::stoul(value);
-          if (newInterval >= 5 && newInterval <= 3600 &&
+          constexpr size_t MAX_SYNC_INTERVAL = 3600;
+          if (newInterval >= 5 && newInterval <= MAX_SYNC_INTERVAL &&
               newInterval != SyncConfig::getSyncInterval()) {
             Logger::info(LogCategory::MONITORING,
                          "Updating sync_interval from " +
@@ -189,8 +232,12 @@ void StreamingData::loadConfigFromDatabase(pqxx::connection &pgConn) {
         }
       } else if (key == "max_workers") {
         try {
+          if (value.empty() || value.length() > 5) {
+            throw std::invalid_argument("Invalid max_workers value length");
+          }
           size_t v = std::stoul(value);
-          if (v >= 1 && v <= 128 && v != SyncConfig::getMaxWorkers()) {
+          constexpr size_t MAX_WORKERS = 128;
+          if (v >= 1 && v <= MAX_WORKERS && v != SyncConfig::getMaxWorkers()) {
             Logger::info(LogCategory::MONITORING,
                          "Updating max_workers from " +
                              std::to_string(SyncConfig::getMaxWorkers()) +
@@ -204,8 +251,13 @@ void StreamingData::loadConfigFromDatabase(pqxx::connection &pgConn) {
         }
       } else if (key == "max_tables_per_cycle") {
         try {
+          if (value.empty() || value.length() > 10) {
+            throw std::invalid_argument(
+                "Invalid max_tables_per_cycle value length");
+          }
           size_t v = std::stoul(value);
-          if (v >= 1 && v <= 1000000 &&
+          constexpr size_t MAX_TABLES_PER_CYCLE = 1000000;
+          if (v >= 1 && v <= MAX_TABLES_PER_CYCLE &&
               v != SyncConfig::getMaxTablesPerCycle()) {
             Logger::info(
                 LogCategory::MONITORING,
@@ -242,118 +294,16 @@ void StreamingData::loadConfigFromDatabase(pqxx::connection &pgConn) {
   }
 }
 
-// Initialization thread that runs once at system startup. Initializes
-// DataGovernance component, runs discovery, and generates a report.
-// Initializes MetricsCollector and collects all metrics. Sets up MariaDB and
-// MSSQL target tables. Each component initialization is wrapped in try-catch
-// to prevent one failure from stopping the entire initialization. Logs all
-// operations and errors. This thread completes after all initialization
-// tasks are done.
 void StreamingData::initializationThread() {
   try {
     Logger::info(LogCategory::MONITORING,
                  "Starting system initialization thread");
 
-    try {
-      Logger::info(LogCategory::MONITORING,
-                   "Initializing DataGovernance component");
-      DataGovernance dg;
-      dg.initialize();
-      Logger::info(LogCategory::MONITORING,
-                   "DataGovernance initialized successfully");
-
-      dg.runDiscovery();
-      Logger::info(LogCategory::MONITORING,
-                   "DataGovernance discovery completed");
-
-      dg.generateReport();
-      Logger::info(LogCategory::MONITORING, "DataGovernance report generated");
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::MONITORING, "initializationThread",
-                    "CRITICAL ERROR in DataGovernance initialization: " +
-                        std::string(e.what()) +
-                        " - System may not function properly");
-    }
-
-    try {
-      Logger::info(LogCategory::MONITORING,
-                   "Initializing MetricsCollector component");
-      MetricsCollector metricsCollector;
-      metricsCollector.collectAllMetrics();
-      Logger::info(LogCategory::MONITORING,
-                   "MetricsCollector completed successfully");
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::MONITORING, "initializationThread",
-                    "CRITICAL ERROR in MetricsCollector: " +
-                        std::string(e.what()) + " - Metrics collection failed");
-    }
-
-    try {
-      Logger::info(LogCategory::MONITORING,
-                   "Initializing QueryStoreCollector component");
-      std::string pgConnStr = DatabaseConfig::getPostgresConnectionString();
-      QueryStoreCollector queryStoreCollector(pgConnStr);
-      queryStoreCollector.collectQuerySnapshots();
-      queryStoreCollector.storeSnapshots();
-      queryStoreCollector.analyzeQueries();
-      Logger::info(LogCategory::MONITORING,
-                   "QueryStoreCollector completed successfully");
-    } catch (const std::exception &e) {
-      Logger::error(
-          LogCategory::MONITORING, "initializationThread",
-          "CRITICAL ERROR in QueryStoreCollector: " + std::string(e.what()) +
-              " - Query snapshot collection failed");
-    }
-
-    try {
-      Logger::info(LogCategory::MONITORING,
-                   "Initializing QueryActivityLogger component");
-      std::string pgConnStr = DatabaseConfig::getPostgresConnectionString();
-      QueryActivityLogger queryActivityLogger(pgConnStr);
-      queryActivityLogger.logActiveQueries();
-      queryActivityLogger.storeActivityLog();
-      queryActivityLogger.analyzeActivity();
-      Logger::info(LogCategory::MONITORING,
-                   "QueryActivityLogger completed successfully");
-    } catch (const std::exception &e) {
-      Logger::error(
-          LogCategory::MONITORING, "initializationThread",
-          "CRITICAL ERROR in QueryActivityLogger: " + std::string(e.what()) +
-              " - Query activity logging failed");
-    }
-
-    try {
-      Logger::info(LogCategory::MONITORING, "Setting up MariaDB target tables");
-      mariaToPg.setupTableTargetMariaDBToPostgres();
-      Logger::info(LogCategory::MONITORING,
-                   "MariaDB target tables setup completed");
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::MONITORING, "initializationThread",
-                    "CRITICAL ERROR in MariaDB table setup: " +
-                        std::string(e.what()) + " - MariaDB sync may fail");
-    }
-
-    try {
-      Logger::info(LogCategory::MONITORING, "Setting up MSSQL target tables");
-      mssqlToPg.setupTableTargetMSSQLToPostgres();
-      Logger::info(LogCategory::MONITORING,
-                   "MSSQL target tables setup completed");
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::MONITORING, "initializationThread",
-                    "CRITICAL ERROR in MSSQL table setup: " +
-                        std::string(e.what()) + " - MSSQL sync may fail");
-    }
-
-    try {
-      Logger::info(LogCategory::MONITORING, "Setting up Oracle target tables");
-      oracleToPg.setupTableTargetOracleToPostgres();
-      Logger::info(LogCategory::MONITORING,
-                   "Oracle target tables setup completed");
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::MONITORING, "initializationThread",
-                    "CRITICAL ERROR in Oracle table setup: " +
-                        std::string(e.what()) + " - Oracle sync may fail");
-    }
+    initializeDataGovernance();
+    initializeMetricsCollector();
+    initializeQueryStoreCollector();
+    initializeQueryActivityLogger();
+    initializeDatabaseTables();
 
     Logger::info(LogCategory::MONITORING,
                  "System initialization thread completed successfully");
@@ -365,13 +315,116 @@ void StreamingData::initializationThread() {
   }
 }
 
-// Catalog synchronization thread that runs continuously while the system is
-// running. Performs periodic catalog synchronization for MariaDB and MSSQL
-// in parallel using separate threads. After sync, performs catalog cleanup
-// and deactivates tables with no data. Sleeps for SyncConfig::getSyncInterval()
-// seconds between cycles. Handles exceptions for each operation
-// independently, allowing the thread to continue even if one operation fails.
-// Logs all operations and errors.
+void StreamingData::initializeDataGovernance() {
+  try {
+    Logger::info(LogCategory::MONITORING,
+                 "Initializing DataGovernance component");
+    DataGovernance dg;
+    dg.initialize();
+    Logger::info(LogCategory::MONITORING,
+                 "DataGovernance initialized successfully");
+
+    dg.runDiscovery();
+    Logger::info(LogCategory::MONITORING, "DataGovernance discovery completed");
+
+    dg.generateReport();
+    Logger::info(LogCategory::MONITORING, "DataGovernance report generated");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::MONITORING, "initializeDataGovernance",
+                  "CRITICAL ERROR in DataGovernance initialization: " +
+                      std::string(e.what()) +
+                      " - System may not function properly");
+  }
+}
+
+void StreamingData::initializeMetricsCollector() {
+  try {
+    Logger::info(LogCategory::MONITORING,
+                 "Initializing MetricsCollector component");
+    MetricsCollector metricsCollector;
+    metricsCollector.collectAllMetrics();
+    Logger::info(LogCategory::MONITORING,
+                 "MetricsCollector completed successfully");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::MONITORING, "initializeMetricsCollector",
+                  "CRITICAL ERROR in MetricsCollector: " +
+                      std::string(e.what()) + " - Metrics collection failed");
+  }
+}
+
+void StreamingData::initializeQueryStoreCollector() {
+  try {
+    Logger::info(LogCategory::MONITORING,
+                 "Initializing QueryStoreCollector component");
+    std::string pgConnStr = DatabaseConfig::getPostgresConnectionString();
+    QueryStoreCollector queryStoreCollector(pgConnStr);
+    queryStoreCollector.collectQuerySnapshots();
+    queryStoreCollector.storeSnapshots();
+    queryStoreCollector.analyzeQueries();
+    Logger::info(LogCategory::MONITORING,
+                 "QueryStoreCollector completed successfully");
+  } catch (const std::exception &e) {
+    Logger::error(
+        LogCategory::MONITORING, "initializeQueryStoreCollector",
+        "CRITICAL ERROR in QueryStoreCollector: " + std::string(e.what()) +
+            " - Query snapshot collection failed");
+  }
+}
+
+void StreamingData::initializeQueryActivityLogger() {
+  try {
+    Logger::info(LogCategory::MONITORING,
+                 "Initializing QueryActivityLogger component");
+    std::string pgConnStr = DatabaseConfig::getPostgresConnectionString();
+    QueryActivityLogger queryActivityLogger(pgConnStr);
+    queryActivityLogger.logActiveQueries();
+    queryActivityLogger.storeActivityLog();
+    queryActivityLogger.analyzeActivity();
+    Logger::info(LogCategory::MONITORING,
+                 "QueryActivityLogger completed successfully");
+  } catch (const std::exception &e) {
+    Logger::error(
+        LogCategory::MONITORING, "initializeQueryActivityLogger",
+        "CRITICAL ERROR in QueryActivityLogger: " + std::string(e.what()) +
+            " - Query activity logging failed");
+  }
+}
+
+void StreamingData::initializeDatabaseTables() {
+  try {
+    Logger::info(LogCategory::MONITORING, "Setting up MariaDB target tables");
+    mariaToPg.setupTableTargetMariaDBToPostgres();
+    Logger::info(LogCategory::MONITORING,
+                 "MariaDB target tables setup completed");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::MONITORING, "initializeDatabaseTables",
+                  "CRITICAL ERROR in MariaDB table setup: " +
+                      std::string(e.what()) + " - MariaDB sync may fail");
+  }
+
+  try {
+    Logger::info(LogCategory::MONITORING, "Setting up MSSQL target tables");
+    mssqlToPg.setupTableTargetMSSQLToPostgres();
+    Logger::info(LogCategory::MONITORING,
+                 "MSSQL target tables setup completed");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::MONITORING, "initializeDatabaseTables",
+                  "CRITICAL ERROR in MSSQL table setup: " +
+                      std::string(e.what()) + " - MSSQL sync may fail");
+  }
+
+  try {
+    Logger::info(LogCategory::MONITORING, "Setting up Oracle target tables");
+    oracleToPg.setupTableTargetOracleToPostgres();
+    Logger::info(LogCategory::MONITORING,
+                 "Oracle target tables setup completed");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::MONITORING, "initializeDatabaseTables",
+                  "CRITICAL ERROR in Oracle table setup: " +
+                      std::string(e.what()) + " - Oracle sync may fail");
+  }
+}
+
 void StreamingData::catalogSyncThread() {
   Logger::info(LogCategory::MONITORING, "Catalog sync thread started");
   while (running) {
@@ -379,110 +432,12 @@ void StreamingData::catalogSyncThread() {
       Logger::info(LogCategory::MONITORING,
                    "Starting catalog synchronization cycle");
 
-      std::vector<std::thread> syncThreads;
       std::vector<std::exception_ptr> exceptions;
       std::mutex exceptionMutex;
 
-      syncThreads.emplace_back([this, &exceptions, &exceptionMutex]() {
-        try {
-          Logger::info(LogCategory::MONITORING,
-                       "Starting MariaDB catalog sync");
-          catalogManager.syncCatalogMariaDBToPostgres();
-          Logger::info(LogCategory::MONITORING,
-                       "MariaDB catalog sync completed successfully");
-        } catch (const std::exception &e) {
-          Logger::error(
-              LogCategory::MONITORING, "catalogSyncThread",
-              "ERROR in MariaDB catalog sync: " + std::string(e.what()) +
-                  " - MariaDB catalog may be out of sync");
-          std::lock_guard<std::mutex> lock(exceptionMutex);
-          exceptions.push_back(std::current_exception());
-        }
-      });
-
-      syncThreads.emplace_back([this, &exceptions, &exceptionMutex]() {
-        try {
-          Logger::info(LogCategory::MONITORING, "Starting MSSQL catalog sync");
-          catalogManager.syncCatalogMSSQLToPostgres();
-          Logger::info(LogCategory::MONITORING,
-                       "MSSQL catalog sync completed successfully");
-        } catch (const std::exception &e) {
-          Logger::error(
-              LogCategory::MONITORING, "catalogSyncThread",
-              "ERROR in MSSQL catalog sync: " + std::string(e.what()) +
-                  " - MSSQL catalog may be out of sync");
-          std::lock_guard<std::mutex> lock(exceptionMutex);
-          exceptions.push_back(std::current_exception());
-        }
-      });
-
-      syncThreads.emplace_back([this, &exceptions, &exceptionMutex]() {
-        try {
-          Logger::info(LogCategory::MONITORING, "Starting Oracle catalog sync");
-          catalogManager.syncCatalogOracleToPostgres();
-          Logger::info(LogCategory::MONITORING,
-                       "Oracle catalog sync completed successfully");
-        } catch (const std::exception &e) {
-          Logger::error(
-              LogCategory::MONITORING, "catalogSyncThread",
-              "ERROR in Oracle catalog sync: " + std::string(e.what()) +
-                  " - Oracle catalog may be out of sync");
-          std::lock_guard<std::mutex> lock(exceptionMutex);
-          exceptions.push_back(std::current_exception());
-        }
-      });
-
-      syncThreads.emplace_back([this, &exceptions, &exceptionMutex]() {
-        try {
-          Logger::info(LogCategory::MONITORING,
-                       "Starting MongoDB catalog sync");
-          catalogManager.syncCatalogMongoDBToPostgres();
-          Logger::info(LogCategory::MONITORING,
-                       "MongoDB catalog sync completed successfully");
-        } catch (const std::exception &e) {
-          Logger::error(
-              LogCategory::MONITORING, "catalogSyncThread",
-              "ERROR in MongoDB catalog sync: " + std::string(e.what()) +
-                  " - MongoDB catalog may be out of sync");
-          std::lock_guard<std::mutex> lock(exceptionMutex);
-          exceptions.push_back(std::current_exception());
-        }
-      });
-
-      for (auto &thread : syncThreads) {
-        thread.join();
-      }
-
-      if (!exceptions.empty()) {
-        Logger::error(LogCategory::MONITORING, "catalogSyncThread",
-                      "CRITICAL: " + std::to_string(exceptions.size()) +
-                          " catalog sync operations failed - system may be in "
-                          "inconsistent state");
-      }
-
-      try {
-        Logger::info(LogCategory::MONITORING, "Starting catalog cleanup");
-        catalogManager.cleanCatalog();
-        Logger::info(LogCategory::MONITORING,
-                     "Catalog cleanup completed successfully");
-      } catch (const std::exception &e) {
-        Logger::error(LogCategory::MONITORING, "catalogSyncThread",
-                      "ERROR in catalog cleanup: " + std::string(e.what()) +
-                          " - Catalog may contain stale data");
-      }
-
-      try {
-        Logger::info(LogCategory::MONITORING,
-                     "Starting no-data table deactivation");
-        catalogManager.deactivateNoDataTables();
-        Logger::info(LogCategory::MONITORING,
-                     "No-data table deactivation completed successfully");
-      } catch (const std::exception &e) {
-        Logger::error(
-            LogCategory::MONITORING, "catalogSyncThread",
-            "ERROR in no-data table deactivation: " + std::string(e.what()) +
-                " - Inactive tables may not be properly marked");
-      }
+      performCatalogSyncs(exceptions, exceptionMutex);
+      processCatalogSyncExceptions(exceptions);
+      performCatalogMaintenance();
 
       Logger::info(LogCategory::MONITORING,
                    "Catalog synchronization cycle completed");
@@ -497,6 +452,124 @@ void StreamingData::catalogSyncThread() {
         std::chrono::seconds(SyncConfig::getSyncInterval()));
   }
   Logger::info(LogCategory::MONITORING, "Catalog sync thread stopped");
+}
+
+void StreamingData::performCatalogSyncs(
+    std::vector<std::exception_ptr> &exceptions, std::mutex &exceptionMutex) {
+  std::vector<std::thread> syncThreads;
+
+  syncThreads.emplace_back([this, &exceptions, &exceptionMutex]() {
+    try {
+      Logger::info(LogCategory::MONITORING, "Starting MariaDB catalog sync");
+      catalogManager.syncCatalogMariaDBToPostgres();
+      Logger::info(LogCategory::MONITORING,
+                   "MariaDB catalog sync completed successfully");
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::MONITORING, "performCatalogSyncs",
+                    "ERROR in MariaDB catalog sync: " + std::string(e.what()) +
+                        " - MariaDB catalog may be out of sync");
+      std::lock_guard<std::mutex> lock(exceptionMutex);
+      exceptions.push_back(std::current_exception());
+    }
+  });
+
+  syncThreads.emplace_back([this, &exceptions, &exceptionMutex]() {
+    try {
+      Logger::info(LogCategory::MONITORING, "Starting MSSQL catalog sync");
+      catalogManager.syncCatalogMSSQLToPostgres();
+      Logger::info(LogCategory::MONITORING,
+                   "MSSQL catalog sync completed successfully");
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::MONITORING, "performCatalogSyncs",
+                    "ERROR in MSSQL catalog sync: " + std::string(e.what()) +
+                        " - MSSQL catalog may be out of sync");
+      std::lock_guard<std::mutex> lock(exceptionMutex);
+      exceptions.push_back(std::current_exception());
+    }
+  });
+
+  syncThreads.emplace_back([this, &exceptions, &exceptionMutex]() {
+    try {
+      Logger::info(LogCategory::MONITORING, "Starting Oracle catalog sync");
+      catalogManager.syncCatalogOracleToPostgres();
+      Logger::info(LogCategory::MONITORING,
+                   "Oracle catalog sync completed successfully");
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::MONITORING, "performCatalogSyncs",
+                    "ERROR in Oracle catalog sync: " + std::string(e.what()) +
+                        " - Oracle catalog may be out of sync");
+      std::lock_guard<std::mutex> lock(exceptionMutex);
+      exceptions.push_back(std::current_exception());
+    }
+  });
+
+  syncThreads.emplace_back([this, &exceptions, &exceptionMutex]() {
+    try {
+      Logger::info(LogCategory::MONITORING, "Starting MongoDB catalog sync");
+      catalogManager.syncCatalogMongoDBToPostgres();
+      Logger::info(LogCategory::MONITORING,
+                   "MongoDB catalog sync completed successfully");
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::MONITORING, "performCatalogSyncs",
+                    "ERROR in MongoDB catalog sync: " + std::string(e.what()) +
+                        " - MongoDB catalog may be out of sync");
+      std::lock_guard<std::mutex> lock(exceptionMutex);
+      exceptions.push_back(std::current_exception());
+    }
+  });
+
+  for (auto &thread : syncThreads) {
+    thread.join();
+  }
+}
+
+void StreamingData::processCatalogSyncExceptions(
+    const std::vector<std::exception_ptr> &exceptions) {
+  if (!exceptions.empty()) {
+    Logger::error(LogCategory::MONITORING, "processCatalogSyncExceptions",
+                  "CRITICAL: " + std::to_string(exceptions.size()) +
+                      " catalog sync operations failed - system may be in "
+                      "inconsistent state");
+    for (const auto &exPtr : exceptions) {
+      if (exPtr) {
+        try {
+          std::rethrow_exception(exPtr);
+        } catch (const std::exception &e) {
+          Logger::error(LogCategory::MONITORING, "processCatalogSyncExceptions",
+                        "Exception details: " + std::string(e.what()));
+        } catch (...) {
+          Logger::error(LogCategory::MONITORING, "processCatalogSyncExceptions",
+                        "Unknown exception in catalog sync");
+        }
+      }
+    }
+  }
+}
+
+void StreamingData::performCatalogMaintenance() {
+  try {
+    Logger::info(LogCategory::MONITORING, "Starting catalog cleanup");
+    catalogManager.cleanCatalog();
+    Logger::info(LogCategory::MONITORING,
+                 "Catalog cleanup completed successfully");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::MONITORING, "performCatalogMaintenance",
+                  "ERROR in catalog cleanup: " + std::string(e.what()) +
+                      " - Catalog may contain stale data");
+  }
+
+  try {
+    Logger::info(LogCategory::MONITORING,
+                 "Starting no-data table deactivation");
+    catalogManager.deactivateNoDataTables();
+    Logger::info(LogCategory::MONITORING,
+                 "No-data table deactivation completed successfully");
+  } catch (const std::exception &e) {
+    Logger::error(
+        LogCategory::MONITORING, "performCatalogMaintenance",
+        "ERROR in no-data table deactivation: " + std::string(e.what()) +
+            " - Inactive tables may not be properly marked");
+  }
 }
 
 // MariaDB transfer thread that runs continuously while the system is running.
@@ -532,8 +605,11 @@ void StreamingData::mariaTransferThread() {
               std::to_string(SyncConfig::getSyncInterval()) + " seconds");
     }
 
-    std::this_thread::sleep_for(std::chrono::seconds(
-        std::max(5, static_cast<int>(SyncConfig::getSyncInterval() / 4))));
+    size_t interval = SyncConfig::getSyncInterval();
+    size_t sleepSeconds = (interval > 0 && interval >= 4) ? (interval / 4) : 5;
+    if (sleepSeconds < 5)
+      sleepSeconds = 5;
+    std::this_thread::sleep_for(std::chrono::seconds(sleepSeconds));
   }
   Logger::info(LogCategory::MONITORING, "MariaDB transfer thread stopped");
 }
@@ -571,8 +647,11 @@ void StreamingData::mssqlTransferThread() {
               std::to_string(SyncConfig::getSyncInterval()) + " seconds");
     }
 
-    std::this_thread::sleep_for(std::chrono::seconds(
-        std::max(5, static_cast<int>(SyncConfig::getSyncInterval() / 4))));
+    size_t interval = SyncConfig::getSyncInterval();
+    size_t sleepSeconds = (interval > 0 && interval >= 4) ? (interval / 4) : 5;
+    if (sleepSeconds < 5)
+      sleepSeconds = 5;
+    std::this_thread::sleep_for(std::chrono::seconds(sleepSeconds));
   }
   Logger::info(LogCategory::MONITORING, "MSSQL transfer thread stopped");
 }
@@ -644,8 +723,11 @@ void StreamingData::oracleTransferThread() {
               std::to_string(SyncConfig::getSyncInterval()) + " seconds");
     }
 
-    std::this_thread::sleep_for(std::chrono::seconds(
-        std::max(5, static_cast<int>(SyncConfig::getSyncInterval() / 4))));
+    size_t interval = SyncConfig::getSyncInterval();
+    size_t sleepSeconds = (interval > 0 && interval >= 4) ? (interval / 4) : 5;
+    if (sleepSeconds < 5)
+      sleepSeconds = 5;
+    std::this_thread::sleep_for(std::chrono::seconds(sleepSeconds));
   }
   Logger::info(LogCategory::MONITORING, "Oracle transfer thread stopped");
 }
@@ -685,6 +767,7 @@ void StreamingData::qualityThread() {
         Logger::error(LogCategory::MONITORING, "qualityThread",
                       "CRITICAL ERROR: Cannot establish PostgreSQL "
                       "connection for data quality validation");
+        pgConn.reset();
         std::this_thread::sleep_for(
             std::chrono::seconds(SyncConfig::getSyncInterval() * 2));
         continue;
@@ -864,6 +947,7 @@ void StreamingData::monitoringThread() {
             LogCategory::MONITORING, "monitoringThread",
             "CRITICAL ERROR: Cannot establish PostgreSQL connection for "
             "monitoring - system health cannot be monitored");
+        pgConn.reset();
         std::this_thread::sleep_for(
             std::chrono::seconds(SyncConfig::getSyncInterval()));
         continue;

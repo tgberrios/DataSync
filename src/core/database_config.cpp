@@ -1,6 +1,7 @@
 #include "core/database_config.h"
 #include "core/logger.h"
 #include "third_party/json.hpp"
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -19,6 +20,32 @@ std::string DatabaseConfig::postgres_user_ = "postgres";
 std::string DatabaseConfig::postgres_password_ = "";
 std::string DatabaseConfig::postgres_port_ = "5432";
 bool DatabaseConfig::initialized_ = false;
+
+namespace {
+constexpr const char *DEFAULT_PASSWORD_PLACEHOLDER = "";
+}
+
+namespace {
+bool validateAndSetPort(const std::string &portStr, std::string &targetPort) {
+  if (portStr.empty() || portStr.length() > 5)
+    return false;
+
+  for (char c : portStr) {
+    if (!std::isdigit(static_cast<unsigned char>(c)))
+      return false;
+  }
+
+  try {
+    int portNum = std::stoi(portStr);
+    if (portNum > 0 && portNum <= 65535) {
+      targetPort = portStr;
+      return true;
+    }
+  } catch (const std::exception &) {
+  }
+  return false;
+}
+} // namespace
 
 // Loads PostgreSQL database configuration from a JSON file. The function
 // expects a JSON structure with a "database" object containing a "postgres"
@@ -52,19 +79,10 @@ void DatabaseConfig::loadFromFile(const std::string &configPath) {
       }
       if (pgConfig.contains("port")) {
         std::string port = pgConfig["port"].get<std::string>();
-        if (!port.empty()) {
-          try {
-            int portNum = std::stoi(port);
-            if (portNum > 0 && portNum <= 65535) {
-              postgres_port_ = port;
-            } else {
-              Logger::warning(LogCategory::CONFIG, "DatabaseConfig",
-                              "Invalid port number: " + port +
-                                  ", using default: 5432");
-            }
-          } catch (const std::exception &) {
+        if (!validateAndSetPort(port, postgres_port_)) {
+          if (!port.empty()) {
             Logger::warning(LogCategory::CONFIG, "DatabaseConfig",
-                            "Port is not a valid number: " + port +
+                            "Invalid port number: " + port +
                                 ", using default: 5432");
           }
         }
@@ -108,18 +126,10 @@ void DatabaseConfig::loadFromEnv() {
   if (host && strlen(host) > 0)
     postgres_host_ = host;
   if (port && strlen(port) > 0) {
-    try {
-      int portNum = std::stoi(port);
-      if (portNum > 0 && portNum <= 65535) {
-        postgres_port_ = port;
-      } else {
-        Logger::warning(LogCategory::CONFIG, "DatabaseConfig",
-                        "Invalid port number: " + std::string(port) +
-                            ", using default: 5432");
-      }
-    } catch (const std::exception &) {
+    std::string portStr(port);
+    if (!validateAndSetPort(portStr, postgres_port_)) {
       Logger::warning(LogCategory::CONFIG, "DatabaseConfig",
-                      "Port is not a valid number: " + std::string(port) +
+                      "Invalid port number: " + portStr +
                           ", using default: 5432");
     }
   }
@@ -131,9 +141,10 @@ void DatabaseConfig::loadFromEnv() {
     postgres_password_ = password;
 
   if (postgres_password_.empty()) {
-    Logger::warning(LogCategory::CONFIG, "DatabaseConfig",
-                    "POSTGRES_PASSWORD not set in config.json or environment. "
-                    "Database connections may fail.");
+    Logger::warning(
+        LogCategory::CONFIG, "DatabaseConfig",
+        "POSTGRES_PASSWORD not set in config.json or environment. "
+        "Database connections may fail. Please set a secure password.");
   }
 
   initialized_ = true;

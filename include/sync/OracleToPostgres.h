@@ -60,6 +60,11 @@ private:
   std::vector<std::string> getPrimaryKeyColumns(OCIConnection *conn,
                                                 const std::string &schema_name,
                                                 const std::string &table_name);
+
+private:
+  // Helper function to safely escape and validate Oracle identifiers/values
+  static std::string escapeOracleValue(const std::string &value);
+  static bool isValidOracleIdentifier(const std::string &identifier);
 };
 
 #endif

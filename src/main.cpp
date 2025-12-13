@@ -1,15 +1,23 @@
 #include "core/Config.h"
 #include "sync/StreamingData.h"
+#include <atomic>
+#include <csignal>
 #include <iostream>
 
-// Main entry point for the DataSync application. Initializes the system by
-// loading configuration from config.json, initializing the logger, displaying
-// a startup banner, and launching the StreamingData system. Handles exceptions
-// at multiple levels: initialization errors (return 2), execution errors
-// (return 3), critical errors (return 4), and unknown errors (return 5).
-// Ensures proper cleanup by calling Logger::shutdown() even on errors.
-// Returns 0 on successful completion. This is the primary orchestrator that
-// coordinates all system components.
+namespace {
+std::atomic<bool> g_shutdownRequested{false};
+StreamingData *g_streamingData = nullptr;
+
+void signalHandler(int signal) {
+  if (signal == SIGINT || signal == SIGTERM) {
+    g_shutdownRequested = true;
+    if (g_streamingData) {
+      g_streamingData->shutdown();
+    }
+  }
+}
+} // namespace
+
 int main() {
   try {
     DatabaseConfig::loadFromFile("config.json");
@@ -40,7 +48,11 @@ int main() {
     std::cout << "                            Version 1.0.0\n";
     std::cout << "\n";
 
+    std::signal(SIGINT, signalHandler);
+    std::signal(SIGTERM, signalHandler);
+
     StreamingData sd;
+    g_streamingData = &sd;
     try {
       sd.initialize();
       Logger::info(LogCategory::SYSTEM, "main",
@@ -81,7 +93,10 @@ int main() {
     std::cerr << "Unknown critical error in main" << std::endl;
     try {
       Logger::shutdown();
+    } catch (const std::exception &e) {
+      std::cerr << "Error during logger shutdown: " << e.what() << std::endl;
     } catch (...) {
+      std::cerr << "Unknown error during logger shutdown" << std::endl;
     }
     return 5;
   }

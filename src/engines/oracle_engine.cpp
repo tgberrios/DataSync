@@ -127,10 +127,33 @@ OCIConnection::OCIConnection(const std::string &connectionString) {
     return;
   }
 
-  OCIAttrSet(session_, OCI_HTYPE_SESSION, (OraText *)user.c_str(),
-             user.length(), OCI_ATTR_USERNAME, err_);
-  OCIAttrSet(session_, OCI_HTYPE_SESSION, (OraText *)password.c_str(),
-             password.length(), OCI_ATTR_PASSWORD, err_);
+  status = OCIAttrSet(session_, OCI_HTYPE_SESSION, (OraText *)user.c_str(),
+                      user.length(), OCI_ATTR_USERNAME, err_);
+  if (status != OCI_SUCCESS) {
+    Logger::error(LogCategory::DATABASE, "OCIConnection",
+                  "OCIAttrSet(USERNAME) failed");
+    OCIServerDetach(srv_, err_, OCI_DEFAULT);
+    OCIHandleFree(session_, OCI_HTYPE_SESSION);
+    OCIHandleFree(srv_, OCI_HTYPE_SERVER);
+    OCIHandleFree(svc_, OCI_HTYPE_SVCCTX);
+    OCIHandleFree(err_, OCI_HTYPE_ERROR);
+    OCIHandleFree(env_, OCI_HTYPE_ENV);
+    return;
+  }
+
+  status = OCIAttrSet(session_, OCI_HTYPE_SESSION, (OraText *)password.c_str(),
+                      password.length(), OCI_ATTR_PASSWORD, err_);
+  if (status != OCI_SUCCESS) {
+    Logger::error(LogCategory::DATABASE, "OCIConnection",
+                  "OCIAttrSet(PASSWORD) failed");
+    OCIServerDetach(srv_, err_, OCI_DEFAULT);
+    OCIHandleFree(session_, OCI_HTYPE_SESSION);
+    OCIHandleFree(srv_, OCI_HTYPE_SERVER);
+    OCIHandleFree(svc_, OCI_HTYPE_SVCCTX);
+    OCIHandleFree(err_, OCI_HTYPE_ERROR);
+    OCIHandleFree(env_, OCI_HTYPE_ENV);
+    return;
+  }
 
   status = OCISessionBegin(svc_, err_, session_, OCI_CRED_RDBMS, OCI_DEFAULT);
   if (status != OCI_SUCCESS) {
@@ -281,31 +304,66 @@ OracleEngine::executeQuery(OCIConnection *conn, const std::string &query) {
   }
 
   ub4 numCols = 0;
-  OCIAttrGet(stmt, OCI_HTYPE_STMT, &numCols, nullptr, OCI_ATTR_PARAM_COUNT,
-             err);
+  status = OCIAttrGet(stmt, OCI_HTYPE_STMT, &numCols, nullptr,
+                      OCI_ATTR_PARAM_COUNT, err);
+  if (status != OCI_SUCCESS || numCols == 0) {
+    Logger::error(LogCategory::DATABASE, "OracleEngine",
+                  "OCIAttrGet(PARAM_COUNT) failed or no columns");
+    OCIHandleFree(stmt, OCI_HTYPE_STMT);
+    return results;
+  }
 
+  constexpr ub4 MAX_COLUMN_SIZE = 32768;
   std::vector<OCIDefine *> defines(numCols);
   std::vector<std::vector<char>> buffers(numCols);
   std::vector<ub2> lengths(numCols);
   std::vector<sb2> inds(numCols);
 
   for (ub4 i = 0; i < numCols; ++i) {
-    buffers[i].resize(4000);
-    OCIDefineByPos(stmt, &defines[i], err, i + 1, buffers[i].data(), 4000,
-                   SQLT_STR, &inds[i], &lengths[i], nullptr, OCI_DEFAULT);
+    buffers[i].resize(MAX_COLUMN_SIZE);
+    status = OCIDefineByPos(stmt, &defines[i], err, i + 1, buffers[i].data(),
+                            MAX_COLUMN_SIZE, SQLT_STR, &inds[i], &lengths[i],
+                            nullptr, OCI_DEFAULT);
+    if (status != OCI_SUCCESS) {
+      Logger::error(LogCategory::DATABASE, "OracleEngine",
+                    "OCIDefineByPos failed for column " +
+                        std::to_string(i + 1));
+      OCIHandleFree(stmt, OCI_HTYPE_STMT);
+      return results;
+    }
   }
 
-  while (OCIStmtFetch(stmt, err, 1, OCI_FETCH_NEXT, OCI_DEFAULT) ==
-         OCI_SUCCESS) {
+  sword fetchStatus;
+  while ((fetchStatus = OCIStmtFetch(stmt, err, 1, OCI_FETCH_NEXT,
+                                     OCI_DEFAULT)) == OCI_SUCCESS ||
+         fetchStatus == OCI_SUCCESS_WITH_INFO) {
     std::vector<std::string> row;
     for (ub4 i = 0; i < numCols; ++i) {
-      if (inds[i] == -1) {
+      if (inds[i] == -1 || inds[i] == OCI_IND_NULL) {
         row.push_back("NULL");
+      } else if (lengths[i] > 0) {
+        ub4 copyLen =
+            (lengths[i] < MAX_COLUMN_SIZE) ? lengths[i] : MAX_COLUMN_SIZE;
+        std::string cellValue(buffers[i].data(), copyLen);
+        if (lengths[i] >= MAX_COLUMN_SIZE) {
+          cellValue += "...(truncated)";
+        }
+        row.push_back(cellValue);
       } else {
-        row.push_back(std::string(buffers[i].data(), lengths[i]));
+        row.push_back("");
       }
     }
     results.push_back(row);
+  }
+
+  if (fetchStatus != OCI_NO_DATA && fetchStatus != OCI_SUCCESS) {
+    char errbuf[512];
+    sb4 errcode = 0;
+    OCIErrorGet(err, 1, nullptr, &errcode, (OraText *)errbuf, sizeof(errbuf),
+                OCI_HTYPE_ERROR);
+    Logger::error(LogCategory::DATABASE, "OracleEngine",
+                  "OCIStmtFetch failed: " + std::string(errbuf) +
+                      " (code: " + std::to_string(errcode) + ")");
   }
 
   OCIHandleFree(stmt, OCI_HTYPE_STMT);
@@ -324,6 +382,8 @@ OracleEngine::extractSchemaName(const std::string &connectionString) {
     std::string value = token.substr(pos + 1);
     key.erase(0, key.find_first_not_of(" \t\r\n"));
     key.erase(key.find_last_not_of(" \t\r\n") + 1);
+    value.erase(0, value.find_first_not_of(" \t\r\n"));
+    value.erase(value.find_last_not_of(" \t\r\n") + 1);
     if (key == "user" || key == "USER")
       return value;
   }
@@ -340,12 +400,32 @@ std::vector<CatalogTableInfo> OracleEngine::discoverTables() {
   }
 
   std::string schema = extractSchemaName(connectionString_);
+  if (schema.empty()) {
+    Logger::error(LogCategory::DATABASE, "OracleEngine",
+                  "discoverTables: schema name is empty");
+    return tables;
+  }
+
   std::string upperSchema = schema;
   std::transform(upperSchema.begin(), upperSchema.end(), upperSchema.begin(),
                  ::toupper);
+  std::string escapedSchema;
+  for (char c : upperSchema) {
+    if (c == '\'') {
+      escapedSchema += "''";
+    } else if (c >= 32 && c <= 126 && c != ';' && c != '-' && c != '\\') {
+      escapedSchema += c;
+    }
+  }
+  if (escapedSchema.empty()) {
+    Logger::error(LogCategory::DATABASE, "OracleEngine",
+                  "discoverTables: escaped schema is empty");
+    return tables;
+  }
+
   std::string query =
       "SELECT owner, table_name FROM all_tables WHERE owner = '" +
-      escapeSQL(upperSchema) + "' ORDER BY owner, table_name";
+      escapedSchema + "' ORDER BY owner, table_name";
 
   auto results = executeQuery(conn.get(), query);
   for (const auto &row : results) {
@@ -369,6 +449,12 @@ std::vector<std::string>
 OracleEngine::detectPrimaryKey(const std::string &schema,
                                const std::string &table) {
   std::vector<std::string> pkColumns;
+  if (schema.empty() || table.empty()) {
+    Logger::error(LogCategory::DATABASE, "OracleEngine",
+                  "detectPrimaryKey: schema and table must not be empty");
+    return pkColumns;
+  }
+
   auto conn = createConnection();
   if (!conn || !conn->isValid()) {
     Logger::error(LogCategory::DATABASE, "OracleEngine",
@@ -383,12 +469,40 @@ OracleEngine::detectPrimaryKey(const std::string &schema,
   std::transform(upperTable.begin(), upperTable.end(), upperTable.begin(),
                  ::toupper);
 
+  std::string escapedSchema;
+  for (char c : upperSchema) {
+    if (c == '\'') {
+      escapedSchema += "''";
+    } else if (c >= 32 && c <= 126 && c != ';' && c != '-' && c != '\\') {
+      escapedSchema += c;
+    }
+  }
+  if (escapedSchema.empty()) {
+    Logger::error(LogCategory::DATABASE, "OracleEngine",
+                  "detectPrimaryKey: escaped schema is empty");
+    return pkColumns;
+  }
+
+  std::string escapedTable;
+  for (char c : upperTable) {
+    if (c == '\'') {
+      escapedTable += "''";
+    } else if (c >= 32 && c <= 126 && c != ';' && c != '-' && c != '\\') {
+      escapedTable += c;
+    }
+  }
+  if (escapedTable.empty()) {
+    Logger::error(LogCategory::DATABASE, "OracleEngine",
+                  "detectPrimaryKey: escaped table is empty");
+    return pkColumns;
+  }
+
   std::string query =
       "SELECT column_name FROM all_cons_columns WHERE constraint_name = ("
       "SELECT constraint_name FROM all_constraints "
       "WHERE UPPER(owner) = '" +
-      escapeSQL(upperSchema) + "' AND UPPER(table_name) = '" +
-      escapeSQL(upperTable) + "' AND constraint_type = 'P') ORDER BY position";
+      escapedSchema + "' AND UPPER(table_name) = '" + escapedTable +
+      "' AND constraint_type = 'P') ORDER BY position";
 
   auto results = executeQuery(conn.get(), query);
   for (const auto &row : results) {
@@ -405,6 +519,12 @@ OracleEngine::detectPrimaryKey(const std::string &schema,
 
 std::string OracleEngine::detectTimeColumn(const std::string &schema,
                                            const std::string &table) {
+  if (schema.empty() || table.empty()) {
+    Logger::error(LogCategory::DATABASE, "OracleEngine",
+                  "detectTimeColumn: schema and table must not be empty");
+    return "";
+  }
+
   auto conn = createConnection();
   if (!conn || !conn->isValid()) {
     Logger::error(LogCategory::DATABASE, "OracleEngine",
@@ -419,9 +539,37 @@ std::string OracleEngine::detectTimeColumn(const std::string &schema,
   std::transform(upperTable.begin(), upperTable.end(), upperTable.begin(),
                  ::toupper);
 
+  std::string escapedSchema;
+  for (char c : upperSchema) {
+    if (c == '\'') {
+      escapedSchema += "''";
+    } else if (c >= 32 && c <= 126 && c != ';' && c != '-' && c != '\\') {
+      escapedSchema += c;
+    }
+  }
+  if (escapedSchema.empty()) {
+    Logger::error(LogCategory::DATABASE, "OracleEngine",
+                  "detectTimeColumn: escaped schema is empty");
+    return "";
+  }
+
+  std::string escapedTable;
+  for (char c : upperTable) {
+    if (c == '\'') {
+      escapedTable += "''";
+    } else if (c >= 32 && c <= 126 && c != ';' && c != '-' && c != '\\') {
+      escapedTable += c;
+    }
+  }
+  if (escapedTable.empty()) {
+    Logger::error(LogCategory::DATABASE, "OracleEngine",
+                  "detectTimeColumn: escaped table is empty");
+    return "";
+  }
+
   std::string query =
       "SELECT column_name FROM all_tab_columns WHERE owner = '" +
-      escapeSQL(upperSchema) + "' AND table_name = '" + escapeSQL(upperTable) +
+      escapedSchema + "' AND table_name = '" + escapedTable +
       "' AND data_type IN ('DATE', 'TIMESTAMP', 'TIMESTAMP WITH TIME ZONE', "
       "'TIMESTAMP WITH LOCAL TIME ZONE') ORDER BY column_id";
 
@@ -442,6 +590,12 @@ OracleEngine::getColumnCounts(const std::string &schema,
   int sourceCount = 0;
   int targetCount = 0;
 
+  if (schema.empty() || table.empty()) {
+    Logger::error(LogCategory::DATABASE, "OracleEngine",
+                  "getColumnCounts: schema and table must not be empty");
+    return {sourceCount, targetCount};
+  }
+
   auto conn = createConnection();
   if (!conn || !conn->isValid()) {
     Logger::error(LogCategory::DATABASE, "OracleEngine",
@@ -456,15 +610,60 @@ OracleEngine::getColumnCounts(const std::string &schema,
   std::transform(upperTable.begin(), upperTable.end(), upperTable.begin(),
                  ::toupper);
 
-  std::string query = "SELECT COUNT(*) FROM " + upperSchema + "." + upperTable;
+  std::string escapedSchema;
+  for (char c : upperSchema) {
+    if (c == '"') {
+      escapedSchema += "\"\"";
+    } else if (c >= 32 && c <= 126) {
+      escapedSchema += c;
+    }
+  }
+  if (escapedSchema.empty()) {
+    Logger::error(LogCategory::DATABASE, "OracleEngine",
+                  "getColumnCounts: escaped schema is empty");
+    return {sourceCount, targetCount};
+  }
+
+  std::string escapedTable;
+  for (char c : upperTable) {
+    if (c == '"') {
+      escapedTable += "\"\"";
+    } else if (c >= 32 && c <= 126) {
+      escapedTable += c;
+    }
+  }
+  if (escapedTable.empty()) {
+    Logger::error(LogCategory::DATABASE, "OracleEngine",
+                  "getColumnCounts: escaped table is empty");
+    return {sourceCount, targetCount};
+  }
+
+  std::string query =
+      "SELECT COUNT(*) FROM \"" + escapedSchema + "\".\"" + escapedTable + "\"";
 
   auto results = executeQuery(conn.get(), query);
   if (!results.empty() && !results[0].empty()) {
     try {
-      sourceCount = std::stoi(results[0][0]);
+      const std::string &countStr = results[0][0];
+      if (!countStr.empty() && countStr.length() <= 20) {
+        try {
+          sourceCount = std::stoi(countStr);
+        } catch (const std::exception &e) {
+          Logger::warning(LogCategory::DATABASE, "OracleEngine",
+                          "Failed to parse source count: " +
+                              std::string(e.what()));
+          sourceCount = 0;
+        }
+      } else {
+        sourceCount = 0;
+      }
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::DATABASE, "OracleEngine",
+                    "Failed to parse source row count: " +
+                        std::string(e.what()));
     } catch (...) {
       Logger::error(LogCategory::DATABASE, "OracleEngine",
-                    "Failed to parse source row count");
+                    "Failed to parse source row count: unknown error");
     }
   }
 

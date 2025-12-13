@@ -2,6 +2,7 @@
 #define DATA_GOVERNANCE_MONGODB_H
 
 #include <mongoc/mongoc.h>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -39,6 +40,7 @@ private:
   std::string serverName_;
   std::string databaseName_;
   std::vector<MongoDBGovernanceData> governanceData_;
+  mutable std::mutex governanceDataMutex_;
 
   std::string extractServerName(const std::string &connectionString);
   std::string extractDatabaseName(const std::string &connectionString);

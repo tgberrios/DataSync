@@ -56,7 +56,7 @@ MariaDBToPostgres::cleanValueForPostgres(const std::string &value,
 
   bool isNull =
       (cleanValue.empty() || cleanValue == "NULL" || cleanValue == "null" ||
-       cleanValue == "\\N" || cleanValue == "\\0" || cleanValue == "0" ||
+       cleanValue == "\\N" || cleanValue == "\\0" ||
        cleanValue.find("0000-") != std::string::npos ||
        cleanValue.find("1900-01-01") != std::string::npos ||
        cleanValue.find("1970-01-01") != std::string::npos);

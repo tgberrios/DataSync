@@ -16,6 +16,11 @@ struct ConnectionParams {
 
   ConnectionParams()
       : port(std::to_string(DatabaseDefaults::DEFAULT_MYSQL_PORT)) {}
+
+  std::string toSafeString() const {
+    return "host=" + host + ";user=" + user + ";password=***;db=" + db +
+           ";port=" + port;
+  }
 };
 
 class ConnectionStringParser {

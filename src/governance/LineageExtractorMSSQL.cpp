@@ -92,12 +92,24 @@ LineageExtractorMSSQL::executeQuery(SQLHDBC conn, const std::string &query) {
       SQLLEN len;
       ret = SQLGetData(stmt, i, SQL_C_CHAR, buffer, sizeof(buffer), &len);
       if (SQL_SUCCEEDED(ret)) {
-        if (len == SQL_NULL_DATA || len < 0)
+        if (len == SQL_NULL_DATA || len < 0) {
           row.push_back("");
-        else if (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer)))
+        } else if (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer))) {
           row.push_back(std::string(buffer, len));
-        else
+        } else if (len >= static_cast<SQLLEN>(sizeof(buffer))) {
+          std::vector<char> largeBuffer(len + 1);
+          SQLLEN actualLen;
+          ret = SQLGetData(stmt, i, SQL_C_CHAR, largeBuffer.data(),
+                           largeBuffer.size(), &actualLen);
+          if (SQL_SUCCEEDED(ret) && actualLen > 0 &&
+              actualLen < static_cast<SQLLEN>(largeBuffer.size())) {
+            row.push_back(std::string(largeBuffer.data(), actualLen));
+          } else {
+            row.push_back(std::string(buffer, sizeof(buffer) - 1));
+          }
+        } else {
           row.push_back("");
+        }
       } else {
         row.push_back("");
       }
@@ -125,7 +137,10 @@ void LineageExtractorMSSQL::extractLineage() {
                "Starting lineage extraction for " + serverName_ + "/" +
                    databaseName_);
 
-  lineageEdges_.clear();
+  {
+    std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
+    lineageEdges_.clear();
+  }
 
   try {
     ODBCConnection conn(connectionString_);
@@ -145,7 +160,11 @@ void LineageExtractorMSSQL::extractLineage() {
 
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMSSQL",
                  "Lineage extraction completed. Found " +
-                     std::to_string(lineageEdges_.size()) + " dependencies");
+                     std::to_string([this]() {
+                       std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
+                       return lineageEdges_.size();
+                     }()) +
+                     " dependencies");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "LineageExtractorMSSQL",
                   "Error extracting lineage: " + std::string(e.what()));
@@ -195,7 +214,10 @@ void LineageExtractorMSSQL::extractForeignKeyDependencies() {
         edge.confidence_score = 1.0;
         edge.edge_key = generateEdgeKey(edge);
 
-        lineageEdges_.push_back(edge);
+        {
+          std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
+          lineageEdges_.push_back(edge);
+        }
       }
     }
 
@@ -251,7 +273,10 @@ void LineageExtractorMSSQL::extractTableDependencies() {
         edge.confidence_score = 0.9;
         edge.edge_key = generateEdgeKey(edge);
 
-        lineageEdges_.push_back(edge);
+        {
+          std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
+          lineageEdges_.push_back(edge);
+        }
       }
     }
 
@@ -305,7 +330,10 @@ void LineageExtractorMSSQL::extractStoredProcedureDependencies() {
         edge.confidence_score = 0.95;
         edge.edge_key = generateEdgeKey(edge);
 
-        lineageEdges_.push_back(edge);
+        {
+          std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
+          lineageEdges_.push_back(edge);
+        }
       }
     }
 
@@ -359,7 +387,10 @@ void LineageExtractorMSSQL::extractViewDependencies() {
         edge.confidence_score = 1.0;
         edge.edge_key = generateEdgeKey(edge);
 
-        lineageEdges_.push_back(edge);
+        {
+          std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
+          lineageEdges_.push_back(edge);
+        }
       }
     }
 
@@ -431,7 +462,10 @@ void LineageExtractorMSSQL::extractSqlExpressionDependencies() {
         edge.confidence_score = 0.85;
         edge.edge_key = generateEdgeKey(edge);
 
-        lineageEdges_.push_back(edge);
+        {
+          std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
+          lineageEdges_.push_back(edge);
+        }
       }
     }
 
@@ -446,10 +480,15 @@ void LineageExtractorMSSQL::extractSqlExpressionDependencies() {
 }
 
 void LineageExtractorMSSQL::storeLineage() {
-  if (lineageEdges_.empty()) {
-    Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMSSQL",
-                 "No lineage data to store");
-    return;
+  std::vector<LineageEdge> edgesCopy;
+  {
+    std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
+    if (lineageEdges_.empty()) {
+      Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMSSQL",
+                   "No lineage data to store");
+      return;
+    }
+    edgesCopy = lineageEdges_;
   }
 
   try {
@@ -457,7 +496,7 @@ void LineageExtractorMSSQL::storeLineage() {
     pqxx::connection conn(connStr);
 
     int stored = 0;
-    for (const auto &edge : lineageEdges_) {
+    for (const auto &edge : edgesCopy) {
       try {
         pqxx::work txn(conn);
         std::string query = R"(
@@ -492,8 +531,7 @@ void LineageExtractorMSSQL::storeLineage() {
             edge.definition_text.empty() ? nullptr
                                          : edge.definition_text.c_str(),
             edge.dependency_level, edge.discovery_method,
-            "LineageExtractorMSSQL",
-            edge.confidence_score);
+            "LineageExtractorMSSQL", edge.confidence_score);
         txn.commit();
         stored++;
       } catch (const std::exception &e) {

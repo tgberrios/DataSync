@@ -27,6 +27,11 @@ public:
            " user=" + postgres_user_ + " password=" + postgres_password_ +
            " port=" + postgres_port_;
   }
+
+  static std::string getPostgresConnectionStringForLogging() {
+    return "host=" + postgres_host_ + " dbname=" + postgres_db_ +
+           " user=" + postgres_user_ + " password=*** port=" + postgres_port_;
+  }
 };
 
 #endif

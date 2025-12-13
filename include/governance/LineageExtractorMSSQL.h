@@ -1,6 +1,7 @@
 #ifndef LINEAGE_EXTRACTOR_MSSQL_H
 #define LINEAGE_EXTRACTOR_MSSQL_H
 
+#include <mutex>
 #include <sql.h>
 #include <string>
 #include <vector>
@@ -44,6 +45,7 @@ private:
   std::string serverName_;
   std::string databaseName_;
   std::vector<LineageEdge> lineageEdges_;
+  mutable std::mutex lineageEdgesMutex_;
 
   std::string extractServerName(const std::string &connectionString);
   std::string extractDatabaseName(const std::string &connectionString);

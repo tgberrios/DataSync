@@ -1,22 +1,23 @@
 #include "governance/MaintenanceManager.h"
-#include "core/logger.h"
+#include "catalog/metadata_repository.h"
 #include "core/database_config.h"
 #include "core/database_defaults.h"
-#include "catalog/metadata_repository.h"
+#include "core/logger.h"
 #include "engines/mariadb_engine.h"
 #include "engines/mssql_engine.h"
 #include "utils/connection_utils.h"
 #include "utils/time_utils.h"
-#include <pqxx/pqxx>
 #include <algorithm>
-#include <sstream>
-#include <iomanip>
 #include <cmath>
 #include <ctime>
+#include <iomanip>
+#include <pqxx/pqxx>
 #include <sql.h>
 #include <sqlext.h>
+#include <sstream>
 
-MaintenanceManager::MaintenanceManager(const std::string &metadataConnectionString)
+MaintenanceManager::MaintenanceManager(
+    const std::string &metadataConnectionString)
     : metadataConnectionString_(metadataConnectionString) {
   defaultThresholds_ = json::parse(R"({
     "postgresql": {
@@ -56,8 +57,7 @@ MaintenanceManager::MaintenanceManager(const std::string &metadataConnectionStri
   })");
 }
 
-MaintenanceManager::~MaintenanceManager() {
-}
+MaintenanceManager::~MaintenanceManager() {}
 
 void MaintenanceManager::detectMaintenanceNeeds() {
   Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
@@ -66,17 +66,21 @@ void MaintenanceManager::detectMaintenanceNeeds() {
   try {
     MetadataRepository repo(metadataConnectionString_);
 
-    std::vector<std::string> pgConnections = repo.getConnectionStrings("PostgreSQL");
+    std::vector<std::string> pgConnections =
+        repo.getConnectionStrings("PostgreSQL");
     if (pgConnections.empty()) {
-      std::string dataLakeConnStr = DatabaseConfig::getPostgresConnectionString();
+      std::string dataLakeConnStr =
+          DatabaseConfig::getPostgresConnectionString();
       if (!dataLakeConnStr.empty()) {
         Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
-                     "No PostgreSQL sources in catalog, detecting maintenance for DataLake");
+                     "No PostgreSQL sources in catalog, detecting maintenance "
+                     "for DataLake");
         try {
           detectPostgreSQLMaintenance(dataLakeConnStr);
         } catch (const std::exception &e) {
           Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
-                        "Error detecting DataLake PostgreSQL maintenance: " + std::string(e.what()));
+                        "Error detecting DataLake PostgreSQL maintenance: " +
+                            std::string(e.what()));
         }
       }
     } else {
@@ -86,32 +90,37 @@ void MaintenanceManager::detectMaintenanceNeeds() {
             detectPostgreSQLMaintenance(connStr);
           } catch (const std::exception &e) {
             Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
-                          "Error detecting PostgreSQL maintenance: " + std::string(e.what()));
+                          "Error detecting PostgreSQL maintenance: " +
+                              std::string(e.what()));
           }
         }
       }
     }
 
-    std::vector<std::string> mariadbConnections = repo.getConnectionStrings("MariaDB");
+    std::vector<std::string> mariadbConnections =
+        repo.getConnectionStrings("MariaDB");
     for (const auto &connStr : mariadbConnections) {
       if (!connStr.empty()) {
         try {
           detectMariaDBMaintenance(connStr);
         } catch (const std::exception &e) {
           Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
-                        "Error detecting MariaDB maintenance: " + std::string(e.what()));
+                        "Error detecting MariaDB maintenance: " +
+                            std::string(e.what()));
         }
       }
     }
 
-    std::vector<std::string> mssqlConnections = repo.getConnectionStrings("MSSQL");
+    std::vector<std::string> mssqlConnections =
+        repo.getConnectionStrings("MSSQL");
     for (const auto &connStr : mssqlConnections) {
       if (!connStr.empty()) {
         try {
           detectMSSQLMaintenance(connStr);
         } catch (const std::exception &e) {
           Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
-                        "Error detecting MSSQL maintenance: " + std::string(e.what()));
+                        "Error detecting MSSQL maintenance: " +
+                            std::string(e.what()));
         }
       }
     }
@@ -124,12 +133,14 @@ void MaintenanceManager::detectMaintenanceNeeds() {
   }
 }
 
-void MaintenanceManager::detectPostgreSQLMaintenance(const std::string &connStr) {
+void MaintenanceManager::detectPostgreSQLMaintenance(
+    const std::string &connStr) {
   try {
     pqxx::connection conn(connStr);
     if (!conn.is_open()) {
-      Logger::warning(LogCategory::GOVERNANCE, "MaintenanceManager",
-                      "Failed to connect to PostgreSQL for maintenance detection");
+      Logger::warning(
+          LogCategory::GOVERNANCE, "MaintenanceManager",
+          "Failed to connect to PostgreSQL for maintenance detection");
       return;
     }
 
@@ -138,16 +149,19 @@ void MaintenanceManager::detectPostgreSQLMaintenance(const std::string &connStr)
     detectReindexNeeds(conn, connStr);
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
-                  "Error in PostgreSQL maintenance detection: " + std::string(e.what()));
+                  "Error in PostgreSQL maintenance detection: " +
+                      std::string(e.what()));
   }
 }
 
-void MaintenanceManager::detectVacuumNeeds(pqxx::connection &conn, const std::string &connStr) {
+void MaintenanceManager::detectVacuumNeeds(pqxx::connection &conn,
+                                           const std::string &connStr) {
   try {
     pqxx::work txn(conn);
     auto thresholds = getThresholds("postgresql", "vacuum");
     double deadTuplesPct = thresholds.value("dead_tuples_percentage", 10.0);
-    long long deadTuplesThreshold = thresholds.value("dead_tuples_threshold", 1000LL);
+    long long deadTuplesThreshold =
+        thresholds.value("dead_tuples_threshold", 1000LL);
     int daysSinceVacuum = thresholds.value("days_since_last_vacuum", 7);
 
     std::string query = R"(
@@ -169,7 +183,8 @@ void MaintenanceManager::detectVacuumNeeds(pqxx::connection &conn, const std::st
         )
     )";
 
-    auto results = txn.exec_params(query, deadTuplesThreshold, deadTuplesPct, daysSinceVacuum);
+    auto results = txn.exec_params(query, deadTuplesThreshold, deadTuplesPct,
+                                   daysSinceVacuum);
     txn.commit();
 
     for (const auto &row : results) {
@@ -182,7 +197,7 @@ void MaintenanceManager::detectVacuumNeeds(pqxx::connection &conn, const std::st
       task.object_type = "TABLE";
       task.auto_execute = true;
       task.enabled = true;
-      
+
       auto params = ConnectionStringParser::parse(connStr);
       if (params) {
         task.server_name = params->host;
@@ -194,7 +209,8 @@ void MaintenanceManager::detectVacuumNeeds(pqxx::connection &conn, const std::st
       metrics.live_tuples = row[3].as<long long>();
       metrics.table_size_mb = row[6].as<long long>() / (1024.0 * 1024.0);
       if (metrics.live_tuples > 0) {
-        metrics.fragmentation_pct = (metrics.dead_tuples * 100.0) / metrics.live_tuples;
+        metrics.fragmentation_pct =
+            (metrics.dead_tuples * 100.0) / metrics.live_tuples;
       }
 
       task.priority = calculatePriority(metrics, "VACUUM");
@@ -210,7 +226,8 @@ void MaintenanceManager::detectVacuumNeeds(pqxx::connection &conn, const std::st
   }
 }
 
-void MaintenanceManager::detectAnalyzeNeeds(pqxx::connection &conn, const std::string &connStr) {
+void MaintenanceManager::detectAnalyzeNeeds(pqxx::connection &conn,
+                                            const std::string &connStr) {
   try {
     pqxx::work txn(conn);
     auto thresholds = getThresholds("postgresql", "analyze");
@@ -245,7 +262,7 @@ void MaintenanceManager::detectAnalyzeNeeds(pqxx::connection &conn, const std::s
       task.status = "PENDING";
       task.next_maintenance_date = calculateNextMaintenanceDate("ANALYZE");
       task.thresholds = thresholds;
-      
+
       auto params = ConnectionStringParser::parse(connStr);
       if (params) {
         task.server_name = params->host;
@@ -260,11 +277,13 @@ void MaintenanceManager::detectAnalyzeNeeds(pqxx::connection &conn, const std::s
   }
 }
 
-void MaintenanceManager::detectReindexNeeds(pqxx::connection &conn, const std::string &connStr) {
+void MaintenanceManager::detectReindexNeeds(pqxx::connection &conn,
+                                            const std::string &connStr) {
   try {
     pqxx::work txn(conn);
     auto thresholds = getThresholds("postgresql", "reindex");
-    double fragmentationThreshold = thresholds.value("fragmentation_threshold", 30.0);
+    double fragmentationThreshold =
+        thresholds.value("fragmentation_threshold", 30.0);
 
     std::string query = R"(
       SELECT 
@@ -314,7 +333,7 @@ void MaintenanceManager::detectReindexNeeds(pqxx::connection &conn, const std::s
           task.status = "PENDING";
           task.next_maintenance_date = calculateNextMaintenanceDate("REINDEX");
           task.thresholds = thresholds;
-          
+
           auto params = ConnectionStringParser::parse(connStr);
           if (params) {
             task.server_name = params->host;
@@ -352,15 +371,19 @@ void MaintenanceManager::detectMariaDBMaintenance(const std::string &connStr) {
     detectAnalyzeTableNeeds(mysqlConn, connStr);
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
-                  "Error in MariaDB maintenance detection: " + std::string(e.what()));
+                  "Error in MariaDB maintenance detection: " +
+                      std::string(e.what()));
   }
 }
 
-void MaintenanceManager::detectOptimizeNeeds(MYSQL *conn, const std::string &connStr) {
+void MaintenanceManager::detectOptimizeNeeds(MYSQL *conn,
+                                             const std::string &connStr) {
   try {
     auto thresholds = getThresholds("mariadb", "optimize");
-    double fragmentationThreshold = thresholds.value("fragmentation_threshold", 20.0);
-    double freeSpaceThreshold = thresholds.value("free_space_threshold_mb", 100.0);
+    double fragmentationThreshold =
+        thresholds.value("fragmentation_threshold", 20.0);
+    double freeSpaceThreshold =
+        thresholds.value("free_space_threshold_mb", 100.0);
 
     std::string query = R"(
       SELECT 
@@ -379,10 +402,12 @@ void MaintenanceManager::detectOptimizeNeeds(MYSQL *conn, const std::string &con
       WHERE table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
         AND table_type = 'BASE TABLE'
         AND (
-          (data_free / (1024 * 1024)) > )" + std::to_string(freeSpaceThreshold) + R"(
+          (data_free / (1024 * 1024)) > )" +
+                        std::to_string(freeSpaceThreshold) + R"(
           OR (
             (data_length + index_length) > 0 
-            AND (data_free / (data_length + index_length)) * 100 > )" + std::to_string(fragmentationThreshold) + R"(
+            AND (data_free / (data_length + index_length)) * 100 > )" +
+                        std::to_string(fragmentationThreshold) + R"(
           )
         )
     )";
@@ -394,7 +419,8 @@ void MaintenanceManager::detectOptimizeNeeds(MYSQL *conn, const std::string &con
     }
 
     MYSQL_RES *res = mysql_store_result(conn);
-    if (!res) return;
+    if (!res)
+      return;
 
     MYSQL_ROW row;
     while ((row = mysql_fetch_row(res))) {
@@ -411,9 +437,10 @@ void MaintenanceManager::detectOptimizeNeeds(MYSQL *conn, const std::string &con
       double fragmentation = row[6] ? std::stod(row[6]) : 0.0;
       task.priority = fragmentation > 30 ? 7 : 5;
       task.status = "PENDING";
-      task.next_maintenance_date = calculateNextMaintenanceDate("OPTIMIZE TABLE");
+      task.next_maintenance_date =
+          calculateNextMaintenanceDate("OPTIMIZE TABLE");
       task.thresholds = thresholds;
-      
+
       auto params = ConnectionStringParser::parse(connStr);
       if (params) {
         task.server_name = params->host;
@@ -429,7 +456,8 @@ void MaintenanceManager::detectOptimizeNeeds(MYSQL *conn, const std::string &con
   }
 }
 
-void MaintenanceManager::detectAnalyzeTableNeeds(MYSQL *conn, const std::string &connStr) {
+void MaintenanceManager::detectAnalyzeTableNeeds(MYSQL *conn,
+                                                 const std::string &connStr) {
   try {
     auto thresholds = getThresholds("mariadb", "analyze");
     int daysSinceAnalyze = thresholds.value("days_since_last_analyze", 1);
@@ -444,18 +472,20 @@ void MaintenanceManager::detectAnalyzeTableNeeds(MYSQL *conn, const std::string 
         AND table_type = 'BASE TABLE'
         AND (
           update_time IS NULL 
-          OR update_time < DATE_SUB(NOW(), INTERVAL )" + std::to_string(daysSinceAnalyze) + R"( DAY)
+          OR update_time < DATE_SUB(NOW(), INTERVAL )" +
+                        std::to_string(daysSinceAnalyze) + R"( DAY)
         )
     )";
 
     if (mysql_query(conn, query.c_str())) {
       Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
-                      "Query failed: " + std::string(mysql_error(conn)));
+                    "Query failed: " + std::string(mysql_error(conn)));
       return;
     }
 
     MYSQL_RES *res = mysql_store_result(conn);
-    if (!res) return;
+    if (!res)
+      return;
 
     MYSQL_ROW row;
     while ((row = mysql_fetch_row(res))) {
@@ -470,9 +500,10 @@ void MaintenanceManager::detectAnalyzeTableNeeds(MYSQL *conn, const std::string 
       task.enabled = true;
       task.priority = 4;
       task.status = "PENDING";
-      task.next_maintenance_date = calculateNextMaintenanceDate("ANALYZE TABLE");
+      task.next_maintenance_date =
+          calculateNextMaintenanceDate("ANALYZE TABLE");
       task.thresholds = thresholds;
-      
+
       auto params = ConnectionStringParser::parse(connStr);
       if (params) {
         task.server_name = params->host;
@@ -484,7 +515,8 @@ void MaintenanceManager::detectAnalyzeTableNeeds(MYSQL *conn, const std::string 
     mysql_free_result(res);
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
-                  "Error detecting analyze table needs: " + std::string(e.what()));
+                  "Error detecting analyze table needs: " +
+                      std::string(e.what()));
   }
 }
 
@@ -503,11 +535,13 @@ void MaintenanceManager::detectMSSQLMaintenance(const std::string &connStr) {
     detectReorganizeIndexNeeds(hdbc, connStr);
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
-                  "Error in MSSQL maintenance detection: " + std::string(e.what()));
+                  "Error in MSSQL maintenance detection: " +
+                      std::string(e.what()));
   }
 }
 
-void MaintenanceManager::detectUpdateStatisticsNeeds(SQLHDBC conn, const std::string &connStr) {
+void MaintenanceManager::detectUpdateStatisticsNeeds(
+    SQLHDBC conn, const std::string &connStr) {
   try {
     auto thresholds = getThresholds("mssql", "update_statistics");
     int daysSinceUpdate = thresholds.value("days_since_last_update", 1);
@@ -521,14 +555,16 @@ void MaintenanceManager::detectUpdateStatisticsNeeds(SQLHDBC conn, const std::st
       WHERE OBJECTPROPERTY(s.object_id, 'IsUserTable') = 1
         AND (
           STATS_DATE(s.object_id, s.stats_id) IS NULL
-          OR STATS_DATE(s.object_id, s.stats_id) < DATEADD(day, -)" + std::to_string(daysSinceUpdate) + R"(, GETDATE())
+          OR STATS_DATE(s.object_id, s.stats_id) < DATEADD(day, -)" +
+                        std::to_string(daysSinceUpdate) + R"(, GETDATE())
         )
     )";
 
     std::vector<std::vector<std::string>> results;
     SQLHSTMT stmt;
     SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, conn, &stmt);
-    if (ret != SQL_SUCCESS) return;
+    if (ret != SQL_SUCCESS)
+      return;
 
     ret = SQLExecDirect(stmt, (SQLCHAR *)query.c_str(), SQL_NTS);
     if (ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) {
@@ -540,8 +576,10 @@ void MaintenanceManager::detectUpdateStatisticsNeeds(SQLHDBC conn, const std::st
       while (SQLFetch(stmt) == SQL_SUCCESS) {
         std::vector<std::string> row;
         for (SQLSMALLINT i = 1; i <= numCols; i++) {
-          if (SQLGetData(stmt, i, SQL_C_CHAR, buffer, sizeof(buffer), &len) == SQL_SUCCESS) {
-            row.push_back((len > 0 && len < 1024) ? std::string(buffer, len) : "");
+          if (SQLGetData(stmt, i, SQL_C_CHAR, buffer, sizeof(buffer), &len) ==
+              SQL_SUCCESS) {
+            row.push_back((len > 0 && len < 1024) ? std::string(buffer, len)
+                                                  : "");
           } else {
             row.push_back("");
           }
@@ -568,7 +606,8 @@ void MaintenanceManager::detectUpdateStatisticsNeeds(SQLHDBC conn, const std::st
         task.enabled = true;
         task.priority = 5;
         task.status = "PENDING";
-        task.next_maintenance_date = calculateNextMaintenanceDate("UPDATE STATISTICS");
+        task.next_maintenance_date =
+            calculateNextMaintenanceDate("UPDATE STATISTICS");
         task.thresholds = thresholds;
         task.server_name = serverName;
         task.database_name = databaseName;
@@ -578,14 +617,17 @@ void MaintenanceManager::detectUpdateStatisticsNeeds(SQLHDBC conn, const std::st
     }
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
-                  "Error detecting UPDATE STATISTICS needs: " + std::string(e.what()));
+                  "Error detecting UPDATE STATISTICS needs: " +
+                      std::string(e.what()));
   }
 }
 
-void MaintenanceManager::detectRebuildIndexNeeds(SQLHDBC conn, const std::string &connStr) {
+void MaintenanceManager::detectRebuildIndexNeeds(SQLHDBC conn,
+                                                 const std::string &connStr) {
   try {
     auto thresholds = getThresholds("mssql", "rebuild_index");
-    double fragmentationThreshold = thresholds.value("fragmentation_threshold", 30.0);
+    double fragmentationThreshold =
+        thresholds.value("fragmentation_threshold", 30.0);
 
     std::string query = R"(
       SELECT 
@@ -597,14 +639,16 @@ void MaintenanceManager::detectRebuildIndexNeeds(SQLHDBC conn, const std::string
       FROM sys.dm_db_index_physical_stats(DB_ID(), NULL, NULL, NULL, 'LIMITED') ips
       INNER JOIN sys.indexes i ON ips.object_id = i.object_id AND ips.index_id = i.index_id
       WHERE ips.index_id > 0
-        AND ips.avg_fragmentation_in_percent > )" + std::to_string(fragmentationThreshold) + R"(
+        AND ips.avg_fragmentation_in_percent > )" +
+                        std::to_string(fragmentationThreshold) + R"(
         AND ips.page_count > 100
     )";
 
     std::vector<std::vector<std::string>> results;
     SQLHSTMT stmt;
     SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, conn, &stmt);
-    if (ret != SQL_SUCCESS) return;
+    if (ret != SQL_SUCCESS)
+      return;
 
     ret = SQLExecDirect(stmt, (SQLCHAR *)query.c_str(), SQL_NTS);
     if (ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) {
@@ -616,8 +660,10 @@ void MaintenanceManager::detectRebuildIndexNeeds(SQLHDBC conn, const std::string
       while (SQLFetch(stmt) == SQL_SUCCESS) {
         std::vector<std::string> row;
         for (SQLSMALLINT i = 1; i <= numCols; i++) {
-          if (SQLGetData(stmt, i, SQL_C_CHAR, buffer, sizeof(buffer), &len) == SQL_SUCCESS) {
-            row.push_back((len > 0 && len < 1024) ? std::string(buffer, len) : "");
+          if (SQLGetData(stmt, i, SQL_C_CHAR, buffer, sizeof(buffer), &len) ==
+              SQL_SUCCESS) {
+            row.push_back((len > 0 && len < 1024) ? std::string(buffer, len)
+                                                  : "");
           } else {
             row.push_back("");
           }
@@ -635,7 +681,8 @@ void MaintenanceManager::detectRebuildIndexNeeds(SQLHDBC conn, const std::string
       if (row.size() >= 5) {
         double fragmentation = 0.0;
         try {
-          if (!row[3].empty()) fragmentation = std::stod(row[3]);
+          if (!row[3].empty())
+            fragmentation = std::stod(row[3]);
         } catch (...) {
         }
 
@@ -650,7 +697,8 @@ void MaintenanceManager::detectRebuildIndexNeeds(SQLHDBC conn, const std::string
         task.enabled = true;
         task.priority = fragmentation > 50 ? 8 : 6;
         task.status = "PENDING";
-        task.next_maintenance_date = calculateNextMaintenanceDate("REBUILD INDEX");
+        task.next_maintenance_date =
+            calculateNextMaintenanceDate("REBUILD INDEX");
         task.thresholds = thresholds;
         task.server_name = serverName;
         task.database_name = databaseName;
@@ -660,11 +708,13 @@ void MaintenanceManager::detectRebuildIndexNeeds(SQLHDBC conn, const std::string
     }
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
-                  "Error detecting REBUILD INDEX needs: " + std::string(e.what()));
+                  "Error detecting REBUILD INDEX needs: " +
+                      std::string(e.what()));
   }
 }
 
-void MaintenanceManager::detectReorganizeIndexNeeds(SQLHDBC conn, const std::string &connStr) {
+void MaintenanceManager::detectReorganizeIndexNeeds(
+    SQLHDBC conn, const std::string &connStr) {
   try {
     auto thresholds = getThresholds("mssql", "reorganize_index");
     double fragmentationMin = thresholds.value("fragmentation_min", 10.0);
@@ -680,15 +730,18 @@ void MaintenanceManager::detectReorganizeIndexNeeds(SQLHDBC conn, const std::str
       FROM sys.dm_db_index_physical_stats(DB_ID(), NULL, NULL, NULL, 'LIMITED') ips
       INNER JOIN sys.indexes i ON ips.object_id = i.object_id AND ips.index_id = i.index_id
       WHERE ips.index_id > 0
-        AND ips.avg_fragmentation_in_percent >= )" + std::to_string(fragmentationMin) + R"(
-        AND ips.avg_fragmentation_in_percent < )" + std::to_string(fragmentationMax) + R"(
+        AND ips.avg_fragmentation_in_percent >= )" +
+                        std::to_string(fragmentationMin) + R"(
+        AND ips.avg_fragmentation_in_percent < )" +
+                        std::to_string(fragmentationMax) + R"(
         AND ips.page_count > 100
     )";
 
     std::vector<std::vector<std::string>> results;
     SQLHSTMT stmt;
     SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, conn, &stmt);
-    if (ret != SQL_SUCCESS) return;
+    if (ret != SQL_SUCCESS)
+      return;
 
     ret = SQLExecDirect(stmt, (SQLCHAR *)query.c_str(), SQL_NTS);
     if (ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) {
@@ -700,8 +753,10 @@ void MaintenanceManager::detectReorganizeIndexNeeds(SQLHDBC conn, const std::str
       while (SQLFetch(stmt) == SQL_SUCCESS) {
         std::vector<std::string> row;
         for (SQLSMALLINT i = 1; i <= numCols; i++) {
-          if (SQLGetData(stmt, i, SQL_C_CHAR, buffer, sizeof(buffer), &len) == SQL_SUCCESS) {
-            row.push_back((len > 0 && len < 1024) ? std::string(buffer, len) : "");
+          if (SQLGetData(stmt, i, SQL_C_CHAR, buffer, sizeof(buffer), &len) ==
+              SQL_SUCCESS) {
+            row.push_back((len > 0 && len < 1024) ? std::string(buffer, len)
+                                                  : "");
           } else {
             row.push_back("");
           }
@@ -728,7 +783,8 @@ void MaintenanceManager::detectReorganizeIndexNeeds(SQLHDBC conn, const std::str
         task.enabled = true;
         task.priority = 5;
         task.status = "PENDING";
-        task.next_maintenance_date = calculateNextMaintenanceDate("REORGANIZE INDEX");
+        task.next_maintenance_date =
+            calculateNextMaintenanceDate("REORGANIZE INDEX");
         task.thresholds = thresholds;
         task.server_name = serverName;
         task.database_name = databaseName;
@@ -738,7 +794,8 @@ void MaintenanceManager::detectReorganizeIndexNeeds(SQLHDBC conn, const std::str
     }
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
-                  "Error detecting REORGANIZE INDEX needs: " + std::string(e.what()));
+                  "Error detecting REORGANIZE INDEX needs: " +
+                      std::string(e.what()));
   }
 }
 
@@ -770,7 +827,8 @@ void MaintenanceManager::executeMaintenance() {
         }
 
         auto endTime = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::seconds>(endTime - startTime);
+        auto duration = std::chrono::duration_cast<std::chrono::seconds>(
+            endTime - startTime);
 
         MaintenanceMetrics after = collectMetricsAfter(task);
         MaintenanceTask updatedTask = task;
@@ -778,10 +836,13 @@ void MaintenanceManager::executeMaintenance() {
 
         std::string resultMsg = "Maintenance completed successfully. ";
         if (updatedTask.space_reclaimed_mb > 0) {
-          resultMsg += "Space reclaimed: " + std::to_string(updatedTask.space_reclaimed_mb) + " MB. ";
+          resultMsg += "Space reclaimed: " +
+                       std::to_string(updatedTask.space_reclaimed_mb) + " MB. ";
         }
         if (updatedTask.performance_improvement_pct > 0) {
-          resultMsg += "Performance improvement: " + std::to_string(updatedTask.performance_improvement_pct) + "%. ";
+          resultMsg += "Performance improvement: " +
+                       std::to_string(updatedTask.performance_improvement_pct) +
+                       "%. ";
         }
 
         updateTaskStatus(task.id, "COMPLETED", resultMsg);
@@ -790,19 +851,23 @@ void MaintenanceManager::executeMaintenance() {
       } catch (const std::exception &e) {
         updateTaskStatus(task.id, "FAILED", "", std::string(e.what()));
         Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
-                      "Error executing maintenance task " + std::to_string(task.id) + ": " + std::string(e.what()));
+                      "Error executing maintenance task " +
+                          std::to_string(task.id) + ": " +
+                          std::string(e.what()));
       }
     }
 
     Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
-                 "Maintenance execution completed. Executed " + std::to_string(executed) + " tasks");
+                 "Maintenance execution completed. Executed " +
+                     std::to_string(executed) + " tasks");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
                   "Error in maintenance execution: " + std::string(e.what()));
   }
 }
 
-void MaintenanceManager::executePostgreSQLMaintenance(const MaintenanceTask &task) {
+void MaintenanceManager::executePostgreSQLMaintenance(
+    const MaintenanceTask &task) {
   try {
     pqxx::connection conn(task.connection_string);
     if (!conn.is_open()) {
@@ -813,14 +878,18 @@ void MaintenanceManager::executePostgreSQLMaintenance(const MaintenanceTask &tas
     std::string query;
 
     if (task.maintenance_type == "VACUUM") {
-      query = "VACUUM ANALYZE " + txn.quote_name(task.schema_name) + "." + txn.quote_name(task.object_name);
+      query = "VACUUM ANALYZE " + txn.quote_name(task.schema_name) + "." +
+              txn.quote_name(task.object_name);
     } else if (task.maintenance_type == "ANALYZE") {
-      query = "ANALYZE " + txn.quote_name(task.schema_name) + "." + txn.quote_name(task.object_name);
+      query = "ANALYZE " + txn.quote_name(task.schema_name) + "." +
+              txn.quote_name(task.object_name);
     } else if (task.maintenance_type == "REINDEX") {
       if (task.object_type == "INDEX") {
-        query = "REINDEX INDEX " + txn.quote_name(task.schema_name) + "." + txn.quote_name(task.object_name);
+        query = "REINDEX INDEX " + txn.quote_name(task.schema_name) + "." +
+                txn.quote_name(task.object_name);
       } else {
-        query = "REINDEX TABLE " + txn.quote_name(task.schema_name) + "." + txn.quote_name(task.object_name);
+        query = "REINDEX TABLE " + txn.quote_name(task.schema_name) + "." +
+                txn.quote_name(task.object_name);
       }
     }
 
@@ -828,14 +897,17 @@ void MaintenanceManager::executePostgreSQLMaintenance(const MaintenanceTask &tas
       txn.exec(query);
       txn.commit();
       Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
-                   "Executed " + task.maintenance_type + " on " + task.schema_name + "." + task.object_name);
+                   "Executed " + task.maintenance_type + " on " +
+                       task.schema_name + "." + task.object_name);
     }
   } catch (const std::exception &e) {
-    throw std::runtime_error("PostgreSQL maintenance failed: " + std::string(e.what()));
+    throw std::runtime_error("PostgreSQL maintenance failed: " +
+                             std::string(e.what()));
   }
 }
 
-void MaintenanceManager::executeMariaDBMaintenance(const MaintenanceTask &task) {
+void MaintenanceManager::executeMariaDBMaintenance(
+    const MaintenanceTask &task) {
   try {
     auto params = ConnectionStringParser::parse(task.connection_string);
     if (!params) {
@@ -851,20 +923,25 @@ void MaintenanceManager::executeMariaDBMaintenance(const MaintenanceTask &task) 
     std::string query;
 
     if (task.maintenance_type == "OPTIMIZE TABLE") {
-      query = "OPTIMIZE TABLE " + escapeSQL(mysqlConn, task.schema_name) + "." + escapeSQL(mysqlConn, task.object_name);
+      query = "OPTIMIZE TABLE " + escapeSQL(mysqlConn, task.schema_name) + "." +
+              escapeSQL(mysqlConn, task.object_name);
     } else if (task.maintenance_type == "ANALYZE TABLE") {
-      query = "ANALYZE TABLE " + escapeSQL(mysqlConn, task.schema_name) + "." + escapeSQL(mysqlConn, task.object_name);
+      query = "ANALYZE TABLE " + escapeSQL(mysqlConn, task.schema_name) + "." +
+              escapeSQL(mysqlConn, task.object_name);
     }
 
     if (!query.empty()) {
       if (mysql_query(mysqlConn, query.c_str())) {
-        throw std::runtime_error("Query failed: " + std::string(mysql_error(mysqlConn)));
+        throw std::runtime_error("Query failed: " +
+                                 std::string(mysql_error(mysqlConn)));
       }
       Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
-                   "Executed " + task.maintenance_type + " on " + task.schema_name + "." + task.object_name);
+                   "Executed " + task.maintenance_type + " on " +
+                       task.schema_name + "." + task.object_name);
     }
   } catch (const std::exception &e) {
-    throw std::runtime_error("MariaDB maintenance failed: " + std::string(e.what()));
+    throw std::runtime_error("MariaDB maintenance failed: " +
+                             std::string(e.what()));
   }
 }
 
@@ -872,9 +949,10 @@ void MaintenanceManager::executeMSSQLMaintenance(const MaintenanceTask &task) {
   // Implementation for MSSQL maintenance execution
 }
 
-MaintenanceMetrics MaintenanceManager::collectMetricsBefore(const MaintenanceTask &task) {
+MaintenanceMetrics
+MaintenanceManager::collectMetricsBefore(const MaintenanceTask &task) {
   MaintenanceMetrics metrics;
-  
+
   try {
     if (task.db_engine == "PostgreSQL") {
       pqxx::connection conn(task.connection_string);
@@ -892,17 +970,21 @@ MaintenanceMetrics MaintenanceManager::collectMetricsBefore(const MaintenanceTas
           WHERE schemaname = $2 AND relname = $3
         )";
         std::string fullName = task.schema_name + "." + task.object_name;
-        auto results = txn.exec_params(query, fullName, task.schema_name, task.object_name);
+        auto results = txn.exec_params(query, fullName, task.schema_name,
+                                       task.object_name);
         txn.commit();
-        
+
         if (!results.empty()) {
           const auto &row = results[0];
           metrics.dead_tuples = row[0].as<long long>();
           metrics.live_tuples = row[1].as<long long>();
           metrics.table_size_mb = row[3].as<long long>() / (1024.0 * 1024.0);
-          metrics.index_size_mb = (row[4].is_null() ? 0 : row[4].as<long long>()) / (1024.0 * 1024.0);
+          metrics.index_size_mb =
+              (row[4].is_null() ? 0 : row[4].as<long long>()) /
+              (1024.0 * 1024.0);
           if (metrics.live_tuples > 0) {
-            metrics.fragmentation_pct = (metrics.dead_tuples * 100.0) / metrics.live_tuples;
+            metrics.fragmentation_pct =
+                (metrics.dead_tuples * 100.0) / metrics.live_tuples;
           }
         }
       }
@@ -912,20 +994,29 @@ MaintenanceMetrics MaintenanceManager::collectMetricsBefore(const MaintenanceTas
         MySQLConnection conn(*params);
         if (conn.isValid()) {
           MYSQL *mysqlConn = conn.get();
-          std::string query = "SELECT data_free, data_length, index_length FROM information_schema.tables "
-                              "WHERE table_schema = '" + escapeSQL(mysqlConn, task.schema_name) + "' "
-                              "AND table_name = '" + escapeSQL(mysqlConn, task.object_name) + "'";
+          std::string query = "SELECT data_free, data_length, index_length "
+                              "FROM information_schema.tables "
+                              "WHERE table_schema = '" +
+                              escapeSQL(mysqlConn, task.schema_name) +
+                              "' "
+                              "AND table_name = '" +
+                              escapeSQL(mysqlConn, task.object_name) + "'";
           if (mysql_query(mysqlConn, query.c_str()) == 0) {
             MYSQL_RES *res = mysql_store_result(mysqlConn);
             if (res) {
               MYSQL_ROW row = mysql_fetch_row(res);
               if (row) {
-                metrics.free_space_mb = (row[0] ? std::stod(row[0]) : 0) / (1024.0 * 1024.0);
-                metrics.table_size_mb = (row[1] ? std::stod(row[1]) : 0) / (1024.0 * 1024.0);
-                metrics.index_size_mb = (row[2] ? std::stod(row[2]) : 0) / (1024.0 * 1024.0);
-                long long totalSize = (row[1] ? std::stoll(row[1]) : 0) + (row[2] ? std::stoll(row[2]) : 0);
+                metrics.free_space_mb =
+                    (row[0] ? std::stod(row[0]) : 0) / (1024.0 * 1024.0);
+                metrics.table_size_mb =
+                    (row[1] ? std::stod(row[1]) : 0) / (1024.0 * 1024.0);
+                metrics.index_size_mb =
+                    (row[2] ? std::stod(row[2]) : 0) / (1024.0 * 1024.0);
+                long long totalSize = (row[1] ? std::stoll(row[1]) : 0) +
+                                      (row[2] ? std::stoll(row[2]) : 0);
                 if (totalSize > 0) {
-                  metrics.fragmentation_pct = ((row[0] ? std::stoll(row[0]) : 0) * 100.0) / totalSize;
+                  metrics.fragmentation_pct =
+                      ((row[0] ? std::stoll(row[0]) : 0) * 100.0) / totalSize;
                 }
               }
               mysql_free_result(res);
@@ -938,35 +1029,46 @@ MaintenanceMetrics MaintenanceManager::collectMetricsBefore(const MaintenanceTas
     Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
                   "Error collecting metrics before: " + std::string(e.what()));
   }
-  
+
   return metrics;
 }
 
-MaintenanceMetrics MaintenanceManager::collectMetricsAfter(const MaintenanceTask &task) {
+MaintenanceMetrics
+MaintenanceManager::collectMetricsAfter(const MaintenanceTask &task) {
   return collectMetricsBefore(task);
 }
 
-void MaintenanceManager::calculateImpact(MaintenanceTask &task, const MaintenanceMetrics &before, const MaintenanceMetrics &after) {
+void MaintenanceManager::calculateImpact(MaintenanceTask &task,
+                                         const MaintenanceMetrics &before,
+                                         const MaintenanceMetrics &after) {
   if (before.table_size_mb > 0 && after.table_size_mb > 0) {
     task.space_reclaimed_mb = before.table_size_mb - after.table_size_mb;
   }
   if (before.fragmentation_pct > 0 && after.fragmentation_pct > 0) {
     task.fragmentation_before = before.fragmentation_pct;
     task.fragmentation_after = after.fragmentation_pct;
-    task.performance_improvement_pct = before.fragmentation_pct - after.fragmentation_pct;
+    task.performance_improvement_pct =
+        before.fragmentation_pct - after.fragmentation_pct;
   }
 }
 
-int MaintenanceManager::calculatePriority(const MaintenanceMetrics &metrics, const std::string &maintenanceType) {
+int MaintenanceManager::calculatePriority(const MaintenanceMetrics &metrics,
+                                          const std::string &maintenanceType) {
   int priority = 5;
 
   if (maintenanceType == "VACUUM") {
-    if (metrics.fragmentation_pct > 50) priority = 9;
-    else if (metrics.fragmentation_pct > 30) priority = 7;
-    else if (metrics.fragmentation_pct > 10) priority = 5;
-  } else if (maintenanceType == "REINDEX" || maintenanceType == "REBUILD INDEX") {
-    if (metrics.fragmentation_pct > 50) priority = 8;
-    else if (metrics.fragmentation_pct > 30) priority = 6;
+    if (metrics.fragmentation_pct > 50)
+      priority = 9;
+    else if (metrics.fragmentation_pct > 30)
+      priority = 7;
+    else if (metrics.fragmentation_pct > 10)
+      priority = 5;
+  } else if (maintenanceType == "REINDEX" ||
+             maintenanceType == "REBUILD INDEX") {
+    if (metrics.fragmentation_pct > 50)
+      priority = 8;
+    else if (metrics.fragmentation_pct > 30)
+      priority = 6;
   }
 
   return priority;
@@ -993,27 +1095,19 @@ void MaintenanceManager::storeTask(const MaintenanceTask &task) {
         updated_at = NOW()
     )";
 
-    auto nextDate = std::chrono::system_clock::to_time_t(task.next_maintenance_date);
+    auto nextDate =
+        std::chrono::system_clock::to_time_t(task.next_maintenance_date);
     std::stringstream ss;
     ss << std::put_time(std::gmtime(&nextDate), "%Y-%m-%d %H:%M:%S");
     std::string nextDateStr = ss.str();
 
-    txn.exec_params(query,
-      task.maintenance_type,
-      task.db_engine,
-      task.connection_string,
-      task.schema_name,
-      task.object_name,
-      task.object_type,
-      task.auto_execute,
-      task.enabled,
-      task.priority,
-      task.status,
-      nextDateStr,
-      task.thresholds.dump(),
-      task.server_name.empty() ? nullptr : task.server_name.c_str(),
-      task.database_name.empty() ? nullptr : task.database_name.c_str()
-    );
+    txn.exec_params(
+        query, task.maintenance_type, task.db_engine, task.connection_string,
+        task.schema_name, task.object_name, task.object_type, task.auto_execute,
+        task.enabled, task.priority, task.status, nextDateStr,
+        task.thresholds.dump(),
+        task.server_name.empty() ? nullptr : task.server_name.c_str(),
+        task.database_name.empty() ? nullptr : task.database_name.c_str());
     txn.commit();
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
@@ -1021,7 +1115,9 @@ void MaintenanceManager::storeTask(const MaintenanceTask &task) {
   }
 }
 
-void MaintenanceManager::updateTaskStatus(int taskId, const std::string &status, const std::string &resultMessage, const std::string &errorDetails) {
+void MaintenanceManager::updateTaskStatus(int taskId, const std::string &status,
+                                          const std::string &resultMessage,
+                                          const std::string &errorDetails) {
   try {
     pqxx::connection conn(metadataConnectionString_);
     pqxx::work txn(conn);
@@ -1043,7 +1139,9 @@ void MaintenanceManager::updateTaskStatus(int taskId, const std::string &status,
   }
 }
 
-void MaintenanceManager::storeExecutionMetrics(const MaintenanceTask &task, const MaintenanceMetrics &before, const MaintenanceMetrics &after) {
+void MaintenanceManager::storeExecutionMetrics(
+    const MaintenanceTask &task, const MaintenanceMetrics &before,
+    const MaintenanceMetrics &after) {
   try {
     pqxx::connection conn(metadataConnectionString_);
     pqxx::work txn(conn);
@@ -1081,25 +1179,17 @@ void MaintenanceManager::storeExecutionMetrics(const MaintenanceTask &task, cons
       WHERE id = $12
     )";
 
-    auto nextDate = std::chrono::system_clock::to_time_t(task.next_maintenance_date);
+    auto nextDate =
+        std::chrono::system_clock::to_time_t(task.next_maintenance_date);
     std::stringstream ss;
     ss << std::put_time(std::gmtime(&nextDate), "%Y-%m-%d %H:%M:%S");
     std::string nextDateStr = ss.str();
 
-    txn.exec_params(query,
-      metricsBeforeJson.dump(),
-      metricsAfterJson.dump(),
-      task.space_reclaimed_mb,
-      task.performance_improvement_pct,
-      task.fragmentation_before,
-      task.fragmentation_after,
-      before.dead_tuples,
-      after.dead_tuples,
-      before.table_size_mb,
-      after.table_size_mb,
-      nextDateStr,
-      task.id
-    );
+    txn.exec_params(query, metricsBeforeJson.dump(), metricsAfterJson.dump(),
+                    task.space_reclaimed_mb, task.performance_improvement_pct,
+                    task.fragmentation_before, task.fragmentation_after,
+                    before.dead_tuples, after.dead_tuples, before.table_size_mb,
+                    after.table_size_mb, nextDateStr, task.id);
     txn.commit();
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
@@ -1142,13 +1232,14 @@ std::vector<MaintenanceTask> MaintenanceManager::getPendingTasks() {
       task.enabled = row[8].as<bool>();
       task.priority = row[9].as<int>();
       task.status = row[10].as<std::string>();
-      
+
       if (!row[11].is_null()) {
         std::string dateStr = row[11].as<std::string>();
         std::tm tm = {};
         std::istringstream ss(dateStr);
         ss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
-        task.next_maintenance_date = std::chrono::system_clock::from_time_t(std::mktime(&tm));
+        task.next_maintenance_date =
+            std::chrono::system_clock::from_time_t(std::mktime(&tm));
       }
 
       if (!row[12].is_null()) {
@@ -1164,21 +1255,27 @@ std::vector<MaintenanceTask> MaintenanceManager::getPendingTasks() {
   return tasks;
 }
 
-std::chrono::system_clock::time_point MaintenanceManager::calculateNextMaintenanceDate(const std::string &maintenanceType) {
+std::chrono::system_clock::time_point
+MaintenanceManager::calculateNextMaintenanceDate(
+    const std::string &maintenanceType) {
   auto now = std::chrono::system_clock::now();
-  
+
   if (maintenanceType == "VACUUM" || maintenanceType == "OPTIMIZE TABLE") {
     return now + std::chrono::hours(24 * 7);
-  } else if (maintenanceType == "ANALYZE" || maintenanceType == "ANALYZE TABLE" || maintenanceType == "UPDATE STATISTICS") {
+  } else if (maintenanceType == "ANALYZE" ||
+             maintenanceType == "ANALYZE TABLE" ||
+             maintenanceType == "UPDATE STATISTICS") {
     return now + std::chrono::hours(24);
-  } else if (maintenanceType == "REINDEX" || maintenanceType == "REBUILD INDEX") {
+  } else if (maintenanceType == "REINDEX" ||
+             maintenanceType == "REBUILD INDEX") {
     return now + std::chrono::hours(24 * 30);
   }
-  
+
   return now + std::chrono::hours(24);
 }
 
-json MaintenanceManager::getThresholds(const std::string &dbEngine, const std::string &maintenanceType) {
+json MaintenanceManager::getThresholds(const std::string &dbEngine,
+                                       const std::string &maintenanceType) {
   try {
     return defaultThresholds_[dbEngine][maintenanceType];
   } catch (...) {
@@ -1186,7 +1283,8 @@ json MaintenanceManager::getThresholds(const std::string &dbEngine, const std::s
   }
 }
 
-std::string MaintenanceManager::escapeSQL(pqxx::connection &conn, const std::string &str) {
+std::string MaintenanceManager::escapeSQL(pqxx::connection &conn,
+                                          const std::string &str) {
   return conn.quote(str);
 }
 
@@ -1194,11 +1292,13 @@ std::string MaintenanceManager::escapeSQL(MYSQL *conn, const std::string &str) {
   if (!conn || str.empty()) {
     return str;
   }
-  char *escaped = new char[str.length() * 2 + 1];
-  mysql_real_escape_string(conn, escaped, str.c_str(), str.length());
-  std::string result(escaped);
-  delete[] escaped;
-  return result;
+  std::vector<char> escaped(str.length() * 2 + 1);
+  unsigned long len =
+      mysql_real_escape_string(conn, escaped.data(), str.c_str(), str.length());
+  if (len == (unsigned long)-1) {
+    return str;
+  }
+  return std::string(escaped.data(), len);
 }
 
 void MaintenanceManager::executeManual(int maintenanceId) {

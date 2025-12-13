@@ -37,7 +37,6 @@ void CatalogManager::cleanCatalog() {
     cleaner_->cleanNonExistentMariaDBTables();
     cleaner_->cleanNonExistentMSSQLTables();
     cleaner_->cleanOrphanedTables();
-    repo_->cleanInvalidOffsets();
     cleaner_->cleanOldLogs(DatabaseDefaults::DEFAULT_LOG_RETENTION_HOURS);
     updateClusterNames();
   } catch (const std::exception &e) {
@@ -102,11 +101,13 @@ void CatalogManager::validateSchemaConsistency() {
     pqxx::connection conn(metadataConnStr_);
     pqxx::work txn(conn);
 
-    auto results = txn.exec(
+    auto results = txn.exec_params(
         "SELECT schema_name, table_name, db_engine, connection_string "
         "FROM metadata.catalog "
-        "WHERE active = true AND status IN ('LISTENING_CHANGES', 'FULL_LOAD') "
-        "ORDER BY db_engine, schema_name, table_name");
+        "WHERE active = true AND status IN ($1, $2) "
+        "ORDER BY db_engine, schema_name, table_name",
+        std::string(CatalogStatus::LISTENING_CHANGES),
+        std::string(CatalogStatus::FULL_LOAD));
     txn.commit();
 
     for (const auto &row : results) {
@@ -188,17 +189,30 @@ int64_t CatalogManager::getTableSize(const std::string &schema,
       }
 
       MYSQL *mysqlConn = mariadbConn->get();
-      char escapedSchema[schema.length() * 2 + 1];
-      char escapedTable[table.length() * 2 + 1];
-      mysql_real_escape_string(mysqlConn, escapedSchema, schema.c_str(),
-                               schema.length());
-      mysql_real_escape_string(mysqlConn, escapedTable, table.c_str(),
-                               table.length());
+      size_t schemaBufSize = schema.length() * 2 + 1;
+      size_t tableBufSize = table.length() * 2 + 1;
+      std::vector<char> escapedSchemaBuf(schemaBufSize);
+      std::vector<char> escapedTableBuf(tableBufSize);
+
+      unsigned long schemaEscapedLen = mysql_real_escape_string(
+          mysqlConn, escapedSchemaBuf.data(), schema.c_str(), schema.length());
+      unsigned long tableEscapedLen = mysql_real_escape_string(
+          mysqlConn, escapedTableBuf.data(), table.c_str(), table.length());
+
+      if (schemaEscapedLen >= schemaBufSize ||
+          tableEscapedLen >= tableBufSize) {
+        Logger::error(LogCategory::DATABASE, "CatalogManager",
+                      "Escape buffer overflow");
+        return 0;
+      }
+
+      std::string escapedSchema(escapedSchemaBuf.data(), schemaEscapedLen);
+      std::string escapedTable(escapedTableBuf.data(), tableEscapedLen);
 
       std::string query = "SELECT table_rows FROM information_schema.tables "
                           "WHERE table_schema = '" +
-                          std::string(escapedSchema) + "' AND table_name = '" +
-                          std::string(escapedTable) + "'";
+                          escapedSchema + "' AND table_name = '" +
+                          escapedTable + "'";
 
       if (mysql_query(mysqlConn, query.c_str())) {
         Logger::error(LogCategory::DATABASE, "CatalogManager",
@@ -206,28 +220,43 @@ int64_t CatalogManager::getTableSize(const std::string &schema,
         return 0;
       }
 
-      MYSQL_RES *res = mysql_store_result(mysqlConn);
-      if (!res) {
-        if (mysql_field_count(mysqlConn) > 0) {
-          Logger::error(LogCategory::DATABASE, "CatalogManager",
-                        "Result fetch failed: " +
-                            std::string(mysql_error(mysqlConn)));
+      MYSQL_RES *res = nullptr;
+      try {
+        res = mysql_store_result(mysqlConn);
+        if (!res) {
+          if (mysql_field_count(mysqlConn) > 0) {
+            Logger::error(LogCategory::DATABASE, "CatalogManager",
+                          "Result fetch failed: " +
+                              std::string(mysql_error(mysqlConn)));
+          }
+          return 0;
+        }
+
+        MYSQL_ROW row = mysql_fetch_row(res);
+        if (row && row[0] && row[0] != "NULL") {
+          try {
+            std::string sizeStr(row[0]);
+            if (!sizeStr.empty() && sizeStr.length() <= 20) {
+              int64_t size = std::stoll(sizeStr);
+              mysql_free_result(res);
+              return size;
+            }
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::DATABASE, "CatalogManager",
+                          "Failed to parse table size: " +
+                              std::string(e.what()));
+          } catch (...) {
+            Logger::error(LogCategory::DATABASE, "CatalogManager",
+                          "Unknown error parsing table size");
+          }
+        }
+        mysql_free_result(res);
+      } catch (...) {
+        if (res) {
+          mysql_free_result(res);
         }
         return 0;
       }
-
-      MYSQL_ROW row = mysql_fetch_row(res);
-      if (row && row[0] && row[0] != "NULL") {
-        try {
-          int64_t size = std::stoll(row[0]);
-          mysql_free_result(res);
-          return size;
-        } catch (...) {
-          mysql_free_result(res);
-          return 0;
-        }
-      }
-      mysql_free_result(res);
     } else if (db_engine == "MSSQL") {
       ODBCConnection conn(connStr);
       if (!conn.isValid()) {
@@ -237,10 +266,22 @@ int64_t CatalogManager::getTableSize(const std::string &schema,
       }
 
       SQLHDBC dbc = conn.getDbc();
-      std::string query =
-          "SELECT COUNT(*) FROM [" + schema + "].[" + table + "]";
 
-      SQLHSTMT stmt;
+      if (!StringUtils::isValidDatabaseIdentifier(schema) ||
+          !StringUtils::isValidDatabaseIdentifier(table)) {
+        Logger::error(LogCategory::DATABASE, "CatalogManager",
+                      "Invalid schema or table name for MSSQL: " + schema +
+                          "." + table);
+        return 0;
+      }
+
+      std::string escapedSchema = StringUtils::escapeMSSQLIdentifier(schema);
+      std::string escapedTable = StringUtils::escapeMSSQLIdentifier(table);
+
+      std::string query =
+          "SELECT COUNT(*) FROM " + escapedSchema + "." + escapedTable;
+
+      SQLHSTMT stmt = nullptr;
       SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt);
       if (!SQL_SUCCEEDED(ret)) {
         Logger::error(LogCategory::DATABASE, "CatalogManager",
@@ -248,30 +289,66 @@ int64_t CatalogManager::getTableSize(const std::string &schema,
         return 0;
       }
 
-      ret = SQLExecDirect(stmt, (SQLCHAR *)query.c_str(), SQL_NTS);
-      if (!SQL_SUCCEEDED(ret)) {
-        Logger::error(LogCategory::DATABASE, "CatalogManager",
-                      "Query execution failed");
-        SQLFreeHandle(SQL_HANDLE_STMT, stmt);
-        return 0;
-      }
+      try {
+        ret = SQLPrepare(stmt, (SQLCHAR *)query.c_str(), SQL_NTS);
+        if (!SQL_SUCCEEDED(ret)) {
+          Logger::error(LogCategory::DATABASE, "CatalogManager",
+                        "SQLPrepare failed");
+          SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+          return 0;
+        }
 
-      int64_t count = 0;
-      if (SQLFetch(stmt) == SQL_SUCCESS) {
-        char buffer[256];
-        SQLLEN len;
-        ret = SQLGetData(stmt, 1, SQL_C_CHAR, buffer, sizeof(buffer), &len);
-        if (SQL_SUCCEEDED(ret) && len != SQL_NULL_DATA) {
-          try {
-            count = std::stoll(std::string(buffer, len));
-          } catch (...) {
-            count = 0;
+        ret = SQLExecute(stmt);
+        if (!SQL_SUCCEEDED(ret)) {
+          Logger::error(LogCategory::DATABASE, "CatalogManager",
+                        "Query execution failed");
+          SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+          return 0;
+        }
+
+        int64_t count = 0;
+        if (SQLFetch(stmt) == SQL_SUCCESS) {
+          constexpr size_t BUFFER_SIZE = 256;
+          char buffer[BUFFER_SIZE];
+          SQLLEN len;
+          ret = SQLGetData(stmt, 1, SQL_C_CHAR, buffer, sizeof(buffer), &len);
+          if (SQL_SUCCEEDED(ret) && len != SQL_NULL_DATA && len > 0) {
+            try {
+              size_t actualLen = (len < static_cast<SQLLEN>(BUFFER_SIZE))
+                                     ? static_cast<size_t>(len)
+                                     : BUFFER_SIZE - 1;
+              count = std::stoll(std::string(buffer, actualLen));
+            } catch (const std::exception &e) {
+              Logger::error(LogCategory::DATABASE, "CatalogManager",
+                            "Failed to parse COUNT result: " +
+                                std::string(e.what()));
+              count = 0;
+            } catch (...) {
+              Logger::error(LogCategory::DATABASE, "CatalogManager",
+                            "Unknown error parsing COUNT result");
+              count = 0;
+            }
           }
         }
-      }
 
-      SQLFreeHandle(SQL_HANDLE_STMT, stmt);
-      return count;
+        SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+        return count;
+      } catch (const std::exception &e) {
+        Logger::error(LogCategory::DATABASE, "CatalogManager",
+                      "Exception in MSSQL getTableRowCount: " +
+                          std::string(e.what()));
+        if (stmt) {
+          SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+        }
+        return 0;
+      } catch (...) {
+        Logger::error(LogCategory::DATABASE, "CatalogManager",
+                      "Unknown exception in MSSQL getTableRowCount");
+        if (stmt) {
+          SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+        }
+        return 0;
+      }
     } else if (db_engine == "PostgreSQL") {
       try {
         pqxx::connection conn(connStr);
@@ -303,6 +380,11 @@ int64_t CatalogManager::getTableSize(const std::string &schema,
 // simultaneously. Lock is held for 60 seconds and tries to acquire for
 // 30 seconds. If lock cannot be acquired, the sync is skipped.
 void CatalogManager::syncCatalog(const std::string &dbEngine) {
+  if (dbEngine.empty()) {
+    Logger::error(LogCategory::DATABASE, "CatalogManager",
+                  "Invalid input: dbEngine must not be empty");
+    return;
+  }
   std::string lockName = "catalog_sync_" + dbEngine;
   CatalogLock lock(metadataConnStr_, lockName, 60);
   if (!lock.tryAcquire(30)) {
@@ -337,6 +419,16 @@ void CatalogManager::syncCatalog(const std::string &dbEngine) {
       try {
         tables = engine->discoverTables();
       } catch (const std::exception &e) {
+        std::string sanitizedConn = connStr;
+        size_t passPos = sanitizedConn.find("password=");
+        if (passPos != std::string::npos) {
+          size_t passStart = passPos + 9;
+          size_t passEnd = sanitizedConn.find_first_of("; ", passStart);
+          if (passEnd == std::string::npos) {
+            passEnd = sanitizedConn.length();
+          }
+          sanitizedConn.replace(passStart, passEnd - passStart, "***");
+        }
         Logger::error(LogCategory::DATABASE, "CatalogManager",
                       "Error discovering tables for connection: " +
                           std::string(e.what()));

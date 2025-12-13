@@ -1,7 +1,10 @@
 #ifndef CLUSTER_NAME_RESOLVER_H
 #define CLUSTER_NAME_RESOLVER_H
 
+#include <memory>
 #include <string>
+
+class IClusterNameProvider;
 
 class ClusterNameResolver {
 public:
@@ -9,11 +12,9 @@ public:
                              const std::string &dbEngine);
 
 private:
-  static std::string resolveMariaDB(const std::string &connectionString);
-  static std::string resolveMSSQL(const std::string &connectionString);
-  static std::string resolvePostgreSQL(const std::string &connectionString);
+  static std::unique_ptr<IClusterNameProvider>
+  createProvider(const std::string &dbEngine);
   static std::string extractHostname(const std::string &connectionString);
-  static std::string getClusterNameFromHostname(const std::string &hostname);
 };
 
 #endif

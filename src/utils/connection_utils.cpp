@@ -1,39 +1,73 @@
 #include "utils/connection_utils.h"
+#include "utils/string_utils.h"
 
 // Parses a connection string into structured ConnectionParams. Expects a
-// semicolon-separated format like "host=server;user=user;password=pass;db=database;port=3306".
-// Supports both lowercase and uppercase keys (e.g., "host" or "SERVER",
-// "db" or "DATABASE"). Trims whitespace from keys and values. Extracts host,
-// user, password, database (db/DATABASE), and port. Validates that host, user,
-// and database are not empty before returning. Returns std::nullopt if
-// required parameters are missing. Port defaults to DEFAULT_MYSQL_PORT if not
-// specified. This parser handles common connection string formats used across
-// different database engines.
+// semicolon-separated format like
+// "host=server;user=user;password=pass;db=database;port=3306". Supports both
+// lowercase and uppercase keys (e.g., "host" or "SERVER", "db" or "DATABASE").
+// Trims whitespace from keys and values. Extracts host, user, password,
+// database (db/DATABASE), and port. Validates that host, user, and database are
+// not empty before returning. Returns std::nullopt if required parameters are
+// missing. Port defaults to DEFAULT_MYSQL_PORT if not specified. This parser
+// handles common connection string formats used across different database
+// engines.
 std::optional<ConnectionParams>
 ConnectionStringParser::parse(std::string_view connStr) {
+  if (connStr.empty()) {
+    return std::nullopt;
+  }
+
   ConnectionParams params;
   std::string connString{connStr};
-  std::istringstream ss{connString};
-  std::string token;
+  size_t pos = 0;
 
-  while (std::getline(ss, token, ';')) {
-    auto pos = token.find('=');
-    if (pos == std::string::npos)
+  while (pos < connString.length()) {
+    size_t semicolonPos = connString.find(';', pos);
+    std::string token;
+    if (semicolonPos == std::string::npos) {
+      token = connString.substr(pos);
+      pos = connString.length();
+    } else {
+      token = connString.substr(pos, semicolonPos - pos);
+      pos = semicolonPos + 1;
+    }
+
+    if (token.empty())
       continue;
 
-    std::string key = trim(token.substr(0, pos));
-    std::string value = trim(token.substr(pos + 1));
+    size_t equalsPos = token.find('=');
+    if (equalsPos == std::string::npos)
+      continue;
 
-    if (key == "host" || key == "SERVER")
+    std::string key = trim(token.substr(0, equalsPos));
+    std::string value = trim(token.substr(equalsPos + 1));
+
+    if (key.empty())
+      continue;
+
+    std::string lowerKey = StringUtils::toLower(key);
+
+    if (lowerKey == "host" || lowerKey == "server")
       params.host = value;
-    else if (key == "user" || key == "USER")
+    else if (lowerKey == "user")
       params.user = value;
-    else if (key == "password" || key == "PASSWORD")
+    else if (lowerKey == "password")
       params.password = value;
-    else if (key == "db" || key == "DATABASE")
+    else if (lowerKey == "db" || lowerKey == "database")
       params.db = value;
-    else if (key == "port" || key == "PORT")
+    else if (lowerKey == "port") {
       params.port = value;
+      if (!value.empty()) {
+        try {
+          unsigned long portNum = std::stoul(value);
+          if (portNum == 0 || portNum > 65535) {
+            return std::nullopt;
+          }
+        } catch (...) {
+          return std::nullopt;
+        }
+      }
+    }
   }
 
   if (params.host.empty() || params.user.empty() || params.db.empty())

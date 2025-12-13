@@ -131,11 +131,17 @@ private:
   static void writeLog(LogLevel level, LogCategory category,
                        const std::string &function,
                        const std::string &message) {
-    std::lock_guard<std::mutex> lock(logMutex);
+    LogLevel minLevel;
+    {
+      std::lock_guard<std::mutex> configLock(configMutex);
+      minLevel = currentLogLevel;
+    }
 
-    if (level < currentLogLevel) {
+    if (level < minLevel) {
       return;
     }
+
+    std::lock_guard<std::mutex> lock(logMutex);
 
     std::string levelStr = getLevelString(level);
     std::string categoryStr = getCategoryString(category);

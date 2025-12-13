@@ -110,10 +110,28 @@ OracleToPostgres::executeQueryOracle(OCIConnection *conn,
     return results;
   }
 
+  if (query.empty()) {
+    Logger::error(LogCategory::TRANSFER, "executeQueryOracle",
+                  "Empty query provided");
+    return results;
+  }
+
   OCIStmt *stmt = nullptr;
   OCIError *err = conn->getErr();
   OCISvcCtx *svc = conn->getSvc();
   OCIEnv *env = conn->getEnv();
+
+  struct StmtGuard {
+    OCIStmt *stmt_;
+    OCIError *err_;
+    StmtGuard(OCIStmt *s, OCIError *e) : stmt_(s), err_(e) {}
+    ~StmtGuard() {
+      if (stmt_) {
+        OCIHandleFree(stmt_, OCI_HTYPE_STMT);
+      }
+    }
+  };
+
   sword status =
       OCIHandleAlloc((dvoid *)env, (dvoid **)&stmt, OCI_HTYPE_STMT, 0, nullptr);
   if (status != OCI_SUCCESS) {
@@ -122,12 +140,13 @@ OracleToPostgres::executeQueryOracle(OCIConnection *conn,
     return results;
   }
 
+  StmtGuard guard(stmt, err);
+
   status = OCIStmtPrepare(stmt, err, (OraText *)query.c_str(), query.length(),
                           OCI_NTV_SYNTAX, OCI_DEFAULT);
   if (status != OCI_SUCCESS) {
     Logger::error(LogCategory::TRANSFER, "executeQueryOracle",
                   "OCIStmtPrepare failed for query: " + query);
-    OCIHandleFree(stmt, OCI_HTYPE_STMT);
     return results;
   }
 
@@ -135,7 +154,6 @@ OracleToPostgres::executeQueryOracle(OCIConnection *conn,
   if (status != OCI_SUCCESS && status != OCI_SUCCESS_WITH_INFO) {
     Logger::error(LogCategory::TRANSFER, "executeQueryOracle",
                   "OCIStmtExecute failed for query: " + query);
-    OCIHandleFree(stmt, OCI_HTYPE_STMT);
     return results;
   }
 
@@ -143,31 +161,45 @@ OracleToPostgres::executeQueryOracle(OCIConnection *conn,
   OCIAttrGet(stmt, OCI_HTYPE_STMT, &numCols, nullptr, OCI_ATTR_PARAM_COUNT,
              err);
 
+  if (numCols == 0) {
+    return results;
+  }
+
   std::vector<OCIDefine *> defines(numCols);
   std::vector<std::vector<char>> buffers(numCols);
-  std::vector<ub2> lengths(numCols);
-  std::vector<sb2> inds(numCols);
+  std::vector<ub2> lengths(numCols, 0);
+  std::vector<sb2> inds(numCols, -1);
 
   for (ub4 i = 0; i < numCols; ++i) {
-    buffers[i].resize(4000);
-    OCIDefineByPos(stmt, &defines[i], err, i + 1, buffers[i].data(), 4000,
-                   SQLT_STR, &inds[i], &lengths[i], nullptr, OCI_DEFAULT);
+    buffers[i].resize(4000, 0);
+    status =
+        OCIDefineByPos(stmt, &defines[i], err, i + 1, buffers[i].data(), 4000,
+                       SQLT_STR, &inds[i], &lengths[i], nullptr, OCI_DEFAULT);
+    if (status != OCI_SUCCESS) {
+      Logger::error(LogCategory::TRANSFER, "executeQueryOracle",
+                    "OCIDefineByPos failed for column " +
+                        std::to_string(i + 1));
+      return results;
+    }
   }
 
   while (OCIStmtFetch(stmt, err, 1, OCI_FETCH_NEXT, OCI_DEFAULT) ==
          OCI_SUCCESS) {
     std::vector<std::string> row;
+    row.reserve(numCols);
     for (ub4 i = 0; i < numCols; ++i) {
       if (inds[i] == -1) {
         row.push_back("NULL");
-      } else {
+      } else if (lengths[i] > 0 && lengths[i] <= 4000) {
         row.push_back(std::string(buffers[i].data(), lengths[i]));
+      } else {
+        row.push_back("");
       }
     }
     results.push_back(row);
   }
 
-  OCIHandleFree(stmt, OCI_HTYPE_STMT);
+  guard.stmt_ = nullptr;
   return results;
 }
 
@@ -227,9 +259,9 @@ void OracleToPostgres::updateLastOffset(pqxx::connection &pgConn,
                               "jsonb_build_object('last_offset', " +
                               std::to_string(offset) +
                               ") "
-                              "WHERE schema_name='" +
-                              escapeSQL(schema_name) + "' AND table_name='" +
-                              escapeSQL(table_name) + "'";
+                              "WHERE schema_name=" +
+                              txn.quote(schema_name) +
+                              " AND table_name=" + txn.quote(table_name);
 
     txn.exec(updateQuery);
     txn.commit();
@@ -250,17 +282,22 @@ long long OracleToPostgres::getLastOffset(pqxx::connection &pgConn,
     pqxx::work txn(pgConn);
     std::string query =
         "SELECT sync_metadata->>'last_offset' FROM metadata.catalog "
-        "WHERE schema_name='" +
-        escapeSQL(schema_name) + "' AND table_name='" + escapeSQL(table_name) +
-        "'";
+        "WHERE schema_name=" +
+        txn.quote(schema_name) + " AND table_name=" + txn.quote(table_name);
 
     auto result = txn.exec(query);
     txn.commit();
 
     if (!result.empty() && !result[0][0].is_null()) {
       std::string offsetStr = result[0][0].as<std::string>();
-      if (!offsetStr.empty()) {
-        return std::stoll(offsetStr);
+      if (!offsetStr.empty() && offsetStr.length() <= 20) {
+        try {
+          return std::stoll(offsetStr);
+        } catch (const std::exception &e) {
+          Logger::error(LogCategory::TRANSFER, "getLastOffset",
+                        "Failed to parse offset value '" + offsetStr +
+                            "': " + std::string(e.what()));
+        }
       }
     }
   } catch (const std::exception &e) {
@@ -277,12 +314,20 @@ void OracleToPostgres::updateStatus(pqxx::connection &pgConn,
                                     size_t rowCount) {
   try {
     pqxx::work txn(pgConn);
-    std::string updateQuery = "UPDATE metadata.catalog SET status='" + status +
-                              "' WHERE schema_name='" + escapeSQL(schema_name) +
-                              "' AND table_name='" + escapeSQL(table_name) +
-                              "'";
-    txn.exec(updateQuery);
-    txn.commit();
+    try {
+      std::string updateQuery =
+          "UPDATE metadata.catalog SET status=" + txn.quote(status) +
+          " WHERE schema_name=" + txn.quote(schema_name) +
+          " AND table_name=" + txn.quote(table_name);
+      txn.exec(updateQuery);
+      txn.commit();
+    } catch (...) {
+      try {
+        txn.abort();
+      } catch (...) {
+      }
+      throw;
+    }
   } catch (const std::exception &e) {
     Logger::error(LogCategory::TRANSFER, "updateStatus",
                   "Error updating status: " + std::string(e.what()));
@@ -295,6 +340,20 @@ OracleToPostgres::getPrimaryKeyColumns(OCIConnection *conn,
                                        const std::string &table_name) {
   std::vector<std::string> pkColumns;
 
+  if (schema_name.empty() || table_name.empty()) {
+    Logger::error(LogCategory::TRANSFER, "getPrimaryKeyColumns",
+                  "Empty schema or table name");
+    return pkColumns;
+  }
+
+  if (!isValidOracleIdentifier(schema_name) ||
+      !isValidOracleIdentifier(table_name)) {
+    Logger::error(
+        LogCategory::TRANSFER, "getPrimaryKeyColumns",
+        "Invalid Oracle identifier characters in schema or table name");
+    return pkColumns;
+  }
+
   std::string upperSchema = schema_name;
   std::transform(upperSchema.begin(), upperSchema.end(), upperSchema.begin(),
                  ::toupper);
@@ -306,8 +365,9 @@ OracleToPostgres::getPrimaryKeyColumns(OCIConnection *conn,
       "SELECT column_name FROM all_cons_columns WHERE constraint_name = ("
       "SELECT constraint_name FROM all_constraints "
       "WHERE UPPER(owner) = '" +
-      escapeSQL(upperSchema) + "' AND UPPER(table_name) = '" +
-      escapeSQL(upperTable) + "' AND constraint_type = 'P') ORDER BY position";
+      escapeOracleValue(upperSchema) + "' AND UPPER(table_name) = '" +
+      escapeOracleValue(upperTable) +
+      "' AND constraint_type = 'P') ORDER BY position";
 
   auto results = executeQueryOracle(conn, query);
   for (const auto &row : results) {
@@ -320,6 +380,71 @@ OracleToPostgres::getPrimaryKeyColumns(OCIConnection *conn,
   }
 
   return pkColumns;
+}
+
+// Helper function to safely escape Oracle string values
+// Escapes single quotes and validates for SQL injection patterns
+std::string OracleToPostgres::escapeOracleValue(const std::string &value) {
+  if (value.empty()) {
+    return value;
+  }
+
+  // Check for SQL injection patterns
+  std::string upperValue = value;
+  std::transform(upperValue.begin(), upperValue.end(), upperValue.begin(),
+                 ::toupper);
+
+  // Reject obvious SQL injection attempts
+  if (upperValue.find("--") != std::string::npos ||
+      upperValue.find("/*") != std::string::npos ||
+      upperValue.find("*/") != std::string::npos ||
+      upperValue.find(";") != std::string::npos ||
+      upperValue.find("DROP") != std::string::npos ||
+      upperValue.find("DELETE") != std::string::npos ||
+      upperValue.find("UPDATE") != std::string::npos ||
+      upperValue.find("INSERT") != std::string::npos ||
+      upperValue.find("EXEC") != std::string::npos ||
+      upperValue.find("EXECUTE") != std::string::npos) {
+    Logger::warning(LogCategory::TRANSFER, "escapeOracleValue",
+                    "Potentially dangerous value detected, rejecting: " +
+                        value);
+    throw std::invalid_argument(
+        "Invalid value contains SQL keywords or special characters");
+  }
+
+  // Escape single quotes (Oracle standard: ' -> '')
+  std::string escaped = value;
+  size_t pos = 0;
+  while ((pos = escaped.find("'", pos)) != std::string::npos) {
+    escaped.replace(pos, 1, "''");
+    pos += 2;
+  }
+
+  return escaped;
+}
+
+// Validates that a string is a valid Oracle identifier
+// Oracle identifiers can contain letters, digits, _, $, #, and must start with
+// a letter
+bool OracleToPostgres::isValidOracleIdentifier(const std::string &identifier) {
+  if (identifier.empty() || identifier.length() > 128) {
+    return false;
+  }
+
+  // Oracle identifiers must start with a letter
+  if (!std::isalpha(static_cast<unsigned char>(identifier[0]))) {
+    return false;
+  }
+
+  // Check remaining characters: letters, digits, _, $, #
+  for (size_t i = 1; i < identifier.length(); ++i) {
+    unsigned char c = static_cast<unsigned char>(identifier[i]);
+    if (!std::isalnum(c) && c != '_' && c != '$' && c != '#') {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 void OracleToPostgres::setupTableTargetOracleToPostgres() {
@@ -360,12 +485,20 @@ void OracleToPostgres::setupTableTargetOracleToPostgres() {
       std::transform(upperTable.begin(), upperTable.end(), upperTable.begin(),
                      ::toupper);
 
+      if (!isValidOracleIdentifier(table.schema_name) ||
+          !isValidOracleIdentifier(table.table_name)) {
+        Logger::error(LogCategory::TRANSFER, "setupTableTargetOracleToPostgres",
+                      "Invalid Oracle identifier characters for " +
+                          table.schema_name + "." + table.table_name);
+        continue;
+      }
+
       std::string query =
           "SELECT column_name, data_type, data_length, data_precision, "
           "data_scale, nullable, data_default "
           "FROM all_tab_columns WHERE UPPER(owner) = '" +
-          escapeSQL(upperSchema) + "' AND UPPER(table_name) = '" +
-          escapeSQL(upperTable) + "' ORDER BY column_id";
+          escapeOracleValue(upperSchema) + "' AND UPPER(table_name) = '" +
+          escapeOracleValue(upperTable) + "' ORDER BY column_id";
 
       auto columns = executeQueryOracle(oracleConn.get(), query);
       if (columns.empty()) {
@@ -412,23 +545,38 @@ void OracleToPostgres::setupTableTargetOracleToPostgres() {
           if (pgType == "VARCHAR" && !dataLength.empty() &&
               dataLength != "NULL") {
             try {
-              int len = std::stoi(dataLength);
-              if (len > 0) {
-                pgType = "VARCHAR(" + std::to_string(len) + ")";
+              if (!dataLength.empty() && dataLength.length() <= 10) {
+                int len = std::stoi(dataLength);
+                if (len > 0 && len <= 10485760) {
+                  pgType = "VARCHAR(" + std::to_string(len) + ")";
+                }
               }
-            } catch (...) {
+            } catch (const std::exception &e) {
+              Logger::warning(LogCategory::TRANSFER,
+                              "setupTableTargetOracleToPostgres",
+                              "Failed to parse dataLength '" + dataLength +
+                                  "': " + std::string(e.what()));
             }
           } else if (pgType == "NUMERIC" && !dataPrecision.empty() &&
                      dataPrecision != "NULL") {
             try {
-              int prec = std::stoi(dataPrecision);
-              int scale = 0;
-              if (!dataScale.empty() && dataScale != "NULL") {
-                scale = std::stoi(dataScale);
+              if (!dataPrecision.empty() && dataPrecision.length() <= 10) {
+                int prec = std::stoi(dataPrecision);
+                int scale = 0;
+                if (!dataScale.empty() && dataScale != "NULL" &&
+                    dataScale.length() <= 10) {
+                  scale = std::stoi(dataScale);
+                }
+                if (prec > 0 && prec <= 1000 && scale >= 0 && scale <= prec) {
+                  pgType = "NUMERIC(" + std::to_string(prec) + "," +
+                           std::to_string(scale) + ")";
+                }
               }
-              pgType = "NUMERIC(" + std::to_string(prec) + "," +
-                       std::to_string(scale) + ")";
-            } catch (...) {
+            } catch (const std::exception &e) {
+              Logger::warning(LogCategory::TRANSFER,
+                              "setupTableTargetOracleToPostgres",
+                              "Failed to parse numeric precision/scale: " +
+                                  std::string(e.what()));
             }
           }
         }
@@ -524,11 +672,15 @@ void OracleToPostgres::transferDataOracleToPostgres() {
       size_t sourceCount = 0;
       if (!countResults.empty() && !countResults[0].empty()) {
         try {
-          sourceCount = std::stoul(countResults[0][0]);
-        } catch (...) {
+          const std::string &countStr = countResults[0][0];
+          if (!countStr.empty() && countStr.length() <= 20) {
+            sourceCount = std::stoul(countStr);
+          }
+        } catch (const std::exception &e) {
           Logger::warning(LogCategory::TRANSFER,
                           "Could not parse source count for table " +
-                              schema_name + "." + table_name + " - using 0");
+                              schema_name + "." + table_name + ": " +
+                              std::string(e.what()) + " - using 0");
           sourceCount = 0;
         }
       }
@@ -557,9 +709,9 @@ void OracleToPostgres::transferDataOracleToPostgres() {
                            lowerTable + "\" CASCADE;");
           truncateTxn.exec(
               "UPDATE metadata.catalog SET last_processed_pk=NULL, "
-              "sync_metadata='{}'::jsonb WHERE schema_name='" +
-              escapeSQL(schema_name) + "' AND table_name='" +
-              escapeSQL(table_name) + "'");
+              "sync_metadata='{}'::jsonb WHERE schema_name=" +
+              truncateTxn.quote(schema_name) +
+              " AND table_name=" + truncateTxn.quote(table_name));
           truncateTxn.commit();
           targetCount = 0;
           Logger::info(LogCategory::TRANSFER, "transferDataOracleToPostgres",
@@ -599,10 +751,18 @@ void OracleToPostgres::transferDataOracleToPostgres() {
       }
 
       // Get column names once
+      if (!isValidOracleIdentifier(schema_name) ||
+          !isValidOracleIdentifier(table_name)) {
+        Logger::error(LogCategory::TRANSFER, "transferDataOracleToPostgres",
+                      "Invalid Oracle identifier characters for " +
+                          schema_name + "." + table_name);
+        continue;
+      }
+
       std::string columnQuery =
           "SELECT column_name FROM all_tab_columns WHERE owner = '" +
-          escapeSQL(upperSchema) + "' AND table_name = '" +
-          escapeSQL(upperTable) + "' ORDER BY column_id";
+          escapeOracleValue(upperSchema) + "' AND table_name = '" +
+          escapeOracleValue(upperTable) + "' ORDER BY column_id";
       auto columnResults = executeQueryOracle(oracleConn.get(), columnQuery);
 
       std::vector<std::string> columnNames;
@@ -634,7 +794,9 @@ void OracleToPostgres::transferDataOracleToPostgres() {
       // Process in chunks (same as MariaDB/MSSQL)
       bool hasMoreData = sourceCount > targetCount;
       size_t chunkNumber = 0;
-      const size_t CHUNK_SIZE = SyncConfig::getChunkSize();
+      size_t rawChunkSize = SyncConfig::getChunkSize();
+      const size_t CHUNK_SIZE =
+          (rawChunkSize == 0 || rawChunkSize > 10000) ? 1000 : rawChunkSize;
 
       while (hasMoreData) {
         chunkNumber++;
@@ -650,8 +812,8 @@ void OracleToPostgres::transferDataOracleToPostgres() {
             std::vector<std::string> lastPKValues =
                 parseLastPK(lastProcessedPK);
             if (!lastPKValues.empty() && pkColumns.size() == 1) {
-              selectQuery += " WHERE " + upperPkCol + " > '" +
-                             escapeSQL(lastPKValues[0]) + "'";
+              std::string escapedPK = escapeOracleValue(lastPKValues[0]);
+              selectQuery += " WHERE " + upperPkCol + " > '" + escapedPK + "'";
             }
           }
           selectQuery += " ORDER BY " + upperPkCol;
@@ -674,42 +836,50 @@ void OracleToPostgres::transferDataOracleToPostgres() {
           break;
         }
 
-        // Build INSERT query
-        std::ostringstream insertQuery;
-        insertQuery << "INSERT INTO \"" << lowerSchema << "\".\"" << lowerTable
-                    << "\" (";
-
-        for (size_t i = 0; i < columnNames.size(); ++i) {
-          if (i > 0)
-            insertQuery << ", ";
-          insertQuery << "\"" << columnNames[i] << "\"";
-        }
-        insertQuery << ") VALUES ";
-
-        for (size_t i = 0; i < results.size(); ++i) {
-          if (i > 0)
-            insertQuery << ", ";
-          insertQuery << "(";
-          for (size_t j = 0; j < columnNames.size() && j < results[i].size();
-               ++j) {
-            if (j > 0)
-              insertQuery << ", ";
-            if (results[i][j] == "NULL" || results[i][j].empty()) {
-              insertQuery << "NULL";
-            } else {
-              insertQuery << "'" << cleanValueForPostgres(results[i][j], "TEXT")
-                          << "'";
-            }
-          }
-          insertQuery << ")";
-        }
-
         try {
           pqxx::work txn(pgConn);
-          txn.exec(insertQuery.str());
-          txn.commit();
 
-          targetCount += results.size();
+          std::ostringstream insertQuery;
+          insertQuery << "INSERT INTO " << txn.quote_name(lowerSchema) << "."
+                      << txn.quote_name(lowerTable) << " (";
+
+          for (size_t i = 0; i < columnNames.size(); ++i) {
+            if (i > 0)
+              insertQuery << ", ";
+            insertQuery << txn.quote_name(columnNames[i]);
+          }
+          insertQuery << ") VALUES ";
+
+          for (size_t i = 0; i < results.size(); ++i) {
+            if (i > 0)
+              insertQuery << ", ";
+            insertQuery << "(";
+            for (size_t j = 0; j < columnNames.size() && j < results[i].size();
+                 ++j) {
+              if (j > 0)
+                insertQuery << ", ";
+              if (results[i][j] == "NULL" || results[i][j].empty()) {
+                insertQuery << "NULL";
+              } else {
+                std::string cleanValue =
+                    cleanValueForPostgres(results[i][j], "TEXT");
+                insertQuery << txn.quote(cleanValue);
+              }
+            }
+            insertQuery << ")";
+          }
+
+          try {
+            txn.exec(insertQuery.str());
+            txn.commit();
+            targetCount += results.size();
+          } catch (...) {
+            try {
+              txn.abort();
+            } catch (...) {
+            }
+            throw;
+          }
 
           // Update last_processed_pk or last_offset after each chunk
           if (pkStrategy == "PK" && !pkColumns.empty() && !results.empty()) {
