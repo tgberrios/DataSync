@@ -315,11 +315,17 @@ const LogsViewer = () => {
   const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isMountedRef = useRef(true);
 
+  const isInitialLoadRef = useRef(true);
+  
   const fetchLogs = useCallback(async () => {
     if (!isMountedRef.current) return;
+    const isInitialLoad = isInitialLoadRef.current;
     try {
       setIsRefreshing(true);
       setError(null);
+      if (isInitialLoad) {
+        setLoading(true);
+      }
       const sanitizedSearch = sanitizeSearch(search, 200);
       
       const [logsData, infoData] = await Promise.all([
@@ -346,6 +352,7 @@ const LogsViewer = () => {
         const startIndex = (currentPage - 1) * logsPerPage;
         const endIndex = startIndex + logsPerPage;
         setLogs((logsData.logs || []).slice(startIndex, endIndex));
+        isInitialLoadRef.current = false;
       }
     } catch (err) {
       if (isMountedRef.current) {

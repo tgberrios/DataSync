@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom';
+import { useState } from 'react';
 import styled from 'styled-components';
 
 const LayoutContainer = styled.div`
@@ -13,6 +14,7 @@ const Sidebar = styled.div`
   padding: 20px 0;
   border-right: 1px solid #333;
   box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
+  overflow-y: auto;
 `;
 
 const MainContent = styled.div`
@@ -60,6 +62,83 @@ const NavItem = styled(NavLink)`
   }
 `;
 
+const NavSubItem = styled(NavLink)`
+  display: flex;
+  align-items: center;
+  padding: 12px 25px 12px 40px;
+  color: #888;
+  text-decoration: none;
+  font-family: monospace;
+  font-size: 0.95em;
+  border-left: 3px solid transparent;
+  transition: all 0.2s ease;
+  position: relative;
+  
+  &:hover {
+    background: linear-gradient(90deg, #252525 0%, rgba(10, 25, 41, 0.3) 100%);
+    color: white;
+    transform: translateX(3px);
+    border-left-color: #1e3a5f;
+  }
+  
+  &.active {
+    background: linear-gradient(90deg, #252525 0%, rgba(10, 25, 41, 0.5) 100%);
+    color: white;
+    border-left-color: #0d1b2a;
+    font-weight: bold;
+    
+    &::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 3px;
+      background: linear-gradient(180deg, #0d1b2a 0%, #1e3a5f 50%, #2d4a6f 100%);
+      box-shadow: 0 0 8px rgba(13, 27, 42, 0.6);
+    }
+  }
+`;
+
+const NavGroup = styled.div`
+  margin-bottom: 5px;
+`;
+
+const NavGroupHeader = styled.div<{ $isOpen: boolean }>`
+  display: flex;
+  align-items: center;
+  padding: 12px 25px;
+  color: #aaa;
+  font-family: monospace;
+  font-size: 0.9em;
+  font-weight: bold;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.2s ease;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  
+  &:hover {
+    background: linear-gradient(90deg, #252525 0%, rgba(10, 25, 41, 0.2) 100%);
+    color: white;
+  }
+  
+  &::before {
+    content: '${props => props.$isOpen ? '▼' : '▶'}';
+    margin-right: 10px;
+    font-size: 0.8em;
+    transition: transform 0.2s ease;
+  }
+`;
+
+const NavGroupContent = styled.div<{ $isOpen: boolean }>`
+  display: block;
+  max-height: ${props => props.$isOpen ? '2000px' : '0'};
+  overflow: hidden;
+  transition: max-height 0.3s ease;
+  visibility: ${props => props.$isOpen ? 'visible' : 'hidden'};
+`;
+
 const Logo = styled.div`
   padding: 20px 25px;
   font-size: 1.3em;
@@ -78,79 +157,174 @@ const Logo = styled.div`
 `;
 
 const Layout = () => {
+  const [openGroups, setOpenGroups] = useState<{ [key: string]: boolean }>({
+    catalog: false,
+    lineage: false,
+    governance: false,
+    dataSources: false,
+    monitoring: false,
+    operations: false,
+    system: false,
+  });
+
+  const toggleGroup = (group: string) => {
+    setOpenGroups(prev => ({
+      ...prev,
+      [group]: !prev[group]
+    }));
+  };
+
   return (
     <LayoutContainer>
       <Sidebar>
         <Logo>DataSync</Logo>
+        
         <NavItem to="/" end>
           ■ Dashboard
         </NavItem>
-        <NavItem to="/catalog">
-          ■ Catalog
-        </NavItem>
-        <NavItem to="/column-catalog">
-          ■ Column Catalog
-        </NavItem>
-        <NavItem to="/catalog-locks">
-          ■ Catalog Locks
-        </NavItem>
-        <NavItem to="/data-lineage-mariadb">
-          ■ Lineage MariaDB
-        </NavItem>
-        <NavItem to="/data-lineage-mssql">
-          ■ Lineage MSSQL
-        </NavItem>
-        <NavItem to="/data-lineage-mongodb">
-          ■ Lineage MongoDB
-        </NavItem>
-        <NavItem to="/data-lineage-oracle">
-          ■ Lineage Oracle
-        </NavItem>
-        <NavItem to="/governance-catalog-mariadb">
-          ■ Gov Catalog MariaDB
-        </NavItem>
-        <NavItem to="/governance-catalog-mssql">
-          ■ Gov Catalog MSSQL
-        </NavItem>
-        <NavItem to="/governance-catalog-mongodb">
-          ■ Gov Catalog MongoDB
-        </NavItem>
-        <NavItem to="/governance-catalog-oracle">
-          ■ Gov Catalog Oracle
-        </NavItem>
-        <NavItem to="/api-catalog">
-          ■ API Catalog
-        </NavItem>
-        <NavItem to="/custom-jobs">
-          ■ Custom Jobs
-        </NavItem>
-        <NavItem to="/monitor">
-          ■ Monitor
-        </NavItem>
-        <NavItem to="/query-performance">
-          ■ Query Performance
-        </NavItem>
-        <NavItem to="/maintenance">
-          ■ Maintenance
-        </NavItem>
-        <NavItem to="/live-changes">
-          ■ Live Changes
-        </NavItem>
-        <NavItem to="/quality">
-          ■ Quality
-        </NavItem>
-        <NavItem to="/governance">
-          ■ Governance
-        </NavItem>
-        <NavItem to="/security">
-          ■ Security
-        </NavItem>
-        <NavItem to="/logs">
-          ■ Logs
-        </NavItem>
-        <NavItem to="/config">
-          ■ Config
-        </NavItem>
+
+        <NavGroup>
+          <NavGroupHeader 
+            $isOpen={openGroups.catalog} 
+            onClick={() => toggleGroup('catalog')}
+          >
+            Catalog
+          </NavGroupHeader>
+          <NavGroupContent $isOpen={openGroups.catalog}>
+            <NavSubItem to="/catalog">
+              ■ Catalog
+            </NavSubItem>
+            <NavSubItem to="/column-catalog">
+              ■ Column Catalog
+            </NavSubItem>
+            <NavSubItem to="/catalog-locks">
+              ■ Catalog Locks
+            </NavSubItem>
+          </NavGroupContent>
+        </NavGroup>
+
+        <NavGroup>
+          <NavGroupHeader 
+            $isOpen={openGroups.lineage} 
+            onClick={() => toggleGroup('lineage')}
+          >
+            Lineage
+          </NavGroupHeader>
+          <NavGroupContent $isOpen={openGroups.lineage}>
+            <NavSubItem to="/data-lineage-mariadb">
+              ■ Lineage MariaDB
+            </NavSubItem>
+            <NavSubItem to="/data-lineage-mssql">
+              ■ Lineage MSSQL
+            </NavSubItem>
+            <NavSubItem to="/data-lineage-mongodb">
+              ■ Lineage MongoDB
+            </NavSubItem>
+            <NavSubItem to="/data-lineage-oracle">
+              ■ Lineage Oracle
+            </NavSubItem>
+          </NavGroupContent>
+        </NavGroup>
+
+        <NavGroup>
+          <NavGroupHeader 
+            $isOpen={openGroups.governance} 
+            onClick={() => toggleGroup('governance')}
+          >
+            Governance
+          </NavGroupHeader>
+          <NavGroupContent $isOpen={openGroups.governance}>
+            <NavSubItem to="/governance-catalog-mariadb">
+              ■ Gov Catalog MariaDB
+            </NavSubItem>
+            <NavSubItem to="/governance-catalog-mssql">
+              ■ Gov Catalog MSSQL
+            </NavSubItem>
+            <NavSubItem to="/governance-catalog-mongodb">
+              ■ Gov Catalog MongoDB
+            </NavSubItem>
+            <NavSubItem to="/governance-catalog-oracle">
+              ■ Gov Catalog Oracle
+            </NavSubItem>
+            <NavSubItem to="/governance">
+              ■ Governance
+            </NavSubItem>
+          </NavGroupContent>
+        </NavGroup>
+
+        <NavGroup>
+          <NavGroupHeader 
+            $isOpen={openGroups.dataSources} 
+            onClick={() => toggleGroup('dataSources')}
+          >
+            Data Sources
+          </NavGroupHeader>
+          <NavGroupContent $isOpen={openGroups.dataSources}>
+            <NavSubItem to="/api-catalog">
+              ■ API Catalog
+            </NavSubItem>
+            <NavSubItem to="/custom-jobs">
+              ■ Custom Jobs
+            </NavSubItem>
+          </NavGroupContent>
+        </NavGroup>
+
+        <NavGroup>
+          <NavGroupHeader 
+            $isOpen={openGroups.monitoring} 
+            onClick={() => toggleGroup('monitoring')}
+          >
+            Monitoring
+          </NavGroupHeader>
+          <NavGroupContent $isOpen={openGroups.monitoring}>
+            <NavSubItem to="/monitor">
+              ■ Monitor
+            </NavSubItem>
+            <NavSubItem to="/live-changes">
+              ■ Live Changes
+            </NavSubItem>
+            <NavSubItem to="/query-performance">
+              ■ Query Performance
+            </NavSubItem>
+            <NavSubItem to="/quality">
+              ■ Quality
+            </NavSubItem>
+          </NavGroupContent>
+        </NavGroup>
+
+        <NavGroup>
+          <NavGroupHeader 
+            $isOpen={openGroups.operations} 
+            onClick={() => toggleGroup('operations')}
+          >
+            Operations
+          </NavGroupHeader>
+          <NavGroupContent $isOpen={openGroups.operations}>
+            <NavSubItem to="/maintenance">
+              ■ Maintenance
+            </NavSubItem>
+            <NavSubItem to="/security">
+              ■ Security
+            </NavSubItem>
+          </NavGroupContent>
+        </NavGroup>
+
+        <NavGroup>
+          <NavGroupHeader 
+            $isOpen={openGroups.system} 
+            onClick={() => toggleGroup('system')}
+          >
+            System
+          </NavGroupHeader>
+          <NavGroupContent $isOpen={openGroups.system}>
+            <NavSubItem to="/logs">
+              ■ Logs
+            </NavSubItem>
+            <NavSubItem to="/config">
+              ■ Config
+            </NavSubItem>
+          </NavGroupContent>
+        </NavGroup>
       </Sidebar>
       <MainContent>
         <Outlet />

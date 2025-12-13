@@ -443,26 +443,32 @@ const LiveChanges = () => {
                       <DetailLabel>Status:</DetailLabel>
                       <DetailValue>{processing.status}</DetailValue>
                       
-                      {processing.pk_strategy === 'PK' ? (
+                      <DetailLabel>PK Strategy:</DetailLabel>
+                      <DetailValue>{processing.pk_strategy || 'N/A'}</DetailValue>
+                      
+                      {processing.old_pk && (
                         <>
                           <DetailLabel>Old PK:</DetailLabel>
-                          <DetailValue>{processing.old_pk || '0'}</DetailValue>
-                          
-                          <DetailLabel>New PK:</DetailLabel>
-                          <DetailValue>{processing.new_pk || '0'}</DetailValue>
+                          <DetailValue>{processing.old_pk}</DetailValue>
                         </>
-                      ) : (
+                      )}
+                      
+                      {processing.new_pk && (
                         <>
-                          <DetailLabel>Old Offset:</DetailLabel>
-                          <DetailValue>{processing.old_offset || '0'}</DetailValue>
-                          
-                          <DetailLabel>New Offset:</DetailLabel>
-                          <DetailValue>{processing.new_offset || '1000'}</DetailValue>
+                          <DetailLabel>New PK:</DetailLabel>
+                          <DetailValue>{processing.new_pk}</DetailValue>
+                        </>
+                      )}
+                      
+                      {processing.record_count !== null && processing.record_count !== undefined && (
+                        <>
+                          <DetailLabel>Record Count:</DetailLabel>
+                          <DetailValue>{processing.record_count.toLocaleString()}</DetailValue>
                         </>
                       )}
                       
                       <DetailLabel>Processed At:</DetailLabel>
-                      <DetailValue>{new Date(processing.processed_at).toLocaleString()}</DetailValue>
+                      <DetailValue>{processing.processed_at ? new Date(processing.processed_at).toLocaleString() : 'N/A'}</DetailValue>
                     </DetailGrid>
                   </ProcessingDetails>
                 </ProcessingItem>
