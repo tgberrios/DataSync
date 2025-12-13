@@ -43,6 +43,7 @@ add_executable(DataSync
     src/governance/DataGovernanceMSSQL.cpp
     src/governance/DataGovernanceMariaDB.cpp
     src/governance/DataGovernanceMongoDB.cpp
+    src/governance/DataGovernanceOracle.cpp
     src/governance/DataQuality.cpp
     src/governance/data_classifier.cpp
     src/governance/QueryStoreCollector.cpp
@@ -51,6 +52,7 @@ add_executable(DataSync
     src/governance/LineageExtractorMSSQL.cpp
     src/governance/LineageExtractorMariaDB.cpp
     src/governance/LineageExtractorMongoDB.cpp
+    src/governance/LineageExtractorOracle.cpp
     src/governance/ColumnCatalogCollector.cpp
     src/metrics/MetricsCollector.cpp
     src/utils/connection_utils.cpp

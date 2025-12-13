@@ -6,9 +6,11 @@
 #include "governance/DataGovernanceMSSQL.h"
 #include "governance/DataGovernanceMariaDB.h"
 #include "governance/DataGovernanceMongoDB.h"
+#include "governance/DataGovernanceOracle.h"
 #include "governance/LineageExtractorMSSQL.h"
 #include "governance/LineageExtractorMariaDB.h"
 #include "governance/LineageExtractorMongoDB.h"
+#include "governance/LineageExtractorOracle.h"
 #include "utils/string_utils.h"
 #include "utils/time_utils.h"
 #include <algorithm>
@@ -230,6 +232,39 @@ void DataGovernance::runDiscovery() {
           } catch (const std::exception &e) {
             Logger::error(LogCategory::GOVERNANCE, "runDiscovery",
                           "Error extracting MongoDB lineage: " +
+                              std::string(e.what()));
+          }
+        }
+      }
+
+      std::vector<std::string> oracleConnections =
+          repo.getConnectionStrings("Oracle");
+      for (const auto &connStr : oracleConnections) {
+        if (!connStr.empty()) {
+          try {
+            Logger::info(LogCategory::GOVERNANCE, "runDiscovery",
+                         "Collecting Oracle governance data for connection");
+            DataGovernanceOracle oracleGov(connStr);
+            oracleGov.collectGovernanceData();
+            oracleGov.storeGovernanceData();
+            oracleGov.generateReport();
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::GOVERNANCE, "runDiscovery",
+                          "Error collecting Oracle governance data: " +
+                              std::string(e.what()));
+          }
+
+          try {
+            Logger::info(LogCategory::GOVERNANCE, "runDiscovery",
+                         "Extracting Oracle lineage for connection");
+            LineageExtractorOracle lineageExtractor(connStr);
+            lineageExtractor.extractLineage();
+            lineageExtractor.storeLineage();
+            Logger::info(LogCategory::GOVERNANCE, "runDiscovery",
+                         "Oracle lineage extraction completed");
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::GOVERNANCE, "runDiscovery",
+                          "Error extracting Oracle lineage: " +
                               std::string(e.what()));
           }
         }

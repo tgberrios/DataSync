@@ -1466,3 +1466,162 @@ export const governanceCatalogMongoDBApi = {
     }
   },
 };
+
+export const dataLineageOracleApi = {
+  getOracleLineage: async (params: {
+    page?: number;
+    limit?: number;
+    server_name?: string;
+    schema_name?: string;
+    relationship_type?: string;
+    search?: string;
+  }) => {
+    try {
+      const response = await api.get("/data-lineage/oracle", { params });
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching Oracle lineage data:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getOracleMetrics: async () => {
+    try {
+      const response = await api.get("/data-lineage/oracle/metrics");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching Oracle lineage metrics:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getOracleServers: async () => {
+    try {
+      const response = await api.get("/data-lineage/oracle/servers");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching Oracle servers:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getOracleSchemas: async (serverName: string) => {
+    try {
+      const response = await api.get(
+        `/data-lineage/oracle/schemas/${encodeURIComponent(serverName)}`
+      );
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching Oracle schemas:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+};
+
+export const governanceCatalogOracleApi = {
+  getOracleItems: async (params: {
+    page?: number;
+    limit?: number;
+    server_name?: string;
+    schema_name?: string;
+    health_status?: string;
+    access_frequency?: string;
+    search?: string;
+  }) => {
+    try {
+      const response = await api.get("/governance-catalog/oracle", { params });
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching Oracle governance catalog:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getOracleMetrics: async () => {
+    try {
+      const response = await api.get("/governance-catalog/oracle/metrics");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching Oracle governance metrics:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getOracleServers: async () => {
+    try {
+      const response = await api.get("/governance-catalog/oracle/servers");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching Oracle servers:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getOracleSchemas: async (serverName: string) => {
+    try {
+      const response = await api.get(
+        `/governance-catalog/oracle/schemas/${encodeURIComponent(serverName)}`
+      );
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching Oracle schemas:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+};
