@@ -57,8 +57,8 @@ y el de mssql de azure
     otro proyecto igual mejorando en lo que carece!
 
     ANADIR FORMA DE HACER FIRST SETUP DIGAMOS DE LA DB 
-
-    Revisa este código/carpeta/proyecto y encuentra TODOS los problemas posibles:
+    
+ Revisa este código/carpeta/proyecto y encuentra TODOS los problemas posibles:
 
 1. **Seguridad:**
    - SQL injection
@@ -113,6 +113,109 @@ Sé exhaustivo y detallado.
 
 como se podria catalogar este programa con todas las funcionalidades que tiene ? es como una navaja suiza para todo lo que  tiene que ver con data engineer no ? o que nos faltaria para llegara ese punto una vez terminemos el proyecto ? 
 
+que en la cosa de jobs se puedan scripts de python
 
+qye column catalog tenga forma de visualizarlo en modo tree y ademas contra source y target seria genial 
 
-ya tenemos el status processing por ende ya podemos digamos aber cua le esta capturando!
+═══════════════════════════════════════════════════════════════════
+                    DOCUMENTACIÓN DETALLADA DE FUNCIONES
+═══════════════════════════════════════════════════════════════════
+
+Revisa este código/carpeta/proyecto y documenta CADA FUNCIÓN al super detalle:
+
+INSTRUCCIONES:
+- Ir carpeta por carpeta de forma sistemática
+- Para cada archivo, revisar TODAS las funciones/métodos/clases
+- Documentar cada función con el máximo detalle posible
+
+Para cada función/método/clase, documentar:
+
+1. **Información básica:**
+   - Nombre completo de la función/clase
+   - Ubicación exacta (archivo, línea de inicio, línea de fin)
+   - Tipo (función libre, método de clase, constructor, destructor, etc.)
+   - Visibilidad (public, private, protected, static, etc.)
+
+2. **Propósito y funcionalidad:**
+   - Descripción detallada de qué hace la función
+   - Objetivo principal y objetivos secundarios
+   - Contexto de uso (cuándo se llama, desde dónde)
+   - Relación con otras funciones/clases
+
+3. **Parámetros:**
+   - Nombre de cada parámetro
+   - Tipo de dato de cada parámetro
+   - Descripción detallada de cada parámetro
+   - Valores válidos/rango permitido
+   - Si es opcional u obligatorio
+   - Valores por defecto (si los hay)
+   - Si se modifica dentro de la función (in/out/inout)
+
+4. **Valor de retorno:**
+   - Tipo de dato de retorno
+   - Descripción detallada del valor retornado
+   - Valores posibles de retorno
+   - Casos especiales (null, empty, error codes, etc.)
+   - Si lanza excepciones y cuáles
+
+5. **Lógica interna:**
+   - Flujo paso a paso de la función
+   - Algoritmo utilizado
+   - Estructuras de datos internas
+   - Llamadas a otras funciones y por qué
+   - Condiciones y validaciones realizadas
+   - Manejo de casos límite
+
+6. **Efectos secundarios:**
+   - Modificaciones a variables globales
+   - Cambios en el estado del sistema
+   - Operaciones de I/O (archivos, red, base de datos)
+   - Llamadas a APIs externas
+   - Modificaciones a parámetros de entrada
+
+7. **Manejo de errores:**
+   - Qué errores puede generar
+   - Cómo se manejan los errores
+   - Qué excepciones se lanzan
+   - Códigos de error retornados
+   - Comportamiento en caso de fallo
+
+8. **Dependencias:**
+   - Qué funciones/clases utiliza
+   - Qué librerías/bibliotecas requiere
+   - Qué recursos necesita (conexiones DB, archivos, etc.)
+   - Orden de inicialización requerido
+
+9. **Rendimiento:**
+   - Complejidad algorítmica (O notation si aplica)
+   - Operaciones costosas realizadas
+   - Posibles cuellos de botella
+   - Optimizaciones implementadas
+
+10. **Casos de uso:**
+    - Ejemplos de uso típicos
+    - Escenarios donde se utiliza
+    - Casos límite manejados
+    - Casos no soportados (si los hay)
+
+11. **Notas adicionales:**
+    - Comentarios importantes del código
+    - TODOs o FIXMEs relacionados
+    - Limitaciones conocidas
+    - Mejoras futuras sugeridas
+    - Referencias a documentación externa
+
+FORMATO DE SALIDA:
+Para cada función, usar este formato:
+
+═══════════════════════════════════════════════════════════════════
+FUNCIÓN: [nombre_completo]
+ARCHIVO: [ruta_completa]
+LÍNEAS: [inicio] - [fin]
+═══════════════════════════════════════════════════════════════════
+
+[TODA LA DOCUMENTACIÓN DETALLADA SIGUIENDO LOS 11 PUNTOS ARRIBA]
+
+═══════════════════════════════════════════════════════════════════
+
+Sé exhaustivo y detallado. Documenta TODO.

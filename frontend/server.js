@@ -1536,13 +1536,13 @@ app.get("/api/dashboard/currently-processing", async (req, res) => {
         schema_name,
         table_name,
         db_engine,
-        new_offset,
-        new_pk,
         status,
-        processed_at
-      FROM metadata.processing_log
-      WHERE processed_at > NOW() - INTERVAL '5 minutes'
-      ORDER BY processed_at DESC
+        last_sync_time as processed_at,
+        last_processed_pk as new_pk,
+        sync_metadata
+      FROM metadata.catalog
+      WHERE status = 'PROCESSING'
+      ORDER BY last_sync_time DESC NULLS LAST
       LIMIT 1
     `);
 
@@ -1551,6 +1551,16 @@ app.get("/api/dashboard/currently-processing", async (req, res) => {
     }
 
     const processingTable = result.rows[0];
+
+    let newOffset = null;
+    if (processingTable.sync_metadata) {
+      try {
+        const metadata = JSON.parse(processingTable.sync_metadata);
+        newOffset = metadata.last_offset || null;
+      } catch (e) {
+        newOffset = null;
+      }
+    }
 
     // Hacer COUNT de la tabla que se está procesando (resolver nombres reales insensibles a mayúsculas)
     let countResult;
@@ -1588,10 +1598,13 @@ app.get("/api/dashboard/currently-processing", async (req, res) => {
     }
 
     const response = {
-      ...processingTable,
       schema_name: String(processingTable.schema_name).toLowerCase(),
       table_name: String(processingTable.table_name).toLowerCase(),
       db_engine: String(processingTable.db_engine),
+      new_offset: newOffset,
+      new_pk: processingTable.new_pk,
+      status: processingTable.status,
+      processed_at: processingTable.processed_at,
       total_records: parseInt(countResult.rows[0]?.total_records || 0),
     };
 
@@ -1721,7 +1734,7 @@ app.get("/api/monitor/processing-logs", async (req, res) => {
     const offset = (page - 1) * limit;
     const strategy = req.query.strategy || "";
 
-    const whereConditions = [];
+    const whereConditions = ["pl.status = 'PROCESSING'"];
     const params = [];
     let paramCount = 1;
 
@@ -1731,21 +1744,19 @@ app.get("/api/monitor/processing-logs", async (req, res) => {
       paramCount++;
     }
 
-    const whereClause =
-      whereConditions.length > 0
-        ? `WHERE ${whereConditions.join(" AND ")}`
-        : "";
+    const whereClause = `WHERE ${whereConditions.join(" AND ")}`;
 
-    // Get total count
+    // Get total count - solo entradas únicas por tabla que están en PROCESSING
     const countResult = await pool.query(
       `
-      SELECT COUNT(*) as total
+      SELECT COUNT(DISTINCT pl.schema_name || '.' || pl.table_name || '.' || pl.db_engine) as total
       FROM metadata.processing_log pl
-      JOIN metadata.catalog c
-        ON c.schema_name = pl.schema_name
-       AND c.table_name  = pl.table_name
-       AND c.db_engine   = pl.db_engine
+      LEFT JOIN metadata.catalog c 
+        ON c.schema_name = pl.schema_name 
+        AND c.table_name = pl.table_name 
+        AND c.db_engine = pl.db_engine
       ${whereClause}
+      AND pl.processed_at > NOW() - INTERVAL '5 minutes'
     `,
       params
     );
@@ -1753,29 +1764,29 @@ app.get("/api/monitor/processing-logs", async (req, res) => {
     const total = parseInt(countResult.rows[0].total);
     const totalPages = Math.ceil(total / limit);
 
-    // Get paginated data
+    // Get paginated data - mostrar las entradas más recientes de cada tabla en PROCESSING
     params.push(limit, offset);
     const result = await pool.query(
       `
-      SELECT 
+      SELECT DISTINCT ON (pl.schema_name, pl.table_name, pl.db_engine)
         pl.id,
         pl.schema_name,
         pl.table_name,
         pl.db_engine,
-        c.pk_strategy,
-        pl.old_offset,
-        pl.new_offset,
+        COALESCE(c.pk_strategy, 'N/A') as pk_strategy,
+        pl.status,
+        pl.processed_at,
         pl.old_pk,
         pl.new_pk,
-        pl.status,
-        pl.processed_at
+        pl.record_count
       FROM metadata.processing_log pl
-      JOIN metadata.catalog c
-        ON c.schema_name = pl.schema_name
-       AND c.table_name  = pl.table_name
-       AND c.db_engine   = pl.db_engine
+      LEFT JOIN metadata.catalog c 
+        ON c.schema_name = pl.schema_name 
+        AND c.table_name = pl.table_name 
+        AND c.db_engine = pl.db_engine
       ${whereClause}
-      ORDER BY pl.processed_at DESC
+      AND pl.processed_at > NOW() - INTERVAL '5 minutes'
+      ORDER BY pl.schema_name, pl.table_name, pl.db_engine, pl.processed_at DESC
       LIMIT $${paramCount} OFFSET $${paramCount + 1}
     `,
       params
@@ -1807,15 +1818,27 @@ app.get("/api/monitor/processing-logs/stats", async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT 
-        COUNT(*) as total,
-        COUNT(*) FILTER (WHERE processed_at > NOW() - INTERVAL '24 hours') as last24h,
+        COUNT(DISTINCT schema_name || '.' || table_name || '.' || db_engine) FILTER (
+          WHERE status = 'PROCESSING' 
+          AND processed_at > NOW() - INTERVAL '5 minutes'
+        ) as total,
+        COUNT(*) FILTER (
+          WHERE status = 'PROCESSING' 
+          AND processed_at > NOW() - INTERVAL '24 hours'
+        ) as last24h,
         COUNT(*) FILTER (WHERE status = 'LISTENING_CHANGES') as listeningChanges,
         COUNT(*) FILTER (WHERE status = 'FULL_LOAD') as fullLoad,
         COUNT(*) FILTER (WHERE status = 'ERROR') as errors
       FROM metadata.processing_log
     `);
 
-    res.json(result.rows[0]);
+    res.json({
+      total: parseInt(result.rows[0]?.total || 0),
+      last24h: parseInt(result.rows[0]?.last24h || 0),
+      listeningChanges: parseInt(result.rows[0]?.listeningChanges || 0),
+      fullLoad: parseInt(result.rows[0]?.fullLoad || 0),
+      errors: parseInt(result.rows[0]?.errors || 0),
+    });
   } catch (err) {
     console.error("Error getting processing stats:", err);
     const safeError = sanitizeError(

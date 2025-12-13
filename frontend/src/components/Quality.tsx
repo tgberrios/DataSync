@@ -261,12 +261,18 @@ const Quality = () => {
   /**
    * Obtiene los datos de calidad desde la API
    */
+  const isInitialLoadRef = useRef(true);
+  
   const fetchQualityData = useCallback(async () => {
     if (!isMountedRef.current) return;
     
+    const isInitialLoad = isInitialLoadRef.current;
+    
     try {
       setError(null);
-      setLoading(true);
+      if (isInitialLoad) {
+        setLoading(true);
+      }
       const response = await qualityApi.getQualityMetrics({
         page,
         limit: 10,
@@ -277,6 +283,7 @@ const Quality = () => {
       if (isMountedRef.current) {
         setQualityData(response.data);
         setPagination(response.pagination);
+        isInitialLoadRef.current = false;
       }
     } catch (err) {
       if (isMountedRef.current) {
