@@ -176,6 +176,46 @@ bool SchemaSync::isTypeChangeCompatible(const std::string &oldType,
     return true;
   }
 
+  if ((oldUpper.find("TIMESTAMP") != std::string::npos ||
+       oldUpper.find("TIMESTAMP WITHOUT TIME ZONE") != std::string::npos) &&
+      (newUpper.find("TIMESTAMP") != std::string::npos ||
+       newUpper.find("TIMESTAMP WITHOUT TIME ZONE") != std::string::npos)) {
+    return true;
+  }
+
+  if ((oldUpper.find("TIME") != std::string::npos ||
+       oldUpper.find("TIME WITHOUT TIME ZONE") != std::string::npos) &&
+      (newUpper.find("TIME") != std::string::npos ||
+       newUpper.find("TIME WITHOUT TIME ZONE") != std::string::npos)) {
+    return true;
+  }
+
+  if (oldUpper.find("TEXT") != std::string::npos &&
+      (newUpper.find("VARCHAR") != std::string::npos ||
+       newUpper.find("TEXT") != std::string::npos ||
+       newUpper.find("CHAR") != std::string::npos)) {
+    return true;
+  }
+
+  if ((oldUpper.find("VARCHAR") != std::string::npos ||
+       oldUpper.find("CHAR") != std::string::npos) &&
+      newUpper.find("TEXT") != std::string::npos) {
+    return true;
+  }
+
+  if (oldUpper.find("JSONB") != std::string::npos &&
+      (newUpper.find("TEXT") != std::string::npos ||
+       newUpper.find("VARCHAR") != std::string::npos ||
+       newUpper.find("JSONB") != std::string::npos)) {
+    return true;
+  }
+
+  if ((oldUpper.find("TEXT") != std::string::npos ||
+       oldUpper.find("VARCHAR") != std::string::npos) &&
+      newUpper.find("JSONB") != std::string::npos) {
+    return true;
+  }
+
   return false;
 }
 
@@ -315,6 +355,20 @@ bool SchemaSync::updateColumnTypes(
       txn.exec(alterQuery);
 
       if (oldCol.isNullable != newCol.isNullable) {
+        if (!newCol.isNullable) {
+          auto nullCheck =
+              txn.exec("SELECT COUNT(*) FROM " + txn.quote_name(lowerSchema) +
+                       "." + txn.quote_name(lowerTable) + " WHERE " +
+                       txn.quote_name(lowerColName) + " IS NULL");
+          if (!nullCheck.empty() && nullCheck[0][0].as<int64_t>() > 0) {
+            Logger::warning(LogCategory::TRANSFER, "updateColumnTypes",
+                            "Cannot set NOT NULL on " + schemaName + "." +
+                                tableName + "." + newCol.name +
+                                " - column contains NULL values, skipping");
+            continue;
+          }
+        }
+
         std::string nullQuery = "ALTER TABLE " + txn.quote_name(lowerSchema) +
                                 "." + txn.quote_name(lowerTable) +
                                 " ALTER COLUMN " + txn.quote_name(lowerColName);

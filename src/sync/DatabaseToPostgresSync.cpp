@@ -791,6 +791,12 @@ void DatabaseToPostgresSync::batchInserterThread(pqxx::connection &pgConn) {
         result.errorMessage = e.what();
         result.rowsProcessed = 0;
 
+        try {
+          pqxx::work abortTxn(pgConn);
+          abortTxn.abort();
+        } catch (...) {
+        }
+
         Logger::error(LogCategory::TRANSFER,
                       "Error inserting batch " +
                           std::to_string(batch.chunkNumber) + " for " +
@@ -937,12 +943,7 @@ void DatabaseToPostgresSync::performBulkUpsert(
             try {
               txn.abort();
             } catch (const std::exception &e) {
-              Logger::error(LogCategory::TRANSFER, "performBulkUpsert",
-                            "Error aborting transaction: " +
-                                std::string(e.what()));
             } catch (...) {
-              Logger::error(LogCategory::TRANSFER, "performBulkUpsert",
-                            "Unknown error aborting transaction");
             }
 
             size_t individualProcessed = 0;

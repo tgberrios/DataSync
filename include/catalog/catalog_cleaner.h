@@ -16,6 +16,8 @@ public:
   virtual void cleanNonExistentPostgresTables() = 0;
   virtual void cleanNonExistentMariaDBTables() = 0;
   virtual void cleanNonExistentMSSQLTables() = 0;
+  virtual void cleanNonExistentOracleTables() = 0;
+  virtual void cleanNonExistentMongoDBTables() = 0;
   virtual void cleanOrphanedTables() = 0;
   virtual void cleanOldLogs(int retentionHours) = 0;
 };
@@ -30,6 +32,8 @@ public:
   void cleanNonExistentPostgresTables() override;
   void cleanNonExistentMariaDBTables() override;
   void cleanNonExistentMSSQLTables() override;
+  void cleanNonExistentOracleTables() override;
+  void cleanNonExistentMongoDBTables() override;
   void cleanOrphanedTables() override;
   void cleanOldLogs(int retentionHours) override;
 };

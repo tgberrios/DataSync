@@ -125,10 +125,6 @@ MariaDBToPostgres::cleanValueForPostgres(const std::string &value,
       if (cleanValue.find("-00") != std::string::npos ||
           cleanValue.find("-00 ") != std::string::npos ||
           cleanValue.find(" 00:00:00") != std::string::npos) {
-        Logger::warning(
-            LogCategory::TRANSFER, "cleanValueForPostgres",
-            "Invalid date detected (contains -00), converting to NULL: " +
-                cleanValue);
         isNull = true;
       }
     }

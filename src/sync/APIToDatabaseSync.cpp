@@ -710,11 +710,22 @@ void APIToDatabaseSync::createMSSQLTable(
 
     ret = SQLExecDirect(stmt, (SQLCHAR *)createTable.str().c_str(), SQL_NTS);
     if (!SQL_SUCCEEDED(ret)) {
+      SQLCHAR sqlState[6];
+      SQLCHAR errorMsg[SQL_MAX_MESSAGE_LENGTH];
+      SQLINTEGER nativeError;
+      SQLSMALLINT msgLen;
+      std::string errorDetails = "Failed to create MSSQL table";
+      if (SQLGetDiagRec(SQL_HANDLE_STMT, stmt, 1, sqlState, &nativeError,
+                        errorMsg, SQL_MAX_MESSAGE_LENGTH,
+                        &msgLen) == SQL_SUCCESS) {
+        errorDetails += ": " + std::string((char *)errorMsg) +
+                        " (SQL State: " + std::string((char *)sqlState) + ")";
+      }
       SQLFreeHandle(SQL_HANDLE_STMT, stmt);
       SQLDisconnect(dbc);
       SQLFreeHandle(SQL_HANDLE_DBC, dbc);
       SQLFreeHandle(SQL_HANDLE_ENV, env);
-      throw std::runtime_error("Failed to create MSSQL table");
+      throw std::runtime_error(errorDetails);
     }
 
     SQLFreeHandle(SQL_HANDLE_STMT, stmt);
@@ -1287,7 +1298,7 @@ void APIToDatabaseSync::logToProcessLog(
     std::string metadataStr = metadata.dump();
 
     txn.exec_params(
-        "INSERT INTO process_log (process_type, process_name, status, "
+        "INSERT INTO metadata.process_log (process_type, process_name, status, "
         "start_time, end_time, target_schema, tables_processed, "
         "total_rows_processed, tables_success, tables_failed, error_message, "
         "metadata) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, "
