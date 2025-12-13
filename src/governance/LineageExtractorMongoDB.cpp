@@ -506,7 +506,6 @@ void LineageExtractorMongoDB::extractViewDependencies() {
       bson_destroy(&reply);
     }
 
-    bson_destroy(command);
     mongoc_database_destroy(database);
   } catch (const std::exception &e) {
     Logger::warning(LogCategory::GOVERNANCE, "LineageExtractorMongoDB",

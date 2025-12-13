@@ -156,9 +156,23 @@ public:
           "ORDER BY schema_name, table_name;");
       txn.commit();
 
+      Logger::info(LogCategory::TRANSFER, "getActiveTables",
+                   "Query returned " + std::to_string(results.size()) +
+                       " rows from catalog");
+
       for (const auto &row : results) {
-        if (row.size() < 13)
+        if (row.size() < 12) {
+          Logger::warning(LogCategory::TRANSFER, "getActiveTables",
+                          "Row has only " + std::to_string(row.size()) +
+                              " columns, expected 12 - skipping");
           continue;
+        }
+
+        Logger::info(LogCategory::TRANSFER, "getActiveTables",
+                     "Processing table: " +
+                         (row[0].is_null() ? "" : row[0].as<std::string>()) +
+                         "." +
+                         (row[1].is_null() ? "" : row[1].as<std::string>()));
 
         TableInfo t;
         t.schema_name = row[0].is_null() ? "" : row[0].as<std::string>();
@@ -1519,6 +1533,8 @@ public:
                  "Starting parallel MariaDB to PostgreSQL data transfer");
 
     try {
+      startParallelProcessing();
+
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
 
       if (!pgConn.is_open()) {
@@ -1526,13 +1542,21 @@ public:
                       "transferDataMariaDBToPostgresParallel",
                       "CRITICAL ERROR: Cannot establish PostgreSQL connection "
                       "for parallel MariaDB data transfer");
+        shutdownParallelProcessing();
         return;
       }
 
       auto tables = getActiveTables(pgConn);
 
-      if (tables.empty()) {
+      Logger::info(LogCategory::TRANSFER,
+                   "Found " + std::to_string(tables.size()) +
+                       " active MariaDB tables to process");
 
+      if (tables.empty()) {
+        Logger::info(
+            LogCategory::TRANSFER,
+            "No active MariaDB tables found - skipping transfer cycle");
+        shutdownParallelProcessing();
         return;
       }
 
@@ -1600,12 +1624,15 @@ public:
                        std::to_string(pool.completedTasks()) +
                        " | Failed: " + std::to_string(pool.failedTasks()));
 
+      shutdownParallelProcessing();
+
     } catch (const std::exception &e) {
       Logger::error(
           LogCategory::TRANSFER, "transferDataMariaDBToPostgresParallel",
           "CRITICAL ERROR in transferDataMariaDBToPostgresParallel: " +
               std::string(e.what()) +
               " - Parallel MariaDB data transfer completely failed");
+      shutdownParallelProcessing();
     }
   }
 
@@ -1639,8 +1666,6 @@ public:
                  "Starting parallel processing for table " + tableKey);
 
     try {
-      startParallelProcessing();
-
       setTableProcessingState(tableKey, true);
 
       MYSQL *mariadbConn = getMariaDBConnection(table.connection_string);
@@ -1652,6 +1677,9 @@ public:
         return;
       }
 
+      Logger::info(LogCategory::TRANSFER, "processTableParallel",
+                   "Getting table metadata for " + tableKey);
+
       // Get table metadata
       std::string query = "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, "
                           "COLUMN_KEY, EXTRA, CHARACTER_MAXIMUM_LENGTH "
@@ -1662,6 +1690,10 @@ public:
 
       std::vector<std::vector<std::string>> columns =
           executeQueryMariaDB(mariadbConn, query);
+
+      Logger::info(LogCategory::TRANSFER, "processTableParallel",
+                   "Retrieved " + std::to_string(columns.size()) +
+                       " columns for " + tableKey);
 
       if (columns.empty()) {
         Logger::error(LogCategory::TRANSFER,
@@ -1843,9 +1875,8 @@ public:
           updateStatus(pgConn, table.schema_name, table.table_name,
                        "LISTENING_CHANGES", targetCount);
         }
-        // Cerrar conexión y salir
         mysql_close(mariadbConn);
-        shutdownParallelProcessing();
+        removeTableProcessingState(tableKey);
         return;
       }
 
@@ -1870,7 +1901,7 @@ public:
             updateStatus(pgConn, table.schema_name, table.table_name,
                          "LISTENING_CHANGES", targetCount);
             mysql_close(mariadbConn);
-            shutdownParallelProcessing();
+            removeTableProcessingState(tableKey);
             return;
           }
 
@@ -1894,11 +1925,10 @@ public:
             }
           }
 
-          // Marcar LISTENING_CHANGES y salir
           updateStatus(pgConn, table.schema_name, table.table_name,
                        "LISTENING_CHANGES", targetCount);
           mysql_close(mariadbConn);
-          shutdownParallelProcessing();
+          removeTableProcessingState(tableKey);
           return;
         } else {
           // Los datos NO están sincronizados a pesar de tener conteos iguales
@@ -1980,8 +2010,6 @@ public:
                    "LISTENING_CHANGES", finalTargetCount);
 
       mysql_close(mariadbConn);
-      shutdownParallelProcessing();
-
       removeTableProcessingState(tableKey);
 
       Logger::info(LogCategory::TRANSFER,
@@ -1992,7 +2020,7 @@ public:
       Logger::error(LogCategory::TRANSFER, "processTableParallel",
                     "Error in parallel table processing: " +
                         std::string(e.what()));
-      shutdownParallelProcessing();
+      removeTableProcessingState(tableKey);
     }
   }
 

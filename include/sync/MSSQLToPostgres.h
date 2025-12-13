@@ -187,9 +187,17 @@ public:
           "ORDER BY schema_name, table_name;");
       txn.commit();
 
+      Logger::info(LogCategory::TRANSFER, "getActiveTables",
+                   "Query returned " + std::to_string(results.size()) +
+                       " rows from catalog");
+
       for (const auto &row : results) {
-        if (row.size() < 13)
+        if (row.size() < 12) {
+          Logger::warning(LogCategory::TRANSFER, "getActiveTables",
+                          "Row has only " + std::to_string(row.size()) +
+                              " columns, expected 12 - skipping");
           continue;
+        }
 
         TableInfo t;
         t.schema_name = row[0].is_null() ? "" : row[0].as<std::string>();
@@ -1292,6 +1300,8 @@ public:
                  "Starting HYBRID PARALLEL MSSQL to PostgreSQL data transfer");
 
     try {
+      startParallelProcessing();
+
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
 
       if (!pgConn.is_open()) {
@@ -1299,6 +1309,7 @@ public:
                       "transferDataMSSQLToPostgresParallel",
                       "CRITICAL ERROR: Cannot establish PostgreSQL connection "
                       "for parallel MSSQL data transfer");
+        shutdownParallelProcessing();
         return;
       }
 
@@ -1380,6 +1391,8 @@ public:
                        std::to_string(pool.completedTasks()) +
                        " | Failed: " + std::to_string(pool.failedTasks()));
 
+      shutdownParallelProcessing();
+
       Logger::info(LogCategory::TRANSFER,
                    "HYBRID PARALLEL MSSQL to PostgreSQL data "
                    "transfer completed successfully");
@@ -1423,8 +1436,6 @@ public:
                  "Starting parallel processing for table " + tableKey);
 
     try {
-      startParallelProcessing();
-
       setTableProcessingState(tableKey, true);
 
       SQLHDBC mssqlConn = getMSSQLConnection(table.connection_string);
@@ -1571,8 +1582,6 @@ public:
                    "LISTENING_CHANGES", 0);
 
       closeMSSQLConnection(mssqlConn);
-      shutdownParallelProcessing();
-
       removeTableProcessingState(tableKey);
 
       Logger::info(LogCategory::TRANSFER,
@@ -1583,7 +1592,6 @@ public:
                     "Error in parallel table processing: " +
                         std::string(e.what()));
       removeTableProcessingState(tableKey);
-      shutdownParallelProcessing();
     }
   }
 
