@@ -106,7 +106,8 @@ ODBCConnection &ODBCConnection::operator=(ODBCConnection &&other) noexcept {
 
 // Constructor for MSSQLEngine. Stores the connection string for later use when
 // creating database connections. The connection string should be in ODBC
-// format (e.g., "DRIVER={ODBC Driver 17 for SQL Server};SERVER=...;DATABASE=...;UID=...;PWD=...").
+// format (e.g., "DRIVER={ODBC Driver 17 for SQL
+// Server};SERVER=...;DATABASE=...;UID=...;PWD=...").
 MSSQLEngine::MSSQLEngine(std::string connectionString)
     : connectionString_(std::move(connectionString)) {}
 
@@ -175,25 +176,66 @@ MSSQLEngine::executeQuery(SQLHDBC dbc, const std::string &query) {
     return results;
   }
 
-  SQLSMALLINT numCols;
-  SQLNumResultCols(stmt, &numCols);
+  SQLSMALLINT numCols = 0;
+  ret = SQLNumResultCols(stmt, &numCols);
+  if (!SQL_SUCCEEDED(ret) || numCols <= 0) {
+    Logger::error(LogCategory::DATABASE, "MSSQLEngine",
+                  "SQLNumResultCols failed or no columns");
+    SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+    return results;
+  }
 
-  while (SQLFetch(stmt) == SQL_SUCCESS) {
+  SQLRETURN fetchRet;
+  while ((fetchRet = SQLFetch(stmt)) == SQL_SUCCESS ||
+         fetchRet == SQL_SUCCESS_WITH_INFO) {
     std::vector<std::string> row;
     for (SQLSMALLINT i = 1; i <= numCols; i++) {
+      std::string cellValue;
+      SQLLEN totalLen = 0;
+      SQLLEN len = 0;
+      constexpr SQLLEN CHUNK_SIZE = DatabaseDefaults::BUFFER_SIZE - 1;
       char buffer[DatabaseDefaults::BUFFER_SIZE];
-      SQLLEN len;
-      ret = SQLGetData(stmt, i, SQL_C_CHAR, buffer, sizeof(buffer), &len);
-      if (SQL_SUCCEEDED(ret)) {
-        if (len == SQL_NULL_DATA)
-          row.push_back("NULL");
-        else
-          row.push_back(std::string(buffer, len));
-      } else {
-        row.push_back("NULL");
+
+      do {
+        ret = SQLGetData(stmt, i, SQL_C_CHAR, buffer, sizeof(buffer), &len);
+        if (ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) {
+          if (len == SQL_NULL_DATA) {
+            cellValue = "NULL";
+            break;
+          } else if (len > 0) {
+            SQLLEN copyLen = (len < CHUNK_SIZE) ? len : CHUNK_SIZE;
+            cellValue.append(buffer, copyLen);
+            totalLen += copyLen;
+            if (len < CHUNK_SIZE) {
+              break;
+            }
+          } else {
+            break;
+          }
+        } else if (ret == SQL_NO_DATA) {
+          break;
+        } else {
+          cellValue = "NULL";
+          break;
+        }
+      } while (ret == SQL_SUCCESS_WITH_INFO);
+
+      if (cellValue.empty() && totalLen == 0) {
+        cellValue = "NULL";
       }
+      row.push_back(cellValue);
     }
     results.push_back(std::move(row));
+  }
+
+  if (fetchRet != SQL_NO_DATA && !SQL_SUCCEEDED(fetchRet)) {
+    SQLCHAR sqlState[6], msg[SQL_MAX_MESSAGE_LENGTH];
+    SQLINTEGER nativeError;
+    SQLSMALLINT msgLen;
+    SQLGetDiagRec(SQL_HANDLE_STMT, stmt, 1, sqlState, &nativeError, msg,
+                  sizeof(msg), &msgLen);
+    Logger::error(LogCategory::DATABASE, "MSSQLEngine",
+                  "SQLFetch failed: " + std::string((char *)msg));
   }
 
   SQLFreeHandle(SQL_HANDLE_STMT, stmt);
@@ -259,16 +301,31 @@ MSSQLEngine::detectPrimaryKey(const std::string &schema,
     return pkColumns;
   }
 
-  std::string safeSchema = schema;
-  std::string safeTable = table;
-  safeSchema.erase(
-      std::remove_if(safeSchema.begin(), safeSchema.end(),
-                     [](char c) { return c == '\'' || c == ';' || c == '-'; }),
-      safeSchema.end());
-  safeTable.erase(
-      std::remove_if(safeTable.begin(), safeTable.end(),
-                     [](char c) { return c == '\'' || c == ';' || c == '-'; }),
-      safeTable.end());
+  std::string safeSchema;
+  for (char c : schema) {
+    if (c >= 32 && c <= 126 && c != '\'' && c != ';' && c != '-' && c != '\\' &&
+        c != '/') {
+      safeSchema += c;
+    }
+  }
+  if (safeSchema.empty()) {
+    Logger::error(LogCategory::DATABASE, "MSSQLEngine",
+                  "detectTimeColumn: sanitized schema is empty");
+    return {};
+  }
+
+  std::string safeTable;
+  for (char c : table) {
+    if (c >= 32 && c <= 126 && c != '\'' && c != ';' && c != '-' && c != '\\' &&
+        c != '/') {
+      safeTable += c;
+    }
+  }
+  if (safeTable.empty()) {
+    Logger::error(LogCategory::DATABASE, "MSSQLEngine",
+                  "detectTimeColumn: sanitized table is empty");
+    return {};
+  }
 
   std::string query =
       "SELECT c.name AS COLUMN_NAME "
@@ -315,16 +372,31 @@ std::string MSSQLEngine::detectTimeColumn(const std::string &schema,
     return "";
   }
 
-  std::string safeSchema = schema;
-  std::string safeTable = table;
-  safeSchema.erase(
-      std::remove_if(safeSchema.begin(), safeSchema.end(),
-                     [](char c) { return c == '\'' || c == ';' || c == '-'; }),
-      safeSchema.end());
-  safeTable.erase(
-      std::remove_if(safeTable.begin(), safeTable.end(),
-                     [](char c) { return c == '\'' || c == ';' || c == '-'; }),
-      safeTable.end());
+  std::string safeSchema;
+  for (char c : schema) {
+    if (c >= 32 && c <= 126 && c != '\'' && c != ';' && c != '-' && c != '\\' &&
+        c != '/') {
+      safeSchema += c;
+    }
+  }
+  if (safeSchema.empty()) {
+    Logger::error(LogCategory::DATABASE, "MSSQLEngine",
+                  "detectTimeColumn: sanitized schema is empty");
+    return "";
+  }
+
+  std::string safeTable;
+  for (char c : table) {
+    if (c >= 32 && c <= 126 && c != '\'' && c != ';' && c != '-' && c != '\\' &&
+        c != '/') {
+      safeTable += c;
+    }
+  }
+  if (safeTable.empty()) {
+    Logger::error(LogCategory::DATABASE, "MSSQLEngine",
+                  "detectTimeColumn: sanitized table is empty");
+    return "";
+  }
 
   std::string candidates;
   for (size_t i = 0; i < DatabaseDefaults::TIME_COLUMN_COUNT; ++i) {
@@ -385,16 +457,31 @@ MSSQLEngine::getColumnCounts(const std::string &schema,
     return {0, 0};
   }
 
-  std::string safeSchema = schema;
-  std::string safeTable = table;
-  safeSchema.erase(
-      std::remove_if(safeSchema.begin(), safeSchema.end(),
-                     [](char c) { return c == '\'' || c == ';' || c == '-'; }),
-      safeSchema.end());
-  safeTable.erase(
-      std::remove_if(safeTable.begin(), safeTable.end(),
-                     [](char c) { return c == '\'' || c == ';' || c == '-'; }),
-      safeTable.end());
+  std::string safeSchema;
+  for (char c : schema) {
+    if (c >= 32 && c <= 126 && c != '\'' && c != ';' && c != '-' && c != '\\' &&
+        c != '/') {
+      safeSchema += c;
+    }
+  }
+  if (safeSchema.empty()) {
+    Logger::error(LogCategory::DATABASE, "MSSQLEngine",
+                  "detectTimeColumn: sanitized schema is empty");
+    return {0, 0};
+  }
+
+  std::string safeTable;
+  for (char c : table) {
+    if (c >= 32 && c <= 126 && c != '\'' && c != ';' && c != '-' && c != '\\' &&
+        c != '/') {
+      safeTable += c;
+    }
+  }
+  if (safeTable.empty()) {
+    Logger::error(LogCategory::DATABASE, "MSSQLEngine",
+                  "detectTimeColumn: sanitized table is empty");
+    return {0, 0};
+  }
 
   std::string sourceQuery =
       "SELECT COUNT(*) FROM sys.columns c "
@@ -409,7 +496,14 @@ MSSQLEngine::getColumnCounts(const std::string &schema,
       sourceResults[0][0] != "NULL") {
     try {
       sourceCount = std::stoi(sourceResults[0][0]);
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::DATABASE, "MSSQLEngine",
+                    "Failed to parse source column count: " +
+                        std::string(e.what()));
+      sourceCount = 0;
     } catch (...) {
+      Logger::error(LogCategory::DATABASE, "MSSQLEngine",
+                    "Failed to parse source column count: unknown error");
       sourceCount = 0;
     }
   }

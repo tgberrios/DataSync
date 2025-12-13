@@ -327,28 +327,56 @@ void ColumnCatalogCollector::collectMariaDBColumns(
       col.connection_string = connectionString;
 
       try {
-        col.ordinal_position = (row[3] && strlen(row[3]) > 0) ? std::stoi(row[3]) : 0;
-      } catch (const std::exception &) {
+        if (row[3] && strlen(row[3]) > 0 && strlen(row[3]) <= 10) {
+          col.ordinal_position = std::stoi(row[3]);
+        } else {
+          col.ordinal_position = 0;
+        }
+      } catch (const std::exception &e) {
+        Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                        "Failed to parse ordinal_position: " +
+                            std::string(e.what()));
         col.ordinal_position = 0;
       }
 
       col.data_type = row[4] ? row[4] : "";
 
       try {
-        col.character_maximum_length = (row[5] && strlen(row[5]) > 0) ? std::stoi(row[5]) : 0;
-      } catch (const std::exception &) {
+        if (row[5] && strlen(row[5]) > 0 && strlen(row[5]) <= 10) {
+          col.character_maximum_length = std::stoi(row[5]);
+        } else {
+          col.character_maximum_length = 0;
+        }
+      } catch (const std::exception &e) {
+        Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                        "Failed to parse character_maximum_length: " +
+                            std::string(e.what()));
         col.character_maximum_length = 0;
       }
 
       try {
-        col.numeric_precision = (row[6] && strlen(row[6]) > 0) ? std::stoi(row[6]) : 0;
-      } catch (const std::exception &) {
+        if (row[6] && strlen(row[6]) > 0 && strlen(row[6]) <= 10) {
+          col.numeric_precision = std::stoi(row[6]);
+        } else {
+          col.numeric_precision = 0;
+        }
+      } catch (const std::exception &e) {
+        Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                        "Failed to parse numeric_precision: " +
+                            std::string(e.what()));
         col.numeric_precision = 0;
       }
 
       try {
-        col.numeric_scale = (row[7] && strlen(row[7]) > 0) ? std::stoi(row[7]) : 0;
-      } catch (const std::exception &) {
+        if (row[7] && strlen(row[7]) > 0 && strlen(row[7]) <= 10) {
+          col.numeric_scale = std::stoi(row[7]);
+        } else {
+          col.numeric_scale = 0;
+        }
+      } catch (const std::exception &e) {
+        Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                        "Failed to parse numeric_scale: " +
+                            std::string(e.what()));
         col.numeric_scale = 0;
       }
 
@@ -356,38 +384,78 @@ void ColumnCatalogCollector::collectMariaDBColumns(
       col.column_default = row[9] ? row[9] : "";
 
       try {
-        col.is_primary_key = (row[16] && strlen(row[16]) > 0 && std::stoi(row[16]) == 1);
-      } catch (const std::exception &) {
+        if (row[16] && strlen(row[16]) > 0 && strlen(row[16]) <= 2) {
+          col.is_primary_key = (std::stoi(row[16]) == 1);
+        } else {
+          col.is_primary_key = false;
+        }
+      } catch (const std::exception &e) {
+        Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                        "Failed to parse is_primary_key: " +
+                            std::string(e.what()));
         col.is_primary_key = false;
       }
 
       try {
-        col.is_foreign_key = (row[17] && strlen(row[17]) > 0 && std::stoi(row[17]) == 1);
-      } catch (const std::exception &) {
+        if (row[17] && strlen(row[17]) > 0 && strlen(row[17]) <= 2) {
+          col.is_foreign_key = (std::stoi(row[17]) == 1);
+        } else {
+          col.is_foreign_key = false;
+        }
+      } catch (const std::exception &e) {
+        Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                        "Failed to parse is_foreign_key: " +
+                            std::string(e.what()));
         col.is_foreign_key = false;
       }
 
       try {
-        col.is_unique = (row[18] && strlen(row[18]) > 0 && std::stoi(row[18]) == 1);
-      } catch (const std::exception &) {
+        if (row[18] && strlen(row[18]) > 0 && strlen(row[18]) <= 2) {
+          col.is_unique = (std::stoi(row[18]) == 1);
+        } else {
+          col.is_unique = false;
+        }
+      } catch (const std::exception &e) {
+        Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                        "Failed to parse is_unique: " + std::string(e.what()));
         col.is_unique = false;
       }
 
       try {
-        col.is_indexed = (row[19] && strlen(row[19]) > 0 && std::stoi(row[19]) == 1);
-      } catch (const std::exception &) {
+        if (row[19] && strlen(row[19]) > 0 && strlen(row[19]) <= 2) {
+          col.is_indexed = (std::stoi(row[19]) == 1);
+        } else {
+          col.is_indexed = false;
+        }
+      } catch (const std::exception &e) {
+        Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                        "Failed to parse is_indexed: " + std::string(e.what()));
         col.is_indexed = false;
       }
 
       try {
-        col.is_auto_increment = (row[20] && strlen(row[20]) > 0 && std::stoi(row[20]) == 1);
-      } catch (const std::exception &) {
+        if (row[20] && strlen(row[20]) > 0 && strlen(row[20]) <= 2) {
+          col.is_auto_increment = (std::stoi(row[20]) == 1);
+        } else {
+          col.is_auto_increment = false;
+        }
+      } catch (const std::exception &e) {
+        Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                        "Failed to parse is_auto_increment: " +
+                            std::string(e.what()));
         col.is_auto_increment = false;
       }
 
       try {
-        col.is_generated = (row[21] && strlen(row[21]) > 0 && std::stoi(row[21]) == 1);
-      } catch (const std::exception &) {
+        if (row[21] && strlen(row[21]) > 0 && strlen(row[21]) <= 2) {
+          col.is_generated = (std::stoi(row[21]) == 1);
+        } else {
+          col.is_generated = false;
+        }
+      } catch (const std::exception &e) {
+        Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                        "Failed to parse is_generated: " +
+                            std::string(e.what()));
         col.is_generated = false;
       }
 

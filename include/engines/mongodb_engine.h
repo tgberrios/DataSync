@@ -7,6 +7,7 @@
 #include <bson/bson.h>
 #include <memory>
 #include <mongoc/mongoc.h>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -17,6 +18,7 @@ class MongoDBEngine : public IDatabaseEngine {
   std::string host_;
   int port_;
   bool valid_;
+  mutable std::mutex clientMutex_;
 
 public:
   explicit MongoDBEngine(std::string connectionString);

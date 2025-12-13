@@ -218,9 +218,12 @@ double TableProcessorThreadPool::getTasksPerSecond() const {
       std::chrono::duration_cast<std::chrono::seconds>(now - startTime_)
           .count();
 
-  if (elapsed == 0)
+  if (elapsed <= 0)
     return 0.0;
 
-  return static_cast<double>(completedTasks_.load()) /
-         static_cast<double>(elapsed);
+  size_t completed = completedTasks_.load();
+  if (completed == 0)
+    return 0.0;
+
+  return static_cast<double>(completed) / static_cast<double>(elapsed);
 }

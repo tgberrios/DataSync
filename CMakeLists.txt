@@ -56,6 +56,10 @@ add_executable(DataSync
     src/utils/connection_utils.cpp
     src/utils/cluster_name_resolver.cpp
     src/utils/table_utils.cpp
+    src/utils/HostnamePatternMatcher.cpp
+    src/utils/MariaDBClusterNameProvider.cpp
+    src/utils/MSSQLClusterNameProvider.cpp
+    src/utils/PostgreSQLClusterNameProvider.cpp
     src/engines/mariadb_engine.cpp
     src/engines/mssql_engine.cpp
     src/engines/postgres_engine.cpp

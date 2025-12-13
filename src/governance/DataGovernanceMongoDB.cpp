@@ -117,7 +117,22 @@ bool DataGovernanceMongoDB::connect(const std::string &connectionString) {
     }
 
     bson_t *ping = BCON_NEW("ping", BCON_INT32(1));
+    if (!ping) {
+      Logger::error(LogCategory::GOVERNANCE, "DataGovernanceMongoDB",
+                    "Failed to create ping BSON");
+      mongoc_client_destroy(client_);
+      client_ = nullptr;
+      return false;
+    }
     mongoc_database_t *db = mongoc_client_get_database(client_, dbName.c_str());
+    if (!db) {
+      bson_destroy(ping);
+      Logger::error(LogCategory::GOVERNANCE, "DataGovernanceMongoDB",
+                    "Failed to get database");
+      mongoc_client_destroy(client_);
+      client_ = nullptr;
+      return false;
+    }
     bool ret =
         mongoc_database_command_simple(db, ping, nullptr, nullptr, &error);
     bson_destroy(ping);
@@ -151,7 +166,10 @@ void DataGovernanceMongoDB::collectGovernanceData() {
   Logger::info(LogCategory::GOVERNANCE, "DataGovernanceMongoDB",
                "Starting governance data collection for MongoDB");
 
-  governanceData_.clear();
+  {
+    std::lock_guard<std::mutex> lock(governanceDataMutex_);
+    governanceData_.clear();
+  }
 
   if (!client_) {
     Logger::error(LogCategory::GOVERNANCE, "DataGovernanceMongoDB",
@@ -167,7 +185,11 @@ void DataGovernanceMongoDB::collectGovernanceData() {
 
     Logger::info(LogCategory::GOVERNANCE, "DataGovernanceMongoDB",
                  "Governance data collection completed. Collected " +
-                     std::to_string(governanceData_.size()) + " records");
+                     std::to_string([this]() {
+                       std::lock_guard<std::mutex> lock(governanceDataMutex_);
+                       return governanceData_.size();
+                     }()) +
+                     " records");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "DataGovernanceMongoDB",
                   "Error collecting governance data: " + std::string(e.what()));
@@ -209,6 +231,10 @@ void DataGovernanceMongoDB::queryCollectionStats() {
 
       bson_t *command =
           BCON_NEW("collStats", BCON_UTF8(collectionName.c_str()));
+      if (!command) {
+        mongoc_collection_destroy(collection);
+        continue;
+      }
       bson_t reply;
       bool success = mongoc_database_command_simple(database, command, nullptr,
                                                     &reply, &error);
@@ -249,7 +275,10 @@ void DataGovernanceMongoDB::queryCollectionStats() {
         }
 
         data.total_size_mb = data.collection_size_mb + data.index_size_mb;
-        governanceData_.push_back(data);
+        {
+          std::lock_guard<std::mutex> lock(governanceDataMutex_);
+          governanceData_.push_back(data);
+        }
         bson_destroy(&reply);
       } else {
         Logger::warning(LogCategory::GOVERNANCE, "DataGovernanceMongoDB",
@@ -350,6 +379,7 @@ void DataGovernanceMongoDB::queryIndexStats() {
         }
 
         if (!data.index_name.empty()) {
+          std::lock_guard<std::mutex> lock(governanceDataMutex_);
           governanceData_.push_back(data);
         }
       }
@@ -378,6 +408,10 @@ void DataGovernanceMongoDB::queryReplicaSetInfo() {
     }
 
     bson_t *command = BCON_NEW("replSetGetStatus", BCON_INT32(1));
+    if (!command) {
+      mongoc_database_destroy(admin_db);
+      return;
+    }
     bson_t reply;
     bson_error_t error;
 
@@ -390,9 +424,12 @@ void DataGovernanceMongoDB::queryReplicaSetInfo() {
           const char *key = bson_iter_key(&iter);
           if (strcmp(key, "set") == 0 && BSON_ITER_HOLDS_UTF8(&iter)) {
             std::string replicaSetName = bson_iter_utf8(&iter, nullptr);
-            for (auto &data : governanceData_) {
-              if (data.replica_set_name.empty()) {
-                data.replica_set_name = replicaSetName;
+            {
+              std::lock_guard<std::mutex> lock(governanceDataMutex_);
+              for (auto &data : governanceData_) {
+                if (data.replica_set_name.empty()) {
+                  data.replica_set_name = replicaSetName;
+                }
               }
             }
           }
@@ -411,6 +448,7 @@ void DataGovernanceMongoDB::queryReplicaSetInfo() {
 }
 
 void DataGovernanceMongoDB::calculateHealthScores() {
+  std::lock_guard<std::mutex> lock(governanceDataMutex_);
   for (auto &data : governanceData_) {
     double score = 100.0;
 
@@ -459,10 +497,15 @@ void DataGovernanceMongoDB::calculateHealthScores() {
 }
 
 void DataGovernanceMongoDB::storeGovernanceData() {
-  if (governanceData_.empty()) {
-    Logger::warning(LogCategory::GOVERNANCE, "DataGovernanceMongoDB",
-                    "No governance data to store");
-    return;
+  std::vector<MongoDBGovernanceData> dataCopy;
+  {
+    std::lock_guard<std::mutex> lock(governanceDataMutex_);
+    if (governanceData_.empty()) {
+      Logger::warning(LogCategory::GOVERNANCE, "DataGovernanceMongoDB",
+                      "No governance data to store");
+      return;
+    }
+    dataCopy = governanceData_;
   }
 
   try {
@@ -522,7 +565,12 @@ void DataGovernanceMongoDB::storeGovernanceData() {
     int successCount = 0;
     int errorCount = 0;
 
-    for (const auto &data : governanceData_) {
+    std::vector<MongoDBGovernanceData> dataCopy;
+    {
+      std::lock_guard<std::mutex> lock(governanceDataMutex_);
+      dataCopy = governanceData_;
+    }
+    for (const auto &data : dataCopy) {
       if (data.server_name.empty() || data.database_name.empty() ||
           data.collection_name.empty()) {
         Logger::warning(LogCategory::GOVERNANCE, "DataGovernanceMongoDB",
@@ -642,15 +690,20 @@ void DataGovernanceMongoDB::storeGovernanceData() {
 }
 
 void DataGovernanceMongoDB::generateReport() {
+  std::vector<MongoDBGovernanceData> dataCopy;
+  {
+    std::lock_guard<std::mutex> lock(governanceDataMutex_);
+    dataCopy = governanceData_;
+  }
   Logger::info(LogCategory::GOVERNANCE, "DataGovernanceMongoDB",
                "Generating governance report for " +
-                   std::to_string(governanceData_.size()) + " records");
+                   std::to_string(dataCopy.size()) + " records");
 
   int healthyCount = 0;
   int warningCount = 0;
   int criticalCount = 0;
 
-  for (const auto &data : governanceData_) {
+  for (const auto &data : dataCopy) {
     if (data.health_status == "HEALTHY") {
       healthyCount++;
     } else if (data.health_status == "WARNING") {

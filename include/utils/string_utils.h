@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -91,6 +92,39 @@ inline std::string sanitizeForSQL(const std::string &input) {
   }
 
   return toLower(cleaned);
+}
+
+inline bool isValidDatabaseIdentifier(const std::string &identifier) {
+  if (identifier.empty() || identifier.length() > 128) {
+    return false;
+  }
+
+  for (char c : identifier) {
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+          (c >= '0' && c <= '9') || c == '_' || c == '$' || c == '#')) {
+      return false;
+    }
+  }
+
+  if (identifier[0] >= '0' && identifier[0] <= '9') {
+    return false;
+  }
+
+  return true;
+}
+
+inline std::string escapeMSSQLIdentifier(const std::string &identifier) {
+  if (!isValidDatabaseIdentifier(identifier)) {
+    throw std::invalid_argument("Invalid database identifier: " + identifier);
+  }
+
+  std::string escaped = identifier;
+  size_t pos = 0;
+  while ((pos = escaped.find(']', pos)) != std::string::npos) {
+    escaped.replace(pos, 1, "]]");
+    pos += 2;
+  }
+  return "[" + escaped + "]";
 }
 
 } // namespace StringUtils

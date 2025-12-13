@@ -33,8 +33,6 @@ public:
 private:
   std::atomic<bool> running{true};
   std::vector<std::thread> threads;
-  std::mutex configMutex;
-  std::condition_variable configCV;
 
   MariaDBToPostgres mariaToPg;
   MSSQLToPostgres mssqlToPg;
@@ -55,6 +53,17 @@ private:
   void monitoringThread();
   void validateTablesForEngine(pqxx::connection &pgConn,
                                const std::string &dbEngine);
+
+  void initializeDataGovernance();
+  void initializeMetricsCollector();
+  void initializeQueryStoreCollector();
+  void initializeQueryActivityLogger();
+  void initializeDatabaseTables();
+  void performCatalogSyncs(std::vector<std::exception_ptr> &exceptions,
+                           std::mutex &exceptionMutex);
+  void processCatalogSyncExceptions(
+      const std::vector<std::exception_ptr> &exceptions);
+  void performCatalogMaintenance();
 };
 
 #endif

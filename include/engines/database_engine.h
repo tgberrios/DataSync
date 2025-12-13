@@ -39,7 +39,18 @@ inline std::string columnsToJSON(const std::vector<std::string> &columns) {
   for (size_t i = 0; i < columns.size(); ++i) {
     if (i > 0)
       json += ",";
-    json += "\"" + columns[i] + "\"";
+    std::string escaped = columns[i];
+    size_t pos = 0;
+    while ((pos = escaped.find('"', pos)) != std::string::npos) {
+      escaped.replace(pos, 1, "\\\"");
+      pos += 2;
+    }
+    pos = 0;
+    while ((pos = escaped.find('\\', pos)) != std::string::npos) {
+      escaped.replace(pos, 1, "\\\\");
+      pos += 2;
+    }
+    json += "\"" + escaped + "\"";
   }
   json += "]";
   return json;

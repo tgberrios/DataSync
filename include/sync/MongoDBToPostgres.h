@@ -20,6 +20,11 @@ using namespace ParallelProcessing;
 
 class MongoDBToPostgres : public DatabaseToPostgresSync {
 public:
+  static constexpr int MAX_SAMPLES = 100;
+  static constexpr int LOG_INTERVAL = 10000;
+  static constexpr size_t MONGODB_BATCH_SIZE = 10000;
+  static constexpr int SYNC_INTERVAL_HOURS = 24;
+
   MongoDBToPostgres() = default;
   ~MongoDBToPostgres() { shutdownParallelProcessing(); }
 

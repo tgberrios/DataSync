@@ -339,7 +339,8 @@ app.get("/api/dashboard/stats", async (req, res) => {
     const cpus = os.cpus();
     const cpuCount = cpus.length;
     const loadAvg = os.loadavg()[0];
-    const cpuUsagePercent = ((loadAvg * 100) / cpuCount).toFixed(1);
+    const cpuUsagePercent =
+      cpuCount > 0 ? ((loadAvg * 100) / cpuCount).toFixed(1) : "0.0";
 
     console.log("CPU Info:", {
       count: cpuCount,

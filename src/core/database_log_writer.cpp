@@ -34,6 +34,9 @@ void DatabaseLogWriter::prepareStatement() {
   if (!conn_ || !conn_->is_open())
     return;
 
+  if (statementPrepared_)
+    return;
+
   try {
     pqxx::work w(*conn_);
     w.conn().prepare("log_insert",
@@ -70,8 +73,17 @@ bool DatabaseLogWriter::writeParsed(const std::string &levelStr,
                                     const std::string &message) {
   std::lock_guard<std::mutex> lock(mutex_);
 
-  if (!enabled_ || !conn_ || !conn_->is_open())
+  if (!enabled_ || !conn_ || !conn_->is_open()) {
+    if (conn_ && !conn_->is_open()) {
+      enabled_ = false;
+    }
     return false;
+  }
+
+  if (levelStr.length() > 50 || categoryStr.length() > 50 ||
+      function.length() > 255 || message.length() > 10000) {
+    return false;
+  }
 
   try {
     if (!statementPrepared_) {
@@ -84,8 +96,17 @@ bool DatabaseLogWriter::writeParsed(const std::string &levelStr,
     txn.exec_prepared("log_insert", levelStr, categoryStr, function, message);
     txn.commit();
     return true;
-  } catch (const std::exception &e) {
+  } catch (const pqxx::broken_connection &e) {
     enabled_ = false;
+    conn_.reset();
+    std::cerr << "DatabaseLogWriter: Connection broken: " << e.what()
+              << std::endl;
+    return false;
+  } catch (const pqxx::sql_error &e) {
+    std::cerr << "DatabaseLogWriter: SQL error writing log entry: " << e.what()
+              << std::endl;
+    return false;
+  } catch (const std::exception &e) {
     std::cerr << "DatabaseLogWriter: Failed to write log entry: " << e.what()
               << std::endl;
     return false;
@@ -102,10 +123,17 @@ void DatabaseLogWriter::close() {
   enabled_ = false;
 }
 
-// Checks if the database log writer is open and ready to accept log entries.
-// Returns true only if the connection exists, is open, and the writer is
-// enabled. Returns false if the connection is closed, the writer is disabled,
-// or if an error occurred during initialization.
+bool DatabaseLogWriter::isEnabled() const {
+  std::lock_guard<std::mutex> lock(const_cast<std::mutex &>(mutex_));
+  return enabled_;
+}
+
+void DatabaseLogWriter::disable() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  enabled_ = false;
+}
+
 bool DatabaseLogWriter::isOpen() const {
+  std::lock_guard<std::mutex> lock(const_cast<std::mutex &>(mutex_));
   return conn_ && conn_->is_open() && enabled_;
 }

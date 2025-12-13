@@ -59,13 +59,20 @@ MongoDBToPostgres::parseTimestamp(const std::string &timestamp) {
   std::istringstream ss(timestamp);
   ss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
 
-  if (ss.fail()) {
+  if (ss.fail() || !ss.eof()) {
     Logger::warning(LogCategory::TRANSFER, "parseTimestamp",
                     "Failed to parse timestamp: " + timestamp);
     return std::chrono::system_clock::time_point::min();
   }
 
-  return std::chrono::system_clock::from_time_t(std::mktime(&tm));
+  std::time_t time = std::mktime(&tm);
+  if (time == -1) {
+    Logger::warning(LogCategory::TRANSFER, "parseTimestamp",
+                    "Invalid timestamp value: " + timestamp);
+    return std::chrono::system_clock::time_point::min();
+  }
+
+  return std::chrono::system_clock::from_time_t(time);
 }
 
 bool MongoDBToPostgres::shouldSyncCollection(const TableInfo &tableInfo) {
@@ -79,14 +86,24 @@ bool MongoDBToPostgres::shouldSyncCollection(const TableInfo &tableInfo) {
 
   auto lastSync = parseTimestamp(tableInfo.last_sync_time);
   if (lastSync == std::chrono::system_clock::time_point::min()) {
+    Logger::warning(LogCategory::TRANSFER, "shouldSyncCollection",
+                    "Invalid last_sync_time for " + tableInfo.schema_name +
+                        "." + tableInfo.table_name + ", forcing sync");
     return true;
   }
 
   auto now = std::chrono::system_clock::now();
+  if (lastSync > now) {
+    Logger::warning(LogCategory::TRANSFER, "shouldSyncCollection",
+                    "Future timestamp detected for " + tableInfo.schema_name +
+                        "." + tableInfo.table_name);
+    return true;
+  }
+
   auto hoursSinceLastSync =
       std::chrono::duration_cast<std::chrono::hours>(now - lastSync).count();
 
-  return hoursSinceLastSync >= 24;
+  return hoursSinceLastSync >= MongoDBToPostgres::SYNC_INTERVAL_HOURS;
 }
 
 void MongoDBToPostgres::updateLastSyncTime(pqxx::connection &pgConn,
@@ -96,9 +113,9 @@ void MongoDBToPostgres::updateLastSyncTime(pqxx::connection &pgConn,
     std::lock_guard<std::mutex> lock(metadataUpdateMutex);
     pqxx::work txn(pgConn);
     txn.exec("UPDATE metadata.catalog SET last_sync_time = NOW() WHERE "
-             "schema_name = '" +
-             escapeSQL(schema_name) + "' AND table_name = '" +
-             escapeSQL(table_name) + "' AND db_engine = 'MongoDB'");
+             "schema_name = " +
+             txn.quote(schema_name) + " AND table_name = " +
+             txn.quote(table_name) + " AND db_engine = 'MongoDB'");
     txn.commit();
   } catch (const std::exception &e) {
     Logger::error(LogCategory::TRANSFER, "updateLastSyncTime",
@@ -127,16 +144,33 @@ MongoDBToPostgres::discoverCollectionFields(const std::string &connectionString,
       return fields;
     }
 
+    struct ResourceGuard {
+      mongoc_collection_t *coll_;
+      mongoc_cursor_t *cursor_;
+      bson_t *query_;
+      ResourceGuard(mongoc_collection_t *c, mongoc_cursor_t *cur, bson_t *q)
+          : coll_(c), cursor_(cur), query_(q) {}
+      ~ResourceGuard() {
+        if (cursor_)
+          mongoc_cursor_destroy(cursor_);
+        if (query_)
+          bson_destroy(query_);
+        if (coll_)
+          mongoc_collection_destroy(coll_);
+      }
+    };
+
     bson_t *query = bson_new();
     mongoc_cursor_t *cursor =
         mongoc_collection_find_with_opts(coll, query, nullptr, nullptr);
+
+    ResourceGuard guard(coll, cursor, query);
 
     const bson_t *doc;
     std::set<std::string> fieldSet;
     fieldSet.insert("_id");
 
     int sampleCount = 0;
-    const int MAX_SAMPLES = 100;
 
     while (mongoc_cursor_next(cursor, &doc) && sampleCount < MAX_SAMPLES) {
       bson_iter_t iter;
@@ -156,9 +190,9 @@ MongoDBToPostgres::discoverCollectionFields(const std::string &connectionString,
       sampleCount++;
     }
 
-    mongoc_cursor_destroy(cursor);
-    bson_destroy(query);
-    mongoc_collection_destroy(coll);
+    guard.coll_ = nullptr;
+    guard.cursor_ = nullptr;
+    guard.query_ = nullptr;
 
     fields.assign(fieldSet.begin(), fieldSet.end());
     fields.push_back("_document");
@@ -346,6 +380,22 @@ MongoDBToPostgres::fetchCollectionData(const TableInfo &tableInfo) {
       return results;
     }
 
+    struct ResourceGuard {
+      mongoc_collection_t *coll_;
+      mongoc_cursor_t *cursor_;
+      bson_t *query_;
+      ResourceGuard(mongoc_collection_t *c, mongoc_cursor_t *cur, bson_t *q)
+          : coll_(c), cursor_(cur), query_(q) {}
+      ~ResourceGuard() {
+        if (cursor_)
+          mongoc_cursor_destroy(cursor_);
+        if (query_)
+          bson_destroy(query_);
+        if (coll_)
+          mongoc_collection_destroy(coll_);
+      }
+    };
+
     std::vector<std::string> fields =
         discoverCollectionFields(tableInfo.connection_string,
                                  tableInfo.schema_name, tableInfo.table_name);
@@ -359,6 +409,8 @@ MongoDBToPostgres::fetchCollectionData(const TableInfo &tableInfo) {
     mongoc_cursor_t *cursor =
         mongoc_collection_find_with_opts(coll, query, nullptr, nullptr);
 
+    ResourceGuard guard(coll, cursor, query);
+
     const bson_t *doc;
     int count = 0;
     while (mongoc_cursor_next(cursor, &doc)) {
@@ -369,15 +421,15 @@ MongoDBToPostgres::fetchCollectionData(const TableInfo &tableInfo) {
       results.push_back(row);
       count++;
 
-      if (count % 10000 == 0) {
+      if (count % MongoDBToPostgres::LOG_INTERVAL == 0) {
         Logger::info(LogCategory::TRANSFER, "fetchCollectionData",
                      "Fetched " + std::to_string(count) + " documents");
       }
     }
 
-    mongoc_cursor_destroy(cursor);
-    bson_destroy(query);
-    mongoc_collection_destroy(coll);
+    guard.coll_ = nullptr;
+    guard.cursor_ = nullptr;
+    guard.query_ = nullptr;
 
     Logger::info(LogCategory::TRANSFER, "fetchCollectionData",
                  "Fetched " + std::to_string(results.size()) +
@@ -522,11 +574,40 @@ void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
     }
 
     pqxx::work insertTxn(conn);
-    const size_t BATCH_SIZE = 10000;
     size_t inserted = 0;
 
-    for (size_t i = 0; i < data.size(); i += BATCH_SIZE) {
-      size_t batchEnd = std::min(i + BATCH_SIZE, data.size());
+    auto buildFieldValue =
+        [&](const std::string &fieldName, const std::string &fieldType,
+            const std::string &value, pqxx::work &txn) -> std::string {
+      if (fieldName == "_document" || fieldType == "JSONB") {
+        if (value.empty() || value == "NULL" || value == "null") {
+          return "NULL";
+        }
+        try {
+          auto parsed = nlohmann::json::parse(value);
+          return txn.quote(parsed.dump()) + "::jsonb";
+        } catch (const nlohmann::json::exception &e) {
+          Logger::warning(LogCategory::TRANSFER, "MongoDBToPostgres",
+                          "Failed to parse JSON value, wrapping as string: " +
+                              std::string(e.what()));
+          nlohmann::json wrapper;
+          wrapper["value"] = value;
+          return txn.quote(wrapper.dump()) + "::jsonb";
+        } catch (const std::exception &e) {
+          Logger::warning(LogCategory::TRANSFER, "MongoDBToPostgres",
+                          "Error processing JSON field: " +
+                              std::string(e.what()));
+          nlohmann::json wrapper;
+          wrapper["value"] = value;
+          return txn.quote(wrapper.dump()) + "::jsonb";
+        }
+      } else {
+        return txn.quote(cleanValueForPostgres(value, fieldType));
+      }
+    };
+
+    for (size_t i = 0; i < data.size(); i += MONGODB_BATCH_SIZE) {
+      size_t batchEnd = std::min(i + MONGODB_BATCH_SIZE, data.size());
       std::ostringstream insertQuery;
       insertQuery << "INSERT INTO " << fullTableName << " (";
 
@@ -552,40 +633,8 @@ void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
             }
           }
           if (fieldIndex < data[j].size()) {
-            if (validFields[k] == "_document") {
-              std::string jsonValue = data[j][fieldIndex];
-              if (jsonValue.empty() || jsonValue == "NULL" ||
-                  jsonValue == "null") {
-                insertQuery << "NULL";
-              } else {
-                try {
-                  auto parsed = nlohmann::json::parse(jsonValue);
-                  insertQuery << insertTxn.quote(parsed.dump()) << "::jsonb";
-                } catch (...) {
-                  nlohmann::json wrapper;
-                  wrapper["value"] = jsonValue;
-                  insertQuery << insertTxn.quote(wrapper.dump()) << "::jsonb";
-                }
-              }
-            } else if (fieldTypes[k] == "JSONB") {
-              std::string jsonValue = data[j][fieldIndex];
-              if (jsonValue.empty() || jsonValue == "NULL" ||
-                  jsonValue == "null") {
-                insertQuery << "NULL";
-              } else {
-                try {
-                  auto parsed = nlohmann::json::parse(jsonValue);
-                  insertQuery << insertTxn.quote(parsed.dump()) << "::jsonb";
-                } catch (...) {
-                  nlohmann::json wrapper;
-                  wrapper["value"] = jsonValue;
-                  insertQuery << insertTxn.quote(wrapper.dump()) << "::jsonb";
-                }
-              }
-            } else {
-              insertQuery << insertTxn.quote(
-                  cleanValueForPostgres(data[j][fieldIndex], fieldTypes[k]));
-            }
+            insertQuery << buildFieldValue(validFields[k], fieldTypes[k],
+                                           data[j][fieldIndex], insertTxn);
           } else {
             insertQuery << "NULL";
           }
@@ -606,7 +655,7 @@ void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
         throw;
       }
 
-      if (inserted % 10000 == 0) {
+      if (inserted % MONGODB_BATCH_SIZE == 0) {
         Logger::info(LogCategory::TRANSFER, "truncateAndLoadCollection",
                      "Inserted " + std::to_string(inserted) + " rows");
       }

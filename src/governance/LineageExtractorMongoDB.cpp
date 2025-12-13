@@ -118,7 +118,22 @@ bool LineageExtractorMongoDB::connect(const std::string &connectionString) {
     }
 
     bson_t *ping = BCON_NEW("ping", BCON_INT32(1));
+    if (!ping) {
+      Logger::error(LogCategory::GOVERNANCE, "LineageExtractorMongoDB",
+                    "Failed to create ping BSON");
+      mongoc_client_destroy(client_);
+      client_ = nullptr;
+      return false;
+    }
     mongoc_database_t *db = mongoc_client_get_database(client_, dbName.c_str());
+    if (!db) {
+      bson_destroy(ping);
+      Logger::error(LogCategory::GOVERNANCE, "LineageExtractorMongoDB",
+                    "Failed to get database");
+      mongoc_client_destroy(client_);
+      client_ = nullptr;
+      return false;
+    }
     bool ret =
         mongoc_database_command_simple(db, ping, nullptr, nullptr, &error);
     bson_destroy(ping);
@@ -163,7 +178,10 @@ void LineageExtractorMongoDB::extractLineage() {
                "Starting lineage extraction for " + serverName_ + "/" +
                    databaseName_);
 
-  lineageEdges_.clear();
+  {
+    std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
+    lineageEdges_.clear();
+  }
 
   if (!client_) {
     Logger::error(LogCategory::GOVERNANCE, "LineageExtractorMongoDB",
@@ -174,18 +192,27 @@ void LineageExtractorMongoDB::extractLineage() {
   try {
     extractCollectionDependencies();
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMongoDB",
-                 "After collection extraction: " +
-                     std::to_string(lineageEdges_.size()) + " edges");
+                 "After collection extraction: " + std::to_string([this]() {
+                   std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
+                   return lineageEdges_.size();
+                 }()) +
+                     " edges");
 
     extractViewDependencies();
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMongoDB",
-                 "After view extraction: " +
-                     std::to_string(lineageEdges_.size()) + " edges");
+                 "After view extraction: " + std::to_string([this]() {
+                   std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
+                   return lineageEdges_.size();
+                 }()) +
+                     " edges");
 
     extractPipelineDependencies();
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMongoDB",
-                 "After pipeline extraction: " +
-                     std::to_string(lineageEdges_.size()) + " edges");
+                 "After pipeline extraction: " + std::to_string([this]() {
+                   std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
+                   return lineageEdges_.size();
+                 }()) +
+                     " edges");
 
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMongoDB",
                  "Lineage extraction completed. Found " +
@@ -231,8 +258,17 @@ void LineageExtractorMongoDB::extractCollectionDependencies() {
       }
 
       bson_t *query = bson_new();
+      if (!query) {
+        mongoc_collection_destroy(collection);
+        continue;
+      }
       mongoc_cursor_t *cursor =
           mongoc_collection_find_with_opts(collection, query, nullptr, nullptr);
+      if (!cursor) {
+        bson_destroy(query);
+        mongoc_collection_destroy(collection);
+        continue;
+      }
       const bson_t *doc;
       int sampleCount = 0;
       const int MAX_SAMPLES = 100;
@@ -265,14 +301,17 @@ void LineageExtractorMongoDB::extractCollectionDependencies() {
               edge.edge_key = generateEdgeKey(edge);
 
               bool exists = false;
-              for (const auto &existing : lineageEdges_) {
-                if (existing.edge_key == edge.edge_key) {
-                  exists = true;
-                  break;
+              {
+                std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
+                for (const auto &existing : lineageEdges_) {
+                  if (existing.edge_key == edge.edge_key) {
+                    exists = true;
+                    break;
+                  }
                 }
-              }
-              if (!exists) {
-                lineageEdges_.push_back(edge);
+                if (!exists) {
+                  lineageEdges_.push_back(edge);
+                }
               }
             } else if (type == BSON_TYPE_UTF8) {
               std::string value = bson_iter_utf8(&iter, nullptr);
@@ -346,11 +385,16 @@ void LineageExtractorMongoDB::extractViewDependencies() {
     }
 
     bson_t *command = BCON_NEW("listCollections", BCON_INT32(1));
+    if (!command) {
+      mongoc_database_destroy(database);
+      return;
+    }
     bson_t reply;
     bson_error_t error;
 
     bool success = mongoc_database_command_simple(database, command, nullptr,
                                                   &reply, &error);
+    bson_destroy(command);
     if (success) {
       bson_iter_t iter;
       if (bson_iter_init(&iter, &reply)) {
@@ -362,6 +406,11 @@ void LineageExtractorMongoDB::extractViewDependencies() {
           uint32_t len;
           bson_iter_array(&cursor_iter, &len, &data);
           bson_t *array = bson_new_from_data(data, len);
+          if (!array) {
+            bson_destroy(&reply);
+            mongoc_database_destroy(database);
+            return;
+          }
           bson_iter_t array_iter;
 
           if (bson_iter_init(&array_iter, array)) {
@@ -371,6 +420,9 @@ void LineageExtractorMongoDB::extractViewDependencies() {
                 uint32_t doc_len;
                 bson_iter_document(&array_iter, &doc_len, &doc_data);
                 bson_t *view_doc = bson_new_from_data(doc_data, doc_len);
+                if (!view_doc) {
+                  continue;
+                }
                 bson_iter_t view_iter;
 
                 if (bson_iter_init(&view_iter, view_doc)) {
@@ -397,6 +449,10 @@ void LineageExtractorMongoDB::extractViewDependencies() {
                                          &options_data);
                       bson_t *options =
                           bson_new_from_data(options_data, options_len);
+                      if (!options) {
+                        bson_destroy(view_doc);
+                        continue;
+                      }
                       bson_iter_t options_iter;
 
                       if (bson_iter_init(&options_iter, options)) {
@@ -465,10 +521,15 @@ void LineageExtractorMongoDB::extractPipelineDependencies() {
 }
 
 void LineageExtractorMongoDB::storeLineage() {
-  if (lineageEdges_.empty()) {
-    Logger::warning(LogCategory::GOVERNANCE, "LineageExtractorMongoDB",
-                    "No lineage data to store");
-    return;
+  std::vector<MongoDBLineageEdge> edgesCopy;
+  {
+    std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
+    if (lineageEdges_.empty()) {
+      Logger::warning(LogCategory::GOVERNANCE, "LineageExtractorMongoDB",
+                      "No lineage data to store");
+      return;
+    }
+    edgesCopy = lineageEdges_;
   }
 
   try {
@@ -514,7 +575,7 @@ void LineageExtractorMongoDB::storeLineage() {
     int successCount = 0;
     int errorCount = 0;
 
-    for (const auto &edge : lineageEdges_) {
+    for (const auto &edge : edgesCopy) {
       try {
         pqxx::work insertTxn(conn);
 

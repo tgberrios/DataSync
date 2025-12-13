@@ -71,3 +71,54 @@ tiene que haber algo mas facil para capturar cual es la que se esta procesando a
 
 
     actualizar logica para manejar cambios en el DDL
+
+
+
+    Revisa este código/carpeta/proyecto y encuentra TODOS los problemas posibles:
+
+1. **Seguridad:**
+   - SQL injection
+   - Buffer overflows
+   - Memory leaks
+   - Race conditions
+   - Validación de entrada faltante
+   - Exposición de datos sensibles
+
+2. **Bugs y errores:**
+   - Errores de sintaxis
+   - Errores de compilación
+   - Lógica incorrecta
+   - Manejo de errores faltante o incorrecto
+   - Casos límite no manejados (null, vacío, valores extremos)
+   - Off-by-one errors
+   - Divisiones por cero
+
+3. **Calidad de código:**
+   - Uso incorrecto de APIs
+   - Patrones anti-pattern
+   - Inconsistencias en el código
+   - Variables no inicializadas
+   - Recursos no liberados
+   - Dead code
+
+4. **Lógica de negocio:**
+   - Flujos de control incorrectos
+   - Validaciones faltantes
+   - Inconsistencias entre funciones relacionadas
+   - Condiciones de carrera
+   - Problemas de concurrencia
+
+5. **Mejores prácticas:**
+   - Violaciones de principios SOLID
+   - Código duplicado
+   - Funciones demasiado largas
+   - Acoplamiento excesivo
+
+Para cada problema encontrado, indica:
+- Tipo de problema (seguridad/bug/lógica/etc)
+- Severidad (crítico/alto/medio/bajo)
+- Ubicación exacta (archivo, línea)
+- Descripción clara del problema
+- Impacto potencial
+
+Sé exhaustivo y detallado.

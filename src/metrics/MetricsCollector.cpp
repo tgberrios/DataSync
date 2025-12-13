@@ -2,9 +2,11 @@
 #include "engines/database_engine.h"
 #include "utils/string_utils.h"
 #include "utils/time_utils.h"
-#include <algorithm>
-#include <numeric>
+#include <ctime>
 #include <unordered_map>
+#ifdef _WIN32
+#include <errno.h>
+#endif
 
 // Main entry point for collecting all transfer metrics. Orchestrates the
 // complete metrics collection process by calling all collection methods in
@@ -42,9 +44,8 @@ void MetricsCollector::createMetricsTable() {
   try {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
 
-    // Set connection timeouts using modern API
-    conn.set_session_var("statement_timeout", "30000"); // 30 seconds
-    conn.set_session_var("lock_timeout", "10000");      // 10 seconds
+    conn.set_session_var("statement_timeout", "30000");
+    conn.set_session_var("lock_timeout", "10000");
 
     if (!conn.is_open()) {
       Logger::error(LogCategory::METRICS, "createMetricsTable",
@@ -107,6 +108,16 @@ void MetricsCollector::createMetricsTable() {
 void MetricsCollector::collectTransferMetrics() {
   try {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
+
+    conn.set_session_var("statement_timeout", "30000");
+    conn.set_session_var("lock_timeout", "10000");
+
+    if (!conn.is_open()) {
+      Logger::error(LogCategory::METRICS, "collectTransferMetrics",
+                    "Failed to connect to database");
+      return;
+    }
+
     pqxx::work txn(conn);
 
     std::string transferQuery =
@@ -135,9 +146,12 @@ void MetricsCollector::collectTransferMetrics() {
     metrics.reserve(result.size());
 
     for (const auto &row : result) {
+      if (row.size() < 8) {
+        continue;
+      }
+
       TransferMetrics metric;
 
-      // Validate and extract data with proper error handling
       if (row[0].is_null() || row[1].is_null() || row[2].is_null()) {
         continue;
       }
@@ -146,9 +160,9 @@ void MetricsCollector::collectTransferMetrics() {
       metric.table_name = row[1].as<std::string>();
       metric.db_engine = row[2].as<std::string>();
 
-      // Validate non-empty strings
       if (metric.schema_name.empty() || metric.table_name.empty() ||
-          metric.db_engine.empty()) {
+          metric.db_engine.empty() || metric.schema_name.length() > 100 ||
+          metric.table_name.length() > 100 || metric.db_engine.length() > 50) {
         continue;
       }
 
@@ -165,14 +179,16 @@ void MetricsCollector::collectTransferMetrics() {
         tableSizeBytes = 0;
       }
 
-      if (currentRecords <= 0 && tableSizeBytes <= 0) {
-        continue;
-      }
-
       metric.records_transferred = currentRecords;
       metric.bytes_transferred = tableSizeBytes;
-      metric.memory_used_mb = tableSizeBytes / (1024.0 * 1024.0);
-      metric.io_operations_per_second = 0;
+
+      if (tableSizeBytes > 0) {
+        metric.memory_used_mb = tableSizeBytes / (1024.0 * 1024.0);
+      } else {
+        metric.memory_used_mb = 0.0;
+      }
+
+      metric.io_operations_total = 0;
 
       // Map transfer type based on status
       if (status == "full_load" || status == "FULL_LOAD") {
@@ -231,7 +247,21 @@ void MetricsCollector::collectTransferMetrics() {
 // pg_stat_user_tables.
 void MetricsCollector::collectPerformanceMetrics() {
   try {
+    if (metrics.empty()) {
+      return;
+    }
+
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
+
+    conn.set_session_var("statement_timeout", "30000");
+    conn.set_session_var("lock_timeout", "10000");
+
+    if (!conn.is_open()) {
+      Logger::error(LogCategory::METRICS, "collectPerformanceMetrics",
+                    "Failed to connect to database");
+      return;
+    }
+
     pqxx::work txn(conn);
 
     std::string performanceQuery =
@@ -259,23 +289,33 @@ void MetricsCollector::collectPerformanceMetrics() {
     // Build hash map for O(1) lookup instead of O(n²)
     std::unordered_map<std::string, pqxx::row> perfMap;
     for (const auto &row : result) {
+      if (row.size() < 10) {
+        continue;
+      }
       std::string key =
           row[0].as<std::string>() + "|" + row[1].as<std::string>();
       perfMap[key] = row;
     }
 
-    // Now lookup in O(1) instead of O(n²)
     for (auto &metric : metrics) {
       std::string key = metric.schema_name + "|" + metric.table_name;
       auto it = perfMap.find(key);
       if (it != perfMap.end()) {
         const auto &row = it->second;
-        long long total_operations = row[2].as<long long>() +
-                                     row[3].as<long long>() +
-                                     row[4].as<long long>();
+        if (row.size() >= 10) {
+          long long total_operations = row[2].as<long long>() +
+                                       row[3].as<long long>() +
+                                       row[4].as<long long>();
 
-        metric.io_operations_per_second = static_cast<int>(total_operations);
-        metric.memory_used_mb = row[9].as<long long>() / (1024.0 * 1024.0);
+          if (total_operations > 0 && total_operations <= 2147483647LL) {
+            metric.io_operations_total = static_cast<int>(total_operations);
+          }
+
+          long long tableSizeBytes = row[9].as<long long>();
+          if (tableSizeBytes > 0) {
+            metric.memory_used_mb = tableSizeBytes / (1024.0 * 1024.0);
+          }
+        }
       }
     }
 
@@ -296,7 +336,21 @@ void MetricsCollector::collectPerformanceMetrics() {
 // collectTransferMetrics with more accurate metadata.
 void MetricsCollector::collectMetadataMetrics() {
   try {
+    if (metrics.empty()) {
+      return;
+    }
+
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
+
+    conn.set_session_var("statement_timeout", "30000");
+    conn.set_session_var("lock_timeout", "10000");
+
+    if (!conn.is_open()) {
+      Logger::error(LogCategory::METRICS, "collectMetadataMetrics",
+                    "Failed to connect to database");
+      return;
+    }
+
     pqxx::work txn(conn);
 
     std::string metadataQuery = "SELECT "
@@ -316,37 +370,40 @@ void MetricsCollector::collectMetadataMetrics() {
     // Build hash map for O(1) lookup instead of O(n²)
     std::unordered_map<std::string, pqxx::row> metaMap;
     for (const auto &row : result) {
+      if (row.size() < 6) {
+        continue;
+      }
       std::string key = row[0].as<std::string>() + "|" +
                         row[1].as<std::string>() + "|" +
                         row[2].as<std::string>();
       metaMap[key] = row;
     }
 
-    // Now lookup in O(1) instead of O(n²)
     for (auto &metric : metrics) {
       std::string key =
           metric.schema_name + "|" + metric.table_name + "|" + metric.db_engine;
       auto it = metaMap.find(key);
       if (it != metaMap.end()) {
         const auto &row = it->second;
+        if (row.size() >= 6) {
+          std::string status = row[3].is_null() ? "" : row[3].as<std::string>();
+          if (status == "full_load") {
+            metric.transfer_type = "FULL_LOAD";
+          } else if (status == "incremental") {
+            metric.transfer_type = "INCREMENTAL";
+          } else {
+            metric.transfer_type = "SYNC";
+          }
 
-        std::string status = row[3].as<std::string>();
-        if (status == "full_load") {
-          metric.transfer_type = "FULL_LOAD";
-        } else if (status == "incremental") {
-          metric.transfer_type = "INCREMENTAL";
-        } else {
-          metric.transfer_type = "SYNC";
-        }
-
-        bool active = row[4].as<bool>();
-        if (!active) {
-          metric.status = "FAILED";
-          metric.error_message = "Table marked as inactive";
-        } else if (row[5].is_null()) {
-          metric.status = "PENDING";
-        } else {
-          metric.status = "SUCCESS";
+          bool active = row[4].is_null() ? false : row[4].as<bool>();
+          if (!active) {
+            metric.status = "FAILED";
+            metric.error_message = "Table marked as inactive";
+          } else if (row[5].is_null()) {
+            metric.status = "PENDING";
+          } else {
+            metric.status = "SUCCESS";
+          }
         }
       }
     }
@@ -366,7 +423,21 @@ void MetricsCollector::collectMetadataMetrics() {
 // times from the catalog rather than estimates.
 void MetricsCollector::collectTimestampMetrics() {
   try {
+    if (metrics.empty()) {
+      return;
+    }
+
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
+
+    conn.set_session_var("statement_timeout", "30000");
+    conn.set_session_var("lock_timeout", "10000");
+
+    if (!conn.is_open()) {
+      Logger::error(LogCategory::METRICS, "collectTimestampMetrics",
+                    "Failed to connect to database");
+      return;
+    }
+
     pqxx::work txn(conn);
 
     std::string timestampQuery =
@@ -384,21 +455,25 @@ void MetricsCollector::collectTimestampMetrics() {
     // Build hash map for O(1) lookup instead of O(n²)
     std::unordered_map<std::string, pqxx::row> timeMap;
     for (const auto &row : result) {
+      if (row.size() < 4) {
+        continue;
+      }
       std::string key = row[0].as<std::string>() + "|" +
                         row[1].as<std::string>() + "|" +
                         row[2].as<std::string>();
       timeMap[key] = row;
     }
 
-    // Now lookup in O(1) instead of O(n²)
     for (auto &metric : metrics) {
       std::string key =
           metric.schema_name + "|" + metric.table_name + "|" + metric.db_engine;
       auto it = timeMap.find(key);
       if (it != timeMap.end()) {
         const auto &row = it->second;
-        metric.completed_at = row[3].as<std::string>();
-        metric.started_at = metric.completed_at;
+        if (row.size() >= 4 && !row[3].is_null()) {
+          metric.completed_at = row[3].as<std::string>();
+          metric.started_at = metric.completed_at;
+        }
       }
     }
 
@@ -418,7 +493,21 @@ void MetricsCollector::collectTimestampMetrics() {
 // an error but does not throw an exception.
 void MetricsCollector::saveMetricsToDatabase() {
   try {
+    if (metrics.empty()) {
+      return;
+    }
+
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
+
+    conn.set_session_var("statement_timeout", "30000");
+    conn.set_session_var("lock_timeout", "10000");
+
+    if (!conn.is_open()) {
+      Logger::error(LogCategory::METRICS, "saveMetricsToDatabase",
+                    "Failed to connect to database");
+      return;
+    }
+
     pqxx::work txn(conn);
 
     std::string insertQuery =
@@ -443,10 +532,16 @@ void MetricsCollector::saveMetricsToDatabase() {
         "completed_at = EXCLUDED.completed_at;";
 
     for (const auto &metric : metrics) {
+      if (metric.schema_name.length() > 100 ||
+          metric.table_name.length() > 100 || metric.db_engine.length() > 50 ||
+          metric.transfer_type.length() > 20 || metric.status.length() > 20) {
+        continue;
+      }
+
       txn.exec_params(
           insertQuery, metric.schema_name, metric.table_name, metric.db_engine,
           metric.records_transferred, metric.bytes_transferred,
-          metric.memory_used_mb, metric.io_operations_per_second,
+          metric.memory_used_mb, metric.io_operations_total,
           metric.transfer_type, metric.status,
           metric.error_message.empty() ? nullptr : metric.error_message.c_str(),
           metric.started_at.empty() ? nullptr : metric.started_at.c_str(),
@@ -471,6 +566,16 @@ void MetricsCollector::saveMetricsToDatabase() {
 void MetricsCollector::generateMetricsReport() {
   try {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
+
+    conn.set_session_var("statement_timeout", "30000");
+    conn.set_session_var("lock_timeout", "10000");
+
+    if (!conn.is_open()) {
+      Logger::error(LogCategory::METRICS, "generateMetricsReport",
+                    "Failed to connect to database");
+      return;
+    }
+
     pqxx::work txn(conn);
 
     std::string reportQuery =
@@ -489,7 +594,7 @@ void MetricsCollector::generateMetricsReport() {
     auto result = txn.exec(reportQuery);
     txn.commit();
 
-    if (!result.empty()) {
+    if (!result.empty() && result[0].size() >= 8) {
       auto row = result[0];
       int totalTables = row[0].as<int>();
       int successfulTransfers = row[1].as<int>();
@@ -530,17 +635,9 @@ void MetricsCollector::generateMetricsReport() {
   }
 }
 
-// Estimates the start time for a transfer by subtracting 1 hour from the
-// completed timestamp. Parses the completed timestamp string using
-// std::get_time, converts to time_point, subtracts 1 hour, and formats back to
-// string with milliseconds. This is used when actual start times are not
-// available. If parsing fails, returns the current timestamp. The estimation
-// assumes transfers typically take about 1 hour, which may not be accurate for
-// all cases.
 std::string
 MetricsCollector::getEstimatedStartTime(const std::string &completedAt) {
   try {
-    // Parse the completed timestamp
     std::tm tm = {};
     std::istringstream ss(completedAt);
     ss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
@@ -549,74 +646,29 @@ MetricsCollector::getEstimatedStartTime(const std::string &completedAt) {
       return TimeUtils::getCurrentTimestamp();
     }
 
-    // Subtract 1 hour for estimation
     auto time_point = std::chrono::system_clock::from_time_t(std::mktime(&tm));
     auto estimated_start = time_point - std::chrono::hours(1);
     auto time_t_start = std::chrono::system_clock::to_time_t(estimated_start);
 
+    std::tm tm_result = {};
+#ifdef _WIN32
+    errno_t err = localtime_s(&tm_result, &time_t_start);
+    if (err != 0) {
+      return TimeUtils::getCurrentTimestamp();
+    }
+#else
+    std::tm *tm_ptr = localtime_r(&time_t_start, &tm_result);
+    if (!tm_ptr) {
+      return TimeUtils::getCurrentTimestamp();
+    }
+#endif
+
     std::stringstream result;
-    result << std::put_time(std::localtime(&time_t_start), "%Y-%m-%d %H:%M:%S");
-    result << ".000"; // Add milliseconds for consistency
+    result << std::put_time(&tm_result, "%Y-%m-%d %H:%M:%S");
+    result << ".000";
 
     return result.str();
   } catch (const std::exception &e) {
     return TimeUtils::getCurrentTimestamp();
   }
-}
-
-// Calculates the transfer rate (records per second) based on the number of
-// records transferred and the duration in milliseconds. Returns 0.0 if duration
-// is invalid (<= 0). Formula: records / (duration_ms / 1000.0). This function
-// is deprecated and not used in the codebase.
-[[deprecated("This function is not used in the codebase and may be removed in "
-             "a future version")]]
-double MetricsCollector::calculateTransferRate(long long records,
-                                               int duration_ms) {
-  if (duration_ms <= 0)
-    return 0.0;
-  return static_cast<double>(records) / (duration_ms / 1000.0);
-}
-
-// Calculates the total size in bytes of a specific table using
-// pg_total_relation_size. Converts schema and table names to lowercase and
-// uses SQL escaping to prevent injection. Queries PostgreSQL system catalogs
-// to get the actual table size including indexes and TOAST data. Returns 0 if
-// the table does not exist or if an error occurs. This function is deprecated
-// and not used in the codebase.
-[[deprecated("This function is not used in the codebase and may be removed in "
-             "a future version")]]
-long long
-MetricsCollector::calculateBytesTransferred(const std::string &schema_name,
-                                            const std::string &table_name) {
-  if (schema_name.empty() || table_name.empty()) {
-    Logger::error(LogCategory::METRICS, "calculateBytesTransferred",
-                  "schema_name and table_name must not be empty");
-    return 0;
-  }
-
-  try {
-    pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
-    pqxx::work txn(conn);
-
-    std::string lowerSchema = StringUtils::toLower(schema_name);
-    std::string lowerTable = StringUtils::toLower(table_name);
-
-    std::string sizeQuery =
-        "SELECT COALESCE(pg_total_relation_size(to_regclass('\"" +
-        escapeSQL(lowerSchema) + "\".\"" + escapeSQL(lowerTable) +
-        "\"')), 0) as size_bytes;";
-
-    auto result = txn.exec(sizeQuery);
-    txn.commit();
-
-    if (!result.empty()) {
-      return result[0][0].as<long long>();
-    }
-  } catch (const std::exception &e) {
-    Logger::error(LogCategory::METRICS, "calculateBytesTransferred",
-                  "Error calculating bytes transferred: " +
-                      std::string(e.what()));
-  }
-
-  return 0;
 }

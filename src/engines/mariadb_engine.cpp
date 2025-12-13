@@ -5,11 +5,11 @@
 #include <thread>
 
 // Constructor for MySQLConnection. Initializes a MySQL connection using the
-// provided connection parameters. Parses the port from the params, defaulting to
-// DEFAULT_MYSQL_PORT if parsing fails or port is empty. Attempts to establish
-// a connection to the MySQL/MariaDB server. If connection fails, logs an error
-// and sets conn_ to nullptr. The connection must be checked with isValid()
-// before use.
+// provided connection parameters. Parses the port from the params, defaulting
+// to DEFAULT_MYSQL_PORT if parsing fails or port is empty. Attempts to
+// establish a connection to the MySQL/MariaDB server. If connection fails, logs
+// an error and sets conn_ to nullptr. The connection must be checked with
+// isValid() before use.
 MySQLConnection::MySQLConnection(const ConnectionParams &params) {
   conn_ = mysql_init(nullptr);
   if (!conn_) {
@@ -54,10 +54,10 @@ MySQLConnection::MySQLConnection(MySQLConnection &&other) noexcept
   other.conn_ = nullptr;
 }
 
-// Move assignment operator for MySQLConnection. Transfers ownership of the MySQL
-// connection handle from the source object. If this object already has an open
-// connection, it is closed before the transfer. The source object's connection
-// handle is set to nullptr. Returns a reference to this object.
+// Move assignment operator for MySQLConnection. Transfers ownership of the
+// MySQL connection handle from the source object. If this object already has an
+// open connection, it is closed before the transfer. The source object's
+// connection handle is set to nullptr. Returns a reference to this object.
 MySQLConnection &MySQLConnection::operator=(MySQLConnection &&other) noexcept {
   if (this != &other) {
     if (conn_)
@@ -70,7 +70,8 @@ MySQLConnection &MySQLConnection::operator=(MySQLConnection &&other) noexcept {
 
 // Constructor for MariaDBEngine. Stores the connection string for later use
 // when creating database connections. The connection string should be in a
-// format parseable by ConnectionStringParser (e.g., "mysql://user:pass@host:port/db").
+// format parseable by ConnectionStringParser (e.g.,
+// "mysql://user:pass@host:port/db").
 MariaDBEngine::MariaDBEngine(std::string connectionString)
     : connectionString_(std::move(connectionString)) {}
 
@@ -163,9 +164,17 @@ MariaDBEngine::executeQuery(MYSQL *conn, const std::string &query) {
 
   MYSQL_RES *res = mysql_store_result(conn);
   if (!res) {
-    if (mysql_field_count(conn) > 0) {
-      Logger::error(LogCategory::DATABASE, "MariaDBEngine",
-                    "Result fetch failed: " + std::string(mysql_error(conn)));
+    unsigned int fieldCount = mysql_field_count(conn);
+    if (fieldCount > 0) {
+      unsigned int errNo = mysql_errno(conn);
+      if (errNo != 0) {
+        Logger::error(LogCategory::DATABASE, "MariaDBEngine",
+                      "Result fetch failed: " + std::string(mysql_error(conn)) +
+                          " (error code: " + std::to_string(errNo) + ")");
+      } else {
+        Logger::error(LogCategory::DATABASE, "MariaDBEngine",
+                      "Result fetch failed: " + std::string(mysql_error(conn)));
+      }
     }
     return results;
   }
@@ -235,18 +244,42 @@ MariaDBEngine::detectPrimaryKey(const std::string &schema,
   if (!conn)
     return pkColumns;
 
-  char escapedSchema[schema.length() * 2 + 1];
-  char escapedTable[table.length() * 2 + 1];
-  mysql_real_escape_string(conn->get(), escapedSchema, schema.c_str(),
-                           schema.length());
-  mysql_real_escape_string(conn->get(), escapedTable, table.c_str(),
-                           table.length());
+  if (!conn->isValid()) {
+    Logger::error(LogCategory::DATABASE, "MariaDBEngine",
+                  "detectPrimaryKey: connection is invalid");
+    return pkColumns;
+  }
+
+  MYSQL *mysqlConn = conn->get();
+  if (!mysqlConn) {
+    Logger::error(LogCategory::DATABASE, "MariaDBEngine",
+                  "detectPrimaryKey: MySQL connection is null");
+    return pkColumns;
+  }
+
+  size_t schemaEscapedLen = schema.length() * 2 + 1;
+  std::vector<char> escapedSchemaBuf(schemaEscapedLen);
+  size_t tableEscapedLen = table.length() * 2 + 1;
+  std::vector<char> escapedTableBuf(tableEscapedLen);
+
+  unsigned long schemaLen = mysql_real_escape_string(
+      mysqlConn, escapedSchemaBuf.data(), schema.c_str(), schema.length());
+  unsigned long tableLen = mysql_real_escape_string(
+      mysqlConn, escapedTableBuf.data(), table.c_str(), table.length());
+
+  if (schemaLen == (unsigned long)-1 || tableLen == (unsigned long)-1) {
+    Logger::error(LogCategory::DATABASE, "MariaDBEngine",
+                  "detectPrimaryKey: mysql_real_escape_string failed");
+    return pkColumns;
+  }
+
+  std::string escapedSchema(escapedSchemaBuf.data(), schemaLen);
+  std::string escapedTable(escapedTableBuf.data(), tableLen);
 
   std::string query = "SELECT COLUMN_NAME "
                       "FROM information_schema.KEY_COLUMN_USAGE "
                       "WHERE TABLE_SCHEMA = '" +
-                      std::string(escapedSchema) + "' AND TABLE_NAME = '" +
-                      std::string(escapedTable) +
+                      escapedSchema + "' AND TABLE_NAME = '" + escapedTable +
                       "' AND CONSTRAINT_NAME = 'PRIMARY' "
                       "ORDER BY ORDINAL_POSITION";
 
@@ -277,12 +310,37 @@ std::string MariaDBEngine::detectTimeColumn(const std::string &schema,
   if (!conn)
     return "";
 
-  char escapedSchema[schema.length() * 2 + 1];
-  char escapedTable[table.length() * 2 + 1];
-  mysql_real_escape_string(conn->get(), escapedSchema, schema.c_str(),
-                           schema.length());
-  mysql_real_escape_string(conn->get(), escapedTable, table.c_str(),
-                           table.length());
+  if (!conn->isValid()) {
+    Logger::error(LogCategory::DATABASE, "MariaDBEngine",
+                  "detectTimeColumn: connection is invalid");
+    return "";
+  }
+
+  MYSQL *mysqlConn = conn->get();
+  if (!mysqlConn) {
+    Logger::error(LogCategory::DATABASE, "MariaDBEngine",
+                  "detectTimeColumn: MySQL connection is null");
+    return "";
+  }
+
+  size_t schemaEscapedLen = schema.length() * 2 + 1;
+  std::vector<char> escapedSchemaBuf(schemaEscapedLen);
+  size_t tableEscapedLen = table.length() * 2 + 1;
+  std::vector<char> escapedTableBuf(tableEscapedLen);
+
+  unsigned long schemaLen = mysql_real_escape_string(
+      mysqlConn, escapedSchemaBuf.data(), schema.c_str(), schema.length());
+  unsigned long tableLen = mysql_real_escape_string(
+      mysqlConn, escapedTableBuf.data(), table.c_str(), table.length());
+
+  if (schemaLen == (unsigned long)-1 || tableLen == (unsigned long)-1) {
+    Logger::error(LogCategory::DATABASE, "MariaDBEngine",
+                  "detectTimeColumn: mysql_real_escape_string failed");
+    return "";
+  }
+
+  std::string escapedSchema(escapedSchemaBuf.data(), schemaLen);
+  std::string escapedTable(escapedTableBuf.data(), tableLen);
 
   std::string candidates;
   for (size_t i = 0; i < DatabaseDefaults::TIME_COLUMN_COUNT; ++i) {
@@ -294,9 +352,9 @@ std::string MariaDBEngine::detectTimeColumn(const std::string &schema,
 
   std::string query = "SELECT COLUMN_NAME FROM information_schema.columns "
                       "WHERE table_schema = '" +
-                      std::string(escapedSchema) + "' AND table_name = '" +
-                      std::string(escapedTable) + "' AND COLUMN_NAME IN (" +
-                      candidates + ") ORDER BY FIELD(COLUMN_NAME, ";
+                      escapedSchema + "' AND table_name = '" + escapedTable +
+                      "' AND COLUMN_NAME IN (" + candidates +
+                      ") ORDER BY FIELD(COLUMN_NAME, ";
 
   for (size_t i = 0; i < DatabaseDefaults::TIME_COLUMN_COUNT; ++i) {
     if (i > 0)
@@ -335,18 +393,42 @@ MariaDBEngine::getColumnCounts(const std::string &schema,
   if (!conn)
     return {0, 0};
 
-  char escapedSchema[schema.length() * 2 + 1];
-  char escapedTable[table.length() * 2 + 1];
-  mysql_real_escape_string(conn->get(), escapedSchema, schema.c_str(),
-                           schema.length());
-  mysql_real_escape_string(conn->get(), escapedTable, table.c_str(),
-                           table.length());
+  if (!conn->isValid()) {
+    Logger::error(LogCategory::DATABASE, "MariaDBEngine",
+                  "getColumnCounts: connection is invalid");
+    return {0, 0};
+  }
+
+  MYSQL *mysqlConn = conn->get();
+  if (!mysqlConn) {
+    Logger::error(LogCategory::DATABASE, "MariaDBEngine",
+                  "getColumnCounts: MySQL connection is null");
+    return {0, 0};
+  }
+
+  size_t schemaEscapedLen = schema.length() * 2 + 1;
+  std::vector<char> escapedSchemaBuf(schemaEscapedLen);
+  size_t tableEscapedLen = table.length() * 2 + 1;
+  std::vector<char> escapedTableBuf(tableEscapedLen);
+
+  unsigned long schemaLen = mysql_real_escape_string(
+      mysqlConn, escapedSchemaBuf.data(), schema.c_str(), schema.length());
+  unsigned long tableLen = mysql_real_escape_string(
+      mysqlConn, escapedTableBuf.data(), table.c_str(), table.length());
+
+  if (schemaLen == (unsigned long)-1 || tableLen == (unsigned long)-1) {
+    Logger::error(LogCategory::DATABASE, "MariaDBEngine",
+                  "getColumnCounts: mysql_real_escape_string failed");
+    return {0, 0};
+  }
+
+  std::string escapedSchema(escapedSchemaBuf.data(), schemaLen);
+  std::string escapedTable(escapedTableBuf.data(), tableLen);
 
   std::string sourceQuery = "SELECT COUNT(*) FROM information_schema.columns "
                             "WHERE table_schema = '" +
-                            std::string(escapedSchema) +
-                            "' AND table_name = '" + std::string(escapedTable) +
-                            "'";
+                            escapedSchema + "' AND table_name = '" +
+                            escapedTable + "'";
 
   auto sourceResults = executeQuery(conn->get(), sourceQuery);
   int sourceCount = 0;
@@ -354,7 +436,14 @@ MariaDBEngine::getColumnCounts(const std::string &schema,
       sourceResults[0][0] != "NULL") {
     try {
       sourceCount = std::stoi(sourceResults[0][0]);
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::DATABASE, "MariaDBEngine",
+                    "Failed to parse source column count: " +
+                        std::string(e.what()));
+      sourceCount = 0;
     } catch (...) {
+      Logger::error(LogCategory::DATABASE, "MariaDBEngine",
+                    "Failed to parse source column count: unknown error");
       sourceCount = 0;
     }
   }

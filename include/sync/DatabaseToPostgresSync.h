@@ -46,6 +46,12 @@ protected:
   static constexpr size_t MAX_BATCH_PREPARERS = 4;
   static constexpr size_t MAX_BATCH_INSERTERS = 4;
   static constexpr size_t BATCH_PREPARATION_TIMEOUT_MS = 5000;
+  static constexpr size_t DEFAULT_BATCH_SIZE = 1000;
+  static constexpr size_t MAX_BATCH_SIZE = 10000;
+  static constexpr size_t MAX_QUERY_SIZE = 1000000;
+  static constexpr size_t MAX_INDIVIDUAL_PROCESSING = 100;
+  static constexpr size_t MAX_BINARY_ERROR_PROCESSING = 50;
+  static constexpr size_t STATEMENT_TIMEOUT_SECONDS = 600;
 
   static std::mutex metadataUpdateMutex;
 

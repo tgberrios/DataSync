@@ -1,15 +1,15 @@
 #include "engines/mongodb_engine.h"
 #include "utils/connection_utils.h"
 #include <algorithm>
+#include <atomic>
 #include <iomanip>
 #include <mutex>
 #include <pqxx/pqxx>
 #include <sstream>
-#include <atomic>
 
 MongoDBEngine::MongoDBEngine(std::string connectionString)
     : connectionString_(std::move(connectionString)), client_(nullptr),
-      port_(27017), valid_(false) {
+      port_(27017), valid_(false), clientMutex_() {
   if (parseConnectionString(connectionString_)) {
     valid_ = connect();
   } else {
@@ -65,8 +65,22 @@ bool MongoDBEngine::parseConnectionString(const std::string &connectionString) {
     std::string portStr =
         connectionString.substr(colonPos + 1, slashPos - colonPos - 1);
     try {
-      port_ = std::stoi(portStr);
+      if (!portStr.empty() && portStr.length() <= 5) {
+        port_ = std::stoi(portStr);
+        if (port_ <= 0 || port_ > 65535) {
+          port_ = 27017;
+        }
+      } else {
+        port_ = 27017;
+      }
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::DATABASE, "MongoDBEngine",
+                    "Failed to parse port: " + std::string(e.what()));
+      port_ = 27017;
+      port_ = 27017;
     } catch (...) {
+      Logger::error(LogCategory::DATABASE, "MongoDBEngine",
+                    "Failed to parse port: unknown error");
       port_ = 27017;
     }
   } else {
@@ -130,6 +144,7 @@ std::vector<CatalogTableInfo> MongoDBEngine::discoverTables() {
   }
 
   try {
+    std::lock_guard<std::mutex> lock(clientMutex_);
     mongoc_database_t *db =
         mongoc_client_get_database(client_, databaseName_.c_str());
     bson_error_t error;
@@ -185,11 +200,18 @@ MongoDBEngine::getColumnCounts(const std::string &schema,
   int sourceCount = 0;
   int targetCount = 0;
 
+  if (schema.empty() || table.empty()) {
+    Logger::error(LogCategory::DATABASE, "MongoDBEngine",
+                  "getColumnCounts: schema and table must not be empty");
+    return {sourceCount, targetCount};
+  }
+
   if (!isValid()) {
     return {sourceCount, targetCount};
   }
 
   try {
+    std::lock_guard<std::mutex> lock(clientMutex_);
     mongoc_collection_t *collection =
         mongoc_client_get_collection(client_, schema.c_str(), table.c_str());
     if (collection) {
@@ -205,19 +227,17 @@ MongoDBEngine::getColumnCounts(const std::string &schema,
   try {
     pqxx::connection conn(targetConnStr);
     pqxx::work txn(conn);
-    std::string query = "SELECT COUNT(*) FROM information_schema.columns "
-                        "WHERE table_schema = '" +
-                        escapeSQL(schema) + "' AND table_name = '" +
-                        escapeSQL(table) + "'";
-    auto result = txn.exec(query);
-    if (!result.empty()) {
+    auto result =
+        txn.exec_params("SELECT COUNT(*) FROM information_schema.tables "
+                        "WHERE table_schema = $1 AND table_name = $2",
+                        schema, table);
+    if (!result.empty() && !result[0][0].is_null()) {
       targetCount = result[0][0].as<int>();
     }
     txn.commit();
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "MongoDBEngine",
-                  "Error getting target column count: " +
-                      std::string(e.what()));
+                  "Error getting target table count: " + std::string(e.what()));
   }
 
   return {sourceCount, targetCount};
@@ -230,6 +250,7 @@ long long MongoDBEngine::getCollectionCount(const std::string &database,
   }
 
   try {
+    std::lock_guard<std::mutex> lock(clientMutex_);
     mongoc_collection_t *coll = mongoc_client_get_collection(
         client_, database.c_str(), collection.c_str());
     if (!coll) {

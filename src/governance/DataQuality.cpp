@@ -67,10 +67,11 @@ bool DataQuality::validateTable(pqxx::connection &conn,
   }
 }
 
-// Checks if a table exists in the database by querying information_schema.tables.
-// Uses parameterized queries (txn.quote) to prevent SQL injection. Returns
-// true if the table exists, false otherwise. This is a helper function used
-// internally to validate table existence before performing quality checks.
+// Checks if a table exists in the database by querying
+// information_schema.tables. Uses parameterized queries (txn.quote) to prevent
+// SQL injection. Returns true if the table exists, false otherwise. This is a
+// helper function used internally to validate table existence before performing
+// quality checks.
 bool DataQuality::tableExists(pqxx::work &txn, const std::string &schema,
                               const std::string &table) {
   auto result =
@@ -121,14 +122,14 @@ DataQuality::collectMetrics(pqxx::connection &conn, const std::string &schema,
     metrics.validation_status = "FAILED";
   } catch (const std::invalid_argument &e) {
     Logger::error(LogCategory::QUALITY, "collectMetrics",
-                  "Invalid argument error for " + schema + "." + table +
-                      ": " + std::string(e.what()));
+                  "Invalid argument error for " + schema + "." + table + ": " +
+                      std::string(e.what()));
     metrics.error_details = "Invalid Argument: " + std::string(e.what());
     metrics.validation_status = "FAILED";
   } catch (const std::exception &e) {
     Logger::error(LogCategory::QUALITY, "collectMetrics",
-                  "General error collecting metrics for " + schema + "." + table +
-                      ": " + std::string(e.what()));
+                  "General error collecting metrics for " + schema + "." +
+                      table + ": " + std::string(e.what()));
     metrics.error_details = "General Error: " + std::string(e.what());
     metrics.validation_status = "FAILED";
   }
@@ -192,8 +193,11 @@ bool DataQuality::checkDataTypes(pqxx::connection &conn,
 
         // Adjust count for sampled data
         if (tableSize > 1000000) {
-          invalid_count = static_cast<size_t>(
-              invalid_count * 20); // 5% sample -> multiply by 20
+          if (invalid_count > SIZE_MAX / 20) {
+            invalid_count = SIZE_MAX;
+          } else {
+            invalid_count = static_cast<size_t>(invalid_count * 20);
+          }
         }
 
         if (invalid_count > 0) {
@@ -341,8 +345,12 @@ bool DataQuality::checkDuplicates(pqxx::connection &conn,
 
     // Adjust count for sampled data
     if (tableSize > 1000000) {
-      metrics.duplicate_count = static_cast<size_t>(
-          metrics.duplicate_count * 10); // 10% sample -> multiply by 10
+      if (metrics.duplicate_count > SIZE_MAX / 10) {
+        metrics.duplicate_count = SIZE_MAX;
+      } else {
+        metrics.duplicate_count =
+            static_cast<size_t>(metrics.duplicate_count * 10);
+      }
     }
 
     txn.commit();

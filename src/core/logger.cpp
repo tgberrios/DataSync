@@ -72,46 +72,74 @@ void Logger::loadDebugConfig() {
 
     pqxx::work txn(conn);
 
-    // Load debug level with validation
     auto result =
         txn.exec("SELECT value FROM metadata.config WHERE key = 'debug_level'");
     if (!result.empty()) {
-      std::string levelStr = result[0][0].as<std::string>();
-      if (!levelStr.empty()) {
-        LogLevel newLevel = stringToLogLevel(levelStr);
-        currentLogLevel = newLevel;
+      try {
+        std::string levelStr = result[0][0].as<std::string>();
+        if (!levelStr.empty() && levelStr.length() <= 20) {
+          std::string upperLevelStr = levelStr;
+          std::transform(upperLevelStr.begin(), upperLevelStr.end(),
+                         upperLevelStr.begin(), ::toupper);
+          if (levelMap.find(upperLevelStr) != levelMap.end()) {
+            LogLevel newLevel = stringToLogLevel(upperLevelStr);
+            currentLogLevel = newLevel;
+          }
+        }
+      } catch (const std::exception &) {
       }
     }
 
-    // Load timestamp setting with validation
     result = txn.exec("SELECT value FROM metadata.config WHERE key = "
                       "'debug_show_timestamps'");
     if (!result.empty()) {
-      std::string value = result[0][0].as<std::string>();
-      showTimestamps = (value == "true");
+      try {
+        std::string value = result[0][0].as<std::string>();
+        if (value.length() <= 10) {
+          std::string lowerValue = value;
+          std::transform(lowerValue.begin(), lowerValue.end(),
+                         lowerValue.begin(), ::tolower);
+          showTimestamps = (lowerValue == "true" || lowerValue == "1");
+        }
+      } catch (const std::exception &) {
+      }
     }
 
-    // Load thread ID setting with validation
     result = txn.exec(
         "SELECT value FROM metadata.config WHERE key = 'debug_show_thread_id'");
     if (!result.empty()) {
-      std::string value = result[0][0].as<std::string>();
-      showThreadId = (value == "true");
+      try {
+        std::string value = result[0][0].as<std::string>();
+        if (value.length() <= 10) {
+          std::string lowerValue = value;
+          std::transform(lowerValue.begin(), lowerValue.end(),
+                         lowerValue.begin(), ::tolower);
+          showThreadId = (lowerValue == "true" || lowerValue == "1");
+        }
+      } catch (const std::exception &) {
+      }
     }
 
-    // Load file/line setting with validation
     result = txn.exec(
         "SELECT value FROM metadata.config WHERE key = 'debug_show_file_line'");
     if (!result.empty()) {
-      std::string value = result[0][0].as<std::string>();
-      showFileLine = (value == "true");
+      try {
+        std::string value = result[0][0].as<std::string>();
+        if (value.length() <= 10) {
+          std::string lowerValue = value;
+          std::transform(lowerValue.begin(), lowerValue.end(),
+                         lowerValue.begin(), ::tolower);
+          showFileLine = (lowerValue == "true" || lowerValue == "1");
+        }
+      } catch (const std::exception &) {
+      }
     }
 
     txn.commit();
 
-    // Removed debug config load log to reduce noise
-
   } catch (const pqxx::sql_error &e) {
+    setDefaultConfig();
+  } catch (const pqxx::broken_connection &e) {
     setDefaultConfig();
   } catch (const std::exception &e) {
     setDefaultConfig();
@@ -159,7 +187,7 @@ void Logger::setLogLevel(const std::string &levelStr) {
     return;
   }
 
-  setLogLevel(stringToLogLevel(levelStr));
+  setLogLevel(stringToLogLevel(upperLevelStr));
 }
 
 // Returns the current log level setting. This function is thread-safe and
@@ -183,9 +211,9 @@ void Logger::refreshConfig() { loadDebugConfig(); }
 // work but database logging will be disabled. Errors during initialization
 // are logged to stderr since the logger may not be fully initialized yet.
 void Logger::initialize() {
-  std::lock_guard<std::mutex> lock(logMutex);
-
   loadDebugConfig();
+
+  std::lock_guard<std::mutex> lock(logMutex);
 
   try {
     std::string connStr = DatabaseConfig::getPostgresConnectionString();

@@ -106,10 +106,10 @@ void DatabaseToPostgresSync::updateLastProcessedPK(
     std::lock_guard<std::mutex> lock(metadataUpdateMutex);
 
     pqxx::work txn(pgConn);
-    txn.exec("UPDATE metadata.catalog SET last_processed_pk='" +
-             escapeSQL(lastPK) + "' WHERE schema_name='" +
-             escapeSQL(schema_name) + "' AND table_name='" +
-             escapeSQL(table_name) + "'");
+    txn.exec(
+        "UPDATE metadata.catalog SET last_processed_pk=" + txn.quote(lastPK) +
+        " WHERE schema_name=" + txn.quote(schema_name) +
+        " AND table_name=" + txn.quote(table_name));
     txn.commit();
 
     Logger::info(LogCategory::TRANSFER, "updateLastProcessedPK",
@@ -130,13 +130,28 @@ std::string DatabaseToPostgresSync::getPKStrategyFromCatalog(
     pqxx::connection &pgConn, const std::string &schema_name,
     const std::string &table_name) {
   try {
+    if (pgConn.is_open()) {
+      try {
+        pqxx::nontransaction ntxn(pgConn);
+        auto result = ntxn.exec("SELECT pk_strategy FROM metadata.catalog "
+                                "WHERE schema_name=" +
+                                ntxn.quote(schema_name) +
+                                " AND table_name=" + ntxn.quote(table_name));
+
+        if (!result.empty() && !result[0][0].is_null()) {
+          return result[0][0].as<std::string>();
+        }
+      } catch (const pqxx::broken_connection &) {
+      }
+    }
+
     pqxx::connection separateConn(
         DatabaseConfig::getPostgresConnectionString());
     pqxx::nontransaction ntxn(separateConn);
     auto result = ntxn.exec("SELECT pk_strategy FROM metadata.catalog "
-                            "WHERE schema_name='" +
-                            escapeSQL(schema_name) + "' AND table_name='" +
-                            escapeSQL(table_name) + "'");
+                            "WHERE schema_name=" +
+                            ntxn.quote(schema_name) +
+                            " AND table_name=" + ntxn.quote(table_name));
 
     if (!result.empty() && !result[0][0].is_null()) {
       return result[0][0].as<std::string>();
@@ -159,13 +174,30 @@ DatabaseToPostgresSync::getPKColumnsFromCatalog(pqxx::connection &pgConn,
                                                 const std::string &table_name) {
   std::vector<std::string> pkColumns;
   try {
+    if (pgConn.is_open()) {
+      try {
+        pqxx::nontransaction ntxn(pgConn);
+        auto result = ntxn.exec("SELECT pk_columns FROM metadata.catalog "
+                                "WHERE schema_name=" +
+                                ntxn.quote(schema_name) +
+                                " AND table_name=" + ntxn.quote(table_name));
+
+        if (!result.empty() && !result[0][0].is_null()) {
+          std::string pkColumnsJSON = result[0][0].as<std::string>();
+          pkColumns = parseJSONArray(pkColumnsJSON);
+          return pkColumns;
+        }
+      } catch (const pqxx::broken_connection &) {
+      }
+    }
+
     pqxx::connection separateConn(
         DatabaseConfig::getPostgresConnectionString());
     pqxx::nontransaction ntxn(separateConn);
     auto result = ntxn.exec("SELECT pk_columns FROM metadata.catalog "
-                            "WHERE schema_name='" +
-                            escapeSQL(schema_name) + "' AND table_name='" +
-                            escapeSQL(table_name) + "'");
+                            "WHERE schema_name=" +
+                            ntxn.quote(schema_name) +
+                            " AND table_name=" + ntxn.quote(table_name));
 
     if (!result.empty() && !result[0][0].is_null()) {
       std::string pkColumnsJSON = result[0][0].as<std::string>();
@@ -188,13 +220,29 @@ std::string DatabaseToPostgresSync::getLastProcessedPKFromCatalog(
     pqxx::connection &pgConn, const std::string &schema_name,
     const std::string &table_name) {
   try {
+    if (pgConn.is_open()) {
+      try {
+        pqxx::nontransaction ntxn(pgConn);
+        auto result =
+            ntxn.exec("SELECT last_processed_pk FROM metadata.catalog "
+                      "WHERE schema_name=" +
+                      ntxn.quote(schema_name) +
+                      " AND table_name=" + ntxn.quote(table_name));
+
+        if (!result.empty() && !result[0][0].is_null()) {
+          return result[0][0].as<std::string>();
+        }
+      } catch (const pqxx::broken_connection &) {
+      }
+    }
+
     pqxx::connection separateConn(
         DatabaseConfig::getPostgresConnectionString());
     pqxx::nontransaction ntxn(separateConn);
     auto result = ntxn.exec("SELECT last_processed_pk FROM metadata.catalog "
-                            "WHERE schema_name='" +
-                            escapeSQL(schema_name) + "' AND table_name='" +
-                            escapeSQL(table_name) + "'");
+                            "WHERE schema_name=" +
+                            ntxn.quote(schema_name) +
+                            " AND table_name=" + ntxn.quote(table_name));
 
     if (!result.empty() && !result[0][0].is_null()) {
       return result[0][0].as<std::string>();
@@ -216,26 +264,31 @@ std::string DatabaseToPostgresSync::getLastPKFromResults(
     const std::vector<std::vector<std::string>> &results,
     const std::vector<std::string> &pkColumns,
     const std::vector<std::string> &columnNames) {
-  if (results.empty() || pkColumns.empty()) {
+  if (results.empty() || pkColumns.empty() || columnNames.empty()) {
     return "";
   }
 
   try {
     const auto &lastRow = results.back();
 
-    std::string lastPK;
-    if (!pkColumns.empty()) {
-      size_t pkIndex = 0;
-      for (size_t j = 0; j < columnNames.size(); ++j) {
-        if (columnNames[j] == pkColumns[0]) {
-          pkIndex = j;
-          break;
-        }
-      }
+    if (lastRow.size() != columnNames.size()) {
+      Logger::warning(LogCategory::TRANSFER, "getLastPKFromResults",
+                      "Row size mismatch: " + std::to_string(lastRow.size()) +
+                          " vs " + std::to_string(columnNames.size()));
+      return "";
+    }
 
-      if (pkIndex < lastRow.size()) {
-        lastPK = lastRow[pkIndex];
+    std::string lastPK;
+    size_t pkIndex = columnNames.size();
+    for (size_t j = 0; j < columnNames.size(); ++j) {
+      if (columnNames[j] == pkColumns[0]) {
+        pkIndex = j;
+        break;
       }
+    }
+
+    if (pkIndex < lastRow.size()) {
+      lastPK = lastRow[pkIndex];
     }
 
     return lastPK;
@@ -263,6 +316,14 @@ size_t DatabaseToPostgresSync::deleteRecordsByPrimaryKey(
     return 0;
   }
 
+  for (const auto &pk : deletedPKs) {
+    if (pk.size() != pkColumns.size()) {
+      Logger::error(LogCategory::TRANSFER, "deleteRecordsByPrimaryKey",
+                    "Mismatch between PK values and columns count");
+      return 0;
+    }
+  }
+
   size_t deletedCount = 0;
 
   try {
@@ -271,8 +332,8 @@ size_t DatabaseToPostgresSync::deleteRecordsByPrimaryKey(
                    lowerTableName.begin(), ::tolower);
     pqxx::work txn(pgConn);
 
-    std::string deleteQuery = "DELETE FROM \"" + lowerSchemaName + "\".\"" +
-                              lowerTableName + "\" WHERE (";
+    std::string deleteQuery = "DELETE FROM " + txn.quote_name(lowerSchemaName) +
+                              "." + txn.quote_name(lowerTableName) + " WHERE (";
 
     for (size_t i = 0; i < deletedPKs.size(); ++i) {
       if (i > 0)
@@ -282,21 +343,28 @@ size_t DatabaseToPostgresSync::deleteRecordsByPrimaryKey(
         if (j > 0)
           deleteQuery += " AND ";
         std::string value = deletedPKs[i][j];
-        if (value == "NULL") {
-          deleteQuery += "\"" + pkColumns[j] + "\" IS NULL";
+        if (value == "NULL" || value.empty()) {
+          deleteQuery += txn.quote_name(pkColumns[j]) + " IS NULL";
         } else {
           deleteQuery +=
-              "\"" + pkColumns[j] + "\" = '" + escapeSQL(value) + "'";
+              txn.quote_name(pkColumns[j]) + " = " + txn.quote(value);
         }
       }
       deleteQuery += ")";
     }
-    deleteQuery += ");";
+    deleteQuery += ")";
 
-    auto result = txn.exec(deleteQuery);
-    deletedCount = result.affected_rows();
-
-    txn.commit();
+    try {
+      auto result = txn.exec(deleteQuery);
+      deletedCount = result.affected_rows();
+      txn.commit();
+    } catch (...) {
+      try {
+        txn.abort();
+      } catch (...) {
+      }
+      throw;
+    }
 
   } catch (const std::exception &e) {
     Logger::error(LogCategory::TRANSFER, "deleteRecordsByPrimaryKey",
@@ -360,17 +428,35 @@ std::string DatabaseToPostgresSync::buildUpsertQuery(
     const std::vector<std::string> &columnNames,
     const std::vector<std::string> &pkColumns, const std::string &schemaName,
     const std::string &tableName) {
+  if (columnNames.empty() || schemaName.empty() || tableName.empty()) {
+    throw std::invalid_argument("Empty column names, schema, or table name");
+  }
+
+  for (const auto &col : columnNames) {
+    if (col.find('"') != std::string::npos ||
+        col.find(';') != std::string::npos) {
+      throw std::invalid_argument("Invalid character in column name: " + col);
+    }
+  }
+
   std::string lowerTableName = tableName;
   std::transform(lowerTableName.begin(), lowerTableName.end(),
                  lowerTableName.begin(), ::tolower);
+  std::string lowerSchemaName = schemaName;
+  std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
+                 lowerSchemaName.begin(), ::tolower);
+
   std::string query =
-      "INSERT INTO \"" + schemaName + "\".\"" + lowerTableName + "\" (";
+      "INSERT INTO \"" + lowerSchemaName + "\".\"" + lowerTableName + "\" (";
 
   for (size_t i = 0; i < columnNames.size(); ++i) {
     if (i > 0)
       query += ", ";
     std::string col = columnNames[i];
     std::transform(col.begin(), col.end(), col.begin(), ::tolower);
+    if (col.find('"') != std::string::npos) {
+      throw std::invalid_argument("Invalid character in column name");
+    }
     query += "\"" + col + "\"";
   }
   query += ") VALUES ";
@@ -386,6 +472,18 @@ std::string DatabaseToPostgresSync::buildUpsertQuery(
 std::string DatabaseToPostgresSync::buildUpsertConflictClause(
     const std::vector<std::string> &columnNames,
     const std::vector<std::string> &pkColumns) {
+  if (pkColumns.empty() || columnNames.empty()) {
+    throw std::invalid_argument("Empty PK columns or column names");
+  }
+
+  for (const auto &col : pkColumns) {
+    if (col.find('"') != std::string::npos ||
+        col.find(';') != std::string::npos) {
+      throw std::invalid_argument("Invalid character in PK column name: " +
+                                  col);
+    }
+  }
+
   std::string conflictClause = " ON CONFLICT (";
 
   for (size_t i = 0; i < pkColumns.size(); ++i) {
@@ -393,6 +491,9 @@ std::string DatabaseToPostgresSync::buildUpsertConflictClause(
       conflictClause += ", ";
     std::string col = pkColumns[i];
     std::transform(col.begin(), col.end(), col.begin(), ::tolower);
+    if (col.find('"') != std::string::npos) {
+      throw std::invalid_argument("Invalid character in PK column name");
+    }
     conflictClause += "\"" + col + "\"";
   }
   conflictClause += ") DO UPDATE SET ";
@@ -402,6 +503,9 @@ std::string DatabaseToPostgresSync::buildUpsertConflictClause(
       conflictClause += ", ";
     std::string col = columnNames[i];
     std::transform(col.begin(), col.end(), col.begin(), ::tolower);
+    if (col.find('"') != std::string::npos) {
+      throw std::invalid_argument("Invalid character in column name");
+    }
     conflictClause += "\"" + col + "\" = EXCLUDED.\"" + col + "\"";
   }
 
@@ -422,18 +526,42 @@ bool DatabaseToPostgresSync::compareAndUpdateRecord(
     const std::vector<std::vector<std::string>> &columnNames,
     const std::string &whereClause) {
   try {
-    std::string selectQuery = "SELECT * FROM \"" + schemaName + "\".\"" +
-                              tableName + "\" WHERE " + whereClause;
+    if (newRecord.empty() || columnNames.empty() || whereClause.empty()) {
+      Logger::warning(
+          LogCategory::TRANSFER, "compareAndUpdateRecord",
+          "Invalid parameters: empty record, columns, or where clause");
+      return false;
+    }
 
     pqxx::work txn(pgConn);
+    std::string selectQuery = "SELECT * FROM " + txn.quote_name(schemaName) +
+                              "." + txn.quote_name(tableName) + " WHERE " +
+                              whereClause;
+
     auto result = txn.exec(selectQuery);
     txn.commit();
 
     if (result.empty()) {
+      Logger::debug(LogCategory::TRANSFER, "compareAndUpdateRecord",
+                    "Record not found for " + schemaName + "." + tableName);
       return false;
     }
 
+    if (result.size() > 1) {
+      Logger::warning(LogCategory::TRANSFER, "compareAndUpdateRecord",
+                      "Multiple records found for " + schemaName + "." +
+                          tableName + " - using first");
+    }
+
     const auto &currentRow = result[0];
+
+    if (currentRow.size() != columnNames.size()) {
+      Logger::error(
+          LogCategory::TRANSFER, "compareAndUpdateRecord",
+          "Column count mismatch: " + std::to_string(currentRow.size()) +
+              " vs " + std::to_string(columnNames.size()));
+      return false;
+    }
 
     std::vector<std::string> updateFields;
     bool hasChanges = false;
@@ -467,7 +595,8 @@ bool DatabaseToPostgresSync::compareAndUpdateRecord(
         if (cleanNewValue.empty() || cleanNewValue == "NULL") {
           valueToSet = "NULL";
         } else {
-          valueToSet = "'" + escapeSQL(cleanNewValue) + "'";
+          pqxx::work tempTxn(pgConn);
+          valueToSet = tempTxn.quote(cleanNewValue);
         }
 
         updateFields.push_back("\"" + columnName + "\" = " + valueToSet);
@@ -476,8 +605,9 @@ bool DatabaseToPostgresSync::compareAndUpdateRecord(
     }
 
     if (hasChanges) {
-      std::string updateQuery =
-          "UPDATE \"" + schemaName + "\".\"" + tableName + "\" SET ";
+      pqxx::work updateTxn(pgConn);
+      std::string updateQuery = "UPDATE " + updateTxn.quote_name(schemaName) +
+                                "." + updateTxn.quote_name(tableName) + " SET ";
       for (size_t i = 0; i < updateFields.size(); ++i) {
         if (i > 0)
           updateQuery += ", ";
@@ -485,7 +615,6 @@ bool DatabaseToPostgresSync::compareAndUpdateRecord(
       }
       updateQuery += " WHERE " + whereClause;
 
-      pqxx::work updateTxn(pgConn);
       updateTxn.exec(updateQuery);
       updateTxn.commit();
 
@@ -515,41 +644,64 @@ void DatabaseToPostgresSync::performBulkInsert(
     const std::vector<std::string> &columnTypes,
     const std::string &lowerSchemaName, const std::string &tableName) {
   try {
+    if (results.empty() || columnNames.empty() || columnTypes.empty()) {
+      Logger::warning(LogCategory::TRANSFER, "performBulkInsert",
+                      "Empty results, columns, or types - nothing to insert");
+      return;
+    }
+
+    if (columnNames.size() != columnTypes.size()) {
+      Logger::error(LogCategory::TRANSFER, "performBulkInsert",
+                    "Mismatch between column names and types count");
+      throw std::invalid_argument("Column names and types count mismatch");
+    }
+
     std::string lowerTableName = tableName;
     std::transform(lowerTableName.begin(), lowerTableName.end(),
                    lowerTableName.begin(), ::tolower);
-    std::string insertQuery =
-        "INSERT INTO \"" + lowerSchemaName + "\".\"" + lowerTableName + "\" (";
-
-    for (size_t i = 0; i < columnNames.size(); ++i) {
-      if (i > 0)
-        insertQuery += ", ";
-      std::string col = columnNames[i];
-      std::transform(col.begin(), col.end(), col.begin(), ::tolower);
-      insertQuery += "\"" + col + "\"";
-    }
-    insertQuery += ") VALUES ";
 
     pqxx::work txn(pgConn);
-    txn.exec("SET statement_timeout = '600s'");
+    txn.exec("SET statement_timeout = '" +
+             std::to_string(STATEMENT_TIMEOUT_SECONDS) + "s'");
 
-    const size_t BATCH_SIZE = SyncConfig::getChunkSize();
+    size_t rawBatchSize = SyncConfig::getChunkSize();
+    const size_t BATCH_SIZE =
+        (rawBatchSize == 0 || rawBatchSize > MAX_BATCH_SIZE)
+            ? DEFAULT_BATCH_SIZE
+            : rawBatchSize;
     size_t totalProcessed = 0;
+
+    std::string baseInsertQuery = "INSERT INTO " +
+                                  txn.quote_name(lowerSchemaName) + "." +
+                                  txn.quote_name(lowerTableName) + " (";
+    for (size_t i = 0; i < columnNames.size(); ++i) {
+      if (i > 0)
+        baseInsertQuery += ", ";
+      std::string col = columnNames[i];
+      std::transform(col.begin(), col.end(), col.begin(), ::tolower);
+      baseInsertQuery += txn.quote_name(col);
+    }
+    baseInsertQuery += ") VALUES ";
 
     for (size_t batchStart = 0; batchStart < results.size();
          batchStart += BATCH_SIZE) {
       size_t batchEnd = std::min(batchStart + BATCH_SIZE, results.size());
 
-      std::string batchQuery = insertQuery;
+      std::string batchQuery = baseInsertQuery;
       std::vector<std::string> values;
+      size_t querySize = baseInsertQuery.length();
 
       for (size_t i = batchStart; i < batchEnd; ++i) {
         const auto &row = results[i];
-        if (row.size() != columnNames.size())
+        if (row.size() != columnNames.size()) {
+          Logger::warning(LogCategory::TRANSFER, "performBulkInsert",
+                          "Row size mismatch: " + std::to_string(row.size()) +
+                              " vs " + std::to_string(columnNames.size()));
           continue;
+        }
 
         std::string rowValues = "(";
-        for (size_t j = 0; j < row.size(); ++j) {
+        for (size_t j = 0; j < row.size() && j < columnNames.size(); ++j) {
           if (j > 0)
             rowValues += ", ";
 
@@ -561,12 +713,19 @@ void DatabaseToPostgresSync::performBulkInsert(
             if (cleanValue == "NULL") {
               rowValues += "NULL";
             } else {
-              rowValues += "'" + escapeSQL(cleanValue) + "'";
+              rowValues += txn.quote(cleanValue);
             }
           }
         }
         rowValues += ")";
+
+        if (querySize + rowValues.length() + 10 > MAX_QUERY_SIZE &&
+            !values.empty()) {
+          break;
+        }
+
         values.push_back(rowValues);
+        querySize += rowValues.length() + 2;
       }
 
       if (!values.empty()) {
@@ -619,7 +778,8 @@ void DatabaseToPostgresSync::batchInserterThread(pqxx::connection &pgConn) {
 
       try {
         pqxx::work txn(pgConn);
-        txn.exec("SET statement_timeout = '600s'");
+        txn.exec("SET statement_timeout = '" +
+                 std::to_string(STATEMENT_TIMEOUT_SECONDS) + "s'");
         txn.exec(batch.batchQuery);
         txn.commit();
 
@@ -663,6 +823,18 @@ void DatabaseToPostgresSync::performBulkUpsert(
     const std::string &lowerSchemaName, const std::string &tableName,
     const std::string &sourceSchemaName) {
   try {
+    if (results.empty() || columnNames.empty() || columnTypes.empty()) {
+      Logger::warning(LogCategory::TRANSFER, "performBulkUpsert",
+                      "Empty results, columns, or types - nothing to upsert");
+      return;
+    }
+
+    if (columnNames.size() != columnTypes.size()) {
+      Logger::error(LogCategory::TRANSFER, "performBulkUpsert",
+                    "Mismatch between column names and types count");
+      throw std::invalid_argument("Column names and types count mismatch");
+    }
+
     std::vector<std::string> pkColumns =
         getPrimaryKeyColumnsFromPostgres(pgConn, lowerSchemaName, tableName);
 
@@ -683,10 +855,37 @@ void DatabaseToPostgresSync::performBulkUpsert(
         buildUpsertConflictClause(columnNames, pkColumns);
 
     pqxx::work txn(pgConn);
-    txn.exec("SET statement_timeout = '600s'");
+    txn.exec("SET statement_timeout = '" +
+             std::to_string(STATEMENT_TIMEOUT_SECONDS) + "s'");
 
-    const size_t BATCH_SIZE = SyncConfig::getChunkSize();
+    size_t rawBatchSize = SyncConfig::getChunkSize();
+    const size_t BATCH_SIZE =
+        (rawBatchSize == 0 || rawBatchSize > MAX_BATCH_SIZE)
+            ? DEFAULT_BATCH_SIZE
+            : rawBatchSize;
     size_t totalProcessed = 0;
+
+    auto buildRowValues = [&](const std::vector<std::string> &row,
+                              pqxx::work &workTxn) -> std::string {
+      std::string rowValues = "(";
+      for (size_t j = 0; j < row.size() && j < columnNames.size(); ++j) {
+        if (j > 0)
+          rowValues += ", ";
+        if (row[j].empty()) {
+          rowValues += "NULL";
+        } else {
+          std::string cleanValue =
+              cleanValueForPostgres(row[j], columnTypes[j]);
+          if (cleanValue == "NULL") {
+            rowValues += "NULL";
+          } else {
+            rowValues += workTxn.quote(cleanValue);
+          }
+        }
+      }
+      rowValues += ")";
+      return rowValues;
+    };
 
     for (size_t batchStart = 0; batchStart < results.size();
          batchStart += BATCH_SIZE) {
@@ -694,31 +893,26 @@ void DatabaseToPostgresSync::performBulkUpsert(
 
       std::string batchQuery = upsertQuery;
       std::vector<std::string> values;
+      size_t querySize = upsertQuery.length() + conflictClause.length();
 
       for (size_t i = batchStart; i < batchEnd; ++i) {
         const auto &row = results[i];
-        if (row.size() != columnNames.size())
+        if (row.size() != columnNames.size()) {
+          Logger::warning(LogCategory::TRANSFER, "performBulkUpsert",
+                          "Row size mismatch: " + std::to_string(row.size()) +
+                              " vs " + std::to_string(columnNames.size()));
           continue;
-
-        std::string rowValues = "(";
-        for (size_t j = 0; j < row.size(); ++j) {
-          if (j > 0)
-            rowValues += ", ";
-
-          if (row[j].empty()) {
-            rowValues += "NULL";
-          } else {
-            std::string cleanValue =
-                cleanValueForPostgres(row[j], columnTypes[j]);
-            if (cleanValue == "NULL") {
-              rowValues += "NULL";
-            } else {
-              rowValues += "'" + escapeSQL(cleanValue) + "'";
-            }
-          }
         }
-        rowValues += ")";
+
+        std::string rowValues = buildRowValues(row, txn);
+
+        if (querySize + rowValues.length() + 10 > MAX_QUERY_SIZE &&
+            !values.empty()) {
+          break;
+        }
+
         values.push_back(rowValues);
+        querySize += rowValues.length() + 2;
       }
 
       if (!values.empty()) {
@@ -752,7 +946,6 @@ void DatabaseToPostgresSync::performBulkUpsert(
             }
 
             size_t individualProcessed = 0;
-            const size_t MAX_INDIVIDUAL_PROCESSING = 100;
 
             for (size_t i = batchStart;
                  i < batchEnd &&
@@ -760,30 +953,18 @@ void DatabaseToPostgresSync::performBulkUpsert(
                  ++i) {
               try {
                 const auto &row = results[i];
-                if (row.size() != columnNames.size())
+                if (row.size() != columnNames.size()) {
+                  Logger::warning(LogCategory::TRANSFER, "performBulkUpsert",
+                                  "Row size mismatch in individual processing");
                   continue;
-
-                std::string singleRowValues = "(";
-                for (size_t j = 0; j < row.size(); ++j) {
-                  if (j > 0)
-                    singleRowValues += ", ";
-
-                  if (row[j].empty()) {
-                    singleRowValues += "NULL";
-                  } else {
-                    std::string cleanValue =
-                        cleanValueForPostgres(row[j], columnTypes[j]);
-                    if (cleanValue == "NULL") {
-                      singleRowValues += "NULL";
-                    } else {
-                      singleRowValues += "'" + escapeSQL(cleanValue) + "'";
-                    }
-                  }
                 }
-                singleRowValues += ")";
 
                 pqxx::work singleTxn(pgConn);
-                singleTxn.exec("SET statement_timeout = '600s'");
+                singleTxn.exec("SET statement_timeout = '" +
+                               std::to_string(STATEMENT_TIMEOUT_SECONDS) +
+                               "s'");
+
+                std::string singleRowValues = buildRowValues(row, singleTxn);
                 std::string singleQuery =
                     upsertQuery + singleRowValues + conflictClause;
                 singleTxn.exec(singleQuery);
@@ -799,11 +980,14 @@ void DatabaseToPostgresSync::performBulkUpsert(
               }
             }
 
-            if (individualProcessed >= MAX_INDIVIDUAL_PROCESSING) {
-              Logger::warning(LogCategory::TRANSFER, "performBulkUpsert",
-                              "Hit maximum individual processing limit (" +
-                                  std::to_string(MAX_INDIVIDUAL_PROCESSING) +
-                                  ") - stopping to prevent infinite loop");
+            if (individualProcessed >=
+                DatabaseToPostgresSync::MAX_INDIVIDUAL_PROCESSING) {
+              Logger::warning(
+                  LogCategory::TRANSFER, "performBulkUpsert",
+                  "Hit maximum individual processing limit (" +
+                      std::to_string(
+                          DatabaseToPostgresSync::MAX_INDIVIDUAL_PROCESSING) +
+                      ") - stopping to prevent infinite loop");
             }
           } else if (errorMsg.find("not a valid binary digit") !=
                          std::string::npos ||
@@ -816,35 +1000,22 @@ void DatabaseToPostgresSync::performBulkUpsert(
                                 errorMsg.substr(0, 100));
 
             size_t binaryErrorProcessed = 0;
-            const size_t MAX_BINARY_ERROR_PROCESSING = 50;
 
             for (size_t i = batchStart;
                  i < batchEnd &&
-                 binaryErrorProcessed < MAX_BINARY_ERROR_PROCESSING;
+                 binaryErrorProcessed <
+                     DatabaseToPostgresSync::MAX_BINARY_ERROR_PROCESSING;
                  ++i) {
               try {
                 const auto &row = results[i];
-                if (row.size() != columnNames.size())
+                if (row.size() != columnNames.size()) {
+                  Logger::warning(
+                      LogCategory::TRANSFER, "performBulkUpsert",
+                      "Row size mismatch in binary error processing");
                   continue;
-
-                std::string singleRowValues = "(";
-                for (size_t j = 0; j < row.size(); ++j) {
-                  if (j > 0)
-                    singleRowValues += ", ";
-
-                  if (row[j].empty()) {
-                    singleRowValues += "NULL";
-                  } else {
-                    std::string cleanValue =
-                        cleanValueForPostgres(row[j], columnTypes[j]);
-                    if (cleanValue == "NULL") {
-                      singleRowValues += "NULL";
-                    } else {
-                      singleRowValues += "'" + escapeSQL(cleanValue) + "'";
-                    }
-                  }
                 }
-                singleRowValues += ")";
+
+                std::string singleRowValues = buildRowValues(row, txn);
 
                 std::string singleQuery =
                     upsertQuery + singleRowValues + conflictClause;
@@ -860,11 +1031,14 @@ void DatabaseToPostgresSync::performBulkUpsert(
               }
             }
 
-            if (binaryErrorProcessed >= MAX_BINARY_ERROR_PROCESSING) {
-              Logger::warning(LogCategory::TRANSFER, "performBulkUpsert",
-                              "Hit maximum binary error processing limit (" +
-                                  std::to_string(MAX_BINARY_ERROR_PROCESSING) +
-                                  ") - stopping to prevent infinite loop");
+            if (binaryErrorProcessed >=
+                DatabaseToPostgresSync::MAX_BINARY_ERROR_PROCESSING) {
+              Logger::warning(
+                  LogCategory::TRANSFER, "performBulkUpsert",
+                  "Hit maximum binary error processing limit (" +
+                      std::to_string(
+                          DatabaseToPostgresSync::MAX_BINARY_ERROR_PROCESSING) +
+                      ") - stopping to prevent infinite loop");
             }
           } else {
             throw;
@@ -883,6 +1057,9 @@ void DatabaseToPostgresSync::performBulkUpsert(
         Logger::warning(LogCategory::TRANSFER, "performBulkUpsert",
                         "Skipping commit for aborted transaction");
       } else {
+        Logger::error(LogCategory::TRANSFER, "performBulkUpsert",
+                      "Error committing transaction: " +
+                          std::string(commitError.what()));
         throw;
       }
     }

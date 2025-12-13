@@ -1,6 +1,6 @@
 #include "utils/table_utils.h"
 #include "core/logger.h"
-#include <algorithm>
+#include "utils/string_utils.h"
 
 // Checks if a table exists in PostgreSQL by querying information_schema.tables.
 // Converts schema and table names to lowercase for case-insensitive matching.
@@ -12,15 +12,21 @@
 bool TableUtils::tableExistsInPostgres(pqxx::connection &conn,
                                        const std::string &schema,
                                        const std::string &table) {
+  if (schema.empty() || table.empty()) {
+    return false;
+  }
+
+  if (!conn.is_open()) {
+    Logger::error(LogCategory::DATABASE, "TableUtils",
+                  "Connection is not open");
+    return false;
+  }
+
   try {
     pqxx::work txn(conn);
 
-    std::string lowerSchema = schema;
-    std::transform(lowerSchema.begin(), lowerSchema.end(), lowerSchema.begin(),
-                   ::tolower);
-    std::string lowerTable = table;
-    std::transform(lowerTable.begin(), lowerTable.end(), lowerTable.begin(),
-                   ::tolower);
+    std::string lowerSchema = StringUtils::toLower(schema);
+    std::string lowerTable = StringUtils::toLower(table);
 
     auto result =
         txn.exec_params("SELECT COUNT(*) FROM information_schema.tables "

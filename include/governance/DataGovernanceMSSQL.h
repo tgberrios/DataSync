@@ -1,10 +1,11 @@
 #ifndef DATA_GOVERNANCE_MSSQL_H
 #define DATA_GOVERNANCE_MSSQL_H
 
+#include <memory>
+#include <mutex>
+#include <sql.h>
 #include <string>
 #include <vector>
-#include <memory>
-#include <sql.h>
 
 struct MSSQLGovernanceData {
   std::string server_name;
@@ -74,11 +75,13 @@ class DataGovernanceMSSQL {
 private:
   std::string connectionString_;
   std::vector<MSSQLGovernanceData> governanceData_;
+  mutable std::mutex governanceDataMutex_;
 
   std::string extractServerName(const std::string &connectionString);
   std::string extractDatabaseName(const std::string &connectionString);
   std::string escapeSQL(const std::string &str);
-  std::vector<std::vector<std::string>> executeQueryMSSQL(SQLHDBC conn, const std::string &query);
+  std::vector<std::vector<std::string>>
+  executeQueryMSSQL(SQLHDBC conn, const std::string &query);
 
 public:
   explicit DataGovernanceMSSQL(const std::string &connectionString);

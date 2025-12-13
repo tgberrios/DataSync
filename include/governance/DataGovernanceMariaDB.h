@@ -1,10 +1,11 @@
 #ifndef DATA_GOVERNANCE_MARIADB_H
 #define DATA_GOVERNANCE_MARIADB_H
 
+#include <memory>
+#include <mutex>
+#include <mysql/mysql.h>
 #include <string>
 #include <vector>
-#include <memory>
-#include <mysql/mysql.h>
 
 struct MariaDBGovernanceData {
   std::string server_name;
@@ -45,11 +46,13 @@ class DataGovernanceMariaDB {
 private:
   std::string connectionString_;
   std::vector<MariaDBGovernanceData> governanceData_;
+  mutable std::mutex governanceDataMutex_;
 
   std::string extractServerName(const std::string &connectionString);
   std::string extractDatabaseName(const std::string &connectionString);
   std::string escapeSQL(MYSQL *conn, const std::string &str);
-  std::vector<std::vector<std::string>> executeQuery(MYSQL *conn, const std::string &query);
+  std::vector<std::vector<std::string>> executeQuery(MYSQL *conn,
+                                                     const std::string &query);
 
 public:
   explicit DataGovernanceMariaDB(const std::string &connectionString);

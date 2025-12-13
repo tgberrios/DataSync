@@ -23,8 +23,8 @@ public:
   void flush() override {}
   void close() override;
   bool isOpen() const override;
-  bool isEnabled() const { return enabled_; }
-  void disable() { enabled_ = false; }
+  bool isEnabled() const;
+  void disable();
 
   bool writeParsed(const std::string &levelStr, const std::string &categoryStr,
                    const std::string &function, const std::string &message);
