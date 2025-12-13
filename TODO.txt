@@ -122,3 +122,7 @@ Para cada problema encontrado, indica:
 - Impacto potencial
 
 Sé exhaustivo y detallado.
+
+
+
+no puedo matar el proceso!

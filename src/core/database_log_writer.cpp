@@ -1,5 +1,67 @@
 #include "core/database_log_writer.h"
+#include <algorithm>
+#include <cctype>
 #include <iostream>
+
+// Helper function to sanitize UTF-8 strings by removing invalid byte sequences
+static std::string sanitizeUTF8(const std::string &input) {
+  std::string result;
+  result.reserve(input.size());
+
+  for (size_t i = 0; i < input.size(); ++i) {
+    unsigned char c = static_cast<unsigned char>(input[i]);
+
+    // Keep ASCII printable characters (0x20-0x7E) and common whitespace
+    if ((c >= 0x20 && c <= 0x7E) || c == '\n' || c == '\r' || c == '\t') {
+      result += c;
+      continue;
+    }
+
+    // Handle UTF-8 multi-byte sequences
+    if ((c & 0xE0) == 0xC0) {
+      // 2-byte sequence: 110xxxxx 10xxxxxx
+      if (i + 1 < input.size() &&
+          (static_cast<unsigned char>(input[i + 1]) & 0xC0) == 0x80) {
+        result += c;
+        result += input[i + 1];
+        ++i;
+        continue;
+      }
+    } else if ((c & 0xF0) == 0xE0) {
+      // 3-byte sequence: 1110xxxx 10xxxxxx 10xxxxxx
+      if (i + 2 < input.size() &&
+          (static_cast<unsigned char>(input[i + 1]) & 0xC0) == 0x80 &&
+          (static_cast<unsigned char>(input[i + 2]) & 0xC0) == 0x80) {
+        result += c;
+        result += input[i + 1];
+        result += input[i + 2];
+        i += 2;
+        continue;
+      }
+    } else if ((c & 0xF8) == 0xF0) {
+      // 4-byte sequence: 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
+      if (i + 3 < input.size() &&
+          (static_cast<unsigned char>(input[i + 1]) & 0xC0) == 0x80 &&
+          (static_cast<unsigned char>(input[i + 2]) & 0xC0) == 0x80 &&
+          (static_cast<unsigned char>(input[i + 3]) & 0xC0) == 0x80) {
+        result += c;
+        result += input[i + 1];
+        result += input[i + 2];
+        result += input[i + 3];
+        i += 3;
+        continue;
+      }
+    } else if ((c & 0xC0) == 0x80) {
+      // Continuation byte without a start byte - skip it
+      continue;
+    }
+
+    // Invalid byte sequence - replace with '?' or skip
+    // Skip invalid bytes to prevent encoding errors
+  }
+
+  return result;
+}
 
 // Constructor for DatabaseLogWriter. Initializes the log writer with a
 // PostgreSQL connection string and attempts to establish a database connection.
@@ -92,8 +154,15 @@ bool DatabaseLogWriter::writeParsed(const std::string &levelStr,
         return false;
     }
 
+    // Sanitize all strings to ensure valid UTF-8 encoding
+    std::string sanitizedLevel = sanitizeUTF8(levelStr);
+    std::string sanitizedCategory = sanitizeUTF8(categoryStr);
+    std::string sanitizedFunction = sanitizeUTF8(function);
+    std::string sanitizedMessage = sanitizeUTF8(message);
+
     pqxx::work txn(*conn_);
-    txn.exec_prepared("log_insert", levelStr, categoryStr, function, message);
+    txn.exec_prepared("log_insert", sanitizedLevel, sanitizedCategory,
+                      sanitizedFunction, sanitizedMessage);
     txn.commit();
     return true;
   } catch (const pqxx::broken_connection &e) {
