@@ -1,9 +1,12 @@
 #include "sync/StreamingData.h"
+#include "catalog/custom_jobs_repository.h"
 #include "core/database_config.h"
 #include "governance/QueryActivityLogger.h"
 #include "governance/QueryStoreCollector.h"
 #include <chrono>
+#include <ctime>
 #include <mutex>
+#include <sstream>
 #include <thread>
 
 // Constructor initializes API sync component with PostgreSQL connection string
@@ -24,6 +27,17 @@ void StreamingData::initialize() {
 
   Logger::info(LogCategory::MONITORING,
                "Database connections will be created as needed");
+
+  try {
+    std::string connStr = DatabaseConfig::getPostgresConnectionString();
+    customJobExecutor = std::make_unique<CustomJobExecutor>(connStr);
+    Logger::info(LogCategory::MONITORING,
+                 "Custom job executor initialized successfully");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::MONITORING, "initialize",
+                  "Error initializing custom job executor: " +
+                      std::string(e.what()));
+  }
 
   Logger::info(LogCategory::MONITORING,
                "System initialization completed successfully");
@@ -48,14 +62,15 @@ void StreamingData::run() {
   threads.emplace_back(&StreamingData::maintenanceThread, this);
   Logger::info(LogCategory::MONITORING, "Core threads launched successfully");
 
-  Logger::info(
-      LogCategory::MONITORING,
-      "Launching transfer threads (MariaDB, MSSQL, MongoDB, Oracle, API)");
+  Logger::info(LogCategory::MONITORING,
+               "Launching transfer threads (MariaDB, MSSQL, MongoDB, Oracle, "
+               "API, Custom Jobs)");
   threads.emplace_back(&StreamingData::mariaTransferThread, this);
   threads.emplace_back(&StreamingData::mssqlTransferThread, this);
   threads.emplace_back(&StreamingData::mongoTransferThread, this);
   threads.emplace_back(&StreamingData::oracleTransferThread, this);
   threads.emplace_back(&StreamingData::apiTransferThread, this);
+  threads.emplace_back(&StreamingData::customJobsSchedulerThread, this);
 
   Logger::info(LogCategory::MONITORING,
                "Transfer threads launched successfully");
@@ -837,6 +852,117 @@ void StreamingData::apiTransferThread() {
     std::this_thread::sleep_for(std::chrono::seconds(sleepSeconds));
   }
   Logger::info(LogCategory::MONITORING, "API transfer thread stopped");
+}
+
+void StreamingData::customJobsSchedulerThread() {
+  Logger::info(LogCategory::MONITORING, "Custom jobs scheduler thread started");
+  while (running) {
+    try {
+      if (!customJobExecutor) {
+        std::this_thread::sleep_for(std::chrono::minutes(1));
+        continue;
+      }
+
+      CustomJobsRepository repo(DatabaseConfig::getPostgresConnectionString());
+      std::vector<CustomJob> scheduledJobs = repo.getScheduledJobs();
+
+      auto now = std::chrono::system_clock::now();
+      auto timeT = std::chrono::system_clock::to_time_t(now);
+      std::tm *tm = std::gmtime(&timeT);
+      int currentMinute = tm->tm_min;
+      int currentHour = tm->tm_hour;
+      int currentDay = tm->tm_mday;
+      int currentMonth = tm->tm_mon + 1;
+      int currentDow = tm->tm_wday;
+
+      for (const auto &job : scheduledJobs) {
+        if (job.schedule_cron.empty()) {
+          continue;
+        }
+
+        std::istringstream cronStream(job.schedule_cron);
+        std::string minute, hour, day, month, dow;
+        cronStream >> minute >> hour >> day >> month >> dow;
+
+        bool shouldRun = true;
+        if (minute != "*") {
+          try {
+            int cronMinute = std::stoi(minute);
+            if (cronMinute != currentMinute) {
+              shouldRun = false;
+            }
+          } catch (...) {
+            shouldRun = false;
+          }
+        }
+        if (shouldRun && hour != "*") {
+          try {
+            int cronHour = std::stoi(hour);
+            if (cronHour != currentHour) {
+              shouldRun = false;
+            }
+          } catch (...) {
+            shouldRun = false;
+          }
+        }
+        if (shouldRun && day != "*") {
+          try {
+            int cronDay = std::stoi(day);
+            if (cronDay != currentDay) {
+              shouldRun = false;
+            }
+          } catch (...) {
+            shouldRun = false;
+          }
+        }
+        if (shouldRun && month != "*") {
+          try {
+            int cronMonth = std::stoi(month);
+            if (cronMonth != currentMonth) {
+              shouldRun = false;
+            }
+          } catch (...) {
+            shouldRun = false;
+          }
+        }
+        if (shouldRun && dow != "*") {
+          try {
+            int cronDow = std::stoi(dow);
+            if (cronDow != currentDow) {
+              shouldRun = false;
+            }
+          } catch (...) {
+            shouldRun = false;
+          }
+        }
+
+        if (shouldRun) {
+          Logger::info(LogCategory::MONITORING, "customJobsSchedulerThread",
+                       "Executing scheduled job: " + job.job_name);
+          try {
+            customJobExecutor->executeJob(job.job_name);
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::MONITORING, "customJobsSchedulerThread",
+                          "Error executing scheduled job " + job.job_name +
+                              ": " + std::string(e.what()));
+          }
+        }
+      }
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::MONITORING, "customJobsSchedulerThread",
+                    "Error in custom jobs scheduler: " + std::string(e.what()));
+    }
+
+    std::this_thread::sleep_for(std::chrono::minutes(1));
+  }
+  Logger::info(LogCategory::MONITORING, "Custom jobs scheduler thread stopped");
+}
+
+void StreamingData::executeJob(const std::string &jobName) {
+  if (!customJobExecutor) {
+    throw std::runtime_error("Custom job executor not initialized");
+  }
+  customJobExecutor->executeJob(jobName);
 }
 
 // Data quality validation thread that runs continuously while the system is

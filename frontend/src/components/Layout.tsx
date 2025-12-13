@@ -121,6 +121,9 @@ const Layout = () => {
         <NavItem to="/api-catalog">
           ■ API Catalog
         </NavItem>
+        <NavItem to="/custom-jobs">
+          ■ Custom Jobs
+        </NavItem>
         <NavItem to="/monitor">
           ■ Monitor
         </NavItem>

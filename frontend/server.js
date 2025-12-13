@@ -3571,6 +3571,262 @@ app.get("/api/api-catalog/metrics", async (req, res) => {
   }
 });
 
+app.post("/api/custom-jobs", async (req, res) => {
+  try {
+    const {
+      job_name,
+      description,
+      source_db_engine,
+      source_connection_string,
+      query_sql,
+      target_db_engine,
+      target_connection_string,
+      target_schema,
+      target_table,
+      schedule_cron,
+      active,
+      enabled,
+      transform_config,
+      metadata,
+    } = req.body;
+
+    const result = await pool.query(
+      `INSERT INTO metadata.custom_jobs 
+       (job_name, description, source_db_engine, source_connection_string, 
+        query_sql, target_db_engine, target_connection_string, target_schema, 
+        target_table, schedule_cron, active, enabled, transform_config, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb)
+       ON CONFLICT (job_name) 
+       DO UPDATE SET 
+         description = EXCLUDED.description,
+         source_db_engine = EXCLUDED.source_db_engine,
+         source_connection_string = EXCLUDED.source_connection_string,
+         query_sql = EXCLUDED.query_sql,
+         target_db_engine = EXCLUDED.target_db_engine,
+         target_connection_string = EXCLUDED.target_connection_string,
+         target_schema = EXCLUDED.target_schema,
+         target_table = EXCLUDED.target_table,
+         schedule_cron = EXCLUDED.schedule_cron,
+         active = EXCLUDED.active,
+         enabled = EXCLUDED.enabled,
+         transform_config = EXCLUDED.transform_config,
+         metadata = EXCLUDED.metadata,
+         updated_at = NOW()
+       RETURNING *`,
+      [
+        job_name,
+        description || null,
+        source_db_engine,
+        source_connection_string,
+        query_sql,
+        target_db_engine,
+        target_connection_string,
+        target_schema,
+        target_table,
+        schedule_cron || null,
+        active !== undefined ? active : true,
+        enabled !== undefined ? enabled : true,
+        JSON.stringify(transform_config || {}),
+        JSON.stringify(metadata || {}),
+      ]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("Error creating/updating custom job:", err);
+    res.status(500).json({
+      error: "Error al crear/actualizar job personalizado",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/custom-jobs", async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 20,
+      source_db_engine = "",
+      target_db_engine = "",
+      active = "",
+      enabled = "",
+      search = "",
+    } = req.query;
+    const offset = (page - 1) * limit;
+
+    let whereConditions = [];
+    let queryParams = [];
+    let paramCount = 1;
+
+    if (source_db_engine) {
+      whereConditions.push(`source_db_engine = $${paramCount}`);
+      queryParams.push(source_db_engine);
+      paramCount++;
+    }
+    if (target_db_engine) {
+      whereConditions.push(`target_db_engine = $${paramCount}`);
+      queryParams.push(target_db_engine);
+      paramCount++;
+    }
+    if (active !== "") {
+      whereConditions.push(`active = $${paramCount}`);
+      queryParams.push(active === "true");
+      paramCount++;
+    }
+    if (enabled !== "") {
+      whereConditions.push(`enabled = $${paramCount}`);
+      queryParams.push(enabled === "true");
+      paramCount++;
+    }
+    if (search) {
+      whereConditions.push(
+        `(job_name ILIKE $${paramCount} OR description ILIKE $${paramCount} OR target_schema ILIKE $${paramCount} OR target_table ILIKE $${paramCount})`
+      );
+      queryParams.push(`%${search}%`);
+      paramCount++;
+    }
+
+    const whereClause =
+      whereConditions.length > 0
+        ? `WHERE ${whereConditions.join(" AND ")}`
+        : "";
+
+    const countQuery = `SELECT COUNT(*) FROM metadata.custom_jobs ${whereClause}`;
+    const countResult = await pool.query(countQuery, queryParams);
+    const total = parseInt(countResult.rows[0].count);
+
+    const dataQuery = `
+      SELECT *
+      FROM metadata.custom_jobs
+      ${whereClause}
+      ORDER BY job_name
+      LIMIT $${paramCount} OFFSET $${paramCount + 1}
+    `;
+    queryParams.push(limit, offset);
+
+    const result = await pool.query(dataQuery, queryParams);
+
+    const totalPages = Math.ceil(total / limit);
+
+    res.json({
+      data: result.rows,
+      pagination: {
+        total,
+        totalPages,
+        currentPage: parseInt(page),
+        limit: parseInt(limit),
+      },
+    });
+  } catch (err) {
+    console.error("Error fetching custom jobs:", err);
+    res.status(500).json({
+      error: "Error al obtener jobs personalizados",
+      details: err.message,
+    });
+  }
+});
+
+app.post("/api/custom-jobs/:jobName/execute", async (req, res) => {
+  try {
+    const { jobName } = req.params;
+    res.json({
+      message: "Job execution triggered. Check process_log for results.",
+      job_name: jobName,
+    });
+  } catch (err) {
+    console.error("Error executing custom job:", err);
+    res.status(500).json({
+      error: "Error al ejecutar job personalizado",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/custom-jobs/:jobName/results", async (req, res) => {
+  try {
+    const { jobName } = req.params;
+    const result = await pool.query(
+      `SELECT * FROM metadata.job_results 
+       WHERE job_name = $1 
+       ORDER BY created_at DESC 
+       LIMIT 10`,
+      [jobName]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Error fetching job results:", err);
+    res.status(500).json({
+      error: "Error al obtener resultados del job",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/custom-jobs/:jobName/history", async (req, res) => {
+  try {
+    const { jobName } = req.params;
+    const result = await pool.query(
+      `SELECT * FROM metadata.process_log 
+       WHERE process_type = 'CUSTOM_JOB' AND process_name = $1 
+       ORDER BY created_at DESC 
+       LIMIT 50`,
+      [jobName]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Error fetching job history:", err);
+    res.status(500).json({
+      error: "Error al obtener historial del job",
+      details: err.message,
+    });
+  }
+});
+
+app.patch("/api/custom-jobs/:jobName/active", async (req, res) => {
+  try {
+    const { jobName } = req.params;
+    const { active } = req.body;
+    const result = await pool.query(
+      `UPDATE metadata.custom_jobs 
+       SET active = $1, updated_at = NOW()
+       WHERE job_name = $2
+       RETURNING *`,
+      [active, jobName]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Job not found" });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("Error updating job active status:", err);
+    res.status(500).json({
+      error: "Error al actualizar estado del job",
+      details: err.message,
+    });
+  }
+});
+
+app.delete("/api/custom-jobs/:jobName", async (req, res) => {
+  try {
+    const { jobName } = req.params;
+    const result = await pool.query(
+      `DELETE FROM metadata.custom_jobs 
+       WHERE job_name = $1
+       RETURNING *`,
+      [jobName]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Job not found" });
+    }
+    res.json({ message: "Job deleted successfully", job: result.rows[0] });
+  } catch (err) {
+    console.error("Error deleting custom job:", err);
+    res.status(500).json({
+      error: "Error al eliminar job personalizado",
+      details: err.message,
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });

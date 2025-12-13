@@ -82,6 +82,8 @@ add_executable(DataSync
     src/sync/APIToDatabaseSync.cpp
     src/catalog/api_catalog_repository.cpp
     src/engines/api_engine.cpp
+    src/catalog/custom_jobs_repository.cpp
+    src/sync/CustomJobExecutor.cpp
 )
 
 # Configure executable output directory to project root
