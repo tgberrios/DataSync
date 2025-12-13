@@ -103,6 +103,9 @@ const Layout = () => {
         <NavItem to="/data-lineage-mongodb">
           ■ Lineage MongoDB
         </NavItem>
+        <NavItem to="/data-lineage-oracle">
+          ■ Lineage Oracle
+        </NavItem>
         <NavItem to="/governance-catalog-mariadb">
           ■ Gov Catalog MariaDB
         </NavItem>
@@ -111,6 +114,9 @@ const Layout = () => {
         </NavItem>
         <NavItem to="/governance-catalog-mongodb">
           ■ Gov Catalog MongoDB
+        </NavItem>
+        <NavItem to="/governance-catalog-oracle">
+          ■ Gov Catalog Oracle
         </NavItem>
         <NavItem to="/monitor">
           ■ Monitor

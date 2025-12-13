@@ -3127,6 +3127,308 @@ app.get(
   }
 );
 
+// Oracle Lineage endpoints
+app.get("/api/data-lineage/oracle", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = (page - 1) * limit;
+    const server_name = req.query.server_name || "";
+    const schema_name = req.query.schema_name || "";
+    const relationship_type = req.query.relationship_type || "";
+    const search = req.query.search || "";
+
+    const whereConditions = [];
+    const params = [];
+    let paramCount = 1;
+
+    if (server_name) {
+      whereConditions.push(`server_name = $${paramCount}`);
+      params.push(server_name);
+      paramCount++;
+    }
+
+    if (schema_name) {
+      whereConditions.push(`schema_name = $${paramCount}`);
+      params.push(schema_name);
+      paramCount++;
+    }
+
+    if (relationship_type) {
+      whereConditions.push(`relationship_type = $${paramCount}`);
+      params.push(relationship_type);
+      paramCount++;
+    }
+
+    if (search) {
+      whereConditions.push(
+        `(object_name ILIKE $${paramCount} OR target_object_name ILIKE $${paramCount})`
+      );
+      params.push(`%${search}%`);
+      paramCount++;
+    }
+
+    const whereClause =
+      whereConditions.length > 0
+        ? "WHERE " + whereConditions.join(" AND ")
+        : "";
+
+    const countQuery = `SELECT COUNT(*) FROM metadata.oracle_lineage ${whereClause}`;
+    const countResult = await pool.query(countQuery, params);
+    const total = parseInt(countResult.rows[0].count);
+
+    params.push(limit, offset);
+    const dataQuery = `
+      SELECT *
+      FROM metadata.oracle_lineage
+      ${whereClause}
+      ORDER BY dependency_level, confidence_score DESC, last_seen_at DESC
+      LIMIT $${paramCount} OFFSET $${paramCount + 1}
+    `;
+
+    const result = await pool.query(dataQuery, params);
+
+    const totalPages = Math.ceil(total / limit);
+
+    res.json({
+      data: result.rows,
+      pagination: {
+        total,
+        totalPages,
+        currentPage: page,
+        limit,
+      },
+    });
+  } catch (err) {
+    console.error("Error getting Oracle lineage data:", err);
+    res.status(500).json({
+      error: "Error al obtener datos de lineage de Oracle",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/data-lineage/oracle/metrics", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        COUNT(*) as total_relationships,
+        COUNT(DISTINCT object_name) + COUNT(DISTINCT target_object_name) as unique_objects,
+        COUNT(DISTINCT server_name) as unique_servers,
+        COUNT(*) FILTER (WHERE confidence_score >= 0.8) as high_confidence,
+        ROUND(AVG(confidence_score)::numeric, 4) as avg_confidence
+      FROM metadata.oracle_lineage
+    `);
+
+    res.json(result.rows[0] || {});
+  } catch (err) {
+    console.error("Error getting Oracle lineage metrics:", err);
+    res.status(500).json({
+      error: "Error al obtener métricas de lineage de Oracle",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/data-lineage/oracle/servers", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT DISTINCT server_name
+      FROM metadata.oracle_lineage
+      WHERE server_name IS NOT NULL
+      ORDER BY server_name
+    `);
+
+    res.json(result.rows.map((row) => row.server_name));
+  } catch (err) {
+    console.error("Error getting Oracle servers:", err);
+    res.status(500).json({
+      error: "Error al obtener servidores",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/data-lineage/oracle/schemas/:serverName", async (req, res) => {
+  try {
+    const serverName = req.params.serverName;
+    const result = await pool.query(
+      `
+        SELECT DISTINCT schema_name
+        FROM metadata.oracle_lineage
+        WHERE server_name = $1 AND schema_name IS NOT NULL
+        ORDER BY schema_name
+      `,
+      [serverName]
+    );
+
+    res.json(result.rows.map((row) => row.schema_name));
+  } catch (err) {
+    console.error("Error getting Oracle schemas:", err);
+    res.status(500).json({
+      error: "Error al obtener schemas",
+      details: err.message,
+    });
+  }
+});
+
+// Oracle Governance Catalog endpoints
+app.get("/api/governance-catalog/oracle", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = (page - 1) * limit;
+    const server_name = req.query.server_name || "";
+    const schema_name = req.query.schema_name || "";
+    const health_status = req.query.health_status || "";
+    const access_frequency = req.query.access_frequency || "";
+    const search = req.query.search || "";
+
+    const whereConditions = [];
+    const params = [];
+    let paramCount = 1;
+
+    if (server_name) {
+      whereConditions.push(`server_name = $${paramCount}`);
+      params.push(server_name);
+      paramCount++;
+    }
+
+    if (schema_name) {
+      whereConditions.push(`schema_name = $${paramCount}`);
+      params.push(schema_name);
+      paramCount++;
+    }
+
+    if (health_status) {
+      whereConditions.push(`health_status = $${paramCount}`);
+      params.push(health_status);
+      paramCount++;
+    }
+
+    if (access_frequency) {
+      whereConditions.push(`access_frequency = $${paramCount}`);
+      params.push(access_frequency);
+      paramCount++;
+    }
+
+    if (search) {
+      whereConditions.push(
+        `(table_name ILIKE $${paramCount} OR schema_name ILIKE $${paramCount})`
+      );
+      params.push(`%${search}%`);
+      paramCount++;
+    }
+
+    const whereClause =
+      whereConditions.length > 0
+        ? "WHERE " + whereConditions.join(" AND ")
+        : "";
+
+    const countQuery = `SELECT COUNT(*) FROM metadata.data_governance_catalog_oracle ${whereClause}`;
+    const countResult = await pool.query(countQuery, params);
+    const total = parseInt(countResult.rows[0].count);
+
+    params.push(limit, offset);
+    const dataQuery = `
+      SELECT *
+      FROM metadata.data_governance_catalog_oracle
+      ${whereClause}
+      ORDER BY health_score DESC NULLS LAST, table_name
+      LIMIT $${paramCount} OFFSET $${paramCount + 1}
+    `;
+
+    const result = await pool.query(dataQuery, params);
+
+    const totalPages = Math.ceil(total / limit);
+
+    res.json({
+      data: result.rows,
+      pagination: {
+        total,
+        totalPages,
+        currentPage: page,
+        limit,
+      },
+    });
+  } catch (err) {
+    console.error("Error getting Oracle governance catalog:", err);
+    res.status(500).json({
+      error: "Error al obtener datos de governance de Oracle",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/governance-catalog/oracle/metrics", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        COUNT(DISTINCT CASE WHEN index_name IS NULL THEN table_name END) as total_tables,
+        SUM(COALESCE(total_size_mb, 0)) as total_size_mb,
+        SUM(COALESCE(row_count, 0)) as total_rows,
+        COUNT(*) FILTER (WHERE health_status IN ('EXCELLENT', 'HEALTHY')) as healthy_count,
+        COUNT(*) FILTER (WHERE health_status = 'WARNING') as warning_count,
+        COUNT(*) FILTER (WHERE health_status = 'CRITICAL') as critical_count,
+        COUNT(DISTINCT server_name) as unique_servers
+      FROM metadata.data_governance_catalog_oracle
+    `);
+
+    res.json(result.rows[0] || {});
+  } catch (err) {
+    console.error("Error getting Oracle governance metrics:", err);
+    res.status(500).json({
+      error: "Error al obtener métricas de governance de Oracle",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/governance-catalog/oracle/servers", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT DISTINCT server_name
+      FROM metadata.data_governance_catalog_oracle
+      WHERE server_name IS NOT NULL
+      ORDER BY server_name
+    `);
+
+    res.json(result.rows.map((row) => row.server_name));
+  } catch (err) {
+    console.error("Error getting Oracle servers:", err);
+    res.status(500).json({
+      error: "Error al obtener servidores",
+      details: err.message,
+    });
+  }
+});
+
+app.get(
+  "/api/governance-catalog/oracle/schemas/:serverName",
+  async (req, res) => {
+    try {
+      const serverName = req.params.serverName;
+      const result = await pool.query(
+        `
+        SELECT DISTINCT schema_name
+        FROM metadata.data_governance_catalog_oracle
+        WHERE server_name = $1 AND schema_name IS NOT NULL
+        ORDER BY schema_name
+      `,
+        [serverName]
+      );
+
+      res.json(result.rows.map((row) => row.schema_name));
+    } catch (err) {
+      console.error("Error getting Oracle schemas:", err);
+      res.status(500).json({
+        error: "Error al obtener schemas",
+        details: err.message,
+      });
+    }
+  }
+);
+
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
