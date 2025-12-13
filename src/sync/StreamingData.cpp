@@ -2,7 +2,9 @@
 #include "core/database_config.h"
 #include "governance/QueryActivityLogger.h"
 #include "governance/QueryStoreCollector.h"
+#include <chrono>
 #include <mutex>
+#include <thread>
 
 // Destructor automatically shuts down the system, ensuring all threads are
 // properly joined and resources are cleaned up.
@@ -59,10 +61,41 @@ void StreamingData::run() {
   std::vector<std::exception_ptr> threadExceptions;
   std::mutex exceptionMutex;
 
+  // Wait for threads with periodic checks for shutdown
+  while (running.load()) {
+    bool allFinished = true;
+    for (auto &thread : threads) {
+      if (thread.joinable()) {
+        allFinished = false;
+        break;
+      }
+    }
+    if (allFinished) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+
+  // Now join all threads (they should finish quickly since running = false)
   for (auto &thread : threads) {
     if (thread.joinable()) {
       try {
-        thread.join();
+        // Try to join with a timeout check
+        auto start = std::chrono::steady_clock::now();
+        bool joined = false;
+        while (thread.joinable() && (std::chrono::steady_clock::now() - start) <
+                                        std::chrono::seconds(2)) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+          // Check if thread finished
+          if (!thread.joinable()) {
+            break;
+          }
+        }
+        if (thread.joinable()) {
+          Logger::warning(LogCategory::MONITORING, "run",
+                          "Thread did not finish in time, detaching");
+          thread.detach();
+        }
       } catch (const std::exception &e) {
         Logger::error(LogCategory::MONITORING, "run",
                       "Error joining thread in run(): " +
@@ -96,14 +129,41 @@ void StreamingData::shutdown() {
   Logger::info(LogCategory::MONITORING, "Shutting down DataSync system");
   running = false;
 
-  Logger::info(LogCategory::MONITORING, "Waiting for all threads to finish");
+  Logger::info(LogCategory::MONITORING,
+               "Waiting for all threads to finish (max 10 seconds)");
   std::vector<std::exception_ptr> threadExceptions;
   std::mutex exceptionMutex;
+
+  auto startTime = std::chrono::steady_clock::now();
+  const auto maxWaitTime = std::chrono::seconds(10);
 
   for (auto &thread : threads) {
     if (thread.joinable()) {
       try {
-        thread.join();
+        // Wait with timeout
+        auto elapsed = std::chrono::steady_clock::now() - startTime;
+        if (elapsed >= maxWaitTime) {
+          Logger::warning(
+              LogCategory::MONITORING, "shutdown",
+              "Shutdown timeout reached, detaching remaining threads");
+          thread.detach();
+          continue;
+        }
+
+        // Try to join, but don't wait forever
+        auto threadStart = std::chrono::steady_clock::now();
+        while (thread.joinable() && (std::chrono::steady_clock::now() -
+                                     threadStart) < std::chrono::seconds(2)) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+
+        if (thread.joinable()) {
+          Logger::warning(LogCategory::MONITORING, "shutdown",
+                          "Thread did not finish in time, detaching");
+          thread.detach();
+        } else {
+          thread.join();
+        }
       } catch (const std::exception &e) {
         Logger::error(LogCategory::MONITORING, "shutdown",
                       "Error joining thread: " + std::string(e.what()));
