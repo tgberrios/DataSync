@@ -7,6 +7,10 @@
 #include <thread>
 #include <unistd.h>
 
+namespace {
+constexpr int LOCK_RETRY_SLEEP_MS = 500;
+}
+
 // Constructor for CatalogLock. Initializes the lock with a connection string,
 // lock name, and timeout duration. Automatically generates a unique session ID
 // for this lock instance. The lock starts in a non-acquired state and must be
@@ -49,6 +53,17 @@ CatalogLock::~CatalogLock() {
 // should be explicitly released using release() or it will be automatically
 // released when the CatalogLock object is destroyed.
 bool CatalogLock::tryAcquire(int maxWaitSeconds) {
+  if (maxWaitSeconds <= 0 || maxWaitSeconds > 3600) {
+    Logger::error(LogCategory::DATABASE, "CatalogLock",
+                  "Invalid maxWaitSeconds: " + std::to_string(maxWaitSeconds));
+    return false;
+  }
+  if (lockTimeoutSeconds_ <= 0 || lockTimeoutSeconds_ > 3600) {
+    Logger::error(LogCategory::DATABASE, "CatalogLock",
+                  "Invalid lockTimeoutSeconds: " +
+                      std::to_string(lockTimeoutSeconds_));
+    return false;
+  }
   auto startTime = std::chrono::steady_clock::now();
   std::string hostname = getHostname();
 
@@ -70,8 +85,9 @@ bool CatalogLock::tryAcquire(int maxWaitSeconds) {
       auto result = txn.exec_params(
           "INSERT INTO metadata.catalog_locks (lock_name, acquired_by, "
           "expires_at, session_id) "
-          "VALUES ($1, $2, $3::timestamp, $4) "
-          "ON CONFLICT (lock_name) DO NOTHING "
+          "SELECT $1::text, $2::text, $3::timestamp, $4::text "
+          "WHERE NOT EXISTS (SELECT 1 FROM metadata.catalog_locks WHERE "
+          "lock_name = $1::text AND expires_at >= NOW()) "
           "RETURNING lock_name",
           lockName_, hostname, oss.str(), sessionId_);
 
@@ -95,7 +111,8 @@ bool CatalogLock::tryAcquire(int maxWaitSeconds) {
         return false;
       }
 
-      std::this_thread::sleep_for(std::chrono::milliseconds(500));
+      std::this_thread::sleep_for(
+          std::chrono::milliseconds(LOCK_RETRY_SLEEP_MS));
 
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "CatalogLock",
@@ -108,7 +125,8 @@ bool CatalogLock::tryAcquire(int maxWaitSeconds) {
         return false;
       }
 
-      std::this_thread::sleep_for(std::chrono::milliseconds(500));
+      std::this_thread::sleep_for(
+          std::chrono::milliseconds(LOCK_RETRY_SLEEP_MS));
     }
   }
 }
@@ -128,7 +146,7 @@ void CatalogLock::release() {
     pqxx::work txn(conn);
 
     txn.exec_params("DELETE FROM metadata.catalog_locks "
-                    "WHERE lock_name = $1 AND session_id = $2",
+                    "WHERE lock_name = $1::text AND session_id = $2::text",
                     lockName_, sessionId_);
 
     txn.commit();
@@ -165,7 +183,9 @@ std::string CatalogLock::generateSessionId() {
 // monitoring. Returns "unknown" if the hostname cannot be retrieved.
 std::string CatalogLock::getHostname() {
   char hostname[256];
-  if (gethostname(hostname, sizeof(hostname)) == 0) {
+  hostname[255] = '\0';
+  if (gethostname(hostname, sizeof(hostname) - 1) == 0) {
+    hostname[255] = '\0';
     return std::string(hostname);
   }
   return "unknown";
