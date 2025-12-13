@@ -68,3 +68,6 @@ tiene que haber algo mas facil para capturar cual es la que se esta procesando a
 
 
     NORMALIZAR CSS EN EN EL FRONTEND Y ARREGLAR Y OPTIMIZAR TODA ESA VAINA
+
+
+    actualizar logica para manejar cambios en el DDL

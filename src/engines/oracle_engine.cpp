@@ -98,8 +98,14 @@ OCIConnection::OCIConnection(const std::string &connectionString) {
   status = OCIServerAttach(srv_, err_, (OraText *)connectString.c_str(),
                            connectString.length(), OCI_DEFAULT);
   if (status != OCI_SUCCESS) {
+    char errbuf[512];
+    sb4 errcode = 0;
+    OCIErrorGet(err_, 1, nullptr, &errcode, (OraText *)errbuf, sizeof(errbuf),
+                OCI_HTYPE_ERROR);
     Logger::error(LogCategory::DATABASE, "OCIConnection",
-                  "OCIServerAttach failed");
+                  "OCIServerAttach failed: " + std::string(errbuf) +
+                      " (code: " + std::to_string(errcode) +
+                      ", connectString: " + connectString + ")");
     OCIHandleFree(session_, OCI_HTYPE_SESSION);
     OCIHandleFree(srv_, OCI_HTYPE_SERVER);
     OCIHandleFree(svc_, OCI_HTYPE_SVCCTX);
@@ -439,7 +445,7 @@ OracleEngine::getColumnCounts(const std::string &schema,
   auto conn = createConnection();
   if (!conn || !conn->isValid()) {
     Logger::error(LogCategory::DATABASE, "OracleEngine",
-                  "Failed to connect to Oracle for column count");
+                  "Failed to connect to Oracle for row count");
     return {sourceCount, targetCount};
   }
 
@@ -450,9 +456,7 @@ OracleEngine::getColumnCounts(const std::string &schema,
   std::transform(upperTable.begin(), upperTable.end(), upperTable.begin(),
                  ::toupper);
 
-  std::string query = "SELECT COUNT(*) FROM all_tab_columns WHERE owner = '" +
-                      escapeSQL(upperSchema) + "' AND table_name = '" +
-                      escapeSQL(upperTable) + "'";
+  std::string query = "SELECT COUNT(*) FROM " + upperSchema + "." + upperTable;
 
   auto results = executeQuery(conn.get(), query);
   if (!results.empty() && !results[0].empty()) {
@@ -460,7 +464,7 @@ OracleEngine::getColumnCounts(const std::string &schema,
       sourceCount = std::stoi(results[0][0]);
     } catch (...) {
       Logger::error(LogCategory::DATABASE, "OracleEngine",
-                    "Failed to parse source column count");
+                    "Failed to parse source row count");
     }
   }
 
@@ -474,10 +478,8 @@ OracleEngine::getColumnCounts(const std::string &schema,
     std::transform(lowerTable.begin(), lowerTable.end(), lowerTable.begin(),
                    ::tolower);
 
-    std::string pgQuery = "SELECT COUNT(*) FROM information_schema.columns "
-                          "WHERE table_schema = " +
-                          txn.quote(lowerSchema) +
-                          " AND table_name = " + txn.quote(lowerTable);
+    std::string pgQuery =
+        "SELECT COUNT(*) FROM \"" + lowerSchema + "\".\"" + lowerTable + "\"";
 
     auto pgResults = txn.exec(pgQuery);
     if (!pgResults.empty()) {
@@ -486,8 +488,7 @@ OracleEngine::getColumnCounts(const std::string &schema,
     txn.commit();
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "OracleEngine",
-                  "Failed to get target column count: " +
-                      std::string(e.what()));
+                  "Failed to get target row count: " + std::string(e.what()));
   }
 
   return {sourceCount, targetCount};
