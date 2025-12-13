@@ -1,58 +1,30 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import styled from 'styled-components';
+import {
+  Container,
+  Header,
+  ErrorMessage,
+  LoadingOverlay,
+  Button,
+} from './shared/BaseComponents';
 import { logsApi, type LogEntry, type LogInfo } from '../services/api';
-
-const LogsContainer = styled.div`
-  background-color: white;
-  color: #333;
-  padding: 20px;
-  font-family: monospace;
-  box-sizing: border-box;
-  height: 100vh;
-  display: flex;
-  flex-direction: column;
-  animation: fadeIn 0.25s ease-in;
-`;
-
-const Header = styled.div`
-  border: 2px solid #333;
-  padding: 15px;
-  text-align: center;
-  margin-bottom: 30px;
-  font-size: 1.5em;
-  font-weight: bold;
-  background: linear-gradient(135deg, #f5f5f5 0%, #ffffff 50%, #f5f5f5 100%);
-  border-radius: 6px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-  position: relative;
-  overflow: hidden;
-  animation: slideUp 0.3s ease-out;
-  
-  &::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -100%;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(10, 25, 41, 0.1), transparent);
-    animation: shimmer 3s infinite;
-  }
-`;
+import { extractApiError } from '../utils/errorHandler';
+import { sanitizeSearch } from '../utils/validation';
+import { theme } from '../theme/theme';
 
 const Section = styled.div`
-  margin-bottom: 30px;
-  padding: 20px;
-  border: 1px solid #eee;
-  border-radius: 6px;
-  background-color: #fafafa;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
-  transition: all 0.2s ease;
+  margin-bottom: ${theme.spacing.xxl};
+  padding: ${theme.spacing.lg};
+  border: 1px solid ${theme.colors.border.light};
+  border-radius: ${theme.borderRadius.md};
+  background-color: ${theme.colors.background.secondary};
+  box-shadow: ${theme.shadows.sm};
+  transition: all ${theme.transitions.normal};
   animation: slideUp 0.25s ease-out;
   animation-fill-mode: both;
   
   &:hover {
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    box-shadow: ${theme.shadows.md};
     transform: translateY(-2px);
     border-color: rgba(10, 25, 41, 0.2);
   }
@@ -62,10 +34,10 @@ const Section = styled.div`
 `;
 
 const SectionTitle = styled.h3`
-  margin-bottom: 15px;
+  margin-bottom: ${theme.spacing.md};
   font-size: 1.2em;
-  color: #222;
-  border-bottom: 2px solid #333;
+  color: ${theme.colors.text.primary};
+  border-bottom: 2px solid ${theme.colors.border.dark};
   padding-bottom: 8px;
   position: relative;
   
@@ -76,7 +48,7 @@ const SectionTitle = styled.h3`
     left: 0;
     width: 60px;
     height: 2px;
-    background: linear-gradient(90deg, #0d1b2a, #1e3a5f);
+    background: linear-gradient(90deg, ${theme.colors.primary.main}, ${theme.colors.primary.dark});
     transition: width 0.3s ease;
   }
   
@@ -87,15 +59,15 @@ const SectionTitle = styled.h3`
 
 const Controls = styled.div`
   display: flex;
-  gap: 20px;
-  margin-bottom: 20px;
-  padding: 20px;
-  background-color: #fafafa;
-  border: 1px solid #eee;
-  border-radius: 6px;
+  gap: ${theme.spacing.lg};
+  margin-bottom: ${theme.spacing.lg};
+  padding: ${theme.spacing.lg};
+  background-color: ${theme.colors.background.secondary};
+  border: 1px solid ${theme.colors.border.light};
+  border-radius: ${theme.borderRadius.md};
   flex-wrap: wrap;
   align-items: end;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
+  box-shadow: ${theme.shadows.sm};
   animation: slideUp 0.25s ease-out;
   animation-delay: 0.08s;
   animation-fill-mode: both;
@@ -111,18 +83,18 @@ const ControlGroup = styled.div`
 const Label = styled.label`
   font-size: 1em;
   font-weight: bold;
-  color: #333;
-  font-family: monospace;
+  color: ${theme.colors.text.primary};
+  font-family: ${theme.fonts.primary};
 `;
 
 const Select = styled.select`
   padding: 8px 12px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  background-color: white;
-  font-family: monospace;
+  border: 1px solid ${theme.colors.border.medium};
+  border-radius: ${theme.borderRadius.md};
+  background-color: ${theme.colors.background.main};
+  font-family: ${theme.fonts.primary};
   font-size: 1em;
-  transition: all 0.2s ease;
+  transition: all ${theme.transitions.normal};
   cursor: pointer;
 
   &:hover {
@@ -131,19 +103,19 @@ const Select = styled.select`
 
   &:focus {
     outline: none;
-    border-color: #0d1b2a;
+    border-color: ${theme.colors.primary.main};
     box-shadow: 0 0 0 3px rgba(10, 25, 41, 0.1);
   }
 `;
 
 const Input = styled.input`
   padding: 8px 12px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  font-family: monospace;
+  border: 1px solid ${theme.colors.border.medium};
+  border-radius: ${theme.borderRadius.md};
+  font-family: ${theme.fonts.primary};
   font-size: 1em;
   width: 100px;
-  transition: all 0.2s ease;
+  transition: all ${theme.transitions.normal};
 
   &:hover {
     border-color: rgba(10, 25, 41, 0.3);
@@ -151,60 +123,29 @@ const Input = styled.input`
 
   &:focus {
     outline: none;
-    border-color: #0d1b2a;
+    border-color: ${theme.colors.primary.main};
     box-shadow: 0 0 0 3px rgba(10, 25, 41, 0.1);
     transform: translateY(-1px);
   }
 `;
 
-const Button = styled.button<{ $variant?: 'primary' | 'secondary' }>`
-  padding: 8px 16px;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-family: monospace;
-  font-size: 1em;
-  transition: all 0.2s ease;
-  font-weight: 500;
-  background-color: ${props => props.$variant === 'secondary' ? '#f5f5f5' : '#0d1b2a'};
-  color: ${props => props.$variant === 'secondary' ? '#333' : 'white'};
-  height: fit-content;
-  border: ${props => props.$variant === 'secondary' ? '1px solid #ddd' : 'none'};
-
-  &:hover:not(:disabled) {
-    background-color: ${props => props.$variant === 'secondary' ? '#e0e0e0' : '#1e3a5f'};
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  }
-
-  &:active:not(:disabled) {
-    transform: translateY(0);
-  }
-
-  &:disabled {
-    background-color: #ccc;
-    cursor: not-allowed;
-    opacity: 0.6;
-  }
-`;
-
 const LogsArea = styled.div<{ $isTransitioning?: boolean }>`
   flex: 1;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  background-color: white;
-  color: #333;
+  border: 1px solid ${theme.colors.border.medium};
+  border-radius: ${theme.borderRadius.md};
+  background-color: ${theme.colors.background.main};
+  color: ${theme.colors.text.primary};
   overflow-y: auto;
-  padding: 15px;
+  padding: ${theme.spacing.md};
   font-size: 0.9em;
   line-height: 1.6;
   max-height: 500px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
-  transition: all 0.2s ease;
+  box-shadow: ${theme.shadows.sm};
+  transition: all ${theme.transitions.normal};
   animation: ${props => props.$isTransitioning ? 'pageTransition 0.2s ease-out' : 'none'};
   
   &:hover {
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.05);
+    box-shadow: ${theme.shadows.md};
   }
 `;
 
@@ -215,15 +156,15 @@ const LogLine = styled.div<{ level: string; category: string }>`
     switch (props.level) {
       case 'ERROR':
       case 'CRITICAL':
-        return '#c62828';
+        return theme.colors.status.error.text;
       case 'WARNING':
-        return '#ef6c00';
+        return theme.colors.status.warning.text;
       case 'INFO':
-        return '#0d1b2a';
+        return theme.colors.primary.main;
       case 'DEBUG':
-        return '#666';
+        return theme.colors.text.secondary;
       default:
-        return '#999';
+        return theme.colors.text.light;
     }
   }};
   padding-left: 8px;
@@ -231,29 +172,13 @@ const LogLine = styled.div<{ level: string; category: string }>`
   transition: all 0.15s ease;
 
   &:hover {
-    background-color: #f8f9fa;
+    background-color: ${theme.colors.background.secondary};
     transform: translateX(2px);
-  }
-
-  &::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: 1px;
-    background-color: ${props => {
-      const baseColor = props.level === 'ERROR' || props.level === 'CRITICAL' ? '#c62828' :
-                        props.level === 'WARNING' ? '#ef6c00' :
-                        props.level === 'INFO' ? '#0d1b2a' : '#666';
-      return baseColor;
-    }};
-    opacity: 0.3;
   }
 `;
 
 const LogTimestamp = styled.span`
-  color: #666;
+  color: ${theme.colors.text.secondary};
   margin-right: 10px;
   font-size: 0.9em;
 `;
@@ -265,157 +190,101 @@ const LogLevel = styled.span<{ level: string }>`
     switch (props.level) {
       case 'ERROR':
       case 'CRITICAL':
-        return '#c62828';
+        return theme.colors.status.error.text;
       case 'WARNING':
-        return '#ef6c00';
+        return theme.colors.status.warning.text;
       case 'INFO':
-        return '#0d1b2a';
+        return theme.colors.primary.main;
       case 'DEBUG':
-        return '#666';
+        return theme.colors.text.secondary;
       default:
-        return '#333';
+        return theme.colors.text.primary;
     }
   }};
 `;
 
 const LogFunction = styled.span`
-  color: #555;
+  color: ${theme.colors.text.secondary};
   margin-right: 10px;
   font-size: 0.9em;
 `;
 
 const LogCategory = styled.span<{ category: string }>`
-  color: #555;
+  color: ${theme.colors.text.secondary};
   margin-right: 10px;
   font-size: 0.8em;
   font-weight: 500;
-  background-color: #f0f0f0;
+  background-color: ${theme.colors.background.secondary};
   padding: 2px 6px;
-  border-radius: 3px;
+  border-radius: ${theme.borderRadius.sm};
 `;
 
 const LogMessage = styled.span`
-  color: #333;
-`;
-
-const StatusBar = styled.div`
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 15px;
-  padding: 15px;
-  background-color: #f5f5f5;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  font-size: 1em;
-`;
-
-const StatusItem = styled.div`
-  color: #333;
-  font-family: monospace;
-  padding: 8px;
-  background-color: white;
-  border: 1px solid #eee;
-  border-radius: 4px;
-  text-align: center;
-`;
-
-const ErrorMessage = styled.div`
-  color: #ff6b6b;
-  padding: 20px;
-  text-align: center;
-  border: 1px solid #ff6b6b;
-  border-radius: 4px;
-  margin: 20px;
-  background-color: #fff5f5;
-`;
-
-const LoadingMessage = styled.div`
-  color: #666;
-  padding: 20px;
-  text-align: center;
+  color: ${theme.colors.text.primary};
 `;
 
 const Pagination = styled.div`
   display: flex;
   justify-content: center;
   align-items: center;
-  gap: 10px;
-  margin-top: 15px;
-  padding: 15px;
-  background-color: #fafafa;
-  border: 1px solid #eee;
-  border-radius: 4px;
+  gap: ${theme.spacing.sm};
+  margin-top: ${theme.spacing.md};
+  padding: ${theme.spacing.md};
+  background-color: ${theme.colors.background.secondary};
+  border: 1px solid ${theme.colors.border.light};
+  border-radius: ${theme.borderRadius.sm};
 `;
 
-const PageButton = styled.button<{ $active?: boolean }>`
+const PageButton = styled(Button)`
   padding: 8px 14px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  background-color: ${props => props.$active ? '#0d1b2a' : 'white'};
-  color: ${props => props.$active ? 'white' : '#333'};
-  cursor: pointer;
-  font-family: monospace;
   font-size: 0.9em;
-  transition: all 0.2s ease;
-  font-weight: ${props => props.$active ? 'bold' : 'normal'};
-
-  &:hover:not(:disabled) {
-    background-color: ${props => props.$active ? '#1e3a5f' : '#f5f5f5'};
-    transform: translateY(-2px);
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-    border-color: ${props => props.$active ? '#0d1b2a' : 'rgba(10, 25, 41, 0.3)'};
-  }
-
-  &:disabled {
-    background-color: #f5f5f5;
-    color: #ccc;
-    cursor: not-allowed;
-    opacity: 0.5;
-  }
 `;
 
 const PageInfo = styled.span`
-  color: #666;
-  font-family: monospace;
+  color: ${theme.colors.text.secondary};
+  font-family: ${theme.fonts.primary};
   font-size: 0.9em;
 `;
 
-const TabsContainer = styled.div`
+const SuccessMessage = styled.div`
+  margin-top: ${theme.spacing.md};
+  padding: ${theme.spacing.sm} ${theme.spacing.md};
+  backgroundColor: ${theme.colors.status.success.bg};
+  border: 1px solid ${theme.colors.status.success.text};
+  borderRadius: ${theme.borderRadius.sm};
+  color: ${theme.colors.status.success.text};
+  textAlign: center;
+  fontFamily: ${theme.fonts.primary};
+  fontSize: 0.9em;
+`;
+
+const ModalOverlay = styled.div`
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   display: flex;
-  border-bottom: 2px solid #ddd;
-  margin-bottom: 20px;
-  background-color: #fafafa;
-  border-radius: 4px 4px 0 0;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+  background-color: rgba(0, 0, 0, 0.5);
 `;
 
-const Tab = styled.button<{ $active: boolean }>`
-  padding: 12px 20px;
-  border: none;
-  background-color: ${props => props.$active ? '#333' : 'transparent'};
-  color: ${props => props.$active ? 'white' : '#666'};
-  cursor: pointer;
-  font-family: monospace;
-  font-size: 1em;
-  font-weight: ${props => props.$active ? 'bold' : 'normal'};
-  border-radius: 4px 4px 0 0;
-  margin-right: 2px;
-  transition: all 0.2s ease;
-
-  &:hover {
-    background-color: ${props => props.$active ? '#333' : '#f0f0f0'};
-    color: ${props => props.$active ? 'white' : '#333'};
-  }
-
-  &:first-child {
-    border-radius: 4px 0 0 0;
-  }
-
-  &:last-child {
-    border-radius: 0 4px 0 0;
-    margin-right: 0;
-  }
+const ModalContent = styled.div`
+  background: ${theme.colors.background.main};
+  padding: ${theme.spacing.xxl};
+  borderRadius: ${theme.borderRadius.lg};
+  border: 2px solid ${theme.colors.border.dark};
+  maxWidth: 500px;
+  textAlign: center;
+  fontFamily: ${theme.fonts.primary};
 `;
 
+/**
+ * Logs Viewer component
+ * Displays and manages application logs with filtering, pagination, and export capabilities
+ */
 const LogsViewer = () => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [logInfo, setLogInfo] = useState<LogInfo | null>(null);
@@ -438,22 +307,20 @@ const LogsViewer = () => {
   const [isCopying, setIsCopying] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
   const [isPageTransitioning, setIsPageTransitioning] = useState(false);
-  
-  // Single tab (DB-backed)
-  const [activeTab] = useState<'all'>('all');
-  
-  // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [allLogs, setAllLogs] = useState<LogEntry[]>([]);
   
   const logsEndRef = useRef<HTMLDivElement>(null);
   const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isMountedRef = useRef(true);
 
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
+    if (!isMountedRef.current) return;
     try {
       setIsRefreshing(true);
       setError(null);
+      const sanitizedSearch = sanitizeSearch(search, 200);
       
       const [logsData, infoData] = await Promise.all([
         logsApi.getLogs({ 
@@ -461,180 +328,93 @@ const LogsViewer = () => {
           level, 
           category,
           function: func,
-          search,
+          search: sanitizedSearch,
           startDate,
           endDate
         }),
         logsApi.getLogInfo()
       ]);
       
-      setAllLogs(logsData.logs);
-      setLogInfo(infoData);
-      
-      // Calculate pagination - Page 1 shows most recent logs (already DESC from server)
-      const logsPerPage = 50;
-      const totalPages = Math.ceil(logsData.logs.length / logsPerPage);
-      setTotalPages(totalPages);
-      
-      const startIndex = (currentPage - 1) * logsPerPage;
-      const endIndex = startIndex + logsPerPage;
-      setLogs(logsData.logs.slice(startIndex, endIndex));
+      if (isMountedRef.current) {
+        setAllLogs(logsData.logs || []);
+        setLogInfo(infoData);
+        
+        const logsPerPage = 50;
+        const totalPages = Math.ceil((logsData.logs || []).length / logsPerPage);
+        setTotalPages(totalPages);
+        
+        const startIndex = (currentPage - 1) * logsPerPage;
+        const endIndex = startIndex + logsPerPage;
+        setLogs((logsData.logs || []).slice(startIndex, endIndex));
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error loading logs');
+      if (isMountedRef.current) {
+        setError(extractApiError(err));
+      }
     } finally {
-      setLoading(false);
-      setIsRefreshing(false);
+      if (isMountedRef.current) {
+        setLoading(false);
+        setIsRefreshing(false);
+      }
     }
-  };
-  // Load dynamic filters (categories/functions)
+  }, [lines, level, category, func, search, startDate, endDate, currentPage]);
+
   useEffect(() => {
     const loadFilters = async () => {
       try {
+        if (!isMountedRef.current) return;
         const [cats, funcs] = await Promise.all([
           logsApi.getCategories(),
           logsApi.getFunctions(),
         ]);
-        setCategoriesList(['ALL', ...cats.filter(Boolean)]);
-        setFunctionsList(['ALL', ...funcs.filter(Boolean)]);
-      } catch {
+        if (isMountedRef.current) {
+          setCategoriesList(['ALL', ...(cats || []).filter(Boolean)]);
+          setFunctionsList(['ALL', ...(funcs || []).filter(Boolean)]);
+        }
+      } catch (err) {
+        if (isMountedRef.current) {
+          console.error('Error loading filters:', err);
+        }
       }
     };
     loadFilters();
   }, []);
 
-
-  const scrollToBottom = () => {
-    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  // no-op; unified tab
-
-  const goToPage = (page: number) => {
-    if (page >= 1 && page <= totalPages && page !== currentPage) {
-      setIsPageTransitioning(true);
-      setTimeout(() => {
-        setCurrentPage(page);
-        const logsPerPage = 50;
-        const startIndex = (page - 1) * logsPerPage;
-        const endIndex = startIndex + logsPerPage;
-        setLogs(allLogs.slice(startIndex, endIndex));
-        setTimeout(() => setIsPageTransitioning(false), 200);
-      }, 50);
-    }
-  };
-
-  const goToFirstPage = () => goToPage(1);
-  const goToLastPage = () => goToPage(totalPages);
-  const goToPreviousPage = () => goToPage(currentPage - 1);
-  const goToNextPage = () => goToPage(currentPage + 1);
-
-  const handleClearLogs = async () => {
-    try {
-      setIsClearing(true);
-      setError(null);
-      
-      await logsApi.clearLogs();
-      
-      setShowClearDialog(false);
-      setCurrentPage(1);
-      await fetchLogs();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error clearing logs');
-    } finally {
-      setIsClearing(false);
-    }
-  };
-
-  const clearFilters = () => {
-    setLines(10000);
-    setLevel('ALL');
-    setCategory('ALL');
-    setSearch('');
-    setStartDate('');
-    setEndDate('');
-    setCurrentPage(1);
-  };
-
-  const handleCopyAllLogs = async () => {
-    try {
-      setIsCopying(true);
-      setCopySuccess(false);
-      
-      // Get all logs (not just current page)
-      const allLogsData = await logsApi.getLogs({ 
-        lines: 10000, 
-        level, 
-        category,
-        search,
-        startDate,
-        endDate
-      });
-      
-      // Format logs for copying
-      const logsText = allLogsData.logs.map(log => {
-        const timestamp = log.timestamp;
-        const level = `[${log.level}]`;
-        const func = log.function ? `[${log.function}]` : '';
-        const message = log.message;
-        return `${timestamp} ${level} ${func} ${message}`.trim();
-      }).join('\n');
-      
-      // Add header information
-      const header = `DataSync Logs - ${new Date().toLocaleString()}\n` +
-                    `Total Entries: ${allLogsData.logs.length}\n` +
-                    `Level Filter: ${level}\n` +
-                    `Category Filter: ${category}\n` +
-                    `File: ${logInfo?.filePath || 'Unknown'}\n` +
-                    `Size: ${logInfo ? formatFileSize(logInfo.size || 0) : 'Unknown'}\n` +
-                    `Last Modified: ${logInfo?.lastModified ? formatDate(logInfo.lastModified) : 'Unknown'}\n` +
-                    `${'='.repeat(80)}\n\n`;
-      
-      const fullText = header + logsText;
-      
-      // Copy to clipboard
-      await navigator.clipboard.writeText(fullText);
-      
-      setCopySuccess(true);
-      setTimeout(() => setCopySuccess(false), 3000); // Hide success message after 3 seconds
-      
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error copying logs');
-    } finally {
-      setIsCopying(false);
-    }
-  };
-
   useEffect(() => {
+    isMountedRef.current = true;
     fetchLogs();
-  }, [lines, level, category, func, search, startDate, endDate]);
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, [fetchLogs]);
 
   useEffect(() => {
-    // Clear any existing countdown interval
     if (countdownIntervalRef.current) {
       clearInterval(countdownIntervalRef.current);
       countdownIntervalRef.current = null;
     }
 
-    if (autoRefresh) {
+    if (autoRefresh && isMountedRef.current) {
       setRefreshCountdown(5);
       
-      // Countdown timer
       countdownIntervalRef.current = setInterval(() => {
-        setRefreshCountdown(prev => {
-          if (prev <= 1) {
-            return 5; // Reset to 5 when it reaches 0
-          }
-          return prev - 1;
-        });
+        if (isMountedRef.current) {
+          setRefreshCountdown(prev => {
+            if (prev <= 1) {
+              return 5;
+            }
+            return prev - 1;
+          });
+        }
       }, 1000);
 
-      // Auto refresh timer
       const refreshInterval = setInterval(() => {
-        fetchLogs();
-        // Auto-follow: always go to page 1 (most recent logs) when auto-refreshing
-        setCurrentPage(1);
-        setRefreshCountdown(5); // Reset countdown after refresh
-      }, 5000); // Refresh every 5 seconds
+        if (isMountedRef.current) {
+          fetchLogs();
+          setCurrentPage(1);
+          setRefreshCountdown(5);
+        }
+      }, 5000);
 
       return () => {
         clearInterval(refreshInterval);
@@ -646,11 +426,10 @@ const LogsViewer = () => {
     } else {
       setRefreshCountdown(5);
     }
-  }, [autoRefresh, lines, level, category, search, startDate, endDate]);
+  }, [autoRefresh, fetchLogs]);
 
-  // Update logs when allLogs or currentPage changes
   useEffect(() => {
-    if (allLogs.length > 0) {
+    if (allLogs.length > 0 && isMountedRef.current) {
       const logsPerPage = 50;
       const startIndex = (currentPage - 1) * logsPerPage;
       const endIndex = startIndex + logsPerPage;
@@ -658,19 +437,6 @@ const LogsViewer = () => {
     }
   }, [allLogs, currentPage]);
 
-  const formatFileSize = (bytes: number) => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleString();
-  };
-
-  // Cleanup countdown on unmount
   useEffect(() => {
     return () => {
       if (countdownIntervalRef.current) {
@@ -679,18 +445,142 @@ const LogsViewer = () => {
     };
   }, []);
 
+  const scrollToBottom = useCallback(() => {
+    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, []);
+
+  const goToPage = useCallback((pageNum: number) => {
+    if (pageNum >= 1 && pageNum <= totalPages && pageNum !== currentPage) {
+      setIsPageTransitioning(true);
+      setTimeout(() => {
+        setCurrentPage(pageNum);
+        const logsPerPage = 50;
+        const startIndex = (pageNum - 1) * logsPerPage;
+        const endIndex = startIndex + logsPerPage;
+        setLogs(allLogs.slice(startIndex, endIndex));
+        setTimeout(() => setIsPageTransitioning(false), 200);
+      }, 50);
+    }
+  }, [totalPages, currentPage, allLogs]);
+
+  const goToFirstPage = useCallback(() => goToPage(1), [goToPage]);
+  const goToLastPage = useCallback(() => goToPage(totalPages), [goToPage, totalPages]);
+  const goToPreviousPage = useCallback(() => goToPage(currentPage - 1), [goToPage, currentPage]);
+  const goToNextPage = useCallback(() => goToPage(currentPage + 1), [goToPage, currentPage]);
+
+  const handleClearLogs = useCallback(async () => {
+    try {
+      if (!isMountedRef.current) return;
+      setIsClearing(true);
+      setError(null);
+      
+      await logsApi.clearLogs();
+      
+      if (isMountedRef.current) {
+        setShowClearDialog(false);
+        setCurrentPage(1);
+        await fetchLogs();
+      }
+    } catch (err) {
+      if (isMountedRef.current) {
+        setError(extractApiError(err));
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsClearing(false);
+      }
+    }
+  }, [fetchLogs]);
+
+  const clearFilters = useCallback(() => {
+    setLines(10000);
+    setLevel('ALL');
+    setCategory('ALL');
+    setSearch('');
+    setStartDate('');
+    setEndDate('');
+    setCurrentPage(1);
+  }, []);
+
+  const handleCopyAllLogs = useCallback(async () => {
+    try {
+      if (!isMountedRef.current) return;
+      setIsCopying(true);
+      setCopySuccess(false);
+      
+      const allLogsData = await logsApi.getLogs({ 
+        lines: 10000, 
+        level, 
+        category,
+        search: sanitizeSearch(search, 200),
+        startDate,
+        endDate
+      });
+      
+      const logsText = (allLogsData.logs || []).map(log => {
+        const timestamp = log.timestamp;
+        const levelStr = `[${log.level}]`;
+        const funcStr = log.function ? `[${log.function}]` : '';
+        const message = log.message;
+        return `${timestamp} ${levelStr} ${funcStr} ${message}`.trim();
+      }).join('\n');
+      
+      const header = `DataSync Logs - ${new Date().toLocaleString()}\n` +
+                    `Total Entries: ${(allLogsData.logs || []).length}\n` +
+                    `Level Filter: ${level}\n` +
+                    `Category Filter: ${category}\n` +
+                    `File: ${logInfo?.filePath || 'Unknown'}\n` +
+                    `Size: ${logInfo ? formatFileSize(logInfo.size || 0) : 'Unknown'}\n` +
+                    `Last Modified: ${logInfo?.lastModified ? formatDate(logInfo.lastModified) : 'Unknown'}\n` +
+                    `${'='.repeat(80)}\n\n`;
+      
+      const fullText = header + logsText;
+      
+      await navigator.clipboard.writeText(fullText);
+      
+      if (isMountedRef.current) {
+        setCopySuccess(true);
+        setTimeout(() => {
+          if (isMountedRef.current) {
+            setCopySuccess(false);
+          }
+        }, 3000);
+      }
+    } catch (err) {
+      if (isMountedRef.current) {
+        setError(extractApiError(err));
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsCopying(false);
+      }
+    }
+  }, [level, category, search, startDate, endDate, logInfo]);
+
+  const formatFileSize = useCallback((bytes: number) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  }, []);
+
+  const formatDate = useCallback((dateString: string) => {
+    return new Date(dateString).toLocaleString();
+  }, []);
+
   if (loading) {
     return (
-      <LogsContainer>
+      <Container>
         <Header>DataSync Logs Viewer</Header>
-        <LoadingMessage>Loading logs...</LoadingMessage>
-      </LogsContainer>
+        <LoadingOverlay>Loading logs...</LoadingOverlay>
+      </Container>
     );
   }
 
-  if (error) {
+  if (error && logs.length === 0) {
     return (
-      <LogsContainer>
+      <Container>
         <Header>DataSync Logs Viewer</Header>
         <ErrorMessage>
           <div style={{ fontWeight: 'bold', marginBottom: '10px' }}>Error loading logs:</div>
@@ -702,17 +592,15 @@ const LogsViewer = () => {
             Retry
           </Button>
         </ErrorMessage>
-      </LogsContainer>
+      </Container>
     );
   }
 
-  // DB-backed logs: always render
-
   return (
-    <LogsContainer>
+    <Container>
       <Header>DataSync Logs Viewer</Header>
       
-      {/* Unified logs view (DB-backed) */}
+      {error && <ErrorMessage>{error}</ErrorMessage>}
       
       <Section>
         <SectionTitle>⚙ LOG CONTROLS</SectionTitle>
@@ -757,7 +645,6 @@ const LogsViewer = () => {
               ))}
             </Select>
           </ControlGroup>
-          
           
           <ControlGroup>
             <Label>Search:</Label>
@@ -806,13 +693,13 @@ const LogsViewer = () => {
               <Label>Next Refresh:</Label>
               <div style={{
                 padding: '8px 12px',
-                border: '1px solid #ddd',
-                borderRadius: '4px',
-                backgroundColor: '#f8f9fa',
+                border: `1px solid ${theme.colors.border.medium}`,
+                borderRadius: theme.borderRadius.sm,
+                backgroundColor: theme.colors.background.secondary,
                 textAlign: 'center',
-                fontFamily: 'monospace',
+                fontFamily: theme.fonts.primary,
                 fontSize: '1em',
-                color: '#333',
+                color: theme.colors.text.primary,
                 minWidth: '60px'
               }}>
                 {refreshCountdown}s
@@ -848,26 +735,16 @@ const LogsViewer = () => {
             $variant="secondary" 
             onClick={() => setShowClearDialog(true)}
             disabled={isClearing || isRefreshing}
-            style={{ backgroundColor: '#ff6b6b', color: 'white' }}
+            style={{ backgroundColor: theme.colors.status.error.bg, color: theme.colors.status.error.text }}
           >
             {isClearing ? 'Clearing...' : 'Clear Logs'}
           </Button>
         </Controls>
         
         {copySuccess && (
-          <div style={{
-            marginTop: '15px',
-            padding: '10px 15px',
-            backgroundColor: '#e8f5e9',
-            border: '1px solid #4caf50',
-            borderRadius: '4px',
-            color: '#2e7d32',
-            textAlign: 'center',
-            fontFamily: 'monospace',
-            fontSize: '0.9em'
-          }}>
+          <SuccessMessage>
             ✅ Logs copied to clipboard successfully!
-          </div>
+          </SuccessMessage>
         )}
       </Section>
 
@@ -903,7 +780,7 @@ const LogsViewer = () => {
               return (
                 <PageButton
                   key={page}
-                  $active={currentPage === page}
+                  $variant={currentPage === page ? 'primary' : 'secondary'}
                   onClick={() => goToPage(page)}
                 >
                   {page}
@@ -912,7 +789,7 @@ const LogsViewer = () => {
             })}
             
             {totalPages > 20 && currentPage < totalPages - 9 && (
-              <PageInfo style={{ color: '#999', fontSize: '0.8em' }}>
+              <PageInfo style={{ color: theme.colors.text.light, fontSize: '0.8em' }}>
                 ...
               </PageInfo>
             )}
@@ -929,7 +806,7 @@ const LogsViewer = () => {
             </PageInfo>
             
             <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-              <span style={{ fontSize: '0.9em', color: '#666' }}>Go to:</span>
+              <span style={{ fontSize: '0.9em', color: theme.colors.text.secondary }}>Go to:</span>
               <Input
                 type="number"
                 min="1"
@@ -951,31 +828,10 @@ const LogsViewer = () => {
         )}
       </Section>
 
-      {/* Removed file status section for DB-backed logs */}
-
       {showClearDialog && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(0, 0, 0, 0.5)',
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-          zIndex: 1000
-        }}>
-          <div style={{
-            backgroundColor: 'white',
-            padding: '30px',
-            borderRadius: '8px',
-            border: '2px solid #333',
-            maxWidth: '500px',
-            textAlign: 'center',
-            fontFamily: 'monospace'
-          }}>
-            <h3 style={{ marginBottom: '20px', color: '#ff6b6b' }}>
+        <ModalOverlay>
+          <ModalContent>
+            <h3 style={{ marginBottom: '20px', color: theme.colors.status.error.text }}>
               ⚠️ CLEAR LOGS CONFIRMATION
             </h3>
             <p style={{ marginBottom: '25px', lineHeight: '1.5' }}>
@@ -989,22 +845,23 @@ const LogsViewer = () => {
               <Button
                 onClick={() => setShowClearDialog(false)}
                 disabled={isClearing}
-                style={{ backgroundColor: '#666', color: 'white' }}
+                $variant="secondary"
+                style={{ backgroundColor: theme.colors.text.secondary, color: theme.colors.text.white }}
               >
                 Cancel
               </Button>
               <Button
                 onClick={handleClearLogs}
                 disabled={isClearing}
-                style={{ backgroundColor: '#ff6b6b', color: 'white' }}
+                style={{ backgroundColor: theme.colors.status.error.bg, color: theme.colors.status.error.text }}
               >
                 {isClearing ? 'Clearing...' : 'Clear Logs'}
               </Button>
             </div>
-          </div>
-        </div>
+          </ModalContent>
+        </ModalOverlay>
       )}
-    </LogsContainer>
+    </Container>
   );
 };
 

@@ -58,10 +58,6 @@ y el de mssql de azure
 
     ANADIR FORMA DE HACER FIRST SETUP DIGAMOS DE LA DB 
 
-    NORMALIZAR CSS EN EN EL FRONTEND Y ARREGLAR Y OPTIMIZAR TODA ESA VAINA
-
-
-
     Revisa este código/carpeta/proyecto y encuentra TODOS los problemas posibles:
 
 1. **Seguridad:**
@@ -116,3 +112,7 @@ Sé exhaustivo y detallado.
 
 
 como se podria catalogar este programa con todas las funcionalidades que tiene ? es como una navaja suiza para todo lo que  tiene que ver con data engineer no ? o que nos faltaria para llegara ese punto una vez terminemos el proyecto ? 
+
+
+
+ya tenemos el status processing por ende ya podemos digamos aber cua le esta capturando!

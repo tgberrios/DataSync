@@ -1,61 +1,239 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
-import Layout from './components/Layout'
-import Dashboard from './components/Dashboard'
-import Catalog from './components/Catalog'
-import Monitor from './components/Monitor'
-import LiveChanges from './components/LiveChanges'
-import Quality from './components/Quality'
-import Governance from './components/Governance'
-import Security from './components/Security'
-import LogsViewer from './components/LogsViewer'
-import Config from './components/Config'
-import QueryPerformance from './components/QueryPerformance'
-import Maintenance from './components/Maintenance'
-import ColumnCatalog from './components/ColumnCatalog'
-import CatalogLocks from './components/CatalogLocks'
-import DataLineageMariaDB from './components/DataLineageMariaDB'
-import DataLineageMSSQL from './components/DataLineageMSSQL'
-import DataLineageMongoDB from './components/DataLineageMongoDB'
-import DataLineageOracle from './components/DataLineageOracle'
-import GovernanceCatalogMariaDB from './components/GovernanceCatalogMariaDB'
-import GovernanceCatalogMSSQL from './components/GovernanceCatalogMSSQL'
-import GovernanceCatalogMongoDB from './components/GovernanceCatalogMongoDB'
-import GovernanceCatalogOracle from './components/GovernanceCatalogOracle'
-import APICatalog from './components/APICatalog'
-import CustomJobs from './components/CustomJobs'
+import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { lazy, Suspense } from "react";
+import Layout from "./components/Layout";
+import { Container, Header } from "./components/shared/BaseComponents";
+
+const LoadingFallback = () => (
+  <Container>
+    <Header>Loading...</Header>
+  </Container>
+);
+
+const Dashboard = lazy(() => import("./components/Dashboard"));
+const Catalog = lazy(() => import("./components/Catalog"));
+const Monitor = lazy(() => import("./components/Monitor"));
+const LiveChanges = lazy(() => import("./components/LiveChanges"));
+const Quality = lazy(() => import("./components/Quality"));
+const Governance = lazy(() => import("./components/Governance"));
+const Security = lazy(() => import("./components/Security"));
+const LogsViewer = lazy(() => import("./components/LogsViewer"));
+const Config = lazy(() => import("./components/Config"));
+const QueryPerformance = lazy(() => import("./components/QueryPerformance"));
+const Maintenance = lazy(() => import("./components/Maintenance"));
+const ColumnCatalog = lazy(() => import("./components/ColumnCatalog"));
+const CatalogLocks = lazy(() => import("./components/CatalogLocks"));
+const DataLineageMariaDB = lazy(() => import("./components/DataLineageMariaDB"));
+const DataLineageMSSQL = lazy(() => import("./components/DataLineageMSSQL"));
+const DataLineageMongoDB = lazy(() => import("./components/DataLineageMongoDB"));
+const DataLineageOracle = lazy(() => import("./components/DataLineageOracle"));
+const GovernanceCatalogMariaDB = lazy(
+  () => import("./components/GovernanceCatalogMariaDB")
+);
+const GovernanceCatalogMSSQL = lazy(
+  () => import("./components/GovernanceCatalogMSSQL")
+);
+const GovernanceCatalogMongoDB = lazy(
+  () => import("./components/GovernanceCatalogMongoDB")
+);
+const GovernanceCatalogOracle = lazy(
+  () => import("./components/GovernanceCatalogOracle")
+);
+const APICatalog = lazy(() => import("./components/APICatalog"));
+const CustomJobs = lazy(() => import("./components/CustomJobs"));
 
 function App() {
   return (
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Layout />}>
-          <Route index element={<Dashboard />} />
-          <Route path="catalog" element={<Catalog />} />
-          <Route path="column-catalog" element={<ColumnCatalog />} />
-          <Route path="catalog-locks" element={<CatalogLocks />} />
-          <Route path="data-lineage-mariadb" element={<DataLineageMariaDB />} />
-          <Route path="data-lineage-mssql" element={<DataLineageMSSQL />} />
-          <Route path="data-lineage-mongodb" element={<DataLineageMongoDB />} />
-          <Route path="data-lineage-oracle" element={<DataLineageOracle />} />
-          <Route path="governance-catalog-mariadb" element={<GovernanceCatalogMariaDB />} />
-          <Route path="governance-catalog-mssql" element={<GovernanceCatalogMSSQL />} />
-          <Route path="governance-catalog-mongodb" element={<GovernanceCatalogMongoDB />} />
-          <Route path="governance-catalog-oracle" element={<GovernanceCatalogOracle />} />
-          <Route path="api-catalog" element={<APICatalog />} />
-          <Route path="custom-jobs" element={<CustomJobs />} />
-          <Route path="monitor" element={<Monitor />} />
-          <Route path="query-performance" element={<QueryPerformance />} />
-          <Route path="maintenance" element={<Maintenance />} />
-          <Route path="live-changes" element={<LiveChanges />} />
-          <Route path="quality" element={<Quality />} />
-          <Route path="governance" element={<Governance />} />
-          <Route path="security" element={<Security />} />
-          <Route path="logs" element={<LogsViewer />} />
-          <Route path="config" element={<Config />} />
+          <Route
+            index
+            element={
+              <Suspense fallback={<LoadingFallback />}>
+                <Dashboard />
+              </Suspense>
+            }
+          />
+          <Route
+            path="catalog"
+            element={
+              <Suspense fallback={<LoadingFallback />}>
+                <Catalog />
+              </Suspense>
+            }
+          />
+          <Route
+            path="column-catalog"
+            element={
+              <Suspense fallback={<LoadingFallback />}>
+                <ColumnCatalog />
+              </Suspense>
+            }
+          />
+          <Route
+            path="catalog-locks"
+            element={
+              <Suspense fallback={<LoadingFallback />}>
+                <CatalogLocks />
+              </Suspense>
+            }
+          />
+          <Route
+            path="data-lineage-mariadb"
+            element={
+              <Suspense fallback={<LoadingFallback />}>
+                <DataLineageMariaDB />
+              </Suspense>
+            }
+          />
+          <Route
+            path="data-lineage-mssql"
+            element={
+              <Suspense fallback={<LoadingFallback />}>
+                <DataLineageMSSQL />
+              </Suspense>
+            }
+          />
+          <Route
+            path="data-lineage-mongodb"
+            element={
+              <Suspense fallback={<LoadingFallback />}>
+                <DataLineageMongoDB />
+              </Suspense>
+            }
+          />
+          <Route
+            path="data-lineage-oracle"
+            element={
+              <Suspense fallback={<LoadingFallback />}>
+                <DataLineageOracle />
+              </Suspense>
+            }
+          />
+          <Route
+            path="governance-catalog-mariadb"
+            element={
+              <Suspense fallback={<LoadingFallback />}>
+                <GovernanceCatalogMariaDB />
+              </Suspense>
+            }
+          />
+          <Route
+            path="governance-catalog-mssql"
+            element={
+              <Suspense fallback={<LoadingFallback />}>
+                <GovernanceCatalogMSSQL />
+              </Suspense>
+            }
+          />
+          <Route
+            path="governance-catalog-mongodb"
+            element={
+              <Suspense fallback={<LoadingFallback />}>
+                <GovernanceCatalogMongoDB />
+              </Suspense>
+            }
+          />
+          <Route
+            path="governance-catalog-oracle"
+            element={
+              <Suspense fallback={<LoadingFallback />}>
+                <GovernanceCatalogOracle />
+              </Suspense>
+            }
+          />
+          <Route
+            path="api-catalog"
+            element={
+              <Suspense fallback={<LoadingFallback />}>
+                <APICatalog />
+              </Suspense>
+            }
+          />
+          <Route
+            path="custom-jobs"
+            element={
+              <Suspense fallback={<LoadingFallback />}>
+                <CustomJobs />
+              </Suspense>
+            }
+          />
+          <Route
+            path="monitor"
+            element={
+              <Suspense fallback={<LoadingFallback />}>
+                <Monitor />
+              </Suspense>
+            }
+          />
+          <Route
+            path="query-performance"
+            element={
+              <Suspense fallback={<LoadingFallback />}>
+                <QueryPerformance />
+              </Suspense>
+            }
+          />
+          <Route
+            path="maintenance"
+            element={
+              <Suspense fallback={<LoadingFallback />}>
+                <Maintenance />
+              </Suspense>
+            }
+          />
+          <Route
+            path="live-changes"
+            element={
+              <Suspense fallback={<LoadingFallback />}>
+                <LiveChanges />
+              </Suspense>
+            }
+          />
+          <Route
+            path="quality"
+            element={
+              <Suspense fallback={<LoadingFallback />}>
+                <Quality />
+              </Suspense>
+            }
+          />
+          <Route
+            path="governance"
+            element={
+              <Suspense fallback={<LoadingFallback />}>
+                <Governance />
+              </Suspense>
+            }
+          />
+          <Route
+            path="security"
+            element={
+              <Suspense fallback={<LoadingFallback />}>
+                <Security />
+              </Suspense>
+            }
+          />
+          <Route
+            path="logs"
+            element={
+              <Suspense fallback={<LoadingFallback />}>
+                <LogsViewer />
+              </Suspense>
+            }
+          />
+          <Route
+            path="config"
+            element={
+              <Suspense fallback={<LoadingFallback />}>
+                <Config />
+              </Suspense>
+            }
+          />
         </Route>
       </Routes>
     </BrowserRouter>
-  )
+  );
 }
 
 export default App

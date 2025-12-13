@@ -20,15 +20,15 @@ function loadConfig() {
     console.error("Error loading config file:", error.message);
     console.log("Using default configuration");
 
-    // Default configuration fallback
+    // Default configuration fallback - use environment variables if available
     return {
       database: {
         postgres: {
-          host: "10.12.240.40",
-          port: 5432,
-          database: "DataLake",
-          user: "Datalake_User",
-          password: "keepprofessional",
+          host: process.env.POSTGRES_HOST || "localhost",
+          port: parseInt(process.env.POSTGRES_PORT || "5432", 10),
+          database: process.env.POSTGRES_DATABASE || "DataLake",
+          user: process.env.POSTGRES_USER || "postgres",
+          password: process.env.POSTGRES_PASSWORD || "",
         },
       },
     };
@@ -82,17 +82,42 @@ pool.connect((err, client, done) => {
   }
 });
 
+import {
+  sanitizeSearch,
+  validatePage,
+  validateLimit,
+  validateBoolean,
+  validateIdentifier,
+  validateEnum,
+} from "./server-utils/validation.js";
+import { sanitizeError } from "./server-utils/errorHandler.js";
+
 // Obtener catálogo con paginación, filtros y búsqueda
 app.get("/api/catalog", async (req, res) => {
   try {
-    const {
-      page = 1,
-      limit = 10,
-      engine = "",
-      status = "",
-      active = "",
-      search = "",
-    } = req.query;
+    const page = validatePage(req.query.page, 1);
+    const limit = validateLimit(req.query.limit, 1, 100);
+    const engine = validateEnum(
+      req.query.engine,
+      ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle", ""],
+      ""
+    );
+    const status = validateEnum(
+      req.query.status,
+      [
+        "LISTENING_CHANGES",
+        "FULL_LOAD",
+        "ERROR",
+        "NO_DATA",
+        "SKIP",
+        "IN_PROGRESS",
+        "",
+      ],
+      ""
+    );
+    const active =
+      req.query.active !== undefined ? validateBoolean(req.query.active) : "";
+    const search = sanitizeSearch(req.query.search, 100);
     const offset = (page - 1) * limit;
 
     let whereConditions = [];
@@ -171,13 +196,32 @@ app.get("/api/catalog", async (req, res) => {
     });
   } catch (err) {
     console.error("Database error:", err);
-    res.status(500).json({ error: err.message });
+    const safeError = sanitizeError(
+      err,
+      "Error fetching catalog data",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
 // Actualizar estado
 app.patch("/api/catalog/status", async (req, res) => {
-  const { schema_name, table_name, db_engine, active } = req.body;
+  const schema_name = validateIdentifier(req.body.schema_name);
+  const table_name = validateIdentifier(req.body.table_name);
+  const db_engine = validateEnum(
+    req.body.db_engine,
+    ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle"],
+    null
+  );
+  const active = validateBoolean(req.body.active);
+
+  if (!schema_name || !table_name || !db_engine) {
+    return res
+      .status(400)
+      .json({ error: "Invalid schema_name, table_name, or db_engine" });
+  }
+
   try {
     const result = await pool.query(
       `UPDATE metadata.catalog 
@@ -189,13 +233,31 @@ app.patch("/api/catalog/status", async (req, res) => {
     res.json(result.rows[0]);
   } catch (err) {
     console.error("Database error:", err);
-    res.status(500).json({ error: err.message });
+    const safeError = sanitizeError(
+      err,
+      "Error fetching catalog data",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
 // Forzar sincronización
 app.post("/api/catalog/sync", async (req, res) => {
-  const { schema_name, table_name, db_engine } = req.body;
+  const schema_name = validateIdentifier(req.body.schema_name);
+  const table_name = validateIdentifier(req.body.table_name);
+  const db_engine = validateEnum(
+    req.body.db_engine,
+    ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle"],
+    null
+  );
+
+  if (!schema_name || !table_name || !db_engine) {
+    return res
+      .status(400)
+      .json({ error: "Invalid schema_name, table_name, or db_engine" });
+  }
+
   try {
     const result = await pool.query(
       `UPDATE metadata.catalog 
@@ -207,7 +269,12 @@ app.post("/api/catalog/sync", async (req, res) => {
     res.json(result.rows[0]);
   } catch (err) {
     console.error("Database error:", err);
-    res.status(500).json({ error: err.message });
+    const safeError = sanitizeError(
+      err,
+      "Error fetching catalog data",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -220,7 +287,12 @@ app.get("/api/catalog/schemas", async (req, res) => {
     res.json(result.rows.map((row) => row.schema_name));
   } catch (err) {
     console.error("Database error:", err);
-    res.status(500).json({ error: err.message });
+    const safeError = sanitizeError(
+      err,
+      "Error fetching catalog data",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -247,7 +319,12 @@ app.patch("/api/catalog/skip-table", async (req, res) => {
     });
   } catch (err) {
     console.error("Database error:", err);
-    res.status(500).json({ error: err.message });
+    const safeError = sanitizeError(
+      err,
+      "Error fetching catalog data",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -269,7 +346,12 @@ app.patch("/api/catalog/deactivate-schema", async (req, res) => {
     });
   } catch (err) {
     console.error("Database error:", err);
-    res.status(500).json({ error: err.message });
+    const safeError = sanitizeError(
+      err,
+      "Error fetching catalog data",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -614,10 +696,12 @@ app.get("/api/dashboard/stats", async (req, res) => {
     res.json(stats);
   } catch (err) {
     console.error("Error getting dashboard stats:", err);
-    res.status(500).json({
-      error: "Error al obtener estadísticas",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener estadísticas",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -673,21 +757,31 @@ app.get("/api/monitor/queries", async (req, res) => {
     res.json(queries);
   } catch (err) {
     console.error("Error getting active queries:", err);
-    res.status(500).json({
-      error: "Error al obtener queries activas",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener queries activas",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
 // Obtener métricas de calidad
 app.get("/api/quality/metrics", async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    const page = validatePage(req.query.page, 1);
+    const limit = validateLimit(req.query.limit, 1, 100);
     const offset = (page - 1) * limit;
-    const engine = req.query.engine || "";
-    const status = req.query.status || "";
+    const engine = validateEnum(
+      req.query.engine,
+      ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle", ""],
+      ""
+    );
+    const status = validateEnum(
+      req.query.status,
+      ["PASSED", "FAILED", "WARNING", ""],
+      ""
+    );
 
     // Construir WHERE clause dinámicamente
     const whereConditions = [];
@@ -798,10 +892,12 @@ app.get("/api/quality/metrics", async (req, res) => {
     });
   } catch (err) {
     console.error("Error getting quality metrics:", err);
-    res.status(500).json({
-      error: "Error al obtener métricas de calidad",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener métricas de calidad",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -922,10 +1018,12 @@ app.get("/api/governance/data", async (req, res) => {
     });
   } catch (err) {
     console.error("Error getting governance data:", err);
-    res.status(500).json({
-      error: "Error al obtener datos de governance",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener datos de governance",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -938,10 +1036,12 @@ app.get("/api/config", async (req, res) => {
     res.json(result.rows);
   } catch (err) {
     console.error("Error getting configurations:", err);
-    res.status(500).json({
-      error: "Error al obtener configuraciones",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener configuraciones",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -955,10 +1055,12 @@ app.post("/api/config", async (req, res) => {
     res.json(result.rows[0]);
   } catch (err) {
     console.error("Error creating configuration:", err);
-    res.status(500).json({
-      error: "Error al crear configuración",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al crear configuración",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -977,10 +1079,12 @@ app.put("/api/config/:key", async (req, res) => {
     res.json(result.rows[0]);
   } catch (err) {
     console.error("Error updating configuration:", err);
-    res.status(500).json({
-      error: "Error al actualizar configuración",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al actualizar configuración",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -998,10 +1102,12 @@ app.delete("/api/config/:key", async (req, res) => {
     res.json({ message: "Configuración eliminada correctamente" });
   } catch (err) {
     console.error("Error deleting configuration:", err);
-    res.status(500).json({
-      error: "Error al eliminar configuración",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al eliminar configuración",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -1023,10 +1129,12 @@ app.get("/api/config/batch", async (req, res) => {
     }
   } catch (err) {
     console.error("Error getting batch configuration:", err);
-    res.status(500).json({
-      error: "Error al obtener configuración de batch",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener configuración de batch",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -1114,7 +1222,12 @@ app.get("/api/logs", async (req, res) => {
     });
   } catch (err) {
     console.error("Error reading logs from DB:", err);
-    res.status(500).json({ error: "Error al leer logs", details: err.message });
+    const safeError = sanitizeError(
+      err,
+      "Error al leer logs",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -1175,9 +1288,13 @@ app.get("/api/logs/errors", async (req, res) => {
     });
   } catch (err) {
     console.error("Error reading error logs from DB:", err);
-    res
-      .status(500)
-      .json({ error: "Error al leer logs de errores", details: err.message });
+    res.status(500).json({
+      error: sanitizeError(
+        err,
+        "Error al leer logs de errores",
+        process.env.NODE_ENV === "production"
+      ),
+    });
   }
 });
 
@@ -1200,10 +1317,12 @@ app.get("/api/logs/info", async (req, res) => {
     });
   } catch (err) {
     console.error("Error getting DB log info:", err);
-    res.status(500).json({
-      error: "Error al obtener información de logs",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener información de logs",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -1225,10 +1344,12 @@ app.get("/api/logs/errors/info", async (req, res) => {
     });
   } catch (err) {
     console.error("Error getting DB error log info:", err);
-    res.status(500).json({
-      error: "Error al obtener información de logs de errores",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener información de logs de errores",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -1240,9 +1361,13 @@ app.get("/api/logs/levels", async (_req, res) => {
     );
     res.json(result.rows.map((r) => r.level));
   } catch (err) {
-    res
-      .status(500)
-      .json({ error: "Error al obtener niveles", details: err.message });
+    res.status(500).json({
+      error: sanitizeError(
+        err,
+        "Error al obtener niveles",
+        process.env.NODE_ENV === "production"
+      ),
+    });
   }
 });
 
@@ -1253,9 +1378,13 @@ app.get("/api/logs/categories", async (_req, res) => {
     );
     res.json(result.rows.map((r) => r.category));
   } catch (err) {
-    res
-      .status(500)
-      .json({ error: "Error al obtener categorías", details: err.message });
+    res.status(500).json({
+      error: sanitizeError(
+        err,
+        "Error al obtener categorías",
+        process.env.NODE_ENV === "production"
+      ),
+    });
   }
 });
 
@@ -1266,9 +1395,13 @@ app.get("/api/logs/functions", async (_req, res) => {
     );
     res.json(result.rows.map((r) => r.function));
   } catch (err) {
-    res
-      .status(500)
-      .json({ error: "Error al obtener funciones", details: err.message });
+    res.status(500).json({
+      error: sanitizeError(
+        err,
+        "Error al obtener funciones",
+        process.env.NODE_ENV === "production"
+      ),
+    });
   }
 });
 
@@ -1369,10 +1502,12 @@ app.get("/api/logs/stats", async (req, res) => {
     });
   } catch (err) {
     console.error("Error getting log stats:", err);
-    res.status(500).json({
-      error: "Error al obtener estadísticas de logs",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener estadísticas de logs",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -1463,7 +1598,12 @@ app.get("/api/dashboard/currently-processing", async (req, res) => {
     res.json(response);
   } catch (err) {
     console.error("Error getting currently processing table:", err);
-    res.status(500).json({ error: err.message });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener tabla en procesamiento",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -1564,10 +1704,12 @@ app.get("/api/security/data", async (req, res) => {
     res.json(securityData);
   } catch (err) {
     console.error("Error getting security data:", err);
-    res.status(500).json({
-      error: "Error al obtener datos de seguridad",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener datos de seguridad",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -1652,10 +1794,12 @@ app.get("/api/monitor/processing-logs", async (req, res) => {
     });
   } catch (err) {
     console.error("Error getting processing logs:", err);
-    res.status(500).json({
-      error: "Error al obtener logs de procesamiento",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener logs de procesamiento",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -1674,10 +1818,12 @@ app.get("/api/monitor/processing-logs/stats", async (req, res) => {
     res.json(result.rows[0]);
   } catch (err) {
     console.error("Error getting processing stats:", err);
-    res.status(500).json({
-      error: "Error al obtener estadísticas de procesamiento",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener estadísticas de procesamiento",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -1696,10 +1842,12 @@ app.post("/api/monitor/processing-logs/cleanup", async (req, res) => {
     });
   } catch (err) {
     console.error("Error cleaning up processing logs:", err);
-    res.status(500).json({
-      error: "Error al limpiar logs antiguos",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al limpiar logs antiguos",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -1774,10 +1922,12 @@ app.get("/api/query-performance/queries", async (req, res) => {
     });
   } catch (err) {
     console.error("Error getting query performance data:", err);
-    res.status(500).json({
-      error: "Error al obtener datos de rendimiento de queries",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener datos de rendimiento de queries",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -1800,10 +1950,12 @@ app.get("/api/query-performance/metrics", async (req, res) => {
     res.json(result.rows[0] || {});
   } catch (err) {
     console.error("Error getting query performance metrics:", err);
-    res.status(500).json({
-      error: "Error al obtener métricas de rendimiento de queries",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener métricas de rendimiento de queries",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -1881,10 +2033,12 @@ app.get("/api/maintenance/items", async (req, res) => {
     });
   } catch (err) {
     console.error("Error getting maintenance items:", err);
-    res.status(500).json({
-      error: "Error al obtener items de mantenimiento",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener items de mantenimiento",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -1905,26 +2059,42 @@ app.get("/api/maintenance/metrics", async (req, res) => {
     res.json(result.rows[0] || {});
   } catch (err) {
     console.error("Error getting maintenance metrics:", err);
-    res.status(500).json({
-      error: "Error al obtener métricas de mantenimiento",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener métricas de mantenimiento",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
 app.get("/api/column-catalog/columns", async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
+    const page = validatePage(req.query.page, 1);
+    const limit = validateLimit(req.query.limit, 1, 100);
     const offset = (page - 1) * limit;
-    const schema_name = req.query.schema_name || "";
-    const table_name = req.query.table_name || "";
-    const db_engine = req.query.db_engine || "";
-    const data_type = req.query.data_type || "";
-    const sensitivity_level = req.query.sensitivity_level || "";
-    const contains_pii = req.query.contains_pii || "";
-    const contains_phi = req.query.contains_phi || "";
-    const search = req.query.search || "";
+    const schema_name = validateIdentifier(req.query.schema_name) || "";
+    const table_name = validateIdentifier(req.query.table_name) || "";
+    const db_engine = validateEnum(
+      req.query.db_engine,
+      ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle", ""],
+      ""
+    );
+    const data_type = sanitizeSearch(req.query.data_type, 50);
+    const sensitivity_level = validateEnum(
+      req.query.sensitivity_level,
+      ["LOW", "MEDIUM", "HIGH", "CRITICAL", ""],
+      ""
+    );
+    const contains_pii =
+      req.query.contains_pii !== undefined
+        ? validateBoolean(req.query.contains_pii)
+        : "";
+    const contains_phi =
+      req.query.contains_phi !== undefined
+        ? validateBoolean(req.query.contains_phi)
+        : "";
+    const search = sanitizeSearch(req.query.search, 100);
 
     const whereConditions = [];
     const params = [];
@@ -2011,10 +2181,12 @@ app.get("/api/column-catalog/columns", async (req, res) => {
     });
   } catch (err) {
     console.error("Error getting column catalog data:", err);
-    res.status(500).json({
-      error: "Error al obtener datos del catálogo de columnas",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener datos del catálogo de columnas",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -2034,10 +2206,12 @@ app.get("/api/column-catalog/metrics", async (req, res) => {
     res.json(result.rows[0] || {});
   } catch (err) {
     console.error("Error getting column catalog metrics:", err);
-    res.status(500).json({
-      error: "Error al obtener métricas del catálogo de columnas",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener métricas del catálogo de columnas",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -2054,7 +2228,11 @@ app.get("/api/column-catalog/schemas", async (req, res) => {
     console.error("Error getting schemas:", err);
     res.status(500).json({
       error: "Error al obtener schemas",
-      details: err.message,
+      error: sanitizeError(
+        err,
+        "Error en el servidor",
+        process.env.NODE_ENV === "production"
+      ),
     });
   }
 });
@@ -2075,10 +2253,12 @@ app.get("/api/column-catalog/tables/:schemaName", async (req, res) => {
     res.json(result.rows.map((row) => row.table_name));
   } catch (err) {
     console.error("Error getting tables:", err);
-    res.status(500).json({
-      error: "Error al obtener tablas",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener tablas",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -2098,10 +2278,12 @@ app.get("/api/catalog-locks/locks", async (req, res) => {
     res.json(result.rows);
   } catch (err) {
     console.error("Error getting catalog locks:", err);
-    res.status(500).json({
-      error: "Error al obtener locks del catálogo",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener locks del catálogo",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -2119,10 +2301,12 @@ app.get("/api/catalog-locks/metrics", async (req, res) => {
     res.json(result.rows[0] || {});
   } catch (err) {
     console.error("Error getting catalog locks metrics:", err);
-    res.status(500).json({
-      error: "Error al obtener métricas de locks",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener métricas de locks",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -2148,10 +2332,12 @@ app.delete("/api/catalog-locks/locks/:lockName", async (req, res) => {
     });
   } catch (err) {
     console.error("Error unlocking lock:", err);
-    res.status(500).json({
-      error: "Error al liberar lock",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al liberar lock",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -2168,23 +2354,33 @@ app.post("/api/catalog-locks/clean-expired", async (req, res) => {
     });
   } catch (err) {
     console.error("Error cleaning expired locks:", err);
-    res.status(500).json({
-      error: "Error al limpiar locks expirados",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al limpiar locks expirados",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
 app.get("/api/data-lineage/mariadb", async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
+    const page = validatePage(req.query.page, 1);
+    const limit = validateLimit(req.query.limit, 1, 100);
     const offset = (page - 1) * limit;
-    const server_name = req.query.server_name || "";
-    const database_name = req.query.database_name || "";
-    const object_type = req.query.object_type || "";
-    const relationship_type = req.query.relationship_type || "";
-    const search = req.query.search || "";
+    const server_name = sanitizeSearch(req.query.server_name, 100);
+    const database_name = sanitizeSearch(req.query.database_name, 100);
+    const object_type = validateEnum(
+      req.query.object_type,
+      ["TABLE", "VIEW", "PROCEDURE", "FUNCTION", ""],
+      ""
+    );
+    const relationship_type = validateEnum(
+      req.query.relationship_type,
+      ["FOREIGN_KEY", "VIEW_DEPENDENCY", "PROCEDURE_DEPENDENCY", ""],
+      ""
+    );
+    const search = sanitizeSearch(req.query.search, 100);
 
     const whereConditions = [];
     const params = [];
@@ -2236,7 +2432,7 @@ app.get("/api/data-lineage/mariadb", async (req, res) => {
       SELECT *
       FROM metadata.mdb_lineage
       ${whereClause}
-      ORDER BY dependency_level, confidence_score DESC, last_seen_at DESC
+      ORDER BY confidence_score DESC, last_seen_at DESC
       LIMIT $${paramCount} OFFSET $${paramCount + 1}
     `;
 
@@ -2255,10 +2451,12 @@ app.get("/api/data-lineage/mariadb", async (req, res) => {
     });
   } catch (err) {
     console.error("Error getting MariaDB lineage data:", err);
-    res.status(500).json({
-      error: "Error al obtener datos de lineage de MariaDB",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener datos de lineage de MariaDB",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -2277,10 +2475,12 @@ app.get("/api/data-lineage/mariadb/metrics", async (req, res) => {
     res.json(result.rows[0] || {});
   } catch (err) {
     console.error("Error getting MariaDB lineage metrics:", err);
-    res.status(500).json({
-      error: "Error al obtener métricas de lineage de MariaDB",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener métricas de lineage de MariaDB",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -2296,10 +2496,12 @@ app.get("/api/data-lineage/mariadb/servers", async (req, res) => {
     res.json(result.rows.map((row) => row.server_name));
   } catch (err) {
     console.error("Error getting MariaDB servers:", err);
-    res.status(500).json({
-      error: "Error al obtener servidores",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener servidores",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -2319,24 +2521,34 @@ app.get("/api/data-lineage/mariadb/databases/:serverName", async (req, res) => {
     res.json(result.rows.map((row) => row.database_name));
   } catch (err) {
     console.error("Error getting MariaDB databases:", err);
-    res.status(500).json({
-      error: "Error al obtener bases de datos",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener bases de datos",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
 app.get("/api/data-lineage/mssql", async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
+    const page = validatePage(req.query.page, 1);
+    const limit = validateLimit(req.query.limit, 1, 100);
     const offset = (page - 1) * limit;
-    const server_name = req.query.server_name || "";
-    const instance_name = req.query.instance_name || "";
-    const database_name = req.query.database_name || "";
-    const object_type = req.query.object_type || "";
-    const relationship_type = req.query.relationship_type || "";
-    const search = req.query.search || "";
+    const server_name = sanitizeSearch(req.query.server_name, 100);
+    const instance_name = sanitizeSearch(req.query.instance_name, 100);
+    const database_name = sanitizeSearch(req.query.database_name, 100);
+    const object_type = validateEnum(
+      req.query.object_type,
+      ["TABLE", "VIEW", "PROCEDURE", "FUNCTION", ""],
+      ""
+    );
+    const relationship_type = validateEnum(
+      req.query.relationship_type,
+      ["FOREIGN_KEY", "VIEW_DEPENDENCY", "PROCEDURE_DEPENDENCY", ""],
+      ""
+    );
+    const search = sanitizeSearch(req.query.search, 100);
 
     const whereConditions = [];
     const params = [];
@@ -2394,7 +2606,7 @@ app.get("/api/data-lineage/mssql", async (req, res) => {
       SELECT *
       FROM metadata.mssql_lineage
       ${whereClause}
-      ORDER BY dependency_level, confidence_score DESC, last_seen_at DESC
+      ORDER BY confidence_score DESC, last_seen_at DESC
       LIMIT $${paramCount} OFFSET $${paramCount + 1}
     `;
 
@@ -2413,10 +2625,12 @@ app.get("/api/data-lineage/mssql", async (req, res) => {
     });
   } catch (err) {
     console.error("Error getting MSSQL lineage data:", err);
-    res.status(500).json({
-      error: "Error al obtener datos de lineage de MSSQL",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener datos de lineage de MSSQL",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -2436,10 +2650,12 @@ app.get("/api/data-lineage/mssql/metrics", async (req, res) => {
     res.json(result.rows[0] || {});
   } catch (err) {
     console.error("Error getting MSSQL lineage metrics:", err);
-    res.status(500).json({
-      error: "Error al obtener métricas de lineage de MSSQL",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener métricas de lineage de MSSQL",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -2455,10 +2671,12 @@ app.get("/api/data-lineage/mssql/servers", async (req, res) => {
     res.json(result.rows.map((row) => row.server_name));
   } catch (err) {
     console.error("Error getting MSSQL servers:", err);
-    res.status(500).json({
-      error: "Error al obtener servidores",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener servidores",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -2478,10 +2696,12 @@ app.get("/api/data-lineage/mssql/instances/:serverName", async (req, res) => {
     res.json(result.rows.map((row) => row.instance_name));
   } catch (err) {
     console.error("Error getting MSSQL instances:", err);
-    res.status(500).json({
-      error: "Error al obtener instancias",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener instancias",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -2506,7 +2726,11 @@ app.get(
       console.error("Error getting MSSQL databases:", err);
       res.status(500).json({
         error: "Error al obtener bases de datos",
-        details: err.message,
+        error: sanitizeError(
+          err,
+          "Error en el servidor",
+          process.env.NODE_ENV === "production"
+        ),
       });
     }
   }
@@ -2514,14 +2738,22 @@ app.get(
 
 app.get("/api/governance-catalog/mariadb", async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
+    const page = validatePage(req.query.page, 1);
+    const limit = validateLimit(req.query.limit, 1, 100);
     const offset = (page - 1) * limit;
-    const server_name = req.query.server_name || "";
-    const database_name = req.query.database_name || "";
-    const health_status = req.query.health_status || "";
-    const access_frequency = req.query.access_frequency || "";
-    const search = req.query.search || "";
+    const server_name = sanitizeSearch(req.query.server_name, 100);
+    const database_name = sanitizeSearch(req.query.database_name, 100);
+    const health_status = validateEnum(
+      req.query.health_status,
+      ["HEALTHY", "WARNING", "CRITICAL", ""],
+      ""
+    );
+    const access_frequency = validateEnum(
+      req.query.access_frequency,
+      ["HIGH", "MEDIUM", "LOW", ""],
+      ""
+    );
+    const search = sanitizeSearch(req.query.search, 100);
 
     const whereConditions = [];
     const params = [];
@@ -2590,10 +2822,12 @@ app.get("/api/governance-catalog/mariadb", async (req, res) => {
     });
   } catch (err) {
     console.error("Error getting MariaDB governance catalog:", err);
-    res.status(500).json({
-      error: "Error al obtener catálogo de governance de MariaDB",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener catálogo de governance de MariaDB",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -2613,10 +2847,12 @@ app.get("/api/governance-catalog/mariadb/metrics", async (req, res) => {
     res.json(result.rows[0] || {});
   } catch (err) {
     console.error("Error getting MariaDB governance metrics:", err);
-    res.status(500).json({
-      error: "Error al obtener métricas de governance de MariaDB",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener métricas de governance de MariaDB",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -2632,10 +2868,12 @@ app.get("/api/governance-catalog/mariadb/servers", async (req, res) => {
     res.json(result.rows.map((row) => row.server_name));
   } catch (err) {
     console.error("Error getting MariaDB servers:", err);
-    res.status(500).json({
-      error: "Error al obtener servidores",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener servidores",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -2659,7 +2897,11 @@ app.get(
       console.error("Error getting MariaDB databases:", err);
       res.status(500).json({
         error: "Error al obtener bases de datos",
-        details: err.message,
+        error: sanitizeError(
+          err,
+          "Error en el servidor",
+          process.env.NODE_ENV === "production"
+        ),
       });
     }
   }
@@ -2667,15 +2909,27 @@ app.get(
 
 app.get("/api/governance-catalog/mssql", async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
+    const page = validatePage(req.query.page, 1);
+    const limit = validateLimit(req.query.limit, 1, 100);
     const offset = (page - 1) * limit;
-    const server_name = req.query.server_name || "";
-    const database_name = req.query.database_name || "";
-    const object_type = req.query.object_type || "";
-    const health_status = req.query.health_status || "";
-    const access_frequency = req.query.access_frequency || "";
-    const search = req.query.search || "";
+    const server_name = sanitizeSearch(req.query.server_name, 100);
+    const database_name = sanitizeSearch(req.query.database_name, 100);
+    const object_type = validateEnum(
+      req.query.object_type,
+      ["TABLE", "VIEW", "PROCEDURE", "FUNCTION", ""],
+      ""
+    );
+    const health_status = validateEnum(
+      req.query.health_status,
+      ["HEALTHY", "WARNING", "CRITICAL", ""],
+      ""
+    );
+    const access_frequency = validateEnum(
+      req.query.access_frequency,
+      ["HIGH", "MEDIUM", "LOW", ""],
+      ""
+    );
+    const search = sanitizeSearch(req.query.search, 100);
 
     const whereConditions = [];
     const params = [];
@@ -2752,10 +3006,12 @@ app.get("/api/governance-catalog/mssql", async (req, res) => {
     });
   } catch (err) {
     console.error("Error getting MSSQL governance catalog:", err);
-    res.status(500).json({
-      error: "Error al obtener catálogo de governance de MSSQL",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener catálogo de governance de MSSQL",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -2775,10 +3031,12 @@ app.get("/api/governance-catalog/mssql/metrics", async (req, res) => {
     res.json(result.rows[0] || {});
   } catch (err) {
     console.error("Error getting MSSQL governance metrics:", err);
-    res.status(500).json({
-      error: "Error al obtener métricas de governance de MSSQL",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener métricas de governance de MSSQL",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -2794,10 +3052,12 @@ app.get("/api/governance-catalog/mssql/servers", async (req, res) => {
     res.json(result.rows.map((row) => row.server_name));
   } catch (err) {
     console.error("Error getting MSSQL servers:", err);
-    res.status(500).json({
-      error: "Error al obtener servidores",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener servidores",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -2821,7 +3081,11 @@ app.get(
       console.error("Error getting MSSQL databases:", err);
       res.status(500).json({
         error: "Error al obtener bases de datos",
-        details: err.message,
+        error: sanitizeError(
+          err,
+          "Error en el servidor",
+          process.env.NODE_ENV === "production"
+        ),
       });
     }
   }
@@ -2830,13 +3094,17 @@ app.get(
 // MongoDB Lineage endpoints
 app.get("/api/data-lineage/mongodb", async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
+    const page = validatePage(req.query.page, 1);
+    const limit = validateLimit(req.query.limit, 1, 100);
     const offset = (page - 1) * limit;
-    const server_name = req.query.server_name || "";
-    const database_name = req.query.database_name || "";
-    const relationship_type = req.query.relationship_type || "";
-    const search = req.query.search || "";
+    const server_name = sanitizeSearch(req.query.server_name, 100);
+    const database_name = sanitizeSearch(req.query.database_name, 100);
+    const relationship_type = validateEnum(
+      req.query.relationship_type,
+      ["VIEW_DEPENDENCY", "COLLECTION_REFERENCE", ""],
+      ""
+    );
+    const search = sanitizeSearch(req.query.search, 100);
 
     const whereConditions = [];
     const params = [];
@@ -2903,7 +3171,11 @@ app.get("/api/data-lineage/mongodb", async (req, res) => {
     console.error("Error getting MongoDB lineage data:", err);
     res.status(500).json({
       error: "Error al obtener datos de lineage de MongoDB",
-      details: err.message,
+      error: sanitizeError(
+        err,
+        "Error en el servidor",
+        process.env.NODE_ENV === "production"
+      ),
     });
   }
 });
@@ -2925,7 +3197,11 @@ app.get("/api/data-lineage/mongodb/metrics", async (req, res) => {
     console.error("Error getting MongoDB lineage metrics:", err);
     res.status(500).json({
       error: "Error al obtener métricas de lineage de MongoDB",
-      details: err.message,
+      error: sanitizeError(
+        err,
+        "Error en el servidor",
+        process.env.NODE_ENV === "production"
+      ),
     });
   }
 });
@@ -2942,10 +3218,12 @@ app.get("/api/data-lineage/mongodb/servers", async (req, res) => {
     res.json(result.rows.map((row) => row.server_name));
   } catch (err) {
     console.error("Error getting MongoDB servers:", err);
-    res.status(500).json({
-      error: "Error al obtener servidores",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener servidores",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -2965,24 +3243,34 @@ app.get("/api/data-lineage/mongodb/databases/:serverName", async (req, res) => {
     res.json(result.rows.map((row) => row.database_name));
   } catch (err) {
     console.error("Error getting MongoDB databases:", err);
-    res.status(500).json({
-      error: "Error al obtener bases de datos",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener bases de datos",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
 // MongoDB Governance Catalog endpoints
 app.get("/api/governance-catalog/mongodb", async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
+    const page = validatePage(req.query.page, 1);
+    const limit = validateLimit(req.query.limit, 1, 100);
     const offset = (page - 1) * limit;
-    const server_name = req.query.server_name || "";
-    const database_name = req.query.database_name || "";
-    const health_status = req.query.health_status || "";
-    const access_frequency = req.query.access_frequency || "";
-    const search = req.query.search || "";
+    const server_name = sanitizeSearch(req.query.server_name, 100);
+    const database_name = sanitizeSearch(req.query.database_name, 100);
+    const health_status = validateEnum(
+      req.query.health_status,
+      ["HEALTHY", "WARNING", "CRITICAL", ""],
+      ""
+    );
+    const access_frequency = validateEnum(
+      req.query.access_frequency,
+      ["HIGH", "MEDIUM", "LOW", ""],
+      ""
+    );
+    const search = sanitizeSearch(req.query.search, 100);
 
     const whereConditions = [];
     const params = [];
@@ -3053,7 +3341,11 @@ app.get("/api/governance-catalog/mongodb", async (req, res) => {
     console.error("Error getting MongoDB governance catalog:", err);
     res.status(500).json({
       error: "Error al obtener catálogo de governance de MongoDB",
-      details: err.message,
+      error: sanitizeError(
+        err,
+        "Error en el servidor",
+        process.env.NODE_ENV === "production"
+      ),
     });
   }
 });
@@ -3077,7 +3369,11 @@ app.get("/api/governance-catalog/mongodb/metrics", async (req, res) => {
     console.error("Error getting MongoDB governance metrics:", err);
     res.status(500).json({
       error: "Error al obtener métricas de governance de MongoDB",
-      details: err.message,
+      error: sanitizeError(
+        err,
+        "Error en el servidor",
+        process.env.NODE_ENV === "production"
+      ),
     });
   }
 });
@@ -3094,10 +3390,12 @@ app.get("/api/governance-catalog/mongodb/servers", async (req, res) => {
     res.json(result.rows.map((row) => row.server_name));
   } catch (err) {
     console.error("Error getting MongoDB servers:", err);
-    res.status(500).json({
-      error: "Error al obtener servidores",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener servidores",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -3121,7 +3419,11 @@ app.get(
       console.error("Error getting MongoDB databases:", err);
       res.status(500).json({
         error: "Error al obtener bases de datos",
-        details: err.message,
+        error: sanitizeError(
+          err,
+          "Error en el servidor",
+          process.env.NODE_ENV === "production"
+        ),
       });
     }
   }
@@ -3130,13 +3432,17 @@ app.get(
 // Oracle Lineage endpoints
 app.get("/api/data-lineage/oracle", async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
+    const page = validatePage(req.query.page, 1);
+    const limit = validateLimit(req.query.limit, 1, 100);
     const offset = (page - 1) * limit;
-    const server_name = req.query.server_name || "";
-    const schema_name = req.query.schema_name || "";
-    const relationship_type = req.query.relationship_type || "";
-    const search = req.query.search || "";
+    const server_name = sanitizeSearch(req.query.server_name, 100);
+    const schema_name = validateIdentifier(req.query.schema_name) || "";
+    const relationship_type = validateEnum(
+      req.query.relationship_type,
+      ["FOREIGN_KEY", "VIEW_DEPENDENCY", "TRIGGER_DEPENDENCY", ""],
+      ""
+    );
+    const search = sanitizeSearch(req.query.search, 100);
 
     const whereConditions = [];
     const params = [];
@@ -3182,7 +3488,7 @@ app.get("/api/data-lineage/oracle", async (req, res) => {
       SELECT *
       FROM metadata.oracle_lineage
       ${whereClause}
-      ORDER BY dependency_level, confidence_score DESC, last_seen_at DESC
+      ORDER BY confidence_score DESC, last_seen_at DESC
       LIMIT $${paramCount} OFFSET $${paramCount + 1}
     `;
 
@@ -3203,7 +3509,11 @@ app.get("/api/data-lineage/oracle", async (req, res) => {
     console.error("Error getting Oracle lineage data:", err);
     res.status(500).json({
       error: "Error al obtener datos de lineage de Oracle",
-      details: err.message,
+      error: sanitizeError(
+        err,
+        "Error en el servidor",
+        process.env.NODE_ENV === "production"
+      ),
     });
   }
 });
@@ -3225,7 +3535,11 @@ app.get("/api/data-lineage/oracle/metrics", async (req, res) => {
     console.error("Error getting Oracle lineage metrics:", err);
     res.status(500).json({
       error: "Error al obtener métricas de lineage de Oracle",
-      details: err.message,
+      error: sanitizeError(
+        err,
+        "Error en el servidor",
+        process.env.NODE_ENV === "production"
+      ),
     });
   }
 });
@@ -3242,10 +3556,12 @@ app.get("/api/data-lineage/oracle/servers", async (req, res) => {
     res.json(result.rows.map((row) => row.server_name));
   } catch (err) {
     console.error("Error getting Oracle servers:", err);
-    res.status(500).json({
-      error: "Error al obtener servidores",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener servidores",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -3267,7 +3583,11 @@ app.get("/api/data-lineage/oracle/schemas/:serverName", async (req, res) => {
     console.error("Error getting Oracle schemas:", err);
     res.status(500).json({
       error: "Error al obtener schemas",
-      details: err.message,
+      error: sanitizeError(
+        err,
+        "Error en el servidor",
+        process.env.NODE_ENV === "production"
+      ),
     });
   }
 });
@@ -3275,14 +3595,22 @@ app.get("/api/data-lineage/oracle/schemas/:serverName", async (req, res) => {
 // Oracle Governance Catalog endpoints
 app.get("/api/governance-catalog/oracle", async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
+    const page = validatePage(req.query.page, 1);
+    const limit = validateLimit(req.query.limit, 1, 100);
     const offset = (page - 1) * limit;
-    const server_name = req.query.server_name || "";
-    const schema_name = req.query.schema_name || "";
-    const health_status = req.query.health_status || "";
-    const access_frequency = req.query.access_frequency || "";
-    const search = req.query.search || "";
+    const server_name = sanitizeSearch(req.query.server_name, 100);
+    const schema_name = validateIdentifier(req.query.schema_name) || "";
+    const health_status = validateEnum(
+      req.query.health_status,
+      ["HEALTHY", "WARNING", "CRITICAL", "EXCELLENT", ""],
+      ""
+    );
+    const access_frequency = validateEnum(
+      req.query.access_frequency,
+      ["HIGH", "MEDIUM", "LOW", ""],
+      ""
+    );
+    const search = sanitizeSearch(req.query.search, 100);
 
     const whereConditions = [];
     const params = [];
@@ -3355,7 +3683,11 @@ app.get("/api/governance-catalog/oracle", async (req, res) => {
     console.error("Error getting Oracle governance catalog:", err);
     res.status(500).json({
       error: "Error al obtener datos de governance de Oracle",
-      details: err.message,
+      error: sanitizeError(
+        err,
+        "Error en el servidor",
+        process.env.NODE_ENV === "production"
+      ),
     });
   }
 });
@@ -3379,7 +3711,11 @@ app.get("/api/governance-catalog/oracle/metrics", async (req, res) => {
     console.error("Error getting Oracle governance metrics:", err);
     res.status(500).json({
       error: "Error al obtener métricas de governance de Oracle",
-      details: err.message,
+      error: sanitizeError(
+        err,
+        "Error en el servidor",
+        process.env.NODE_ENV === "production"
+      ),
     });
   }
 });
@@ -3396,10 +3732,12 @@ app.get("/api/governance-catalog/oracle/servers", async (req, res) => {
     res.json(result.rows.map((row) => row.server_name));
   } catch (err) {
     console.error("Error getting Oracle servers:", err);
-    res.status(500).json({
-      error: "Error al obtener servidores",
-      details: err.message,
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener servidores",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -3423,7 +3761,11 @@ app.get(
       console.error("Error getting Oracle schemas:", err);
       res.status(500).json({
         error: "Error al obtener schemas",
-        details: err.message,
+        error: sanitizeError(
+          err,
+          "Error en el servidor",
+          process.env.NODE_ENV === "production"
+        ),
       });
     }
   }
@@ -3431,16 +3773,27 @@ app.get(
 
 app.get("/api/api-catalog", async (req, res) => {
   try {
-    const {
-      page = 1,
-      limit = 20,
-      api_type = "",
-      target_db_engine = "",
-      status = "",
-      active = "",
-      search = "",
-    } = req.query;
+    const page = validatePage(req.query.page, 1);
+    const limit = validateLimit(req.query.limit, 1, 100);
     const offset = (page - 1) * limit;
+    const api_type = validateEnum(
+      req.query.api_type,
+      ["REST", "GraphQL", "SOAP", ""],
+      ""
+    );
+    const target_db_engine = validateEnum(
+      req.query.target_db_engine,
+      ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle", ""],
+      ""
+    );
+    const status = validateEnum(
+      req.query.status,
+      ["SUCCESS", "ERROR", "IN_PROGRESS", "PENDING", ""],
+      ""
+    );
+    const active =
+      req.query.active !== undefined ? validateBoolean(req.query.active) : "";
+    const search = sanitizeSearch(req.query.search, 100);
 
     let whereConditions = [];
     let queryParams = [];
@@ -3519,7 +3872,11 @@ app.get("/api/api-catalog", async (req, res) => {
     console.error("Error getting API catalog:", err);
     res.status(500).json({
       error: "Error al obtener catálogo de APIs",
-      details: err.message,
+      error: sanitizeError(
+        err,
+        "Error en el servidor",
+        process.env.NODE_ENV === "production"
+      ),
     });
   }
 });
@@ -3542,7 +3899,11 @@ app.patch("/api/api-catalog/active", async (req, res) => {
     console.error("Error updating API active status:", err);
     res.status(500).json({
       error: "Error al actualizar estado de API",
-      details: err.message,
+      error: sanitizeError(
+        err,
+        "Error en el servidor",
+        process.env.NODE_ENV === "production"
+      ),
     });
   }
 });
@@ -3566,7 +3927,11 @@ app.get("/api/api-catalog/metrics", async (req, res) => {
     console.error("Error getting API catalog metrics:", err);
     res.status(500).json({
       error: "Error al obtener métricas del catálogo de APIs",
-      details: err.message,
+      error: sanitizeError(
+        err,
+        "Error en el servidor",
+        process.env.NODE_ENV === "production"
+      ),
     });
   }
 });
@@ -3635,23 +4000,35 @@ app.post("/api/custom-jobs", async (req, res) => {
     console.error("Error creating/updating custom job:", err);
     res.status(500).json({
       error: "Error al crear/actualizar job personalizado",
-      details: err.message,
+      error: sanitizeError(
+        err,
+        "Error en el servidor",
+        process.env.NODE_ENV === "production"
+      ),
     });
   }
 });
 
 app.get("/api/custom-jobs", async (req, res) => {
   try {
-    const {
-      page = 1,
-      limit = 20,
-      source_db_engine = "",
-      target_db_engine = "",
-      active = "",
-      enabled = "",
-      search = "",
-    } = req.query;
+    const page = validatePage(req.query.page, 1);
+    const limit = validateLimit(req.query.limit, 1, 100);
     const offset = (page - 1) * limit;
+    const source_db_engine = validateEnum(
+      req.query.source_db_engine,
+      ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle", ""],
+      ""
+    );
+    const target_db_engine = validateEnum(
+      req.query.target_db_engine,
+      ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle", ""],
+      ""
+    );
+    const active =
+      req.query.active !== undefined ? validateBoolean(req.query.active) : "";
+    const enabled =
+      req.query.enabled !== undefined ? validateBoolean(req.query.enabled) : "";
+    const search = sanitizeSearch(req.query.search, 100);
 
     let whereConditions = [];
     let queryParams = [];
@@ -3720,7 +4097,11 @@ app.get("/api/custom-jobs", async (req, res) => {
     console.error("Error fetching custom jobs:", err);
     res.status(500).json({
       error: "Error al obtener jobs personalizados",
-      details: err.message,
+      error: sanitizeError(
+        err,
+        "Error en el servidor",
+        process.env.NODE_ENV === "production"
+      ),
     });
   }
 });
@@ -3736,7 +4117,11 @@ app.post("/api/custom-jobs/:jobName/execute", async (req, res) => {
     console.error("Error executing custom job:", err);
     res.status(500).json({
       error: "Error al ejecutar job personalizado",
-      details: err.message,
+      error: sanitizeError(
+        err,
+        "Error en el servidor",
+        process.env.NODE_ENV === "production"
+      ),
     });
   }
 });
@@ -3756,7 +4141,11 @@ app.get("/api/custom-jobs/:jobName/results", async (req, res) => {
     console.error("Error fetching job results:", err);
     res.status(500).json({
       error: "Error al obtener resultados del job",
-      details: err.message,
+      error: sanitizeError(
+        err,
+        "Error en el servidor",
+        process.env.NODE_ENV === "production"
+      ),
     });
   }
 });
@@ -3776,7 +4165,11 @@ app.get("/api/custom-jobs/:jobName/history", async (req, res) => {
     console.error("Error fetching job history:", err);
     res.status(500).json({
       error: "Error al obtener historial del job",
-      details: err.message,
+      error: sanitizeError(
+        err,
+        "Error en el servidor",
+        process.env.NODE_ENV === "production"
+      ),
     });
   }
 });
@@ -3800,7 +4193,11 @@ app.patch("/api/custom-jobs/:jobName/active", async (req, res) => {
     console.error("Error updating job active status:", err);
     res.status(500).json({
       error: "Error al actualizar estado del job",
-      details: err.message,
+      error: sanitizeError(
+        err,
+        "Error en el servidor",
+        process.env.NODE_ENV === "production"
+      ),
     });
   }
 });
@@ -3822,7 +4219,11 @@ app.delete("/api/custom-jobs/:jobName", async (req, res) => {
     console.error("Error deleting custom job:", err);
     res.status(500).json({
       error: "Error al eliminar job personalizado",
-      details: err.message,
+      error: sanitizeError(
+        err,
+        "Error en el servidor",
+        process.env.NODE_ENV === "production"
+      ),
     });
   }
 });

@@ -1,87 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import styled from 'styled-components';
 import { securityApi } from '../services/api';
-
-const SecurityContainer = styled.div`
-  background-color: white;
-  color: #333;
-  padding: 20px;
-  font-family: monospace;
-  animation: fadeIn 0.25s ease-in;
-`;
-
-const Header = styled.div`
-  border: 2px solid #333;
-  padding: 15px;
-  text-align: center;
-  margin-bottom: 30px;
-  font-size: 1.5em;
-  font-weight: bold;
-  background: linear-gradient(135deg, #f5f5f5 0%, #ffffff 50%, #f5f5f5 100%);
-  border-radius: 6px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-  position: relative;
-  overflow: hidden;
-  animation: slideUp 0.3s ease-out;
-  
-  &::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -100%;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(10, 25, 41, 0.1), transparent);
-    animation: shimmer 3s infinite;
-  }
-`;
-
-const Section = styled.div`
-  margin-bottom: 25px;
-  padding: 20px;
-  border: 1px solid #eee;
-  border-radius: 6px;
-  background-color: #fafafa;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
-  transition: all 0.2s ease;
-  animation: slideUp 0.25s ease-out;
-  animation-fill-mode: both;
-  
-  &:hover {
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-    transform: translateY(-2px);
-    border-color: rgba(10, 25, 41, 0.2);
-  }
-  
-  &:nth-child(1) { animation-delay: 0.1s; }
-  &:nth-child(2) { animation-delay: 0.2s; }
-  &:nth-child(3) { animation-delay: 0.15s; }
-  &:nth-child(4) { animation-delay: 0.2s; }
-`;
-
-const SectionTitle = styled.h3`
-  margin-bottom: 15px;
-  font-size: 1.2em;
-  color: #222;
-  border-bottom: 2px solid #333;
-  padding-bottom: 8px;
-  position: relative;
-  
-  &::after {
-    content: '';
-    position: absolute;
-    bottom: -2px;
-    left: 0;
-    width: 60px;
-    height: 2px;
-    background: linear-gradient(90deg, #0d1b2a, #1e3a5f);
-    transition: width 0.3s ease;
-  }
-  
-  &:hover::after {
-    width: 100%;
-  }
-`;
+import { Container, Header, Section, SectionTitle, LoadingOverlay, ErrorMessage } from './shared/BaseComponents';
+import { extractApiError } from '../utils/errorHandler';
 
 const Grid = styled.div`
   display: grid;
@@ -213,14 +134,6 @@ const ExpandableTd = styled.td`
   transition: all 0.2s ease;
 `;
 
-const ExpandIcon = styled.span<{ expanded: boolean }>`
-  margin-left: 8px;
-  font-size: 0.8em;
-  color: #666;
-  transition: transform 0.3s ease;
-  transform: ${props => props.expanded ? 'rotate(90deg)' : 'rotate(0deg)'};
-`;
-
 const ConnectionCount = styled.span`
   background: linear-gradient(135deg, #0d1b2a 0%, #1e3a5f 100%);
   color: white;
@@ -290,15 +203,17 @@ const DetailValue = styled.div`
   color: #333;
 `;
 
+/**
+ * Formatea una fecha a formato legible
+ */
 const formatDate = (date: string) => {
   if (!date) return '-';
   return new Date(date).toLocaleString();
 };
 
-const formatNumber = (num: number) => {
-  return num?.toLocaleString() || '0';
-};
-
+/**
+ * Agrupa usuarios por nombre de usuario
+ */
 const groupUsersByUsername = (users: any[]) => {
   const grouped = users.reduce((acc, user) => {
     const username = user.username;
@@ -335,7 +250,12 @@ const groupUsersByUsername = (users: any[]) => {
   return Object.values(grouped);
 };
 
+/**
+ * Componente para monitorear seguridad y cumplimiento
+ * Muestra información de usuarios, conexiones y permisos
+ */
 const Security = () => {
+  const isMountedRef = useRef(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [securityData, setSecurityData] = useState<any>({
@@ -360,7 +280,10 @@ const Security = () => {
   const [activeUsers, setActiveUsers] = useState<any[]>([]);
   const [expandedUsers, setExpandedUsers] = useState<Set<string>>(new Set());
 
-  const toggleUserExpansion = (username: string) => {
+  /**
+   * Alterna la expansión de un usuario
+   */
+  const toggleUserExpansion = useCallback((username: string) => {
     setExpandedUsers(prev => {
       const newSet = new Set(prev);
       if (newSet.has(username)) {
@@ -370,53 +293,53 @@ const Security = () => {
       }
       return newSet;
     });
-  };
-
-  useEffect(() => {
-    const fetchSecurityData = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const response = await securityApi.getSecurityData();
-        setSecurityData(response.summary);
-        setActiveUsers(response.activeUsers || []);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Error loading security data');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchSecurityData();
-    const interval = setInterval(fetchSecurityData, 30000);
-    return () => clearInterval(interval);
   }, []);
 
+  /**
+   * Obtiene los datos de seguridad desde la API
+   */
+  const fetchSecurityData = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    
+    try {
+      setLoading(true);
+      setError(null);
+      const response = await securityApi.getSecurityData();
+      
+      if (isMountedRef.current) {
+        setSecurityData(response.summary);
+        setActiveUsers(response.activeUsers || []);
+      }
+    } catch (err) {
+      if (isMountedRef.current) {
+        setError(extractApiError(err));
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    fetchSecurityData();
+    
+    const interval = setInterval(fetchSecurityData, 30000);
+    return () => {
+      isMountedRef.current = false;
+      clearInterval(interval);
+    };
+  }, [fetchSecurityData]);
+
   return (
-    <SecurityContainer>
+    <Container>
       <Header>
         Security & Compliance Monitor
       </Header>
 
-      {loading && (
-        <div style={{ textAlign: 'center', padding: '20px' }}>
-          Loading security data...
-        </div>
-      )}
-
-      {error && (
-        <div style={{ 
-          color: 'red', 
-          padding: '20px', 
-          textAlign: 'center',
-          border: '1px solid red',
-          borderRadius: '4px',
-          margin: '20px',
-          backgroundColor: '#fff5f5'
-        }}>
-          {error}
-        </div>
-      )}
+      {loading && <LoadingOverlay>Loading security data...</LoadingOverlay>}
+      {error && <ErrorMessage>{error}</ErrorMessage>}
 
       {!loading && !error && (
         <>
@@ -486,7 +409,7 @@ const Security = () => {
                           <StatusSummary>
                             {Object.entries(user.statusCounts).map(([status, count]) => (
                               <Badge key={status} type={status}>
-                                {status}: {count}
+                                {status}: {count as number}
                               </Badge>
                             ))}
                           </StatusSummary>
@@ -533,7 +456,7 @@ const Security = () => {
 
         </>
       )}
-    </SecurityContainer>
+    </Container>
   );
 };
 

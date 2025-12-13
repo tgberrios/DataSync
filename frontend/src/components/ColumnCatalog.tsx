@@ -1,83 +1,51 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import styled from 'styled-components';
+import {
+  Container,
+  Header,
+  ErrorMessage,
+  LoadingOverlay,
+  Grid,
+  Value,
+  Pagination,
+  PageButton,
+} from './shared/BaseComponents';
+import { usePagination } from '../hooks/usePagination';
+import { useTableFilters } from '../hooks/useTableFilters';
 import { columnCatalogApi } from '../services/api';
+import { extractApiError } from '../utils/errorHandler';
+import { sanitizeSearch } from '../utils/validation';
+import { theme } from '../theme/theme';
 
-const ColumnCatalogContainer = styled.div`
-  background-color: white;
-  color: #333;
-  padding: 20px;
-  font-family: monospace;
-  animation: fadeIn 0.25s ease-in;
-`;
-
-const Header = styled.div`
-  border: 2px solid #333;
-  padding: 15px;
-  text-align: center;
-  margin-bottom: 30px;
-  font-size: 1.5em;
-  font-weight: bold;
-  background: linear-gradient(135deg, #f5f5f5 0%, #ffffff 50%, #f5f5f5 100%);
-  border-radius: 6px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-  position: relative;
-  overflow: hidden;
-  animation: slideUp 0.3s ease-out;
-  
-  &::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -100%;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(10, 25, 41, 0.1), transparent);
-    animation: shimmer 3s infinite;
-  }
-`;
-
-const MetricsGrid = styled.div`
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 15px;
-  margin-bottom: 30px;
+const MetricsGrid = styled(Grid)`
+  margin-bottom: ${theme.spacing.xxl};
   animation: slideUp 0.25s ease-out;
   animation-delay: 0.1s;
   animation-fill-mode: both;
 `;
 
-const MetricCard = styled.div`
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  padding: 15px;
-  background: linear-gradient(135deg, #fafafa 0%, #ffffff 100%);
-  transition: all 0.2s ease;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
-  
-  &:hover {
-    border-color: rgba(10, 25, 41, 0.3);
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-  }
+const MetricCard = styled(Value)`
+  padding: ${theme.spacing.md};
+  min-height: 80px;
 `;
 
 const MetricLabel = styled.div`
   font-size: 0.85em;
-  color: #666;
-  margin-bottom: 8px;
+  color: ${theme.colors.text.secondary};
+  margin-bottom: ${theme.spacing.xs};
   font-weight: 500;
 `;
 
 const MetricValue = styled.div`
   font-size: 1.5em;
   font-weight: bold;
-  color: #0d1b2a;
+  color: ${theme.colors.text.primary};
 `;
 
 const FiltersContainer = styled.div`
   display: flex;
-  gap: 10px;
-  margin-bottom: 20px;
+  gap: ${theme.spacing.sm};
+  margin-bottom: ${theme.spacing.lg};
   flex-wrap: wrap;
   animation: slideUp 0.25s ease-out;
   animation-delay: 0.15s;
@@ -86,24 +54,29 @@ const FiltersContainer = styled.div`
 
 const FilterSelect = styled.select`
   padding: 8px 12px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  background: white;
-  color: #333;
-  font-family: monospace;
+  border: 1px solid ${theme.colors.border.medium};
+  border-radius: ${theme.borderRadius.md};
+  background: ${theme.colors.background.main};
+  color: ${theme.colors.text.primary};
+  font-family: ${theme.fonts.primary};
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all ${theme.transitions.normal};
   font-size: 0.9em;
   
   &:hover {
-    background: #f5f5f5;
+    background: ${theme.colors.background.secondary};
     border-color: rgba(10, 25, 41, 0.3);
   }
   
   &:focus {
     outline: none;
-    border-color: #0d1b2a;
+    border-color: ${theme.colors.primary.main};
     box-shadow: 0 0 0 3px rgba(10, 25, 41, 0.1);
+  }
+  
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 `;
 
@@ -111,22 +84,22 @@ const SearchInput = styled.input`
   flex: 1;
   min-width: 200px;
   padding: 8px 12px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  font-family: monospace;
+  border: 1px solid ${theme.colors.border.medium};
+  border-radius: ${theme.borderRadius.md};
+  font-family: ${theme.fonts.primary};
   font-size: 0.9em;
-  transition: all 0.2s ease;
+  transition: all ${theme.transitions.normal};
   
   &:focus {
     outline: none;
-    border-color: #0d1b2a;
+    border-color: ${theme.colors.primary.main};
     box-shadow: 0 0 0 3px rgba(10, 25, 41, 0.1);
   }
 `;
 
 const ColumnTable = styled.div`
-  border: 1px solid #ddd;
-  border-radius: 6px;
+  border: 1px solid ${theme.colors.border.medium};
+  border-radius: ${theme.borderRadius.md};
   overflow: hidden;
   animation: slideUp 0.25s ease-out;
   animation-delay: 0.2s;
@@ -136,11 +109,11 @@ const ColumnTable = styled.div`
 const TableHeader = styled.div`
   display: grid;
   grid-template-columns: 150px 150px 150px 100px 120px 100px 100px 100px 100px 100px 1fr;
-  background: linear-gradient(135deg, #f5f5f5 0%, #ffffff 100%);
+  background: ${theme.colors.gradient.primary};
   padding: 12px 15px;
   font-weight: bold;
   font-size: 0.8em;
-  border-bottom: 2px solid #ddd;
+  border-bottom: 2px solid ${theme.colors.border.dark};
   gap: 10px;
 `;
 
@@ -148,16 +121,16 @@ const TableRow = styled.div`
   display: grid;
   grid-template-columns: 150px 150px 150px 100px 120px 100px 100px 100px 100px 100px 1fr;
   padding: 12px 15px;
-  border-bottom: 1px solid #eee;
-  transition: all 0.2s ease;
+  border-bottom: 1px solid ${theme.colors.border.light};
+  transition: all ${theme.transitions.normal};
   cursor: pointer;
   gap: 10px;
   align-items: center;
   font-size: 0.85em;
   
   &:hover {
-    background: linear-gradient(90deg, #f0f0f0 0%, #f8f9fa 100%);
-    border-left: 3px solid #0d1b2a;
+    background: linear-gradient(90deg, ${theme.colors.background.secondary} 0%, ${theme.colors.background.tertiary} 100%);
+    border-left: 3px solid ${theme.colors.primary.main};
   }
   
   &:last-child {
@@ -173,35 +146,35 @@ const TableCell = styled.div`
 
 const Badge = styled.span<{ $type?: string; $level?: string; $flag?: boolean }>`
   padding: 4px 10px;
-  border-radius: 6px;
+  border-radius: ${theme.borderRadius.md};
   font-size: 0.75em;
   font-weight: 500;
   display: inline-block;
-  transition: all 0.2s ease;
+  transition: all ${theme.transitions.normal};
   
   ${props => {
     if (props.$type) {
-      return 'background-color: #f0f0f0; color: #333;';
+      return `background-color: ${theme.colors.background.secondary}; color: ${theme.colors.text.primary};`;
     }
     if (props.$level) {
       switch (props.$level) {
-        case 'HIGH': return 'background-color: #ffebee; color: #c62828;';
-        case 'MEDIUM': return 'background-color: #fff3e0; color: #ef6c00;';
-        case 'LOW': return 'background-color: #e8f5e9; color: #2e7d32;';
-        default: return 'background-color: #f5f5f5; color: #757575;';
+        case 'HIGH': return `background-color: ${theme.colors.status.error.bg}; color: ${theme.colors.status.error.text};`;
+        case 'MEDIUM': return `background-color: ${theme.colors.status.warning.bg}; color: ${theme.colors.status.warning.text};`;
+        case 'LOW': return `background-color: ${theme.colors.status.success.bg}; color: ${theme.colors.status.success.text};`;
+        default: return `background-color: ${theme.colors.background.secondary}; color: ${theme.colors.text.secondary};`;
       }
     }
     if (props.$flag !== undefined) {
       return props.$flag 
-        ? 'background-color: #ffebee; color: #c62828;'
-        : 'background-color: #e8f5e9; color: #2e7d32;';
+        ? `background-color: ${theme.colors.status.error.bg}; color: ${theme.colors.status.error.text};`
+        : `background-color: ${theme.colors.status.success.bg}; color: ${theme.colors.status.success.text};`;
     }
-    return 'background-color: #f5f5f5; color: #757575;';
+    return `background-color: ${theme.colors.background.secondary}; color: ${theme.colors.text.secondary};`;
   }}
   
   &:hover {
     transform: scale(1.05);
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+    box-shadow: ${theme.shadows.sm};
   }
 `;
 
@@ -209,36 +182,36 @@ const ColumnDetails = styled.div<{ $isOpen: boolean }>`
   max-height: ${props => props.$isOpen ? '800px' : '0'};
   opacity: ${props => props.$isOpen ? '1' : '0'};
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-  border-top: ${props => props.$isOpen ? '1px solid #eee' : 'none'};
-  background-color: white;
+  border-top: ${props => props.$isOpen ? `1px solid ${theme.colors.border.light}` : 'none'};
+  background-color: ${theme.colors.background.main};
   overflow: hidden;
 `;
 
 const DetailGrid = styled.div`
   display: grid;
   grid-template-columns: 200px 1fr;
-  padding: 15px;
-  gap: 10px;
+  padding: ${theme.spacing.md};
+  gap: ${theme.spacing.sm};
   font-size: 0.9em;
 `;
 
 const DetailLabel = styled.div`
-  color: #666;
+  color: ${theme.colors.text.secondary};
   font-weight: 500;
 `;
 
 const DetailValue = styled.div`
-  color: #333;
+  color: ${theme.colors.text.primary};
 `;
 
 const FlagsGrid = styled.div`
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 10px;
-  padding: 15px;
-  background: #f8f8f8;
-  border-radius: 6px;
-  margin: 15px;
+  gap: ${theme.spacing.sm};
+  padding: ${theme.spacing.md};
+  background: ${theme.colors.background.secondary};
+  border-radius: ${theme.borderRadius.md};
+  margin: ${theme.spacing.md};
 `;
 
 const FlagItem = styled.div`
@@ -248,62 +221,13 @@ const FlagItem = styled.div`
   font-size: 0.9em;
 `;
 
-const Pagination = styled.div`
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 10px;
-  margin-top: 20px;
-  animation: slideUp 0.25s ease-out;
-  animation-delay: 0.25s;
-  animation-fill-mode: both;
-`;
-
-const PageButton = styled.button<{ $active?: boolean; $disabled?: boolean }>`
-  padding: 8px 16px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  background: ${props => props.$active ? '#0d1b2a' : 'white'};
-  color: ${props => props.$active ? 'white' : '#333'};
-  cursor: ${props => props.$disabled ? 'not-allowed' : 'pointer'};
-  font-family: monospace;
-  transition: all 0.2s ease;
-  opacity: ${props => props.$disabled ? 0.5 : 1};
-  
-  &:hover:not(:disabled) {
-    background: ${props => props.$active ? '#1e3a5f' : '#f5f5f5'};
-    border-color: rgba(10, 25, 41, 0.3);
-    transform: translateY(-2px);
-  }
-  
-  &:disabled {
-    cursor: not-allowed;
-  }
-`;
-
-const Loading = styled.div`
-  text-align: center;
-  padding: 40px;
-  color: #666;
-  font-size: 1.1em;
-`;
-
-const Error = styled.div`
-  background-color: #ffebee;
-  color: #c62828;
-  padding: 15px;
-  border-radius: 6px;
-  margin-bottom: 20px;
-  border: 1px solid #ef9a9a;
-`;
-
+/**
+ * Column Catalog component
+ * Displays detailed metadata about database columns including data types, sensitivity levels, and PII/PHI flags
+ */
 const ColumnCatalog = () => {
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [columns, setColumns] = useState<any[]>([]);
-  const [metrics, setMetrics] = useState<any>({});
-  const [openColumnId, setOpenColumnId] = useState<number | null>(null);
-  const [filters, setFilters] = useState({
+  const { page, limit, setPage } = usePagination(1, 20);
+  const { filters, setFilter } = useTableFilters({
     schema_name: '',
     table_name: '',
     db_engine: '',
@@ -313,7 +237,12 @@ const ColumnCatalog = () => {
     contains_phi: '',
     search: ''
   });
-  const [page, setPage] = useState(1);
+  
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [columns, setColumns] = useState<any[]>([]);
+  const [metrics, setMetrics] = useState<any>({});
+  const [openColumnId, setOpenColumnId] = useState<number | null>(null);
   const [pagination, setPagination] = useState({
     total: 0,
     totalPages: 0,
@@ -322,45 +251,89 @@ const ColumnCatalog = () => {
   });
   const [schemas, setSchemas] = useState<string[]>([]);
   const [tables, setTables] = useState<string[]>([]);
+  const isMountedRef = useRef(true);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const [columnsData, metricsData, schemasData] = await Promise.all([
-          columnCatalogApi.getColumns({
-            page,
-            limit: 20,
-            ...filters
-          }),
-          columnCatalogApi.getMetrics(),
-          columnCatalogApi.getSchemas()
-        ]);
+  const fetchData = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    try {
+      setLoading(true);
+      setError(null);
+      const sanitizedSearch = sanitizeSearch(filters.search as string, 100);
+      const [columnsData, metricsData, schemasData] = await Promise.all([
+        columnCatalogApi.getColumns({
+          page,
+          limit,
+          schema_name: filters.schema_name as string,
+          table_name: filters.table_name as string,
+          db_engine: filters.db_engine as string,
+          data_type: filters.data_type as string,
+          sensitivity_level: filters.sensitivity_level as string,
+          contains_pii: filters.contains_pii as string,
+          contains_phi: filters.contains_phi as string,
+          search: sanitizedSearch
+        }),
+        columnCatalogApi.getMetrics(),
+        columnCatalogApi.getSchemas()
+      ]);
+      if (isMountedRef.current) {
         setColumns(columnsData.data || []);
-        setPagination(columnsData.pagination || pagination);
+        setPagination(columnsData.pagination || {
+          total: 0,
+          totalPages: 0,
+          currentPage: 1,
+          limit: 20
+        });
         setMetrics(metricsData || {});
         setSchemas(schemasData || []);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Error loading column catalog data');
-      } finally {
+      }
+    } catch (err) {
+      if (isMountedRef.current) {
+        setError(extractApiError(err));
+      }
+    } finally {
+      if (isMountedRef.current) {
         setLoading(false);
       }
-    };
+    }
+  }, [
+    page, 
+    limit, 
+    filters.schema_name, 
+    filters.table_name, 
+    filters.db_engine, 
+    filters.data_type, 
+    filters.sensitivity_level, 
+    filters.contains_pii, 
+    filters.contains_phi, 
+    filters.search
+  ]);
 
+  useEffect(() => {
+    isMountedRef.current = true;
     fetchData();
-    const interval = setInterval(fetchData, 30000);
-    return () => clearInterval(interval);
-  }, [page, filters]);
+    const interval = setInterval(() => {
+      if (isMountedRef.current) {
+        fetchData();
+      }
+    }, 30000);
+    return () => {
+      isMountedRef.current = false;
+      clearInterval(interval);
+    };
+  }, [fetchData]);
 
   useEffect(() => {
     const fetchTables = async () => {
-      if (filters.schema_name) {
+      if (filters.schema_name && isMountedRef.current) {
         try {
-          const tablesData = await columnCatalogApi.getTables(filters.schema_name);
-          setTables(tablesData || []);
+          const tablesData = await columnCatalogApi.getTables(filters.schema_name as string);
+          if (isMountedRef.current) {
+            setTables(tablesData || []);
+          }
         } catch (err) {
-          console.error('Error loading tables:', err);
+          if (isMountedRef.current) {
+            console.error('Error loading tables:', err);
+          }
         }
       } else {
         setTables([]);
@@ -369,42 +342,55 @@ const ColumnCatalog = () => {
     fetchTables();
   }, [filters.schema_name]);
 
-  const toggleColumn = (id: number) => {
-    setOpenColumnId(openColumnId === id ? null : id);
-  };
+  const toggleColumn = useCallback((id: number) => {
+    setOpenColumnId(prev => prev === id ? null : id);
+  }, []);
 
-  const formatNumber = (num: number | string | null | undefined) => {
+  const formatNumber = useCallback((num: number | string | null | undefined) => {
     if (num === null || num === undefined) return 'N/A';
     const numVal = Number(num);
     if (isNaN(numVal)) return 'N/A';
     if (numVal >= 1000000) return `${(numVal / 1000000).toFixed(2)}M`;
     if (numVal >= 1000) return `${(numVal / 1000).toFixed(2)}K`;
     return numVal.toString();
-  };
+  }, []);
 
-  const formatPercentage = (val: number | string | null | undefined) => {
+  const formatPercentage = useCallback((val: number | string | null | undefined) => {
     if (val === null || val === undefined) return 'N/A';
     const numVal = Number(val);
     if (isNaN(numVal)) return 'N/A';
     return `${numVal.toFixed(2)}%`;
-  };
+  }, []);
+
+  const formatDate = useCallback((date: string | null | undefined) => {
+    if (!date) return 'N/A';
+    return new Date(date).toLocaleString();
+  }, []);
+
+  const handleFilterChange = useCallback((key: string, value: string) => {
+    setFilter(key as any, value);
+    if (key === 'schema_name') {
+      setFilter('table_name' as any, '');
+    }
+    setPage(1);
+  }, [setFilter, setPage]);
 
   if (loading && columns.length === 0) {
     return (
-      <ColumnCatalogContainer>
+      <Container>
         <Header>Column Catalog</Header>
-        <Loading>Loading column catalog data...</Loading>
-      </ColumnCatalogContainer>
+        <LoadingOverlay>Loading column catalog data...</LoadingOverlay>
+      </Container>
     );
   }
 
   return (
-    <ColumnCatalogContainer>
+    <Container>
       <Header>Column Catalog</Header>
       
-      {error && <Error>{error}</Error>}
+      {error && <ErrorMessage>{error}</ErrorMessage>}
       
-      <MetricsGrid>
+      <MetricsGrid $columns="repeat(auto-fit, minmax(180px, 1fr))">
         <MetricCard>
           <MetricLabel>Total Columns</MetricLabel>
           <MetricValue>{formatNumber(metrics.total_columns)}</MetricValue>
@@ -433,11 +419,8 @@ const ColumnCatalog = () => {
 
       <FiltersContainer>
         <FilterSelect
-          value={filters.schema_name}
-          onChange={(e) => {
-            setFilters({ ...filters, schema_name: e.target.value, table_name: '' });
-            setPage(1);
-          }}
+          value={filters.schema_name as string}
+          onChange={(e) => handleFilterChange('schema_name', e.target.value)}
         >
           <option value="">All Schemas</option>
           {schemas.map(schema => (
@@ -446,11 +429,8 @@ const ColumnCatalog = () => {
         </FilterSelect>
         
         <FilterSelect
-          value={filters.table_name}
-          onChange={(e) => {
-            setFilters({ ...filters, table_name: e.target.value });
-            setPage(1);
-          }}
+          value={filters.table_name as string}
+          onChange={(e) => handleFilterChange('table_name', e.target.value)}
           disabled={!filters.schema_name}
         >
           <option value="">All Tables</option>
@@ -460,11 +440,8 @@ const ColumnCatalog = () => {
         </FilterSelect>
         
         <FilterSelect
-          value={filters.db_engine}
-          onChange={(e) => {
-            setFilters({ ...filters, db_engine: e.target.value });
-            setPage(1);
-          }}
+          value={filters.db_engine as string}
+          onChange={(e) => handleFilterChange('db_engine', e.target.value)}
         >
           <option value="">All Engines</option>
           <option value="PostgreSQL">PostgreSQL</option>
@@ -473,11 +450,8 @@ const ColumnCatalog = () => {
         </FilterSelect>
         
         <FilterSelect
-          value={filters.data_type}
-          onChange={(e) => {
-            setFilters({ ...filters, data_type: e.target.value });
-            setPage(1);
-          }}
+          value={filters.data_type as string}
+          onChange={(e) => handleFilterChange('data_type', e.target.value)}
         >
           <option value="">All Types</option>
           <option value="varchar">VARCHAR</option>
@@ -489,11 +463,8 @@ const ColumnCatalog = () => {
         </FilterSelect>
         
         <FilterSelect
-          value={filters.sensitivity_level}
-          onChange={(e) => {
-            setFilters({ ...filters, sensitivity_level: e.target.value });
-            setPage(1);
-          }}
+          value={filters.sensitivity_level as string}
+          onChange={(e) => handleFilterChange('sensitivity_level', e.target.value)}
         >
           <option value="">All Sensitivity</option>
           <option value="HIGH">HIGH</option>
@@ -502,11 +473,8 @@ const ColumnCatalog = () => {
         </FilterSelect>
         
         <FilterSelect
-          value={filters.contains_pii}
-          onChange={(e) => {
-            setFilters({ ...filters, contains_pii: e.target.value });
-            setPage(1);
-          }}
+          value={filters.contains_pii as string}
+          onChange={(e) => handleFilterChange('contains_pii', e.target.value)}
         >
           <option value="">All PII</option>
           <option value="true">Has PII</option>
@@ -516,11 +484,8 @@ const ColumnCatalog = () => {
         <SearchInput
           type="text"
           placeholder="Search column name..."
-          value={filters.search}
-          onChange={(e) => {
-            setFilters({ ...filters, search: e.target.value });
-            setPage(1);
-          }}
+          value={filters.search as string}
+          onChange={(e) => handleFilterChange('search', e.target.value)}
         />
       </FiltersContainer>
 
@@ -539,7 +504,7 @@ const ColumnCatalog = () => {
           <TableCell>Flags</TableCell>
         </TableHeader>
         {columns.length === 0 ? (
-          <div style={{ padding: '40px', textAlign: 'center', color: '#666' }}>
+          <div style={{ padding: '40px', textAlign: 'center', color: theme.colors.text.secondary }}>
             No column data available. Columns will appear here once cataloged.
           </div>
         ) : (
@@ -618,13 +583,13 @@ const ColumnCatalog = () => {
                   <DetailValue>{column.avg_value || 'N/A'}</DetailValue>
                   
                   <DetailLabel>First Seen:</DetailLabel>
-                  <DetailValue>{column.first_seen_at ? new Date(column.first_seen_at).toLocaleString() : 'N/A'}</DetailValue>
+                  <DetailValue>{formatDate(column.first_seen_at)}</DetailValue>
                   
                   <DetailLabel>Last Seen:</DetailLabel>
-                  <DetailValue>{column.last_seen_at ? new Date(column.last_seen_at).toLocaleString() : 'N/A'}</DetailValue>
+                  <DetailValue>{formatDate(column.last_seen_at)}</DetailValue>
                   
                   <DetailLabel>Last Analyzed:</DetailLabel>
-                  <DetailValue>{column.last_analyzed_at ? new Date(column.last_analyzed_at).toLocaleString() : 'N/A'}</DetailValue>
+                  <DetailValue>{formatDate(column.last_analyzed_at)}</DetailValue>
                 </DetailGrid>
                 
                 <FlagsGrid>
@@ -665,7 +630,7 @@ const ColumnCatalog = () => {
       {pagination.totalPages > 1 && (
         <Pagination>
           <PageButton
-            onClick={() => setPage(p => Math.max(1, p - 1))}
+            onClick={() => setPage(Math.max(1, page - 1))}
             disabled={page === 1}
           >
             Previous
@@ -674,16 +639,15 @@ const ColumnCatalog = () => {
             Page {pagination.currentPage} of {pagination.totalPages} ({pagination.total} total)
           </span>
           <PageButton
-            onClick={() => setPage(p => Math.min(pagination.totalPages, p + 1))}
+            onClick={() => setPage(Math.min(pagination.totalPages, page + 1))}
             disabled={page === pagination.totalPages}
           >
             Next
           </PageButton>
         </Pagination>
       )}
-    </ColumnCatalogContainer>
+    </Container>
   );
 };
 
 export default ColumnCatalog;
-

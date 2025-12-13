@@ -1,49 +1,27 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import styled from 'styled-components';
+import {
+  Container,
+  Header,
+  ErrorMessage,
+  LoadingOverlay,
+  Button,
+  Input,
+  FormGroup,
+  Label,
+} from './shared/BaseComponents';
 import { configApi } from '../services/api';
 import type { ConfigEntry } from '../services/api';
-
-const ConfigContainer = styled.div`
-  background-color: white;
-  color: #333;
-  padding: 20px;
-  font-family: monospace;
-  animation: fadeIn 0.25s ease-in;
-`;
-
-const Header = styled.div`
-  border: 2px solid #333;
-  padding: 15px;
-  text-align: center;
-  margin-bottom: 30px;
-  font-size: 1.5em;
-  font-weight: bold;
-  background: linear-gradient(135deg, #f5f5f5 0%, #ffffff 50%, #f5f5f5 100%);
-  border-radius: 6px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-  position: relative;
-  overflow: hidden;
-  animation: slideUp 0.3s ease-out;
-  
-  &::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -100%;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(10, 25, 41, 0.1), transparent);
-    animation: shimmer 3s infinite;
-  }
-`;
+import { extractApiError } from '../utils/errorHandler';
+import { theme } from '../theme/theme';
 
 const ConfigTable = styled.table`
   width: 100%;
   border-collapse: collapse;
-  margin-top: 20px;
-  background: white;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-  border-radius: 6px;
+  margin-top: ${theme.spacing.lg};
+  background: ${theme.colors.background.main};
+  box-shadow: ${theme.shadows.md};
+  border-radius: ${theme.borderRadius.md};
   overflow: hidden;
   animation: slideUp 0.25s ease-out;
   animation-delay: 0.1s;
@@ -51,10 +29,10 @@ const ConfigTable = styled.table`
 `;
 
 const Th = styled.th`
-  padding: 12px;
+  padding: ${theme.spacing.sm};
   text-align: left;
-  border-bottom: 2px solid #333;
-  background: linear-gradient(180deg, #f5f5f5 0%, #fafafa 100%);
+  border-bottom: 2px solid ${theme.colors.border.dark};
+  background: ${theme.colors.gradient.primary};
   font-weight: bold;
   position: sticky;
   top: 0;
@@ -62,19 +40,19 @@ const Th = styled.th`
 `;
 
 const Td = styled.td`
-  padding: 12px;
-  border-bottom: 1px solid #eee;
-  font-family: 'Courier New', monospace;
-  transition: all 0.2s ease;
+  padding: ${theme.spacing.sm};
+  border-bottom: 1px solid ${theme.colors.border.light};
+  font-family: ${theme.fonts.primary};
+  transition: all ${theme.transitions.normal};
 `;
 
 const TableRow = styled.tr`
-  transition: all 0.2s ease;
+  transition: all ${theme.transitions.normal};
   
   &:hover {
-    background: linear-gradient(90deg, #ffffff 0%, #f8f9fa 100%);
+    background: linear-gradient(90deg, ${theme.colors.background.main} 0%, ${theme.colors.background.tertiary} 100%);
     transform: scale(1.001);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+    box-shadow: ${theme.shadows.sm};
     
     ${Td} {
       border-bottom-color: rgba(10, 25, 41, 0.1);
@@ -82,42 +60,16 @@ const TableRow = styled.tr`
   }
 `;
 
-const Input = styled.input`
-  width: 100%;
-  padding: 10px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  font-family: 'Courier New', monospace;
-  background: white;
-  transition: all 0.2s ease;
-
-  &:hover:not(:disabled) {
-    border-color: rgba(10, 25, 41, 0.3);
-  }
-
-  &:focus {
-    outline: none;
-    border-color: #0d1b2a;
-    box-shadow: 0 0 0 3px rgba(10, 25, 41, 0.1);
-    transform: translateY(-1px);
-  }
-
-  &:disabled {
-    background: #f5f5f5;
-    cursor: not-allowed;
-  }
-`;
-
 const TextArea = styled.textarea`
   width: 100%;
   padding: 10px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  font-family: 'Courier New', monospace;
+  border: 1px solid ${theme.colors.border.medium};
+  border-radius: ${theme.borderRadius.md};
+  font-family: ${theme.fonts.primary};
   resize: vertical;
   min-height: 60px;
-  background: white;
-  transition: all 0.2s ease;
+  background: ${theme.colors.background.main};
+  transition: all ${theme.transitions.normal};
 
   &:hover:not(:disabled) {
     border-color: rgba(10, 25, 41, 0.3);
@@ -125,106 +77,110 @@ const TextArea = styled.textarea`
 
   &:focus {
     outline: none;
-    border-color: #0d1b2a;
+    border-color: ${theme.colors.primary.main};
     box-shadow: 0 0 0 3px rgba(10, 25, 41, 0.1);
     transform: translateY(-1px);
   }
 
   &:disabled {
-    background: #f5f5f5;
+    background: ${theme.colors.background.secondary};
     cursor: not-allowed;
   }
 `;
 
-const Button = styled.button<{ $variant?: 'primary' | 'danger' }>`
-  padding: 8px 16px;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-family: monospace;
-  transition: all 0.2s ease;
-  font-weight: 500;
-  background-color: ${props => props.$variant === 'danger' ? '#ffebee' : '#0d1b2a'};
-  color: ${props => props.$variant === 'danger' ? '#c62828' : 'white'};
-  margin-right: 8px;
-
+const DangerButton = styled(Button)`
+  background-color: ${theme.colors.status.error.bg};
+  color: ${theme.colors.status.error.text};
+  border-color: ${theme.colors.status.error.text};
+  
   &:hover:not(:disabled) {
-    background-color: ${props => props.$variant === 'danger' ? '#ffcdd2' : '#1e3a5f'};
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  }
-
-  &:active:not(:disabled) {
-    transform: translateY(0);
-  }
-
-  &:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
+    background-color: #ffcdd2;
+    border-color: ${theme.colors.status.error.text};
   }
 `;
 
 const ActionCell = styled.td`
-  padding: 12px;
-  border-bottom: 1px solid #eee;
+  padding: ${theme.spacing.sm};
+  border-bottom: 1px solid ${theme.colors.border.light};
   text-align: right;
 `;
 
 const AddButton = styled(Button)`
-  margin: 20px 0;
+  margin: ${theme.spacing.lg} 0;
   animation: slideUp 0.25s ease-out;
   animation-delay: 0.2s;
   animation-fill-mode: both;
 `;
 
+/**
+ * Configuration component
+ * Manages application configuration entries with CRUD operations
+ */
 const Config = () => {
   const [configs, setConfigs] = useState<ConfigEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<ConfigEntry | null>(null);
+  const isMountedRef = useRef(true);
 
-  const fetchConfigs = async () => {
+  const fetchConfigs = useCallback(async () => {
+    if (!isMountedRef.current) return;
     try {
       setLoading(true);
       setError(null);
       const data = await configApi.getConfigs();
-      setConfigs(data);
+      if (isMountedRef.current) {
+        setConfigs(data || []);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error loading configurations');
+      if (isMountedRef.current) {
+        setError(extractApiError(err));
+      }
     } finally {
-      setLoading(false);
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
     }
-  };
-
-  useEffect(() => {
-    fetchConfigs();
   }, []);
 
-  const handleEdit = (config: ConfigEntry) => {
+  useEffect(() => {
+    isMountedRef.current = true;
+    fetchConfigs();
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, [fetchConfigs]);
+
+  const handleEdit = useCallback((config: ConfigEntry) => {
     setEditingKey(config.key);
     setEditForm({ ...config });
-  };
+  }, []);
 
-  const handleCancel = () => {
+  const handleCancel = useCallback(() => {
     setEditingKey(null);
     setEditForm(null);
-  };
+  }, []);
 
-  const handleSave = async () => {
+  const handleSave = useCallback(async () => {
     if (!editForm) return;
 
     try {
+      if (!isMountedRef.current) return;
       await configApi.updateConfig(editForm);
-      await fetchConfigs();
-      setEditingKey(null);
-      setEditForm(null);
+      if (isMountedRef.current) {
+        await fetchConfigs();
+        setEditingKey(null);
+        setEditForm(null);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error updating configuration');
+      if (isMountedRef.current) {
+        setError(extractApiError(err));
+      }
     }
-  };
+  }, [editForm, fetchConfigs]);
 
-  const handleAdd = () => {
+  const handleAdd = useCallback(() => {
     const newConfig: ConfigEntry = {
       key: '',
       value: '',
@@ -233,30 +189,44 @@ const Config = () => {
     };
     setEditingKey('new');
     setEditForm(newConfig);
-  };
+  }, []);
 
-  const handleCreate = async () => {
+  const handleCreate = useCallback(async () => {
     if (!editForm) return;
 
     try {
+      if (!isMountedRef.current) return;
       await configApi.createConfig(editForm);
-      await fetchConfigs();
-      setEditingKey(null);
-      setEditForm(null);
+      if (isMountedRef.current) {
+        await fetchConfigs();
+        setEditingKey(null);
+        setEditForm(null);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error creating configuration');
+      if (isMountedRef.current) {
+        setError(extractApiError(err));
+      }
     }
-  };
+  }, [editForm, fetchConfigs]);
+
+  const formatDate = useCallback((dateString: string) => {
+    return new Date(dateString).toLocaleString();
+  }, []);
+
+  if (loading && configs.length === 0) {
+    return (
+      <Container>
+        <Header>Configuration</Header>
+        <LoadingOverlay>Loading configurations...</LoadingOverlay>
+      </Container>
+    );
+  }
 
   return (
-    <ConfigContainer>
+    <Container>
       <Header>Configuration</Header>
 
-      {error && (
-        <div style={{ color: 'red', padding: '20px', textAlign: 'center' }}>
-          Error: {error}
-        </div>
-      )}
+      {error && <ErrorMessage>{error}</ErrorMessage>}
 
       <AddButton onClick={handleAdd}>+ Add New Configuration</AddButton>
 
@@ -291,7 +261,7 @@ const Config = () => {
               <Td>-</Td>
               <ActionCell>
                 <Button onClick={handleCreate}>Save</Button>
-                <Button $variant="danger" onClick={handleCancel}>Cancel</Button>
+                <DangerButton onClick={handleCancel}>Cancel</DangerButton>
               </ActionCell>
             </TableRow>
           )}
@@ -323,12 +293,12 @@ const Config = () => {
               <Td>
                 {config.key === 'batch_size' ? config.value : '-'}
               </Td>
-              <Td>{new Date(config.updated_at).toLocaleString()}</Td>
+              <Td>{formatDate(config.updated_at)}</Td>
               <ActionCell>
                 {editingKey === config.key ? (
                   <>
                     <Button onClick={handleSave}>Save</Button>
-                    <Button $variant="danger" onClick={handleCancel}>Cancel</Button>
+                    <DangerButton onClick={handleCancel}>Cancel</DangerButton>
                   </>
                 ) : (
                   <Button onClick={() => handleEdit(config)}>Edit</Button>
@@ -338,13 +308,7 @@ const Config = () => {
           ))}
         </tbody>
       </ConfigTable>
-
-      {loading && (
-        <div style={{ textAlign: 'center', padding: '20px', color: '#666' }}>
-          Loading configurations...
-        </div>
-      )}
-    </ConfigContainer>
+    </Container>
   );
 };
 
