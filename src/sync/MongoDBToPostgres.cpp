@@ -664,6 +664,14 @@ void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
     insertTxn.commit();
     updateLastSyncTime(conn, tableInfo.schema_name, tableInfo.table_name);
 
+    pqxx::work statusTxn(conn);
+    statusTxn.exec(
+        "UPDATE metadata.catalog SET status = 'LISTENING_CHANGES' "
+        "WHERE schema_name = " +
+        statusTxn.quote(tableInfo.schema_name) +
+        " AND table_name = " + statusTxn.quote(tableInfo.table_name));
+    statusTxn.commit();
+
     Logger::info(LogCategory::TRANSFER, "truncateAndLoadCollection",
                  "Completed loading " + std::to_string(inserted) +
                      " rows into " + fullTableName + " from " +
@@ -712,12 +720,28 @@ void MongoDBToPostgres::transferDataMongoDBToPostgresParallel() {
 
     for (const auto &tableInfo : collectionsToSync) {
       try {
+        std::string originalStatus = tableInfo.status;
+        pqxx::work statusTxn(conn);
+        statusTxn.exec(
+            "UPDATE metadata.catalog SET status = 'IN_PROGRESS' "
+            "WHERE schema_name = " +
+            statusTxn.quote(tableInfo.schema_name) +
+            " AND table_name = " + statusTxn.quote(tableInfo.table_name));
+        statusTxn.commit();
+
         truncateAndLoadCollection(tableInfo);
       } catch (const std::exception &e) {
         Logger::error(LogCategory::TRANSFER,
                       "transferDataMongoDBToPostgresParallel",
                       "Error syncing " + tableInfo.schema_name + "." +
                           tableInfo.table_name + ": " + std::string(e.what()));
+        pqxx::work errorTxn(conn);
+        errorTxn.exec(
+            "UPDATE metadata.catalog SET status = 'ERROR' "
+            "WHERE schema_name = " +
+            errorTxn.quote(tableInfo.schema_name) +
+            " AND table_name = " + errorTxn.quote(tableInfo.table_name));
+        errorTxn.commit();
       }
     }
 

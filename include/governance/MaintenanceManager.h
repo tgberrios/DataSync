@@ -1,15 +1,15 @@
 #ifndef MAINTENANCE_MANAGER_H
 #define MAINTENANCE_MANAGER_H
 
-#include <string>
-#include <vector>
-#include <memory>
+#include "third_party/json.hpp"
 #include <chrono>
-#include <pqxx/pqxx>
+#include <memory>
 #include <mysql/mysql.h>
+#include <pqxx/pqxx>
 #include <sql.h>
 #include <sqlext.h>
-#include "third_party/json.hpp"
+#include <string>
+#include <vector>
 
 using json = nlohmann::json;
 
@@ -84,17 +84,26 @@ private:
 
   MaintenanceMetrics collectMetricsBefore(const MaintenanceTask &task);
   MaintenanceMetrics collectMetricsAfter(const MaintenanceTask &task);
-  void calculateImpact(MaintenanceTask &task, const MaintenanceMetrics &before, const MaintenanceMetrics &after);
+  void calculateImpact(MaintenanceTask &task, const MaintenanceMetrics &before,
+                       const MaintenanceMetrics &after);
 
-  int calculatePriority(const MaintenanceMetrics &metrics, const std::string &maintenanceType);
+  int calculatePriority(const MaintenanceMetrics &metrics,
+                        const std::string &maintenanceType);
   void storeTask(const MaintenanceTask &task);
-  void updateTaskStatus(int taskId, const std::string &status, const std::string &resultMessage = "", const std::string &errorDetails = "");
-  void storeExecutionMetrics(const MaintenanceTask &task, const MaintenanceMetrics &before, const MaintenanceMetrics &after);
+  void updateTaskStatus(int taskId, const std::string &status,
+                        const std::string &resultMessage = "",
+                        const std::string &errorDetails = "");
+  void storeExecutionMetrics(const MaintenanceTask &task,
+                             const MaintenanceMetrics &before,
+                             const MaintenanceMetrics &after);
 
   std::vector<MaintenanceTask> getPendingTasks();
-  std::chrono::system_clock::time_point calculateNextMaintenanceDate(const std::string &maintenanceType);
+  std::chrono::system_clock::time_point
+  calculateNextMaintenanceDate(const std::string &maintenanceType);
 
-  json getThresholds(const std::string &dbEngine, const std::string &maintenanceType);
+  json getThresholds(const std::string &dbEngine,
+                     const std::string &maintenanceType);
+  void loadThresholdsFromDatabase();
   std::string escapeSQL(pqxx::connection &conn, const std::string &str);
   std::string escapeSQL(MYSQL *conn, const std::string &str);
 

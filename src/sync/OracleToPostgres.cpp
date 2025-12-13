@@ -641,11 +641,15 @@ void OracleToPostgres::transferDataOracleToPostgres() {
                    "Processing table: " + table.schema_name + "." +
                        table.table_name + " (status: " + table.status + ")");
 
+      std::string originalStatus = table.status;
+      updateStatus(pgConn, table.schema_name, table.table_name, "IN_PROGRESS");
+
       auto oracleConn = getOracleConnection(table.connection_string);
       if (!oracleConn || !oracleConn->isValid()) {
         Logger::error(LogCategory::TRANSFER, "transferDataOracleToPostgres",
                       "Failed to get Oracle connection for table " +
                           table.schema_name + "." + table.table_name);
+        updateStatus(pgConn, table.schema_name, table.table_name, "ERROR");
         continue;
       }
 
@@ -901,6 +905,7 @@ void OracleToPostgres::transferDataOracleToPostgres() {
         } catch (const std::exception &e) {
           Logger::error(LogCategory::TRANSFER, "transferDataOracleToPostgres",
                         "Error inserting data: " + std::string(e.what()));
+          updateStatus(pgConn, schema_name, table_name, "ERROR");
           hasMoreData = false;
           break;
         }
