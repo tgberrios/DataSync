@@ -1,15 +1,20 @@
 #include "core/Config.h"
 #include "sync/StreamingData.h"
 #include <atomic>
+#include <chrono>
 #include <csignal>
 #include <iostream>
+#include <thread>
 
 namespace {
 std::atomic<bool> g_shutdownRequested{false};
 StreamingData *g_streamingData = nullptr;
+std::atomic<bool> g_forceExit{false};
 
 void signalHandler(int signal) {
   if (signal == SIGINT || signal == SIGTERM) {
+    std::cerr << "\n\nReceived shutdown signal (" << signal
+              << "). Initiating graceful shutdown...\n";
     g_shutdownRequested = true;
     if (g_streamingData) {
       g_streamingData->shutdown();
