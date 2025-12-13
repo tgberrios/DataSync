@@ -1,8 +1,10 @@
 #include "engines/mssql_engine.h"
+#include "sync/MSSQLToPostgres.h"
 #include <algorithm>
 #include <chrono>
 #include <pqxx/pqxx>
 #include <thread>
+#include <unordered_set>
 
 // Constructor for ODBCConnection. Initializes an ODBC connection to a SQL
 // Server database using the provided connection string. Allocates environment
@@ -536,4 +538,124 @@ MSSQLEngine::getColumnCounts(const std::string &schema,
                       table + ": " + std::string(e.what()));
     return {sourceCount, 0};
   }
+}
+
+std::vector<ColumnInfo> MSSQLEngine::getTableColumns(const std::string &schema,
+                                                     const std::string &table) {
+  std::vector<ColumnInfo> columns;
+  if (schema.empty() || table.empty()) {
+    Logger::error(LogCategory::DATABASE, "MSSQLEngine",
+                  "getTableColumns: schema and table must not be empty");
+    return columns;
+  }
+
+  auto conn = createConnection();
+  if (!conn || !conn->isValid()) {
+    Logger::error(LogCategory::DATABASE, "MSSQLEngine",
+                  "getTableColumns: connection is invalid");
+    return columns;
+  }
+
+  std::string safeSchema;
+  for (char c : schema) {
+    if (c >= 32 && c <= 126 && c != '\'' && c != ';' && c != '-' && c != '\\' &&
+        c != '/') {
+      safeSchema += c;
+    }
+  }
+  if (safeSchema.empty()) {
+    Logger::error(LogCategory::DATABASE, "MSSQLEngine",
+                  "getTableColumns: sanitized schema is empty");
+    return columns;
+  }
+
+  std::string safeTable;
+  for (char c : table) {
+    if (c >= 32 && c <= 126 && c != '\'' && c != ';' && c != '-' && c != '\\' &&
+        c != '/') {
+      safeTable += c;
+    }
+  }
+  if (safeTable.empty()) {
+    Logger::error(LogCategory::DATABASE, "MSSQLEngine",
+                  "getTableColumns: sanitized table is empty");
+    return columns;
+  }
+
+  std::string query =
+      "SELECT c.name AS COLUMN_NAME, tp.name AS DATA_TYPE, "
+      "CASE WHEN c.is_nullable = 1 THEN 'YES' ELSE 'NO' END as IS_NULLABLE, "
+      "CASE WHEN pk.column_id IS NOT NULL THEN 'YES' ELSE 'NO' END as "
+      "IS_PRIMARY_KEY, "
+      "c.max_length AS CHARACTER_MAXIMUM_LENGTH, "
+      "c.precision AS NUMERIC_PRECISION, "
+      "c.scale AS NUMERIC_SCALE, "
+      "c.column_id AS ORDINAL_POSITION "
+      "FROM sys.columns c "
+      "INNER JOIN sys.tables t ON c.object_id = t.object_id "
+      "INNER JOIN sys.schemas s ON t.schema_id = s.schema_id "
+      "INNER JOIN sys.types tp ON c.user_type_id = tp.user_type_id "
+      "LEFT JOIN ( "
+      "  SELECT ic.column_id, ic.object_id "
+      "  FROM sys.indexes i "
+      "  INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id AND "
+      "i.index_id = ic.index_id "
+      "  WHERE i.is_primary_key = 1 "
+      ") pk ON c.column_id = pk.column_id AND t.object_id = pk.object_id "
+      "WHERE s.name = '" +
+      safeSchema + "' AND t.name = '" + safeTable + "' ORDER BY c.column_id";
+
+  auto results = executeQuery(conn->getDbc(), query);
+
+  for (const auto &row : results) {
+    if (row.size() < 8)
+      continue;
+
+    ColumnInfo col;
+    col.name = row[0];
+    std::transform(col.name.begin(), col.name.end(), col.name.begin(),
+                   ::tolower);
+    col.dataType = row[1];
+    col.isNullable = (row[2] == "YES");
+    col.isPrimaryKey = (row[3] == "YES");
+    col.maxLength = row.size() > 4 ? row[4] : "";
+    col.numericPrecision = row.size() > 5 ? row[5] : "";
+    col.numericScale = row.size() > 6 ? row[6] : "";
+    try {
+      col.ordinalPosition = std::stoi(row[7]);
+    } catch (...) {
+      col.ordinalPosition = 0;
+    }
+
+    std::string pgType = "TEXT";
+    if (col.dataType == "decimal" || col.dataType == "numeric") {
+      if (!col.numericPrecision.empty() && col.numericPrecision != "NULL" &&
+          !col.numericScale.empty() && col.numericScale != "NULL") {
+        pgType =
+            "NUMERIC(" + col.numericPrecision + "," + col.numericScale + ")";
+      } else {
+        pgType = "NUMERIC(18,4)";
+      }
+    } else if (col.dataType == "varchar" || col.dataType == "nvarchar") {
+      if (!col.maxLength.empty() && col.maxLength != "NULL" &&
+          col.maxLength != "-1") {
+        pgType = "VARCHAR(" + col.maxLength + ")";
+      } else {
+        pgType = "VARCHAR";
+      }
+    } else if (col.dataType == "char" || col.dataType == "nchar") {
+      if (!col.maxLength.empty() && col.maxLength != "NULL") {
+        pgType = "CHAR(" + col.maxLength + ")";
+      } else {
+        pgType = "CHAR(1)";
+      }
+    } else if (MSSQLToPostgres::dataTypeMap.count(col.dataType)) {
+      pgType = MSSQLToPostgres::dataTypeMap[col.dataType];
+    }
+
+    col.pgType = pgType;
+    columns.push_back(col);
+  }
+
+  return columns;
 }

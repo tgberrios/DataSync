@@ -4,6 +4,7 @@
 #include "catalog/catalog_manager.h"
 #include "engines/database_engine.h"
 #include "sync/DatabaseToPostgresSync.h"
+#include "sync/SchemaSync.h"
 #include "sync/TableProcessorThreadPool.h"
 
 #include <algorithm>
@@ -1371,6 +1372,23 @@ public:
                               "." + table.table_name);
           skipped++;
           continue;
+        }
+
+        try {
+          MSSQLEngine engine(table.connection_string);
+          std::vector<ColumnInfo> sourceColumns =
+              engine.getTableColumns(table.schema_name, table.table_name);
+
+          if (!sourceColumns.empty()) {
+            SchemaSync::syncSchema(pgConn, table.schema_name, table.table_name,
+                                   sourceColumns, "MSSQL");
+          }
+        } catch (const std::exception &e) {
+          Logger::warning(
+              LogCategory::TRANSFER, "transferDataMSSQLToPostgresParallel",
+              "Error syncing schema for " + table.schema_name + "." +
+                  table.table_name + ": " + std::string(e.what()) +
+                  " - continuing with sync");
         }
 
         pool.submitTask(table,

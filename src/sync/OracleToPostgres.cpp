@@ -2,6 +2,7 @@
 #include "core/database_config.h"
 #include "core/logger.h"
 #include "engines/database_engine.h"
+#include "sync/SchemaSync.h"
 #include <algorithm>
 #include <cctype>
 #include <pqxx/pqxx>
@@ -651,6 +652,22 @@ void OracleToPostgres::transferDataOracleToPostgres() {
                           table.schema_name + "." + table.table_name);
         updateStatus(pgConn, table.schema_name, table.table_name, "ERROR");
         continue;
+      }
+
+      try {
+        OracleEngine engine(table.connection_string);
+        std::vector<ColumnInfo> sourceColumns =
+            engine.getTableColumns(table.schema_name, table.table_name);
+
+        if (!sourceColumns.empty()) {
+          SchemaSync::syncSchema(pgConn, table.schema_name, table.table_name,
+                                 sourceColumns, "Oracle");
+        }
+      } catch (const std::exception &e) {
+        Logger::warning(LogCategory::TRANSFER, "transferDataOracleToPostgres",
+                        "Error syncing schema for " + table.schema_name + "." +
+                            table.table_name + ": " + std::string(e.what()) +
+                            " - continuing with sync");
       }
 
       std::string schema_name = table.schema_name;
