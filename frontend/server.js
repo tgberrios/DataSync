@@ -2827,6 +2827,306 @@ app.get(
   }
 );
 
+// MongoDB Lineage endpoints
+app.get("/api/data-lineage/mongodb", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = (page - 1) * limit;
+    const server_name = req.query.server_name || "";
+    const database_name = req.query.database_name || "";
+    const relationship_type = req.query.relationship_type || "";
+    const search = req.query.search || "";
+
+    const whereConditions = [];
+    const params = [];
+    let paramCount = 1;
+
+    if (server_name) {
+      whereConditions.push(`server_name = $${paramCount}`);
+      params.push(server_name);
+      paramCount++;
+    }
+
+    if (database_name) {
+      whereConditions.push(`database_name = $${paramCount}`);
+      params.push(database_name);
+      paramCount++;
+    }
+
+    if (relationship_type) {
+      whereConditions.push(`relationship_type = $${paramCount}`);
+      params.push(relationship_type);
+      paramCount++;
+    }
+
+    if (search) {
+      whereConditions.push(
+        `(source_collection ILIKE $${paramCount} OR target_collection ILIKE $${paramCount})`
+      );
+      params.push(`%${search}%`);
+      paramCount++;
+    }
+
+    const whereClause =
+      whereConditions.length > 0
+        ? "WHERE " + whereConditions.join(" AND ")
+        : "";
+
+    const countQuery = `SELECT COUNT(*) FROM metadata.mongo_lineage ${whereClause}`;
+    const countResult = await pool.query(countQuery, params);
+    const total = parseInt(countResult.rows[0].count);
+
+    params.push(limit, offset);
+    const dataQuery = `
+      SELECT *
+      FROM metadata.mongo_lineage
+      ${whereClause}
+      ORDER BY dependency_level, confidence_score DESC, snapshot_date DESC
+      LIMIT $${paramCount} OFFSET $${paramCount + 1}
+    `;
+
+    const result = await pool.query(dataQuery, params);
+
+    const totalPages = Math.ceil(total / limit);
+
+    res.json({
+      data: result.rows,
+      pagination: {
+        total,
+        totalPages,
+        currentPage: page,
+        limit,
+      },
+    });
+  } catch (err) {
+    console.error("Error getting MongoDB lineage data:", err);
+    res.status(500).json({
+      error: "Error al obtener datos de lineage de MongoDB",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/data-lineage/mongodb/metrics", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        COUNT(*) as total_relationships,
+        COUNT(DISTINCT source_collection) + COUNT(DISTINCT target_collection) as unique_collections,
+        COUNT(DISTINCT server_name) as unique_servers,
+        COUNT(*) FILTER (WHERE confidence_score >= 0.8) as high_confidence,
+        ROUND(AVG(confidence_score)::numeric, 4) as avg_confidence
+      FROM metadata.mongo_lineage
+    `);
+
+    res.json(result.rows[0] || {});
+  } catch (err) {
+    console.error("Error getting MongoDB lineage metrics:", err);
+    res.status(500).json({
+      error: "Error al obtener métricas de lineage de MongoDB",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/data-lineage/mongodb/servers", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT DISTINCT server_name
+      FROM metadata.mongo_lineage
+      WHERE server_name IS NOT NULL
+      ORDER BY server_name
+    `);
+
+    res.json(result.rows.map((row) => row.server_name));
+  } catch (err) {
+    console.error("Error getting MongoDB servers:", err);
+    res.status(500).json({
+      error: "Error al obtener servidores",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/data-lineage/mongodb/databases/:serverName", async (req, res) => {
+  try {
+    const serverName = req.params.serverName;
+    const result = await pool.query(
+      `
+        SELECT DISTINCT database_name
+        FROM metadata.mongo_lineage
+        WHERE server_name = $1 AND database_name IS NOT NULL
+        ORDER BY database_name
+      `,
+      [serverName]
+    );
+
+    res.json(result.rows.map((row) => row.database_name));
+  } catch (err) {
+    console.error("Error getting MongoDB databases:", err);
+    res.status(500).json({
+      error: "Error al obtener bases de datos",
+      details: err.message,
+    });
+  }
+});
+
+// MongoDB Governance Catalog endpoints
+app.get("/api/governance-catalog/mongodb", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = (page - 1) * limit;
+    const server_name = req.query.server_name || "";
+    const database_name = req.query.database_name || "";
+    const health_status = req.query.health_status || "";
+    const access_frequency = req.query.access_frequency || "";
+    const search = req.query.search || "";
+
+    const whereConditions = [];
+    const params = [];
+    let paramCount = 1;
+
+    if (server_name) {
+      whereConditions.push(`server_name = $${paramCount}`);
+      params.push(server_name);
+      paramCount++;
+    }
+
+    if (database_name) {
+      whereConditions.push(`database_name = $${paramCount}`);
+      params.push(database_name);
+      paramCount++;
+    }
+
+    if (health_status) {
+      whereConditions.push(`health_status = $${paramCount}`);
+      params.push(health_status);
+      paramCount++;
+    }
+
+    if (access_frequency) {
+      whereConditions.push(`access_frequency = $${paramCount}`);
+      params.push(access_frequency);
+      paramCount++;
+    }
+
+    if (search) {
+      whereConditions.push(`collection_name ILIKE $${paramCount}`);
+      params.push(`%${search}%`);
+      paramCount++;
+    }
+
+    const whereClause =
+      whereConditions.length > 0
+        ? "WHERE " + whereConditions.join(" AND ")
+        : "";
+
+    const countQuery = `SELECT COUNT(*) FROM metadata.data_governance_catalog_mongodb ${whereClause}`;
+    const countResult = await pool.query(countQuery, params);
+    const total = parseInt(countResult.rows[0].count);
+
+    params.push(limit, offset);
+    const dataQuery = `
+      SELECT *
+      FROM metadata.data_governance_catalog_mongodb
+      ${whereClause}
+      ORDER BY server_name, database_name, collection_name, index_name
+      LIMIT $${paramCount} OFFSET $${paramCount + 1}
+    `;
+
+    const result = await pool.query(dataQuery, params);
+
+    const totalPages = Math.ceil(total / limit);
+
+    res.json({
+      data: result.rows,
+      pagination: {
+        total,
+        totalPages,
+        currentPage: page,
+        limit,
+      },
+    });
+  } catch (err) {
+    console.error("Error getting MongoDB governance catalog:", err);
+    res.status(500).json({
+      error: "Error al obtener catálogo de governance de MongoDB",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/governance-catalog/mongodb/metrics", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        COUNT(DISTINCT collection_name) as total_collections,
+        SUM(COALESCE(total_size_mb, 0)) as total_size_mb,
+        SUM(COALESCE(document_count, 0)) as total_documents,
+        COUNT(*) FILTER (WHERE health_status IN ('EXCELLENT', 'HEALTHY')) as healthy_count,
+        COUNT(*) FILTER (WHERE health_status = 'WARNING') as warning_count,
+        COUNT(*) FILTER (WHERE health_status = 'CRITICAL') as critical_count,
+        COUNT(DISTINCT server_name) as unique_servers
+      FROM metadata.data_governance_catalog_mongodb
+    `);
+
+    res.json(result.rows[0] || {});
+  } catch (err) {
+    console.error("Error getting MongoDB governance metrics:", err);
+    res.status(500).json({
+      error: "Error al obtener métricas de governance de MongoDB",
+      details: err.message,
+    });
+  }
+});
+
+app.get("/api/governance-catalog/mongodb/servers", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT DISTINCT server_name
+      FROM metadata.data_governance_catalog_mongodb
+      WHERE server_name IS NOT NULL
+      ORDER BY server_name
+    `);
+
+    res.json(result.rows.map((row) => row.server_name));
+  } catch (err) {
+    console.error("Error getting MongoDB servers:", err);
+    res.status(500).json({
+      error: "Error al obtener servidores",
+      details: err.message,
+    });
+  }
+});
+
+app.get(
+  "/api/governance-catalog/mongodb/databases/:serverName",
+  async (req, res) => {
+    try {
+      const serverName = req.params.serverName;
+      const result = await pool.query(
+        `
+        SELECT DISTINCT database_name
+        FROM metadata.data_governance_catalog_mongodb
+        WHERE server_name = $1 AND database_name IS NOT NULL
+        ORDER BY database_name
+      `,
+        [serverName]
+      );
+
+      res.json(result.rows.map((row) => row.database_name));
+    } catch (err) {
+      console.error("Error getting MongoDB databases:", err);
+      res.status(500).json({
+        error: "Error al obtener bases de datos",
+        details: err.message,
+      });
+    }
+  }
+);
+
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });

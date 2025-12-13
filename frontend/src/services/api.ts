@@ -1145,6 +1145,85 @@ export const dataLineageMSSQLApi = {
   },
 };
 
+export const dataLineageMongoDBApi = {
+  getMongoDBLineage: async (params: {
+    page?: number;
+    limit?: number;
+    server_name?: string;
+    database_name?: string;
+    relationship_type?: string;
+    search?: string;
+  }) => {
+    try {
+      const response = await api.get("/data-lineage/mongodb", { params });
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching MongoDB lineage data:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getMongoDBMetrics: async () => {
+    try {
+      const response = await api.get("/data-lineage/mongodb/metrics");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching MongoDB lineage metrics:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getMongoDBServers: async () => {
+    try {
+      const response = await api.get("/data-lineage/mongodb/servers");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching MongoDB servers:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getMongoDBDatabases: async (serverName: string) => {
+    try {
+      const response = await api.get(
+        `/data-lineage/mongodb/databases/${encodeURIComponent(serverName)}`
+      );
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching MongoDB databases:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+};
+
 export const governanceCatalogApi = {
   getMariaDBItems: async (params: {
     page?: number;
@@ -1294,6 +1373,88 @@ export const governanceCatalogApi = {
       return response.data;
     } catch (error) {
       console.error("Error fetching MSSQL databases:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+};
+
+export const governanceCatalogMongoDBApi = {
+  getMongoDBItems: async (params: {
+    page?: number;
+    limit?: number;
+    server_name?: string;
+    database_name?: string;
+    health_status?: string;
+    access_frequency?: string;
+    search?: string;
+  }) => {
+    try {
+      const response = await api.get("/governance-catalog/mongodb", { params });
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching MongoDB governance catalog:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getMongoDBMetrics: async () => {
+    try {
+      const response = await api.get("/governance-catalog/mongodb/metrics");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching MongoDB governance metrics:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getMongoDBServers: async () => {
+    try {
+      const response = await api.get("/governance-catalog/mongodb/servers");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching MongoDB servers:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getMongoDBDatabases: async (serverName: string) => {
+    try {
+      const response = await api.get(
+        `/governance-catalog/mongodb/databases/${encodeURIComponent(
+          serverName
+        )}`
+      );
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching MongoDB databases:", error);
       if (axios.isAxiosError(error) && error.response) {
         throw new Error(
           error.response.data.details ||

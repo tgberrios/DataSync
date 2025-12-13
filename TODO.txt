@@ -49,9 +49,6 @@
     NORMALIZAR CSS EN EN EL FRONTEND Y ARREGLAR Y OPTIMIZAR TODA ESA VAINA
 
 
-    actualizar logica para manejar cambios en el DDL
-
-
 
     Revisa este código/carpeta/proyecto y encuentra TODOS los problemas posibles:
 
