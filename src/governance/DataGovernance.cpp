@@ -343,13 +343,11 @@ DataGovernance::extractTableMetadata(const std::string &schema_name,
                    ::tolower);
     std::string checkTableQuery =
         "SELECT COUNT(*) FROM information_schema.tables "
-        "WHERE table_schema = '" +
-        escapeSQL(lowerSchema) +
-        "' "
-        "AND table_name = '" +
-        escapeSQL(lowerTable) + "';";
+        "WHERE table_schema = $1 "
+        "AND table_name = $2";
 
-    auto checkResult = checkTxn.exec(checkTableQuery);
+    auto checkResult =
+        checkTxn.exec_params(checkTableQuery, lowerSchema, lowerTable);
     checkTxn.commit();
 
     if (checkResult.empty() || checkResult[0][0].as<int>() == 0) {
@@ -406,32 +404,42 @@ void DataGovernance::analyzeTableStructure(pqxx::connection &conn,
                    ::tolower);
     std::string columnCountQuery =
         "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = "
-        "'" +
-        escapeSQL(lowerSchema) + "' AND table_name = '" +
-        escapeSQL(lowerTable) + "';";
-    auto columnResult = txn.exec(columnCountQuery);
+        "$1 AND table_name = $2";
+    auto columnResult =
+        txn.exec_params(columnCountQuery, lowerSchema, lowerTable);
     if (!columnResult.empty()) {
       metadata.total_columns = columnResult[0][0].as<int>();
     }
 
-    std::string rowCountQuery = "SELECT COUNT(*) FROM \"" +
-                                escapeSQL(lowerSchema) + "\".\"" +
-                                escapeSQL(lowerTable) + "\";";
+    std::string rowCountQuery = "SELECT COUNT(*) FROM " +
+                                txn.quote_name(lowerSchema) + "." +
+                                txn.quote_name(lowerTable);
     auto rowResult = txn.exec(rowCountQuery);
     if (!rowResult.empty()) {
       metadata.total_rows = rowResult[0][0].as<long long>();
     }
 
-    std::string sizeQuery = "SELECT pg_total_relation_size('" +
-                            escapeSQL(lowerSchema) + ".\"" +
-                            escapeSQL(lowerTable) + "\"') as size_bytes;";
+    std::string sizeQuery = "SELECT pg_total_relation_size(" +
+                            txn.quote(lowerSchema + "." + lowerTable) +
+                            "::regclass) as size_bytes";
     auto sizeResult = txn.exec(sizeQuery);
     if (!sizeResult.empty()) {
       try {
         long long sizeBytes = sizeResult[0][0].as<long long>();
-        metadata.table_size_mb =
-            static_cast<double>(sizeBytes) / (1024.0 * 1024.0);
+        if (sizeBytes > 0) {
+          metadata.table_size_mb =
+              static_cast<double>(sizeBytes) / (1024.0 * 1024.0);
+        } else {
+          metadata.table_size_mb = 0.0;
+        }
+      } catch (const std::exception &e) {
+        Logger::warning(LogCategory::GOVERNANCE, "DataGovernance",
+                        "Failed to calculate table size: " +
+                            std::string(e.what()));
+        metadata.table_size_mb = 0.0;
       } catch (...) {
+        Logger::warning(LogCategory::GOVERNANCE, "DataGovernance",
+                        "Unknown error calculating table size");
         metadata.table_size_mb = 0.0;
       }
     }
@@ -440,33 +448,26 @@ void DataGovernance::analyzeTableStructure(pqxx::connection &conn,
                           "FROM information_schema.table_constraints tc "
                           "JOIN information_schema.key_column_usage kcu ON "
                           "tc.constraint_name = kcu.constraint_name "
-                          "WHERE tc.table_schema = '" +
-                          escapeSQL(lowerSchema) +
-                          "' "
-                          "AND tc.table_name = '" +
-                          escapeSQL(lowerTable) +
-                          "' "
-                          "AND tc.constraint_type = 'PRIMARY KEY';";
-    auto pkResult = txn.exec(pkQuery);
+                          "WHERE tc.table_schema = $1 "
+                          "AND tc.table_name = $2 "
+                          "AND tc.constraint_type = 'PRIMARY KEY'";
+    auto pkResult = txn.exec_params(pkQuery, lowerSchema, lowerTable);
     if (!pkResult.empty() && !pkResult[0][0].is_null()) {
       metadata.primary_key_columns = pkResult[0][0].as<std::string>();
     }
 
-    std::string indexQuery =
-        "SELECT COUNT(*) FROM pg_indexes WHERE schemaname = '" +
-        escapeSQL(lowerSchema) + "' AND tablename = '" + escapeSQL(lowerTable) +
-        "';";
-    auto indexResult = txn.exec(indexQuery);
+    std::string indexQuery = "SELECT COUNT(*) FROM pg_indexes WHERE schemaname "
+                             "= $1 AND tablename = $2";
+    auto indexResult = txn.exec_params(indexQuery, lowerSchema, lowerTable);
     if (!indexResult.empty()) {
       metadata.index_count = indexResult[0][0].as<int>();
     }
 
     std::string constraintQuery =
         "SELECT COUNT(*) FROM information_schema.table_constraints WHERE "
-        "table_schema = '" +
-        escapeSQL(lowerSchema) + "' AND table_name = '" +
-        escapeSQL(lowerTable) + "';";
-    auto constraintResult = txn.exec(constraintQuery);
+        "table_schema = $1 AND table_name = $2";
+    auto constraintResult =
+        txn.exec_params(constraintQuery, lowerSchema, lowerTable);
     if (!constraintResult.empty()) {
       metadata.constraint_count = constraintResult[0][0].as<int>();
     }
@@ -759,10 +760,9 @@ void DataGovernance::inferSourceEngine(TableMetadata &metadata) {
     pqxx::work txn(conn);
 
     std::string query =
-        "SELECT db_engine FROM metadata.catalog WHERE schema_name = '" +
-        escapeSQL(metadata.schema_name) + "' LIMIT 1;";
+        "SELECT db_engine FROM metadata.catalog WHERE schema_name = $1 LIMIT 1";
 
-    auto result = txn.exec(query);
+    auto result = txn.exec_params(query, metadata.schema_name);
     txn.commit();
 
     if (!result.empty()) {
