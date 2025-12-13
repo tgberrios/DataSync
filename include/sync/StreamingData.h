@@ -9,6 +9,7 @@
 #include "governance/MaintenanceManager.h"
 #include "metrics/MetricsCollector.h"
 #include "sync/APIToDatabaseSync.h"
+#include "sync/CustomJobExecutor.h"
 #include "sync/MSSQLToPostgres.h"
 #include "sync/MariaDBToPostgres.h"
 #include "sync/MongoDBToPostgres.h"
@@ -17,6 +18,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <pqxx/pqxx>
 #include <thread>
@@ -30,6 +32,7 @@ public:
   void initialize();
   void run();
   void shutdown();
+  void executeJob(const std::string &jobName);
 
 private:
   std::atomic<bool> running{true};
@@ -40,6 +43,7 @@ private:
   MongoDBToPostgres mongoToPg;
   OracleToPostgres oracleToPg;
   APIToDatabaseSync apiToDb;
+  std::unique_ptr<CustomJobExecutor> customJobExecutor;
   CatalogManager catalogManager;
   DataQuality dataQuality;
 
@@ -51,6 +55,7 @@ private:
   void mongoTransferThread();
   void oracleTransferThread();
   void apiTransferThread();
+  void customJobsSchedulerThread();
   void qualityThread();
   void maintenanceThread();
   void monitoringThread();

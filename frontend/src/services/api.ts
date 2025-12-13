@@ -1689,3 +1689,137 @@ export const apiCatalogApi = {
     }
   },
 };
+
+export interface CustomJobEntry {
+  id: number;
+  job_name: string;
+  description: string | null;
+  source_db_engine: string;
+  source_connection_string: string;
+  query_sql: string;
+  target_db_engine: string;
+  target_connection_string: string;
+  target_schema: string;
+  target_table: string;
+  schedule_cron: string | null;
+  active: boolean;
+  enabled: boolean;
+  transform_config: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export const customJobsApi = {
+  getJobs: async (params: {
+    page?: number;
+    limit?: number;
+    source_db_engine?: string;
+    target_db_engine?: string;
+    active?: string;
+    enabled?: string;
+    search?: string;
+  }) => {
+    try {
+      const response = await api.get("/custom-jobs", { params });
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching custom jobs:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  updateActive: async (jobName: string, active: boolean) => {
+    try {
+      const response = await api.patch(`/custom-jobs/${jobName}/active`, {
+        active,
+      });
+      return response.data;
+    } catch (error) {
+      console.error(`Error updating job active status for ${jobName}:`, error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  executeJob: async (jobName: string) => {
+    try {
+      const response = await api.post(`/custom-jobs/${jobName}/execute`);
+      return response.data;
+    } catch (error) {
+      console.error(`Error executing job ${jobName}:`, error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getJobResults: async (jobName: string) => {
+    try {
+      const response = await api.get(`/custom-jobs/${jobName}/results`);
+      return response.data;
+    } catch (error) {
+      console.error(`Error fetching job results for ${jobName}:`, error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getJobHistory: async (jobName: string) => {
+    try {
+      const response = await api.get(`/custom-jobs/${jobName}/history`);
+      return response.data;
+    } catch (error) {
+      console.error(`Error fetching job history for ${jobName}:`, error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  deleteJob: async (jobName: string) => {
+    try {
+      const response = await api.delete(`/custom-jobs/${jobName}`);
+      return response.data;
+    } catch (error) {
+      console.error(`Error deleting job ${jobName}:`, error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+};
