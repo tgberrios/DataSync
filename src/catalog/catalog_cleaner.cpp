@@ -1,6 +1,8 @@
 #include "catalog/catalog_cleaner.h"
 #include "core/Config.h"
 #include "core/logger.h"
+#include "engines/mongodb_engine.h"
+#include "engines/oracle_engine.h"
 #include "utils/table_utils.h"
 #include <algorithm>
 #include <set>
@@ -138,6 +140,94 @@ void CatalogCleaner::cleanNonExistentMSSQLTables() {
   }
 }
 
+void CatalogCleaner::cleanNonExistentOracleTables() {
+  try {
+    auto connStrings = repo_->getConnectionStrings("Oracle");
+    size_t totalDeleted = 0;
+
+    Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                 "Checking " + std::to_string(connStrings.size()) +
+                     " Oracle connection(s) for non-existent tables");
+
+    for (const auto &connStr : connStrings) {
+      try {
+        OracleEngine engine(connStr);
+        auto existingTables = engine.discoverTables();
+
+        std::set<std::pair<std::string, std::string>> existingSet;
+        for (const auto &table : existingTables) {
+          existingSet.insert({table.schema, table.table});
+        }
+
+        auto catalogEntries = repo_->getCatalogEntries("Oracle", connStr);
+        for (const auto &entry : catalogEntries) {
+          if (existingSet.find({entry.schema, entry.table}) ==
+              existingSet.end()) {
+            repo_->deleteTable(entry.schema, entry.table, "Oracle", connStr,
+                               true);
+            totalDeleted++;
+          }
+        }
+      } catch (const std::exception &e) {
+        Logger::error(LogCategory::DATABASE, "CatalogCleaner",
+                      "Error checking Oracle connection: " +
+                          std::string(e.what()));
+      }
+    }
+
+    Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                 "Oracle cleanup completed: " + std::to_string(totalDeleted) +
+                     " non-existent tables removed");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::DATABASE, "CatalogCleaner",
+                  "Error cleaning Oracle tables: " + std::string(e.what()));
+  }
+}
+
+void CatalogCleaner::cleanNonExistentMongoDBTables() {
+  try {
+    auto connStrings = repo_->getConnectionStrings("MongoDB");
+    size_t totalDeleted = 0;
+
+    Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                 "Checking " + std::to_string(connStrings.size()) +
+                     " MongoDB connection(s) for non-existent tables");
+
+    for (const auto &connStr : connStrings) {
+      try {
+        MongoDBEngine engine(connStr);
+        auto existingTables = engine.discoverTables();
+
+        std::set<std::pair<std::string, std::string>> existingSet;
+        for (const auto &table : existingTables) {
+          existingSet.insert({table.schema, table.table});
+        }
+
+        auto catalogEntries = repo_->getCatalogEntries("MongoDB", connStr);
+        for (const auto &entry : catalogEntries) {
+          if (existingSet.find({entry.schema, entry.table}) ==
+              existingSet.end()) {
+            repo_->deleteTable(entry.schema, entry.table, "MongoDB", connStr,
+                               true);
+            totalDeleted++;
+          }
+        }
+      } catch (const std::exception &e) {
+        Logger::error(LogCategory::DATABASE, "CatalogCleaner",
+                      "Error checking MongoDB connection: " +
+                          std::string(e.what()));
+      }
+    }
+
+    Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                 "MongoDB cleanup completed: " + std::to_string(totalDeleted) +
+                     " non-existent tables removed");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::DATABASE, "CatalogCleaner",
+                  "Error cleaning MongoDB tables: " + std::string(e.what()));
+  }
+}
+
 // This function cleans orphaned or invalid table entries from the catalog.
 // It removes three types of invalid entries: (1) entries with NULL or empty
 // connection strings, (2) entries with unsupported database engines (only
@@ -157,9 +247,9 @@ void CatalogCleaner::cleanOrphanedTables() {
                  "WHERE connection_string IS NULL OR connection_string = ''");
     size_t deleted1 = result1.affected_rows();
 
-    auto result2 =
-        txn.exec("DELETE FROM metadata.catalog "
-                 "WHERE db_engine NOT IN ('PostgreSQL', 'MariaDB', 'MSSQL', 'MongoDB', 'Oracle')");
+    auto result2 = txn.exec("DELETE FROM metadata.catalog "
+                            "WHERE db_engine NOT IN ('PostgreSQL', 'MariaDB', "
+                            "'MSSQL', 'MongoDB', 'Oracle')");
     size_t deleted2 = result2.affected_rows();
 
     auto result3 = txn.exec("DELETE FROM metadata.catalog "

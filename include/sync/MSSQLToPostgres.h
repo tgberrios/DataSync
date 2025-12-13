@@ -1542,6 +1542,63 @@ public:
         columnTypes.push_back(pgType);
       }
 
+      // Handle FULL_LOAD / RESET: Always truncate to avoid duplicates
+      if (table.status == "FULL_LOAD" || table.status == "RESET") {
+        Logger::info(
+            LogCategory::TRANSFER, "processTableParallel",
+            "FULL_LOAD/RESET detected - performing mandatory truncate for " +
+                table.schema_name + "." + table.table_name);
+
+        try {
+          std::string lowerSchemaName = table.schema_name;
+          std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
+                         lowerSchemaName.begin(), ::tolower);
+          std::string lowerTableName = table.table_name;
+          std::transform(lowerTableName.begin(), lowerTableName.end(),
+                         lowerTableName.begin(), ::tolower);
+
+          pqxx::work txn(pgConn);
+          txn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
+                   lowerTableName + "\" CASCADE;");
+
+          std::string pkStrategy = getPKStrategyFromCatalog(
+              pgConn, table.schema_name, table.table_name);
+
+          if (pkStrategy != "PK") {
+            txn.exec("UPDATE metadata.catalog SET last_processed_pk=NULL WHERE "
+                     "schema_name=" +
+                     txn.quote(table.schema_name) +
+                     " AND table_name=" + txn.quote(table.table_name));
+            Logger::info(LogCategory::TRANSFER, "processTableParallel",
+                         "Reset last_processed_pk for table " +
+                             table.schema_name + "." + table.table_name);
+          } else {
+            txn.exec("UPDATE metadata.catalog SET last_processed_pk=NULL WHERE "
+                     "schema_name=" +
+                     txn.quote(table.schema_name) +
+                     " AND table_name=" + txn.quote(table.table_name));
+            Logger::info(LogCategory::TRANSFER, "processTableParallel",
+                         "Reset last_processed_pk for PK table " +
+                             table.schema_name + "." + table.table_name);
+          }
+
+          txn.commit();
+
+          Logger::info(LogCategory::TRANSFER, "processTableParallel",
+                       "Successfully truncated and reset metadata for " +
+                           table.schema_name + "." + table.table_name);
+
+        } catch (const std::exception &e) {
+          Logger::error(LogCategory::TRANSFER, "processTableParallel",
+                        "Error truncating table " + table.schema_name + "." +
+                            table.table_name + ": " + std::string(e.what()));
+        } catch (...) {
+          Logger::error(LogCategory::TRANSFER, "processTableParallel",
+                        "Unknown error truncating table " + table.schema_name +
+                            "." + table.table_name);
+        }
+      }
+
       // Start parallel data processing
       std::thread dataFetcher(&MSSQLToPostgres::dataFetcherThread, this,
                               tableKey, mssqlConn, table, columnNames,
@@ -1637,12 +1694,64 @@ public:
       std::string lastProcessedPK = getLastProcessedPKFromCatalog(
           pgConn, table.schema_name, table.table_name);
 
+      // Get actual PostgreSQL columns to filter source columns
+      std::set<std::string> pgColumnSet;
+      try {
+        std::string lowerSchema = table.schema_name;
+        std::transform(lowerSchema.begin(), lowerSchema.end(),
+                       lowerSchema.begin(), ::tolower);
+        std::string lowerTable = table.table_name;
+        std::transform(lowerTable.begin(), lowerTable.end(), lowerTable.begin(),
+                       ::tolower);
+        pqxx::work txn(pgConn);
+        auto pgColResult =
+            txn.exec("SELECT column_name FROM information_schema.columns "
+                     "WHERE table_schema = " +
+                     txn.quote(lowerSchema) + " AND table_name = " +
+                     txn.quote(lowerTable) + " ORDER BY ordinal_position");
+        txn.commit();
+        for (const auto &row : pgColResult) {
+          std::string colName = row[0].as<std::string>();
+          std::transform(colName.begin(), colName.end(), colName.begin(),
+                         ::tolower);
+          pgColumnSet.insert(colName);
+        }
+      } catch (const std::exception &e) {
+        Logger::warning(
+            LogCategory::TRANSFER, "dataFetcherThread",
+            "Error getting PostgreSQL columns, using all source columns: " +
+                std::string(e.what()));
+      }
+
+      // Filter columnNames to only include columns that exist in PostgreSQL
+      std::vector<std::string> validColumnNames;
+      for (size_t i = 0; i < columnNames.size(); ++i) {
+        if (pgColumnSet.empty() ||
+            pgColumnSet.find(columnNames[i]) != pgColumnSet.end()) {
+          validColumnNames.push_back(columnNames[i]);
+        }
+      }
+
+      if (validColumnNames.empty()) {
+        Logger::error(LogCategory::TRANSFER, "dataFetcherThread",
+                      "No valid columns found for " + table.schema_name + "." +
+                          table.table_name);
+        return;
+      }
+
       while (isTableProcessingActive(tableKey)) {
         chunkNumber++;
 
-        // Build select query
-        std::string selectQuery = "SELECT * FROM [" + table.schema_name +
-                                  "].[" + table.table_name + "]";
+        // Build select query with explicit column names that exist in
+        // PostgreSQL
+        std::string selectQuery = "SELECT ";
+        for (size_t i = 0; i < validColumnNames.size(); ++i) {
+          if (i > 0)
+            selectQuery += ", ";
+          selectQuery += "[" + validColumnNames[i] + "]";
+        }
+        selectQuery +=
+            " FROM [" + table.schema_name + "].[" + table.table_name + "]";
 
         if (pkStrategy == "PK" && !pkColumns.empty()) {
           if (!lastProcessedPK.empty()) {
@@ -1687,7 +1796,7 @@ public:
           break;
         }
 
-        // Create data chunk
+        // Create data chunk - results already contain only valid columns
         DataChunk chunk;
         chunk.rawData = std::move(results);
         chunk.chunkNumber = chunkNumber;
@@ -1715,7 +1824,7 @@ public:
           if (!results.empty()) {
             try {
               std::string lastPK =
-                  getLastPKFromResults(results, pkColumns, columnNames);
+                  getLastPKFromResults(results, pkColumns, validColumnNames);
               if (!lastPK.empty()) {
                 updateLastProcessedPK(pgConn, table.schema_name,
                                       table.table_name, lastPK);
@@ -1794,50 +1903,120 @@ public:
           std::transform(lowerTableName.begin(), lowerTableName.end(),
                          lowerTableName.begin(), ::tolower);
 
-          std::string batchQuery = "INSERT INTO \"" + lowerSchemaName +
-                                   "\".\"" + lowerTableName + "\" (";
-          for (size_t i = 0; i < columnNames.size(); ++i) {
-            if (i > 0)
-              batchQuery += ", ";
-            batchQuery += "\"" + columnNames[i] + "\"";
-          }
-          batchQuery += ") VALUES ";
+          PreparedBatch preparedBatch;
+          preparedBatch.chunkNumber = chunk.chunkNumber;
+          preparedBatch.schemaName = chunk.schemaName;
+          preparedBatch.tableName = chunk.tableName;
+          preparedBatch.batchSize = batchEnd - batchStart;
 
-          std::vector<std::string> values;
+          // Get actual PostgreSQL columns to filter out non-existent columns
+          pqxx::connection pgConn(
+              DatabaseConfig::getPostgresConnectionString());
+          std::vector<std::string> pgColumns = getPrimaryKeyColumnsFromPostgres(
+              pgConn, lowerSchemaName, lowerTableName);
+
+          // Get all PostgreSQL columns, not just PK
+          std::set<std::string> pgColumnSet;
+          try {
+            pqxx::work txn(pgConn);
+            auto pgColResult =
+                txn.exec("SELECT column_name FROM information_schema.columns "
+                         "WHERE table_schema = " +
+                         txn.quote(lowerSchemaName) +
+                         " AND table_name = " + txn.quote(lowerTableName) +
+                         " ORDER BY ordinal_position");
+            txn.commit();
+            for (const auto &row : pgColResult) {
+              std::string colName = row[0].as<std::string>();
+              std::transform(colName.begin(), colName.end(), colName.begin(),
+                             ::tolower);
+              pgColumnSet.insert(colName);
+            }
+          } catch (const std::exception &e) {
+            Logger::warning(
+                LogCategory::TRANSFER, "batchPreparerThread",
+                "Error getting PostgreSQL columns, using all source columns: " +
+                    std::string(e.what()));
+          }
+
+          // Filter columnNames to only include columns that exist in PostgreSQL
+          std::vector<std::string> validColumnNames;
+          std::vector<std::string> validColumnTypes;
+          for (size_t i = 0; i < columnNames.size(); ++i) {
+            if (pgColumnSet.empty() ||
+                pgColumnSet.find(columnNames[i]) != pgColumnSet.end()) {
+              validColumnNames.push_back(columnNames[i]);
+              validColumnTypes.push_back(columnTypes[i]);
+            }
+          }
+
+          if (validColumnNames.empty()) {
+            Logger::warning(LogCategory::TRANSFER, "batchPreparerThread",
+                            "No valid columns found for " + lowerSchemaName +
+                                "." + lowerTableName + ", skipping batch");
+            continue;
+          }
+
+          std::vector<std::string> pkColumns = getPrimaryKeyColumnsFromPostgres(
+              pgConn, lowerSchemaName, lowerTableName);
+
+          if (!pkColumns.empty()) {
+            preparedBatch.batchQuery = buildUpsertQuery(
+                validColumnNames, pkColumns, lowerSchemaName, lowerTableName);
+          } else {
+            // Simple INSERT
+            std::string insertQuery = "INSERT INTO \"" + lowerSchemaName +
+                                      "\".\"" + lowerTableName + "\" (";
+            for (size_t i = 0; i < validColumnNames.size(); ++i) {
+              if (i > 0)
+                insertQuery += ", ";
+              insertQuery += "\"" + validColumnNames[i] + "\"";
+            }
+            insertQuery += ") VALUES ";
+            preparedBatch.batchQuery = insertQuery;
+          }
+
+          // Build VALUES clause - row data already contains only valid columns
+          std::string valuesClause;
+          size_t validRowsCount = 0;
           for (size_t i = batchStart; i < batchEnd; ++i) {
             const auto &row = chunk.rawData[i];
-            if (row.size() != columnNames.size())
+            if (row.size() != validColumnNames.size())
               continue;
 
-            std::string rowValues = "(";
-            for (size_t j = 0; j < row.size(); ++j) {
+            if (validRowsCount > 0)
+              valuesClause += ", ";
+
+            valuesClause += "(";
+            for (size_t j = 0; j < row.size() && j < validColumnNames.size();
+                 ++j) {
               if (j > 0)
-                rowValues += ", ";
-              if (row[j] == "NULL" || row[j].empty()) {
-                rowValues += "NULL";
+                valuesClause += ", ";
+
+              if (row[j].empty()) {
+                valuesClause += "NULL";
               } else {
                 std::string cleanValue =
-                    cleanValueForPostgres(row[j], columnTypes[j]);
-                rowValues += "'" + escapeSQL(cleanValue) + "'";
+                    cleanValueForPostgres(row[j], validColumnTypes[j]);
+                if (cleanValue == "NULL") {
+                  valuesClause += "NULL";
+                } else {
+                  valuesClause += "'" + escapeSQL(cleanValue) + "'";
+                }
               }
             }
-            rowValues += ")";
-            values.push_back(rowValues);
+            valuesClause += ")";
+            validRowsCount++;
           }
 
-          if (!values.empty()) {
-            batchQuery += values[0];
-            for (size_t i = 1; i < values.size(); ++i) {
-              batchQuery += ", " + values[i];
+          if (validRowsCount > 0 && !valuesClause.empty()) {
+            preparedBatch.batchQuery += valuesClause;
+            if (!pkColumns.empty()) {
+              preparedBatch.batchQuery +=
+                  buildUpsertConflictClause(validColumnNames, pkColumns);
             }
-            batchQuery += ";";
-
-            PreparedBatch preparedBatch;
-            preparedBatch.batchQuery = batchQuery;
-            preparedBatch.batchSize = values.size();
-            preparedBatch.chunkNumber = chunk.chunkNumber;
-            preparedBatch.schemaName = chunk.schemaName;
-            preparedBatch.tableName = chunk.tableName;
+            preparedBatch.batchQuery += ";";
+            preparedBatch.batchSize = validRowsCount;
 
             preparedBatchQueue.push(std::move(preparedBatch));
           }

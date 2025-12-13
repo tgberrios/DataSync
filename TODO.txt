@@ -114,8 +114,5 @@ parte importante tambien es que documente cada funcion al detalle
 Sé exhaustivo y detallado.
 
 
-hay que meter api catalog a la ui 
-
-
 
 como se podria catalogar este programa con todas las funcionalidades que tiene ? es como una navaja suiza para todo lo que  tiene que ver con data engineer no ? o que nos faltaria para llegara ese punto una vez terminemos el proyecto ? 

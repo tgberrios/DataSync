@@ -36,6 +36,8 @@ void CatalogManager::cleanCatalog() {
     cleaner_->cleanNonExistentPostgresTables();
     cleaner_->cleanNonExistentMariaDBTables();
     cleaner_->cleanNonExistentMSSQLTables();
+    cleaner_->cleanNonExistentOracleTables();
+    cleaner_->cleanNonExistentMongoDBTables();
     cleaner_->cleanOrphanedTables();
     cleaner_->cleanOldLogs(DatabaseDefaults::DEFAULT_LOG_RETENTION_HOURS);
     updateClusterNames();

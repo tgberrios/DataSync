@@ -263,6 +263,7 @@ int MetadataRepository::reactivateTablesWithData() {
         "WHERE active = false");
 
     int reactivatedCount = 0;
+    bool transactionAborted = false;
     for (const auto &row : inactiveTables) {
       std::string schema = row[0].as<std::string>();
       std::string table = row[1].as<std::string>();
@@ -283,13 +284,29 @@ int MetadataRepository::reactivateTablesWithData() {
           reactivatedCount++;
         }
       } catch (const std::exception &e) {
-        Logger::error(LogCategory::DATABASE, "MetadataRepository",
-                      "Error checking table data for " + schema + "." + table +
-                          ": " + std::string(e.what()));
+        std::string errorMsg = e.what();
+        if (errorMsg.find("current transaction is aborted") !=
+            std::string::npos) {
+          try {
+            txn.abort();
+          } catch (...) {
+          }
+          transactionAborted = true;
+          Logger::warning(LogCategory::DATABASE, "MetadataRepository",
+                          "Transaction aborted while checking " + schema + "." +
+                              table + ", skipping remaining tables");
+          break;
+        } else {
+          Logger::error(LogCategory::DATABASE, "MetadataRepository",
+                        "Error checking table data for " + schema + "." +
+                            table + ": " + std::string(e.what()));
+        }
       }
     }
 
-    txn.commit();
+    if (!transactionAborted) {
+      txn.commit();
+    }
     return reactivatedCount;
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "MetadataRepository",
