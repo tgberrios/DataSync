@@ -8,6 +8,7 @@
 #include "governance/DataQuality.h"
 #include "governance/MaintenanceManager.h"
 #include "metrics/MetricsCollector.h"
+#include "sync/APIToDatabaseSync.h"
 #include "sync/MSSQLToPostgres.h"
 #include "sync/MariaDBToPostgres.h"
 #include "sync/MongoDBToPostgres.h"
@@ -23,7 +24,7 @@
 
 class StreamingData {
 public:
-  StreamingData() = default;
+  StreamingData();
   ~StreamingData();
 
   void initialize();
@@ -38,6 +39,7 @@ private:
   MSSQLToPostgres mssqlToPg;
   MongoDBToPostgres mongoToPg;
   OracleToPostgres oracleToPg;
+  APIToDatabaseSync apiToDb;
   CatalogManager catalogManager;
   DataQuality dataQuality;
 
@@ -48,6 +50,7 @@ private:
   void mssqlTransferThread();
   void mongoTransferThread();
   void oracleTransferThread();
+  void apiTransferThread();
   void qualityThread();
   void maintenanceThread();
   void monitoringThread();

@@ -6,6 +6,10 @@
 #include <mutex>
 #include <thread>
 
+// Constructor initializes API sync component with PostgreSQL connection string
+StreamingData::StreamingData()
+    : apiToDb(DatabaseConfig::getPostgresConnectionString()) {}
+
 // Destructor automatically shuts down the system, ensuring all threads are
 // properly joined and resources are cleaned up.
 StreamingData::~StreamingData() { shutdown(); }
@@ -44,12 +48,14 @@ void StreamingData::run() {
   threads.emplace_back(&StreamingData::maintenanceThread, this);
   Logger::info(LogCategory::MONITORING, "Core threads launched successfully");
 
-  Logger::info(LogCategory::MONITORING,
-               "Launching transfer threads (MariaDB, MSSQL)");
+  Logger::info(
+      LogCategory::MONITORING,
+      "Launching transfer threads (MariaDB, MSSQL, MongoDB, Oracle, API)");
   threads.emplace_back(&StreamingData::mariaTransferThread, this);
   threads.emplace_back(&StreamingData::mssqlTransferThread, this);
   threads.emplace_back(&StreamingData::mongoTransferThread, this);
   threads.emplace_back(&StreamingData::oracleTransferThread, this);
+  threads.emplace_back(&StreamingData::apiTransferThread, this);
 
   Logger::info(LogCategory::MONITORING,
                "Transfer threads launched successfully");
@@ -790,6 +796,47 @@ void StreamingData::oracleTransferThread() {
     std::this_thread::sleep_for(std::chrono::seconds(sleepSeconds));
   }
   Logger::info(LogCategory::MONITORING, "Oracle transfer thread stopped");
+}
+
+// API transfer thread that runs continuously while the system is running.
+// Performs periodic data synchronization from APIs to target databases.
+// Measures and logs transfer duration. Sleeps for max(5, sync_interval/4)
+// seconds between cycles to avoid overwhelming the system. Handles exceptions
+// by logging errors and continuing to the next cycle. This thread is
+// responsible for keeping API data synchronized with target databases.
+void StreamingData::apiTransferThread() {
+  Logger::info(LogCategory::MONITORING, "API transfer thread started");
+  while (running) {
+    try {
+      Logger::info(LogCategory::MONITORING,
+                   "Starting API transfer cycle - sync interval: " +
+                       std::to_string(SyncConfig::getSyncInterval()) +
+                       " seconds");
+
+      auto startTime = std::chrono::high_resolution_clock::now();
+      apiToDb.syncAllAPIs();
+      auto endTime = std::chrono::high_resolution_clock::now();
+
+      auto duration =
+          std::chrono::duration_cast<std::chrono::seconds>(endTime - startTime);
+      Logger::info(LogCategory::MONITORING,
+                   "API transfer cycle completed successfully in " +
+                       std::to_string(duration.count()) + " seconds");
+    } catch (const std::exception &e) {
+      Logger::error(
+          LogCategory::MONITORING, "apiTransferThread",
+          "CRITICAL ERROR in API transfer cycle: " + std::string(e.what()) +
+              " - API data sync failed, retrying in " +
+              std::to_string(SyncConfig::getSyncInterval()) + " seconds");
+    }
+
+    size_t interval = SyncConfig::getSyncInterval();
+    size_t sleepSeconds = (interval > 0 && interval >= 4) ? (interval / 4) : 5;
+    if (sleepSeconds < 5)
+      sleepSeconds = 5;
+    std::this_thread::sleep_for(std::chrono::seconds(sleepSeconds));
+  }
+  Logger::info(LogCategory::MONITORING, "API transfer thread stopped");
 }
 
 // Data quality validation thread that runs continuously while the system is
