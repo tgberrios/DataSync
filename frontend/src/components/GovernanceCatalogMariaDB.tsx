@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import styled from 'styled-components';
 import {
   Container,
@@ -9,6 +9,16 @@ import {
   Value,
   Pagination,
   PageButton,
+  FiltersContainer,
+  Select,
+  Input,
+  TableContainer,
+  Table,
+  Th,
+  Td,
+  TableRow,
+  Button,
+  StatusBadge,
 } from './shared/BaseComponents';
 import { usePagination } from '../hooks/usePagination';
 import { useTableFilters } from '../hooks/useTableFilters';
@@ -42,107 +52,54 @@ const MetricValue = styled.div`
   color: ${theme.colors.text.primary};
 `;
 
-const FiltersContainer = styled.div`
+const TableActions = styled.div`
   display: flex;
-  gap: ${theme.spacing.sm};
-  margin-bottom: ${theme.spacing.lg};
-  flex-wrap: wrap;
-  animation: slideUp 0.25s ease-out;
-  animation-delay: 0.15s;
-  animation-fill-mode: both;
-`;
-
-const FilterSelect = styled.select`
-  padding: 8px 12px;
-  border: 1px solid ${theme.colors.border.medium};
-  border-radius: ${theme.borderRadius.md};
-  background: ${theme.colors.background.main};
-  color: ${theme.colors.text.primary};
-  font-family: ${theme.fonts.primary};
-  cursor: pointer;
-  transition: all ${theme.transitions.normal};
-  font-size: 0.9em;
-  
-  &:hover {
-    background: ${theme.colors.background.secondary};
-    border-color: rgba(10, 25, 41, 0.3);
-  }
-  
-  &:focus {
-    outline: none;
-    border-color: ${theme.colors.primary.main};
-    box-shadow: 0 0 0 3px rgba(10, 25, 41, 0.1);
-  }
-  
-  &:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-`;
-
-const SearchInput = styled.input`
-  flex: 1;
-  min-width: 200px;
-  padding: 8px 12px;
-  border: 1px solid ${theme.colors.border.medium};
-  border-radius: ${theme.borderRadius.md};
-  font-family: ${theme.fonts.primary};
-  font-size: 0.9em;
-  transition: all ${theme.transitions.normal};
-  
-  &:focus {
-    outline: none;
-    border-color: ${theme.colors.primary.main};
-    box-shadow: 0 0 0 3px rgba(10, 25, 41, 0.1);
-  }
-`;
-
-const Table = styled.div`
-  border: 1px solid ${theme.colors.border.medium};
-  border-radius: ${theme.borderRadius.md};
-  overflow: hidden;
-  animation: slideUp 0.25s ease-out;
-  animation-delay: 0.2s;
-  animation-fill-mode: both;
-`;
-
-const TableHeader = styled.div`
-  display: grid;
-  grid-template-columns: 120px 120px 150px 150px 100px 100px 120px 100px 1fr;
-  background: ${theme.colors.gradient.primary};
-  padding: 12px 15px;
-  font-weight: bold;
-  font-size: 0.8em;
-  border-bottom: 2px solid ${theme.colors.border.dark};
-  gap: 10px;
-`;
-
-const TableRow = styled.div<{ $expanded?: boolean }>`
-  display: grid;
-  grid-template-columns: 120px 120px 150px 150px 100px 100px 120px 100px 1fr;
-  padding: 12px 15px;
-  border-bottom: 1px solid ${theme.colors.border.light};
-  transition: all ${theme.transitions.normal};
-  cursor: pointer;
-  gap: 10px;
+  justify-content: space-between;
   align-items: center;
-  font-size: 0.85em;
-  background-color: ${props => props.$expanded ? theme.colors.background.secondary : theme.colors.background.main};
-  
-  &:hover {
-    background: linear-gradient(90deg, ${theme.colors.background.secondary} 0%, ${theme.colors.background.tertiary} 100%);
-    border-left: 3px solid ${theme.colors.primary.main};
-  }
-  
-  &:last-child {
-    border-bottom: none;
-  }
+  margin-bottom: ${theme.spacing.md};
+  gap: ${theme.spacing.sm};
 `;
 
-const TableCell = styled.div`
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+const ExportButton = styled(Button)`
+  padding: 8px 16px;
+  font-size: 0.9em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+`;
+
+const PaginationInfo = styled.div`
+  text-align: center;
+  margin-bottom: ${theme.spacing.sm};
+  color: ${theme.colors.text.secondary};
+  font-size: 0.9em;
+  animation: fadeIn 0.25s ease-in;
+`;
+
+const SortableTh = styled(Th)<{ $sortable?: boolean; $active?: boolean; $direction?: "asc" | "desc" }>`
+  cursor: ${props => props.$sortable ? "pointer" : "default"};
+  user-select: none;
+  position: relative;
+  transition: all ${theme.transitions.normal};
+  
+  ${props => props.$sortable && `
+    &:hover {
+      background: linear-gradient(180deg, ${theme.colors.primary.light} 0%, ${theme.colors.primary.main} 100%);
+      color: ${theme.colors.text.white};
+    }
+  `}
+  
+  ${props => props.$active && `
+    background: linear-gradient(180deg, ${theme.colors.primary.main} 0%, ${theme.colors.primary.dark} 100%);
+    color: ${theme.colors.text.white};
+    
+    &::after {
+      content: "${props.$direction === "asc" ? "▲" : "▼"}";
+      position: absolute;
+      right: 8px;
+      font-size: 0.8em;
+    }
+  `}
 `;
 
 const Badge = styled.span<{ $status?: string }>`
@@ -214,13 +171,16 @@ const DetailValue = styled.div`
  */
 const GovernanceCatalogMariaDB = () => {
   const { page, limit, setPage } = usePagination(1, 20);
-  const { filters, setFilter } = useTableFilters({
+  const { filters, setFilter, clearFilters } = useTableFilters({
     server_name: '',
     database_name: '',
     health_status: '',
     access_frequency: '',
     search: ''
   });
+  
+  const [sortField, setSortField] = useState<string>("");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -359,6 +319,73 @@ const GovernanceCatalogMariaDB = () => {
     setPage(1);
   }, [setFilter, setPage]);
 
+  const handleSort = useCallback((field: string) => {
+    if (sortField === field) {
+      setSortDirection(prev => prev === "asc" ? "desc" : "asc");
+    } else {
+      setSortField(field);
+      setSortDirection("desc");
+    }
+    setPage(1);
+  }, [sortField, setPage]);
+
+  const sortedItems = useMemo(() => {
+    if (!sortField) return items;
+    return [...items].sort((a, b) => {
+      let aVal: any = a[sortField as keyof typeof a];
+      let bVal: any = b[sortField as keyof typeof b];
+      
+      if (aVal === null || aVal === undefined) aVal = "";
+      if (bVal === null || bVal === undefined) bVal = "";
+      
+      if (typeof aVal === "string" && typeof bVal === "string") {
+        return sortDirection === "asc" 
+          ? aVal.localeCompare(bVal)
+          : bVal.localeCompare(aVal);
+      }
+      
+      const aNum = Number(aVal);
+      const bNum = Number(bVal);
+      if (!isNaN(aNum) && !isNaN(bNum)) {
+        return sortDirection === "asc" ? aNum - bNum : bNum - aNum;
+      }
+      
+      return sortDirection === "asc"
+        ? String(aVal).localeCompare(String(bVal))
+        : String(bVal).localeCompare(String(aVal));
+    });
+  }, [items, sortField, sortDirection]);
+
+  const handleExportCSV = useCallback(() => {
+    const headers = ["Server", "Database", "Schema", "Table", "Rows", "Size (MB)", "Health", "Access", "Engine"];
+    const rows = sortedItems.map(item => [
+      item.server_name || "",
+      item.database_name || "",
+      item.schema_name || "",
+      item.table_name || "",
+      formatNumber(item.row_count),
+      item.total_size_mb || 0,
+      item.health_status || "",
+      item.access_frequency || "",
+      item.engine || ""
+    ]);
+    
+    const csvContent = [
+      headers.join(","),
+      ...rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+    ].join("\n");
+    
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `governance_catalog_mariadb_export_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, [sortedItems, formatNumber]);
+
   if (loading && items.length === 0) {
     return (
       <Container>
@@ -402,7 +429,7 @@ const GovernanceCatalogMariaDB = () => {
       </MetricsGrid>
 
       <FiltersContainer>
-        <FilterSelect
+        <Select
           value={filters.server_name as string}
           onChange={(e) => handleFilterChange('server_name', e.target.value)}
         >
@@ -410,9 +437,9 @@ const GovernanceCatalogMariaDB = () => {
           {servers.map(server => (
             <option key={server} value={server}>{server}</option>
           ))}
-        </FilterSelect>
+        </Select>
         
-        <FilterSelect
+        <Select
           value={filters.database_name as string}
           onChange={(e) => handleFilterChange('database_name', e.target.value)}
           disabled={!filters.server_name}
@@ -421,9 +448,9 @@ const GovernanceCatalogMariaDB = () => {
           {databases.map(db => (
             <option key={db} value={db}>{db}</option>
           ))}
-        </FilterSelect>
+        </Select>
         
-        <FilterSelect
+        <Select
           value={filters.health_status as string}
           onChange={(e) => handleFilterChange('health_status', e.target.value)}
         >
@@ -432,9 +459,9 @@ const GovernanceCatalogMariaDB = () => {
           <option value="HEALTHY">Healthy</option>
           <option value="WARNING">Warning</option>
           <option value="CRITICAL">Critical</option>
-        </FilterSelect>
+        </Select>
         
-        <FilterSelect
+        <Select
           value={filters.access_frequency as string}
           onChange={(e) => handleFilterChange('access_frequency', e.target.value)}
         >
@@ -444,51 +471,158 @@ const GovernanceCatalogMariaDB = () => {
           <option value="MEDIUM">Medium</option>
           <option value="LOW">Low</option>
           <option value="RARE">Rare</option>
-        </FilterSelect>
+        </Select>
         
-        <SearchInput
+        <Input
           type="text"
           placeholder="Search table name..."
           value={filters.search as string}
           onChange={(e) => handleFilterChange('search', e.target.value)}
+          style={{ flex: 1, minWidth: "200px" }}
         />
+        
+        <Button
+          $variant="secondary"
+          onClick={() => {
+            clearFilters();
+            setPage(1);
+          }}
+          style={{ padding: "8px 16px", fontSize: "0.9em" }}
+        >
+          Reset All
+        </Button>
       </FiltersContainer>
 
-      <Table>
-        <TableHeader>
-          <TableCell>Server</TableCell>
-          <TableCell>Database</TableCell>
-          <TableCell>Schema</TableCell>
-          <TableCell>Table</TableCell>
-          <TableCell>Rows</TableCell>
-          <TableCell>Size</TableCell>
-          <TableCell>Health</TableCell>
-          <TableCell>Access</TableCell>
-          <TableCell>Engine</TableCell>
-        </TableHeader>
-        {items.length === 0 ? (
-          <div style={{ padding: '40px', textAlign: 'center', color: theme.colors.text.secondary }}>
-            No governance data available. Data will appear here once collected.
-          </div>
-        ) : (
-          items.map((item) => (
-            <div key={item.id}>
-              <TableRow $expanded={openItemId === item.id} onClick={() => toggleItem(item.id)}>
-                <TableCell>{item.server_name || 'N/A'}</TableCell>
-                <TableCell>{item.database_name || 'N/A'}</TableCell>
-                <TableCell>{item.schema_name || 'N/A'}</TableCell>
-                <TableCell><strong>{item.table_name || 'N/A'}</strong></TableCell>
-                <TableCell>{formatNumber(item.row_count)}</TableCell>
-                <TableCell>{formatBytes(item.total_size_mb)}</TableCell>
-                <TableCell>
-                  <Badge $status={item.health_status}>{item.health_status || 'N/A'}</Badge>
-                </TableCell>
-                <TableCell>
-                  <Badge $status={item.access_frequency}>{item.access_frequency || 'N/A'}</Badge>
-                </TableCell>
-                <TableCell>{item.engine || 'N/A'}</TableCell>
+      <TableActions>
+        <PaginationInfo>
+          Showing {sortedItems.length} of {pagination.total} entries (Page{" "}
+          {pagination.currentPage} of {pagination.totalPages})
+        </PaginationInfo>
+        <ExportButton $variant="secondary" onClick={handleExportCSV}>
+          Export CSV
+        </ExportButton>
+      </TableActions>
+
+      <TableContainer>
+        <Table $minWidth="1400px">
+          <thead>
+            <tr>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "server_name"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("server_name")}
+              >
+                Server
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "database_name"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("database_name")}
+              >
+                Database
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "schema_name"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("schema_name")}
+              >
+                Schema
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "table_name"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("table_name")}
+              >
+                Table
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "row_count"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("row_count")}
+              >
+                Rows
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "total_size_mb"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("total_size_mb")}
+              >
+                Size
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "health_status"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("health_status")}
+              >
+                Health
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "access_frequency"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("access_frequency")}
+              >
+                Access
+              </SortableTh>
+              <Th>Engine</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {sortedItems.length === 0 ? (
+              <TableRow>
+                <Td colSpan={9} style={{ padding: '40px', textAlign: 'center', color: theme.colors.text.secondary }}>
+                  No governance data available. Data will appear here once collected.
+                </Td>
               </TableRow>
-              <DetailsPanel $isOpen={openItemId === item.id}>
+            ) : (
+              sortedItems.map((item) => (
+                <React.Fragment key={item.id}>
+                  <TableRow onClick={() => toggleItem(item.id)} style={{ cursor: 'pointer' }}>
+                    <Td style={{ color: theme.colors.text.secondary }}>
+                      {item.server_name || 'N/A'}
+                    </Td>
+                    <Td style={{ color: theme.colors.text.secondary }}>
+                      {item.database_name || 'N/A'}
+                    </Td>
+                    <Td style={{ color: theme.colors.text.secondary }}>
+                      {item.schema_name || 'N/A'}
+                    </Td>
+                    <Td>
+                      <strong style={{ color: theme.colors.primary.main }}>
+                        {item.table_name || 'N/A'}
+                      </strong>
+                    </Td>
+                    <Td style={{ color: theme.colors.text.secondary }}>
+                      {formatNumber(item.row_count)}
+                    </Td>
+                    <Td style={{ color: theme.colors.text.secondary }}>
+                      {formatBytes(item.total_size_mb)}
+                    </Td>
+                    <Td>
+                      <StatusBadge $status={item.health_status}>
+                        {item.health_status || 'N/A'}
+                      </StatusBadge>
+                    </Td>
+                    <Td>
+                      <StatusBadge $status={item.access_frequency}>
+                        {item.access_frequency || 'N/A'}
+                      </StatusBadge>
+                    </Td>
+                    <Td style={{ color: theme.colors.text.secondary }}>
+                      {item.engine || 'N/A'}
+                    </Td>
+                  </TableRow>
+                  {openItemId === item.id && (
+                    <TableRow>
+                      <Td colSpan={9} style={{ padding: 0, border: 'none' }}>
+                        <DetailsPanel $isOpen={openItemId === item.id}>
                 <DetailGrid>
                   <DetailLabel>Index Name:</DetailLabel>
                   <DetailValue>{item.index_name || 'N/A'}</DetailValue>
@@ -532,11 +666,16 @@ const GovernanceCatalogMariaDB = () => {
                   <DetailLabel>Snapshot Date:</DetailLabel>
                   <DetailValue>{formatDate(item.snapshot_date)}</DetailValue>
                 </DetailGrid>
-              </DetailsPanel>
-            </div>
-          ))
-        )}
-      </Table>
+                        </DetailsPanel>
+                      </Td>
+                    </TableRow>
+                  )}
+                </React.Fragment>
+              ))
+            )}
+          </tbody>
+        </Table>
+      </TableContainer>
 
       {pagination.totalPages > 1 && (
         <Pagination>

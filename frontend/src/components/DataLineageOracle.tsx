@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import styled from 'styled-components';
 import {
   Container,
@@ -9,6 +9,15 @@ import {
   Value,
   Pagination,
   PageButton,
+  FiltersContainer,
+  Select,
+  Input,
+  TableContainer,
+  Table,
+  Th,
+  Td,
+  TableRow,
+  Button,
 } from './shared/BaseComponents';
 import { usePagination } from '../hooks/usePagination';
 import { useTableFilters } from '../hooks/useTableFilters';
@@ -42,106 +51,54 @@ const MetricValue = styled.div`
   color: ${theme.colors.text.primary};
 `;
 
-const FiltersContainer = styled.div`
+const TableActions = styled.div`
   display: flex;
-  gap: ${theme.spacing.sm};
-  margin-bottom: ${theme.spacing.lg};
-  flex-wrap: wrap;
-  animation: slideUp 0.25s ease-out;
-  animation-delay: 0.15s;
-  animation-fill-mode: both;
-`;
-
-const FilterSelect = styled.select`
-  padding: 8px 12px;
-  border: 1px solid ${theme.colors.border.medium};
-  border-radius: ${theme.borderRadius.md};
-  background: ${theme.colors.background.main};
-  color: ${theme.colors.text.primary};
-  font-family: ${theme.fonts.primary};
-  cursor: pointer;
-  transition: all ${theme.transitions.normal};
-  font-size: 0.9em;
-  
-  &:hover {
-    background: ${theme.colors.background.secondary};
-    border-color: rgba(10, 25, 41, 0.3);
-  }
-  
-  &:focus {
-    outline: none;
-    border-color: ${theme.colors.primary.main};
-    box-shadow: 0 0 0 3px rgba(10, 25, 41, 0.1);
-  }
-  
-  &:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-`;
-
-const SearchInput = styled.input`
-  flex: 1;
-  min-width: 200px;
-  padding: 8px 12px;
-  border: 1px solid ${theme.colors.border.medium};
-  border-radius: ${theme.borderRadius.md};
-  font-family: ${theme.fonts.primary};
-  font-size: 0.9em;
-  transition: all ${theme.transitions.normal};
-  
-  &:focus {
-    outline: none;
-    border-color: ${theme.colors.primary.main};
-    box-shadow: 0 0 0 3px rgba(10, 25, 41, 0.1);
-  }
-`;
-
-const LineageTable = styled.div`
-  border: 1px solid ${theme.colors.border.medium};
-  border-radius: ${theme.borderRadius.md};
-  overflow: hidden;
-  animation: slideUp 0.25s ease-out;
-  animation-delay: 0.2s;
-  animation-fill-mode: both;
-`;
-
-const TableHeader = styled.div`
-  display: grid;
-  grid-template-columns: 120px 150px 100px 150px 100px 120px 120px 100px 1fr;
-  background: ${theme.colors.gradient.primary};
-  padding: 12px 15px;
-  font-weight: bold;
-  font-size: 0.8em;
-  border-bottom: 2px solid ${theme.colors.border.dark};
-  gap: 10px;
-`;
-
-const TableRow = styled.div`
-  display: grid;
-  grid-template-columns: 120px 150px 100px 150px 100px 120px 120px 100px 1fr;
-  padding: 12px 15px;
-  border-bottom: 1px solid ${theme.colors.border.light};
-  transition: all ${theme.transitions.normal};
-  cursor: pointer;
-  gap: 10px;
+  justify-content: space-between;
   align-items: center;
-  font-size: 0.85em;
-  
-  &:hover {
-    background: linear-gradient(90deg, ${theme.colors.background.secondary} 0%, ${theme.colors.background.tertiary} 100%);
-    border-left: 3px solid ${theme.colors.primary.main};
-  }
-  
-  &:last-child {
-    border-bottom: none;
-  }
+  margin-bottom: ${theme.spacing.md};
+  gap: ${theme.spacing.sm};
 `;
 
-const TableCell = styled.div`
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+const ExportButton = styled(Button)`
+  padding: 8px 16px;
+  font-size: 0.9em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+`;
+
+const PaginationInfo = styled.div`
+  text-align: center;
+  margin-bottom: ${theme.spacing.sm};
+  color: ${theme.colors.text.secondary};
+  font-size: 0.9em;
+  animation: fadeIn 0.25s ease-in;
+`;
+
+const SortableTh = styled(Th)<{ $sortable?: boolean; $active?: boolean; $direction?: "asc" | "desc" }>`
+  cursor: ${props => props.$sortable ? "pointer" : "default"};
+  user-select: none;
+  position: relative;
+  transition: all ${theme.transitions.normal};
+  
+  ${props => props.$sortable && `
+    &:hover {
+      background: linear-gradient(180deg, ${theme.colors.primary.light} 0%, ${theme.colors.primary.main} 100%);
+      color: ${theme.colors.text.white};
+    }
+  `}
+  
+  ${props => props.$active && `
+    background: linear-gradient(180deg, ${theme.colors.primary.main} 0%, ${theme.colors.primary.dark} 100%);
+    color: ${theme.colors.text.white};
+    
+    &::after {
+      content: "${props.$direction === "asc" ? "▲" : "▼"}";
+      position: absolute;
+      right: 8px;
+      font-size: 0.8em;
+    }
+  `}
 `;
 
 const Badge = styled.span<{ $type?: string; $level?: number }>`
@@ -224,12 +181,15 @@ const DefinitionText = styled.pre`
 
 const DataLineageOracle = () => {
   const { page, limit, setPage } = usePagination(1, 20);
-  const { filters, setFilter } = useTableFilters({
+  const { filters, setFilter, clearFilters } = useTableFilters({
     server_name: '',
     schema_name: '',
     relationship_type: '',
     search: ''
   });
+  
+  const [sortField, setSortField] = useState<string>("");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -351,6 +311,73 @@ const DataLineageOracle = () => {
     setPage(1);
   }, [setFilter, setPage]);
 
+  const handleSort = useCallback((field: string) => {
+    if (sortField === field) {
+      setSortDirection(prev => prev === "asc" ? "desc" : "asc");
+    } else {
+      setSortField(field);
+      setSortDirection("desc");
+    }
+    setPage(1);
+  }, [sortField, setPage]);
+
+  const sortedLineage = useMemo(() => {
+    if (!sortField) return lineage;
+    return [...lineage].sort((a, b) => {
+      let aVal: any = a[sortField as keyof typeof a];
+      let bVal: any = b[sortField as keyof typeof b];
+      
+      if (aVal === null || aVal === undefined) aVal = "";
+      if (bVal === null || bVal === undefined) bVal = "";
+      
+      if (typeof aVal === "string" && typeof bVal === "string") {
+        return sortDirection === "asc" 
+          ? aVal.localeCompare(bVal)
+          : bVal.localeCompare(aVal);
+      }
+      
+      const aNum = Number(aVal);
+      const bNum = Number(bVal);
+      if (!isNaN(aNum) && !isNaN(bNum)) {
+        return sortDirection === "asc" ? aNum - bNum : bNum - aNum;
+      }
+      
+      return sortDirection === "asc"
+        ? String(aVal).localeCompare(String(bVal))
+        : String(bVal).localeCompare(String(aVal));
+    });
+  }, [lineage, sortField, sortDirection]);
+
+  const handleExportCSV = useCallback(() => {
+    const headers = ["Schema", "Object", "Type", "Relationship", "Target Object", "Target Type", "Server", "Confidence", "Method"];
+    const rows = sortedLineage.map(edge => [
+      edge.schema_name || "",
+      edge.object_name || "",
+      edge.object_type || "",
+      edge.relationship_type || "",
+      edge.target_object_name || "",
+      edge.target_object_type || "",
+      edge.server_name || "",
+      formatConfidence(edge.confidence_score),
+      edge.discovery_method || ""
+    ]);
+    
+    const csvContent = [
+      headers.join(","),
+      ...rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+    ].join("\n");
+    
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `lineage_oracle_export_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, [sortedLineage, formatConfidence]);
+
   if (loading && lineage.length === 0) {
     return (
       <Container>
@@ -390,7 +417,7 @@ const DataLineageOracle = () => {
       </MetricsGrid>
 
       <FiltersContainer>
-        <FilterSelect
+        <Select
           value={filters.server_name as string}
           onChange={(e) => handleFilterChange('server_name', e.target.value)}
         >
@@ -398,9 +425,9 @@ const DataLineageOracle = () => {
           {servers.map(server => (
             <option key={server} value={server}>{server}</option>
           ))}
-        </FilterSelect>
+        </Select>
         
-        <FilterSelect
+        <Select
           value={filters.schema_name as string}
           onChange={(e) => handleFilterChange('schema_name', e.target.value)}
           disabled={!filters.server_name}
@@ -409,9 +436,9 @@ const DataLineageOracle = () => {
           {schemas.map(schema => (
             <option key={schema} value={schema}>{schema}</option>
           ))}
-        </FilterSelect>
+        </Select>
         
-        <FilterSelect
+        <Select
           value={filters.relationship_type as string}
           onChange={(e) => handleFilterChange('relationship_type', e.target.value)}
         >
@@ -420,124 +447,224 @@ const DataLineageOracle = () => {
           <option value="VIEW_READS_TABLE">VIEW_READS_TABLE</option>
           <option value="TRIGGER_ON_TABLE">TRIGGER_ON_TABLE</option>
           <option value="TRIGGER_READS_TABLE">TRIGGER_READS_TABLE</option>
-        </FilterSelect>
+        </Select>
         
-        <SearchInput
+        <Input
           type="text"
           placeholder="Search object name..."
           value={filters.search as string}
           onChange={(e) => handleFilterChange('search', e.target.value)}
+          style={{ flex: 1, minWidth: "200px" }}
         />
+        
+        <Button
+          $variant="secondary"
+          onClick={() => {
+            clearFilters();
+            setPage(1);
+          }}
+          style={{ padding: "8px 16px", fontSize: "0.9em" }}
+        >
+          Reset All
+        </Button>
       </FiltersContainer>
 
-      <LineageTable>
-        <TableHeader>
-          <TableCell>Schema</TableCell>
-          <TableCell>Object</TableCell>
-          <TableCell>Type</TableCell>
-          <TableCell>Target Object</TableCell>
-          <TableCell>Target Type</TableCell>
-          <TableCell>Server</TableCell>
-          <TableCell>Relationship</TableCell>
-          <TableCell>Confidence</TableCell>
-          <TableCell>Method</TableCell>
-        </TableHeader>
-        {lineage.length === 0 ? (
-          <div style={{ padding: '40px', textAlign: 'center', color: theme.colors.text.secondary }}>
-            No lineage data available. Lineage relationships will appear here once extracted.
-          </div>
-        ) : (
-          lineage.map((edge) => (
-            <div key={edge.id}>
-              <TableRow onClick={() => toggleEdge(edge.id)}>
-                <TableCell>{edge.schema_name || 'N/A'}</TableCell>
-                <TableCell>
-                  <strong>{edge.object_name || 'N/A'}</strong>
-                  {edge.column_name && (
-                    <div style={{ fontSize: '0.8em', color: theme.colors.text.secondary }}>.{edge.column_name}</div>
-                  )}
-                </TableCell>
-                <TableCell>
-                  <Badge $type={edge.object_type}>{edge.object_type || 'N/A'}</Badge>
-                </TableCell>
-                <TableCell>
-                  <strong>{edge.target_object_name || 'N/A'}</strong>
-                  {edge.target_column_name && (
-                    <div style={{ fontSize: '0.8em', color: theme.colors.text.secondary }}>.{edge.target_column_name}</div>
-                  )}
-                </TableCell>
-                <TableCell>
-                  <Badge $type={edge.target_object_type}>{edge.target_object_type || 'N/A'}</Badge>
-                </TableCell>
-                <TableCell>{edge.server_name || 'N/A'}</TableCell>
-                <TableCell>
-                  <RelationshipArrow>→</RelationshipArrow>
-                  <div style={{ fontSize: '0.75em', color: theme.colors.text.secondary, marginTop: '4px' }}>
-                    {edge.relationship_type || 'N/A'}
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <Badge $level={edge.confidence_score ? (edge.confidence_score >= 0.8 ? 0 : edge.confidence_score >= 0.5 ? 1 : 2) : 2}>
-                    {formatConfidence(edge.confidence_score)}
-                  </Badge>
-                </TableCell>
-                <TableCell>{edge.discovery_method || 'N/A'}</TableCell>
+      <TableActions>
+        <PaginationInfo>
+          Showing {sortedLineage.length} of {pagination.total} relationships (Page{" "}
+          {pagination.currentPage} of {pagination.totalPages})
+        </PaginationInfo>
+        <ExportButton $variant="secondary" onClick={handleExportCSV}>
+          Export CSV
+        </ExportButton>
+      </TableActions>
+
+      <TableContainer>
+        <Table $minWidth="1400px">
+          <thead>
+            <tr>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "schema_name"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("schema_name")}
+              >
+                Schema
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "object_name"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("object_name")}
+              >
+                Object
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "object_type"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("object_type")}
+              >
+                Type
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "target_object_name"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("target_object_name")}
+              >
+                Target Object
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "target_object_type"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("target_object_type")}
+              >
+                Target Type
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "server_name"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("server_name")}
+              >
+                Server
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "relationship_type"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("relationship_type")}
+              >
+                Relationship
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "confidence_score"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("confidence_score")}
+              >
+                Confidence
+              </SortableTh>
+              <Th>Method</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {sortedLineage.length === 0 ? (
+              <TableRow>
+                <Td colSpan={9} style={{ padding: '40px', textAlign: 'center', color: theme.colors.text.secondary }}>
+                  No lineage data available. Lineage relationships will appear here once extracted.
+                </Td>
               </TableRow>
-              <LineageDetails $isOpen={openEdgeId === edge.id}>
-                <DetailGrid>
-                  <DetailLabel>Edge Key:</DetailLabel>
-                  <DetailValue>{edge.edge_key || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Schema:</DetailLabel>
-                  <DetailValue>{edge.schema_name || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Object Name:</DetailLabel>
-                  <DetailValue>{edge.object_name || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Object Type:</DetailLabel>
-                  <DetailValue>{edge.object_type || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Column Name:</DetailLabel>
-                  <DetailValue>{edge.column_name || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Target Object:</DetailLabel>
-                  <DetailValue>{edge.target_object_name || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Target Type:</DetailLabel>
-                  <DetailValue>{edge.target_object_type || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Target Column:</DetailLabel>
-                  <DetailValue>{edge.target_column_name || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Dependency Level:</DetailLabel>
-                  <DetailValue>{edge.dependency_level !== null && edge.dependency_level !== undefined ? edge.dependency_level : 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Discovery Method:</DetailLabel>
-                  <DetailValue>{edge.discovery_method || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Discovered By:</DetailLabel>
-                  <DetailValue>{edge.discovered_by || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>First Seen:</DetailLabel>
-                  <DetailValue>{formatDate(edge.first_seen_at)}</DetailValue>
-                  
-                  <DetailLabel>Last Seen:</DetailLabel>
-                  <DetailValue>{formatDate(edge.last_seen_at)}</DetailValue>
-                </DetailGrid>
-                
-                {edge.definition_text && (
-                  <>
-                    <div style={{ padding: '15px 15px 5px 15px', fontWeight: 'bold', color: theme.colors.text.secondary }}>
-                      Definition:
-                    </div>
-                    <DefinitionText>{edge.definition_text}</DefinitionText>
-                  </>
-                )}
-              </LineageDetails>
-            </div>
-          ))
-        )}
-      </LineageTable>
+            ) : (
+              sortedLineage.map((edge) => (
+                <React.Fragment key={edge.id}>
+                  <TableRow onClick={() => toggleEdge(edge.id)} style={{ cursor: 'pointer' }}>
+                    <Td style={{ color: theme.colors.text.secondary }}>
+                      {edge.schema_name || 'N/A'}
+                    </Td>
+                    <Td>
+                      <strong style={{ color: theme.colors.primary.main }}>
+                        {edge.object_name || 'N/A'}
+                      </strong>
+                      {edge.column_name && (
+                        <div style={{ fontSize: '0.8em', color: theme.colors.text.secondary }}>.{edge.column_name}</div>
+                      )}
+                    </Td>
+                    <Td>
+                      <Badge $type={edge.object_type}>{edge.object_type || 'N/A'}</Badge>
+                    </Td>
+                    <Td>
+                      <strong>{edge.target_object_name || 'N/A'}</strong>
+                      {edge.target_column_name && (
+                        <div style={{ fontSize: '0.8em', color: theme.colors.text.secondary }}>.{edge.target_column_name}</div>
+                      )}
+                    </Td>
+                    <Td>
+                      <Badge $type={edge.target_object_type}>{edge.target_object_type || 'N/A'}</Badge>
+                    </Td>
+                    <Td style={{ color: theme.colors.text.secondary }}>
+                      {edge.server_name || 'N/A'}
+                    </Td>
+                    <Td>
+                      <RelationshipArrow>→</RelationshipArrow>
+                      <div style={{ fontSize: '0.75em', color: theme.colors.text.secondary, marginTop: '4px' }}>
+                        {edge.relationship_type || 'N/A'}
+                      </div>
+                    </Td>
+                    <Td>
+                      <Badge $level={edge.confidence_score ? (edge.confidence_score >= 0.8 ? 0 : edge.confidence_score >= 0.5 ? 1 : 2) : 2}>
+                        {formatConfidence(edge.confidence_score)}
+                      </Badge>
+                    </Td>
+                    <Td style={{ color: theme.colors.text.secondary }}>
+                      {edge.discovery_method || 'N/A'}
+                    </Td>
+                  </TableRow>
+                  {openEdgeId === edge.id && (
+                    <TableRow>
+                      <Td colSpan={9} style={{ padding: 0, border: 'none' }}>
+                        <LineageDetails $isOpen={openEdgeId === edge.id}>
+                          <DetailGrid>
+                            <DetailLabel>Edge Key:</DetailLabel>
+                            <DetailValue>{edge.edge_key || 'N/A'}</DetailValue>
+                            
+                            <DetailLabel>Schema:</DetailLabel>
+                            <DetailValue>{edge.schema_name || 'N/A'}</DetailValue>
+                            
+                            <DetailLabel>Object Name:</DetailLabel>
+                            <DetailValue>{edge.object_name || 'N/A'}</DetailValue>
+                            
+                            <DetailLabel>Object Type:</DetailLabel>
+                            <DetailValue>{edge.object_type || 'N/A'}</DetailValue>
+                            
+                            <DetailLabel>Column Name:</DetailLabel>
+                            <DetailValue>{edge.column_name || 'N/A'}</DetailValue>
+                            
+                            <DetailLabel>Target Object:</DetailLabel>
+                            <DetailValue>{edge.target_object_name || 'N/A'}</DetailValue>
+                            
+                            <DetailLabel>Target Type:</DetailLabel>
+                            <DetailValue>{edge.target_object_type || 'N/A'}</DetailValue>
+                            
+                            <DetailLabel>Target Column:</DetailLabel>
+                            <DetailValue>{edge.target_column_name || 'N/A'}</DetailValue>
+                            
+                            <DetailLabel>Dependency Level:</DetailLabel>
+                            <DetailValue>{edge.dependency_level !== null && edge.dependency_level !== undefined ? edge.dependency_level : 'N/A'}</DetailValue>
+                            
+                            <DetailLabel>Discovery Method:</DetailLabel>
+                            <DetailValue>{edge.discovery_method || 'N/A'}</DetailValue>
+                            
+                            <DetailLabel>Discovered By:</DetailLabel>
+                            <DetailValue>{edge.discovered_by || 'N/A'}</DetailValue>
+                            
+                            <DetailLabel>First Seen:</DetailLabel>
+                            <DetailValue>{formatDate(edge.first_seen_at)}</DetailValue>
+                            
+                            <DetailLabel>Last Seen:</DetailLabel>
+                            <DetailValue>{formatDate(edge.last_seen_at)}</DetailValue>
+                          </DetailGrid>
+                          
+                          {edge.definition_text && (
+                            <>
+                              <div style={{ padding: '15px 15px 5px 15px', fontWeight: 'bold', color: theme.colors.text.secondary }}>
+                                Definition:
+                              </div>
+                              <DefinitionText>{edge.definition_text}</DefinitionText>
+                            </>
+                          )}
+                        </LineageDetails>
+                      </Td>
+                    </TableRow>
+                  )}
+                </React.Fragment>
+              ))
+            )}
+          </tbody>
+        </Table>
+      </TableContainer>
 
       {pagination.totalPages > 1 && (
         <Pagination>
