@@ -1,244 +1,197 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import styled from 'styled-components';
-import { qualityApi } from '../services/api';
-import { Container, Header, Select, FiltersContainer, Pagination, PageButton, LoadingOverlay, ErrorMessage } from './shared/BaseComponents';
+import {
+  Container,
+  Header,
+  ErrorMessage,
+  LoadingOverlay,
+  Select,
+  Pagination,
+  PageButton,
+  FiltersContainer,
+  TableContainer,
+  Table,
+  Th,
+  Td,
+  TableRow,
+  Button,
+  StatusBadge,
+} from './shared/BaseComponents';
 import { usePagination } from '../hooks/usePagination';
 import { useTableFilters } from '../hooks/useTableFilters';
+import { qualityApi } from '../services/api';
 import { extractApiError } from '../utils/errorHandler';
+import { theme } from '../theme/theme';
 
-const QualityList = styled.div`
+const TableActions = styled.div`
   display: flex;
-  flex-direction: column;
-  gap: 12px;
-  animation: slideUp 0.25s ease-out;
-  animation-delay: 0.1s;
-  animation-fill-mode: both;
-`;
-
-const QualityItem = styled.div`
-  border: 1px solid #eee;
-  border-radius: 6px;
-  background-color: #fafafa;
-  overflow: hidden;
-  transition: all 0.2s ease;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
-  
-  &:hover {
-    border-color: rgba(10, 25, 41, 0.2);
-    background-color: #ffffff;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-    transform: translateY(-2px);
-  }
-`;
-
-  const QualityHeader = styled.div`
-  display: grid;
-  grid-template-columns: 150px 150px 100px 100px 100px 1fr;
+  justify-content: space-between;
   align-items: center;
-  padding: 10px 15px;
-  background: #f8f9fa;
-  border-bottom: 2px solid #dee2e6;
-  font-weight: bold;
-  font-size: 0.9em;
-  
-  & > div {
-    text-align: left;
-    padding: 0 8px;
-  }
-  
-  & > div:nth-child(3) {
-    text-align: right;
-  }
-  
-  & > div:nth-child(4) {
-    text-align: center;
-  }
-  
-  & > div:nth-child(5) {
-    text-align: center;
-  }
-  
-  & > div:last-child {
-    text-align: right;
-  }
+  margin-bottom: ${theme.spacing.md};
+  gap: ${theme.spacing.sm};
 `;
 
-  const QualitySummary = styled.div`
-  display: grid;
-  grid-template-columns: 150px 150px 100px 100px 100px 1fr;
-  align-items: center;
-  padding: 12px 15px;
-  cursor: pointer;
-  gap: 10px;
+const ExportButton = styled(Button)`
+  padding: 8px 16px;
   font-size: 0.9em;
-  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+`;
+
+const PaginationInfo = styled.div`
+  text-align: center;
+  margin-bottom: ${theme.spacing.sm};
+  color: ${theme.colors.text.secondary};
+  font-size: 0.9em;
+  animation: fadeIn 0.25s ease-in;
+`;
+
+const SortableTh = styled(Th)<{ $sortable?: boolean; $active?: boolean; $direction?: "asc" | "desc" }>`
+  cursor: ${props => props.$sortable ? "pointer" : "default"};
+  user-select: none;
+  position: relative;
+  transition: all ${theme.transitions.normal};
   
-  &:hover {
-    background: linear-gradient(90deg, #f0f0f0 0%, #f8f9fa 100%);
-  }
+  ${props => props.$sortable && `
+    &:hover {
+      background: linear-gradient(180deg, ${theme.colors.primary.light} 0%, ${theme.colors.primary.main} 100%);
+      color: ${theme.colors.text.white};
+    }
+  `}
   
-  & > div {
-    text-align: left;
-    padding: 0 8px;
-  }
-  
-  & > div:nth-child(3) {
-    text-align: right;
-  }
-  
-  & > div:nth-child(4) {
-    text-align: center;
-  }
-  
-  & > div:nth-child(5) {
-    text-align: center;
-  }
-  
-  & > div:last-child {
-    text-align: right;
-  }
+  ${props => props.$active && `
+    background: linear-gradient(180deg, ${theme.colors.primary.main} 0%, ${theme.colors.primary.dark} 100%);
+    color: ${theme.colors.text.white};
+    
+    &::after {
+      content: "${props.$direction === "asc" ? "▲" : "▼"}";
+      position: absolute;
+      right: 8px;
+      font-size: 0.8em;
+    }
+  `}
 `;
 
 const QualityDetails = styled.div<{ $isOpen: boolean }>`
   max-height: ${props => props.$isOpen ? '800px' : '0'};
   opacity: ${props => props.$isOpen ? '1' : '0'};
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-  border-top: ${props => props.$isOpen ? '1px solid #eee' : 'none'};
-  background-color: white;
+  border-top: ${props => props.$isOpen ? `1px solid ${theme.colors.border.light}` : 'none'};
+  background-color: ${theme.colors.background.main};
   overflow: hidden;
 `;
 
-const MetricsGrid = styled.div`
+const DetailsGrid = styled.div`
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  padding: 15px;
-  gap: 15px;
-  
-  & > div {
-    position: relative;
-  }
-  
-  & > div::before {
-    content: attr(data-label);
-    position: absolute;
-    top: -8px;
-    left: 12px;
-    background: white;
-    padding: 0 4px;
-    font-size: 0.75em;
-    color: #666;
-  }
+  padding: ${theme.spacing.md};
+  gap: ${theme.spacing.md};
 `;
 
-const MetricCard = styled.div`
-  background: white;
-  border: 1px solid #eee;
-  border-radius: 6px;
-  padding: 12px;
-  transition: all 0.2s ease;
+const DetailCard = styled.div`
+  background: ${theme.colors.background.main};
+  border: 1px solid ${theme.colors.border.light};
+  border-radius: ${theme.borderRadius.md};
+  padding: ${theme.spacing.sm};
+  transition: all ${theme.transitions.normal};
   animation: fadeIn 0.2s ease-in;
   animation-fill-mode: both;
   
   &:hover {
     transform: translateY(-3px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-    border-color: rgba(10, 25, 41, 0.2);
-    background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+    box-shadow: ${theme.shadows.md};
+    border-color: ${theme.colors.border.dark};
   }
-  
-  &:nth-child(1) { animation-delay: 0.1s; }
-  &:nth-child(2) { animation-delay: 0.15s; }
-  &:nth-child(3) { animation-delay: 0.2s; }
-  &:nth-child(4) { animation-delay: 0.25s; }
-  &:nth-child(5) { animation-delay: 0.15s; }
-  &:nth-child(6) { animation-delay: 0.35s; }
-  &:nth-child(7) { animation-delay: 0.2s; }
 `;
 
-const MetricLabel = styled.div`
-  color: #666;
+const DetailLabel = styled.div`
+  color: ${theme.colors.text.secondary};
   font-size: 0.85em;
   margin-bottom: 5px;
   font-weight: 500;
 `;
 
-const MetricValue = styled.div`
+const DetailValue = styled.div`
   font-size: 1.1em;
   font-weight: 500;
+  color: ${theme.colors.text.primary};
 `;
 
 const ValidationStatus = styled.span<{ $status: string }>`
   padding: 4px 10px;
-  border-radius: 6px;
+  border-radius: ${theme.borderRadius.md};
   font-size: 0.85em;
-  font-weight: 500;
+  font-weight: bold;
   display: inline-block;
-  transition: all 0.2s ease;
+  transition: all ${theme.transitions.normal};
   
   &:hover {
     transform: scale(1.05);
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+    box-shadow: ${theme.shadows.sm};
   }
   background-color: ${props => {
     switch (props.$status) {
-      case 'PASSED': return '#e8f5e9';
-      case 'WARNING': return '#fff3e0';
-      case 'FAILED': return '#ffebee';
-      default: return '#f5f5f5';
+      case 'PASSED': return theme.colors.status.success.bg;
+      case 'WARNING': return theme.colors.status.warning.bg;
+      case 'FAILED': return theme.colors.status.error.bg;
+      default: return theme.colors.background.secondary;
     }
   }};
   color: ${props => {
     switch (props.$status) {
-      case 'PASSED': return '#2e7d32';
-      case 'WARNING': return '#ef6c00';
-      case 'FAILED': return '#c62828';
-      default: return '#757575';
+      case 'PASSED': return theme.colors.status.success.text;
+      case 'WARNING': return theme.colors.status.warning.text;
+      case 'FAILED': return theme.colors.status.error.text;
+      default: return theme.colors.text.secondary;
     }
   }};
 `;
 
 const QualityScore = styled.span<{ $score: number }>`
   padding: 4px 10px;
-  border-radius: 6px;
+  border-radius: ${theme.borderRadius.md};
   font-size: 0.9em;
-  font-weight: 500;
+  font-weight: bold;
   display: inline-block;
-  transition: all 0.2s ease;
+  transition: all ${theme.transitions.normal};
   
   &:hover {
     transform: scale(1.05);
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+    box-shadow: ${theme.shadows.sm};
   }
   background-color: ${props => {
-    if (props.$score >= 90) return '#e8f5e9';
+    if (props.$score >= 90) return theme.colors.status.success.bg;
     if (props.$score >= 70) return '#f1f8e9';
-    if (props.$score >= 50) return '#fff3e0';
-    return '#ffebee';
+    if (props.$score >= 50) return theme.colors.status.warning.bg;
+    return theme.colors.status.error.bg;
   }};
   color: ${props => {
-    if (props.$score >= 90) return '#1b5e20';
+    if (props.$score >= 90) return theme.colors.status.success.text;
     if (props.$score >= 70) return '#33691e';
-    if (props.$score >= 50) return '#e65100';
-    return '#333333';
+    if (props.$score >= 50) return theme.colors.status.warning.text;
+    return theme.colors.status.error.text;
   }};
 `;
 
 const ErrorDetails = styled.pre`
-  margin: 15px;
-  padding: 12px;
-  background-color: #f8f8f8;
-  border-radius: 4px;
+  margin: ${theme.spacing.md};
+  padding: ${theme.spacing.sm};
+  background-color: ${theme.colors.background.secondary};
+  border-radius: ${theme.borderRadius.sm};
   font-size: 0.9em;
   overflow-x: auto;
-  border: 1px solid #eee;
+  border: 1px solid ${theme.colors.border.light};
   white-space: pre-wrap;
+  color: ${theme.colors.text.primary};
 `;
 
+const ActionButton = styled(Button)`
+  padding: 6px 12px;
+  margin-right: 5px;
+  font-size: 0.9em;
+`;
 
-/**
- * Componente para monitorear la calidad de los datos
- * Muestra métricas de calidad, validaciones y detalles de problemas encontrados
- */
 const Quality = () => {
   const isMountedRef = useRef(true);
   const [loading, setLoading] = useState(true);
@@ -253,14 +206,91 @@ const Quality = () => {
   });
 
   const { page, setPage } = usePagination(1, 10);
-  const { filters, setFilter } = useTableFilters({
+  const { filters, setFilter, clearFilters } = useTableFilters({
     engine: '',
     status: ''
   });
 
-  /**
-   * Obtiene los datos de calidad desde la API
-   */
+  const [sortField, setSortField] = useState("check_timestamp");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+
+  const formatNumber = useCallback((num: number) => num.toLocaleString(), []);
+
+  const formatDate = useCallback((date: string) => {
+    if (!date) return '-';
+    return new Date(date).toLocaleString();
+  }, []);
+
+  const sortedData = useMemo(() => {
+    if (!sortField) return qualityData;
+    return [...qualityData].sort((a, b) => {
+      let aVal: any = a[sortField as keyof typeof a];
+      let bVal: any = b[sortField as keyof typeof b];
+      
+      if (aVal === null || aVal === undefined) aVal = "";
+      if (bVal === null || bVal === undefined) bVal = "";
+      
+      if (typeof aVal === "string" && typeof bVal === "string") {
+        return sortDirection === "asc" 
+          ? aVal.localeCompare(bVal)
+          : bVal.localeCompare(aVal);
+      }
+      
+      const aNum = Number(aVal);
+      const bNum = Number(bVal);
+      if (!isNaN(aNum) && !isNaN(bNum)) {
+        return sortDirection === "asc" ? aNum - bNum : bNum - aNum;
+      }
+      
+      return sortDirection === "asc"
+        ? String(aVal).localeCompare(String(bVal))
+        : String(bVal).localeCompare(String(aVal));
+    });
+  }, [qualityData, sortField, sortDirection]);
+
+  const handleSort = useCallback((field: string) => {
+    if (sortField === field) {
+      setSortDirection(prev => prev === "asc" ? "desc" : "asc");
+    } else {
+      setSortField(field);
+      setSortDirection("asc");
+    }
+    setPage(1);
+  }, [sortField, setPage]);
+
+  const handleExportCSV = useCallback(() => {
+    const headers = ["Schema", "Table", "Total Rows", "Status", "Quality Score", "Missing Values", "Duplicates", "Type Mismatches", "Range Violations", "Referential Issues", "Constraint Violations", "Last Check"];
+    const rows = sortedData.map(item => [
+      item.schema_name,
+      item.table_name,
+      item.total_rows || 0,
+      item.validation_status || "",
+      item.quality_score || 0,
+      item.null_count || 0,
+      item.duplicate_count || 0,
+      item.invalid_type_count || 0,
+      item.out_of_range_count || 0,
+      item.referential_integrity_errors || 0,
+      item.constraint_violation_count || 0,
+      formatDate(item.check_timestamp)
+    ]);
+    
+    const csvContent = [
+      headers.join(","),
+      ...rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+    ].join("\n");
+    
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `quality_export_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, [sortedData, formatDate]);
+
   const isInitialLoadRef = useRef(true);
   
   const fetchQualityData = useCallback(async () => {
@@ -311,24 +341,17 @@ const Quality = () => {
     };
   }, [fetchQualityData]);
 
-  /**
-   * Alterna la expansión de un item de calidad
-   */
   const toggleItem = useCallback((id: number) => {
     setOpenItemId(prev => prev === id ? null : id);
   }, []);
 
-  /**
-   * Formatea un número con separadores de miles
-   */
-  const formatNumber = useCallback((num: number) => num.toLocaleString(), []);
-
-
   return (
     <Container>
-      <Header>
-        Data Quality Monitor
-      </Header>
+      {loading && <LoadingOverlay>Loading quality metrics...</LoadingOverlay>}
+
+      <Header>Data Quality Monitor</Header>
+
+      {error && <ErrorMessage>{error}</ErrorMessage>}
 
       <FiltersContainer>
         <Select 
@@ -343,6 +366,7 @@ const Quality = () => {
           <option value="MongoDB">MongoDB</option>
           <option value="MSSQL">MSSQL</option>
           <option value="MariaDB">MariaDB</option>
+          <option value="Oracle">Oracle</option>
         </Select>
 
         <Select
@@ -357,145 +381,228 @@ const Quality = () => {
           <option value="WARNING">Warning</option>
           <option value="FAILED">Failed</option>
         </Select>
+
+        <Button
+          $variant="secondary"
+          onClick={() => {
+            clearFilters();
+            setPage(1);
+          }}
+        >
+          Reset All
+        </Button>
       </FiltersContainer>
 
-      {loading && <LoadingOverlay>Loading quality metrics...</LoadingOverlay>}
-      {error && <ErrorMessage>{error}</ErrorMessage>}
+      <TableActions>
+        <PaginationInfo>
+          Showing {sortedData.length} of {pagination.total} entries (Page{" "}
+          {pagination.currentPage} of {pagination.totalPages})
+        </PaginationInfo>
+        <ExportButton $variant="secondary" onClick={handleExportCSV}>
+          Export CSV
+        </ExportButton>
+      </TableActions>
 
-      {!loading && !error && (
-        <>
-          <QualityList>
-            {qualityData.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '20px', color: '#666' }}>
-                No quality metrics found
-              </div>
+      <TableContainer>
+        <Table $minWidth="1400px">
+          <thead>
+            <tr>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "schema_name"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("schema_name")}
+              >
+                Schema
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "table_name"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("table_name")}
+              >
+                Table
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "total_rows"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("total_rows")}
+              >
+                Total Rows
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "validation_status"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("validation_status")}
+              >
+                Status
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "quality_score"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("quality_score")}
+              >
+                Quality Score
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "check_timestamp"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("check_timestamp")}
+              >
+                Last Check
+              </SortableTh>
+              <Th>Actions</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {sortedData.length === 0 ? (
+              <TableRow>
+                <Td colSpan={7} style={{ textAlign: 'center', padding: '20px', color: theme.colors.text.secondary }}>
+                  No quality metrics found
+                </Td>
+              </TableRow>
             ) : (
-              <>
-                <QualityHeader>
-                  <div>Schema</div>
-                  <div>Table</div>
-                  <div>Total Rows</div>
-                  <div>Status</div>
-                  <div>Quality</div>
-                  <div>Last Check</div>
-                </QualityHeader>
-                {qualityData.map((item) => (
-                <QualityItem key={item.id}>
-                  <QualitySummary onClick={() => toggleItem(item.id)}>
-                    <div>{item.schema_name}</div>
-                    <div>{item.table_name}</div>
-                    <div>{formatNumber(item.total_rows)}</div>
-                    <ValidationStatus $status={item.validation_status}>
-                      {item.validation_status}
-                    </ValidationStatus>
-                    <QualityScore $score={item.quality_score}>
-                      {item.quality_score}%
-                    </QualityScore>
-                    <div style={{ textAlign: 'right', color: '#666', fontSize: '0.85em' }}>
-                      {new Date(item.check_timestamp).toLocaleString()}
-                    </div>
-                  </QualitySummary>
+              sortedData.map((item) => (
+                <React.Fragment key={item.id}>
+                  <TableRow>
+                    <Td>
+                      <strong style={{ color: theme.colors.primary.main }}>
+                        {item.schema_name}
+                      </strong>
+                    </Td>
+                    <Td>{item.table_name}</Td>
+                    <Td>{formatNumber(item.total_rows || 0)}</Td>
+                    <Td>
+                      <ValidationStatus $status={item.validation_status}>
+                        {item.validation_status}
+                      </ValidationStatus>
+                    </Td>
+                    <Td>
+                      <QualityScore $score={item.quality_score || 0}>
+                        {item.quality_score || 0}%
+                      </QualityScore>
+                    </Td>
+                    <Td style={{ color: theme.colors.text.secondary, fontSize: '0.9em' }}>
+                      {formatDate(item.check_timestamp)}
+                    </Td>
+                    <Td>
+                      <ActionButton
+                        $variant="secondary"
+                        onClick={() => toggleItem(item.id)}
+                      >
+                        {openItemId === item.id ? 'Hide Details' : 'Show Details'}
+                      </ActionButton>
+                    </Td>
+                  </TableRow>
+                  {openItemId === item.id && (
+                    <TableRow>
+                      <Td colSpan={7} style={{ padding: 0 }}>
+                        <QualityDetails $isOpen={true}>
+                          <DetailsGrid>
+                            <DetailCard>
+                              <DetailValue>{formatNumber(item.null_count || 0)} rows</DetailValue>
+                              <DetailLabel>Missing Values</DetailLabel>
+                            </DetailCard>
+                            <DetailCard>
+                              <DetailValue>{formatNumber(item.duplicate_count || 0)} rows</DetailValue>
+                              <DetailLabel>Duplicate Records</DetailLabel>
+                            </DetailCard>
+                            <DetailCard>
+                              <DetailValue>{formatNumber(item.invalid_type_count || 0)} fields</DetailValue>
+                              <DetailLabel>Type Mismatches</DetailLabel>
+                            </DetailCard>
+                            <DetailCard>
+                              <DetailValue>{formatNumber(item.out_of_range_count || 0)} values</DetailValue>
+                              <DetailLabel>Range Violations</DetailLabel>
+                            </DetailCard>
+                            <DetailCard>
+                              <DetailValue>{formatNumber(item.referential_integrity_errors || 0)} errors</DetailValue>
+                              <DetailLabel>Referential Issues</DetailLabel>
+                            </DetailCard>
+                            <DetailCard>
+                              <DetailValue>{formatNumber(item.constraint_violation_count || 0)} violations</DetailValue>
+                              <DetailLabel>Constraint Issues</DetailLabel>
+                            </DetailCard>
+                            <DetailCard>
+                              <DetailValue>{(item.check_duration_ms / 1000 || 0).toFixed(2)}s</DetailValue>
+                              <DetailLabel>Analysis Time</DetailLabel>
+                            </DetailCard>
+                          </DetailsGrid>
 
-                  <QualityDetails $isOpen={openItemId === item.id}>
-                    <MetricsGrid>
-                      <MetricCard data-label="Missing Values">
-                        <MetricValue>{formatNumber(item.null_count)} rows</MetricValue>
-                        <MetricLabel>Rows with NULL values</MetricLabel>
-                      </MetricCard>
-                      <MetricCard data-label="Duplicate Records">
-                        <MetricValue>{formatNumber(item.duplicate_count)} rows</MetricValue>
-                        <MetricLabel>Duplicate entries found</MetricLabel>
-                      </MetricCard>
-                      <MetricCard data-label="Type Mismatches">
-                        <MetricValue>{formatNumber(item.invalid_type_count)} fields</MetricValue>
-                        <MetricLabel>Fields with incorrect data types</MetricLabel>
-                      </MetricCard>
-                      <MetricCard data-label="Range Violations">
-                        <MetricValue>{formatNumber(item.out_of_range_count)} values</MetricValue>
-                        <MetricLabel>Values outside valid range</MetricLabel>
-                      </MetricCard>
-                      <MetricCard data-label="Referential Issues">
-                        <MetricValue>{formatNumber(item.referential_integrity_errors)} errors</MetricValue>
-                        <MetricLabel>Foreign key violations</MetricLabel>
-                      </MetricCard>
-                      <MetricCard data-label="Constraint Issues">
-                        <MetricValue>{formatNumber(item.constraint_violation_count)} violations</MetricValue>
-                        <MetricLabel>Failed constraint checks</MetricLabel>
-                      </MetricCard>
-                      <MetricCard data-label="Analysis Time">
-                        <MetricValue>{(item.check_duration_ms / 1000).toFixed(2)}s</MetricValue>
-                        <MetricLabel>Time taken to check quality</MetricLabel>
-                      </MetricCard>
-                    </MetricsGrid>
+                          {item.type_mismatch_details && (
+                            <>
+                              <DetailLabel style={{ margin: `0 ${theme.spacing.md}` }}>Type Mismatch Details:</DetailLabel>
+                              <ErrorDetails>
+                                {Object.entries(item.type_mismatch_details).map(([column, details]) => (
+                                  `Column: ${column}\n${JSON.stringify(details, null, 2)}\n\n`
+                                ))}
+                              </ErrorDetails>
+                            </>
+                          )}
 
-                    {item.type_mismatch_details && (
-                      <>
-                        <MetricLabel style={{ margin: '0 15px' }}>Type Mismatch Details:</MetricLabel>
-                        <ErrorDetails>
-                          {Object.entries(item.type_mismatch_details).map(([column, details]) => (
-                            `Column: ${column}\n${JSON.stringify(details, null, 2)}\n\n`
-                          ))}
-                        </ErrorDetails>
-                      </>
-                    )}
+                          {item.integrity_check_details && (
+                            <>
+                              <DetailLabel style={{ margin: `0 ${theme.spacing.md}` }}>Integrity Check Details:</DetailLabel>
+                              <ErrorDetails>
+                                {Object.entries(item.integrity_check_details).map(([column, details]) => (
+                                  `Column: ${column}\n${JSON.stringify(details, null, 2)}\n\n`
+                                ))}
+                              </ErrorDetails>
+                            </>
+                          )}
 
-                    {item.integrity_check_details && (
-                      <>
-                        <MetricLabel style={{ margin: '0 15px' }}>Integrity Check Details:</MetricLabel>
-                        <ErrorDetails>
-                          {Object.entries(item.integrity_check_details).map(([column, details]) => (
-                            `Column: ${column}\n${JSON.stringify(details, null, 2)}\n\n`
-                          ))}
-                        </ErrorDetails>
-                      </>
-                    )}
-
-                    {item.error_details && (
-                      <>
-                        <MetricLabel style={{ margin: '0 15px' }}>Error Details:</MetricLabel>
-                        <ErrorDetails>{item.error_details}</ErrorDetails>
-                      </>
-                    )}
-                  </QualityDetails>
-                </QualityItem>
-              ))}
-              </>
+                          {item.error_details && (
+                            <>
+                              <DetailLabel style={{ margin: `0 ${theme.spacing.md}` }}>Error Details:</DetailLabel>
+                              <ErrorDetails>{item.error_details}</ErrorDetails>
+                            </>
+                          )}
+                        </QualityDetails>
+                      </Td>
+                    </TableRow>
+                  )}
+                </React.Fragment>
+              ))
             )}
-          </QualityList>
+          </tbody>
+        </Table>
+      </TableContainer>
 
-          {pagination.totalPages > 1 && (
-            <Pagination>
-              <PageButton
-                disabled={page === 1}
-                onClick={() => setPage(page - 1)}
-              >
-                Previous
-              </PageButton>
-              
-              {Array.from({ length: pagination.totalPages }, (_, i) => i + 1)
-                .filter(p => Math.abs(p - page) <= 2 || p === 1 || p === pagination.totalPages)
-                .map((p, i, arr) => (
-                  <React.Fragment key={p}>
-                    {i > 0 && arr[i - 1] !== p - 1 && <span>...</span>}
-                    <PageButton
-                      $active={p === page}
-                      onClick={() => setPage(p)}
-                    >
-                      {p}
-                    </PageButton>
-                  </React.Fragment>
-                ))
-              }
-              
-              <PageButton
-                disabled={page === pagination.totalPages}
-                onClick={() => setPage(page + 1)}
-              >
-                Next
-              </PageButton>
-            </Pagination>
-          )}
-        </>
+      {pagination.totalPages > 1 && (
+        <Pagination>
+          <PageButton
+            disabled={page === 1}
+            onClick={() => setPage(page - 1)}
+          >
+            Previous
+          </PageButton>
+          
+          {Array.from({ length: pagination.totalPages }, (_, i) => i + 1)
+            .filter(p => Math.abs(p - page) <= 2 || p === 1 || p === pagination.totalPages)
+            .map((p, i, arr) => (
+              <React.Fragment key={p}>
+                {i > 0 && arr[i - 1] !== p - 1 && <span>...</span>}
+                <PageButton
+                  $active={p === page}
+                  onClick={() => setPage(p)}
+                >
+                  {p}
+                </PageButton>
+              </React.Fragment>
+            ))
+          }
+          
+          <PageButton
+            disabled={page === pagination.totalPages}
+            onClick={() => setPage(page + 1)}
+          >
+            Next
+          </PageButton>
+        </Pagination>
       )}
     </Container>
   );
