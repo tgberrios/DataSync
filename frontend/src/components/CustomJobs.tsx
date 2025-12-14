@@ -20,6 +20,8 @@ import {
   ActiveBadge,
   ActionButton,
   PlayButton,
+  FormGroup,
+  Label,
 } from './shared/BaseComponents';
 import { usePagination } from '../hooks/usePagination';
 import { useTableFilters } from '../hooks/useTableFilters';
@@ -50,6 +52,103 @@ const PaginationInfo = styled.div`
   color: ${theme.colors.text.secondary};
   font-size: 0.9em;
   animation: fadeIn 0.25s ease-in;
+`;
+
+const ModalOverlay = styled.div<{ $isOpen: boolean }>`
+  display: ${props => props.$isOpen ? 'flex' : 'none'};
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.2s ease-in;
+`;
+
+const ModalContent = styled.div`
+  background: ${theme.colors.background.main};
+  border-radius: ${theme.borderRadius.md};
+  padding: ${theme.spacing.xl};
+  max-width: 800px;
+  width: 90%;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: ${theme.shadows.xl};
+  animation: slideUp 0.3s ease-out;
+`;
+
+const ModalHeader = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: ${theme.spacing.lg};
+  padding-bottom: ${theme.spacing.md};
+  border-bottom: 2px solid ${theme.colors.border.medium};
+`;
+
+const ModalTitle = styled.h2`
+  margin: 0;
+  color: ${theme.colors.text.primary};
+`;
+
+const HeaderContent = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+`;
+
+const CloseButton = styled.button`
+  background: none;
+  border: none;
+  font-size: 1.5em;
+  cursor: pointer;
+  color: ${theme.colors.text.secondary};
+  padding: 0;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  
+  &:hover {
+    color: ${theme.colors.text.primary};
+  }
+`;
+
+const TextArea = styled.textarea`
+  width: 100%;
+  padding: ${theme.spacing.sm};
+  border: 1px solid ${theme.colors.border.medium};
+  border-radius: ${theme.borderRadius.md};
+  font-family: ${theme.fonts.primary};
+  font-size: 0.9em;
+  min-height: 200px;
+  resize: vertical;
+  background: ${theme.colors.background.main};
+  color: ${theme.colors.text.primary};
+  
+  &:focus {
+    outline: none;
+    border-color: ${theme.colors.primary.main};
+    box-shadow: 0 0 0 2px ${theme.colors.primary.light}40;
+  }
+`;
+
+const ScriptSelector = styled(Select)`
+  margin-bottom: ${theme.spacing.md};
+`;
+
+const ButtonGroup = styled.div`
+  display: flex;
+  gap: ${theme.spacing.md};
+  justify-content: flex-end;
+  margin-top: ${theme.spacing.lg};
+  padding-top: ${theme.spacing.md};
+  border-top: 1px solid ${theme.colors.border.light};
 `;
 
 const QueryPreview = styled.div`
@@ -86,6 +185,24 @@ const CustomJobs = () => {
     currentPage: 1,
     limit: 20
   });
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingJob, setEditingJob] = useState<CustomJobEntry | null>(null);
+  const [availableScripts, setAvailableScripts] = useState<Array<{name: string, content: string}>>([]);
+  const [selectedScript, setSelectedScript] = useState<string>('');
+  const [jobForm, setJobForm] = useState({
+    job_name: '',
+    description: '',
+    source_db_engine: 'PostgreSQL',
+    source_connection_string: '',
+    query_sql: '',
+    target_db_engine: 'PostgreSQL',
+    target_connection_string: '',
+    target_schema: '',
+    target_table: '',
+    schedule_cron: '',
+    active: true,
+    enabled: true
+  });
   const isMountedRef = useRef(true);
 
   const fetchJobs = useCallback(async () => {
@@ -94,15 +211,27 @@ const CustomJobs = () => {
       setLoading(true);
       setError(null);
       const sanitizedSearch = sanitizeSearch(search, 100);
-      const response = await customJobsApi.getJobs({
+      const params: any = {
         page,
         limit,
-        ...filters,
         search: sanitizedSearch
-      });
+      };
+      
+      if (filters.source_db_engine) params.source_db_engine = filters.source_db_engine;
+      if (filters.target_db_engine) params.target_db_engine = filters.target_db_engine;
+      if (filters.active) params.active = filters.active;
+      if (filters.enabled) params.enabled = filters.enabled;
+      
+      const response = await customJobsApi.getJobs(params);
       if (isMountedRef.current) {
-        setData(response.data);
-        setPagination(response.pagination);
+        console.log('CustomJobs response:', response);
+        setData(response.data || []);
+        setPagination(response.pagination || {
+          total: 0,
+          totalPages: 0,
+          currentPage: 1,
+          limit: 20
+        });
       }
     } catch (err) {
       if (isMountedRef.current) {
@@ -184,13 +313,124 @@ const CustomJobs = () => {
     }
   }, [fetchJobs]);
 
+  const loadScripts = useCallback(async () => {
+    try {
+      const scripts = await customJobsApi.getScripts();
+      setAvailableScripts(scripts);
+    } catch (err) {
+      console.error('Error loading scripts:', err);
+    }
+  }, []);
+
+  const handleOpenModal = useCallback((job?: CustomJobEntry) => {
+    if (job) {
+      setEditingJob(job);
+      setJobForm({
+        job_name: job.job_name,
+        description: job.description || '',
+        source_db_engine: job.source_db_engine,
+        source_connection_string: job.source_connection_string || '',
+        query_sql: job.query_sql || '',
+        target_db_engine: job.target_db_engine,
+        target_connection_string: job.target_connection_string || '',
+        target_schema: job.target_schema || '',
+        target_table: job.target_table || '',
+        schedule_cron: job.schedule_cron || '',
+        active: job.active,
+        enabled: job.enabled
+      });
+    } else {
+      setEditingJob(null);
+      setJobForm({
+        job_name: '',
+        description: '',
+        source_db_engine: 'PostgreSQL',
+        source_connection_string: '',
+        query_sql: '',
+        target_db_engine: 'PostgreSQL',
+        target_connection_string: '',
+        target_schema: '',
+        target_table: '',
+        schedule_cron: '',
+        active: true,
+        enabled: true
+      });
+    }
+    setSelectedScript('');
+    setIsModalOpen(true);
+  }, []);
+
+  const handleCloseModal = useCallback(() => {
+    setIsModalOpen(false);
+    setEditingJob(null);
+    setSelectedScript('');
+  }, []);
+
+  const handleScriptSelect = useCallback((scriptName: string) => {
+    setSelectedScript(scriptName);
+    const script = availableScripts.find(s => s.name === scriptName);
+    if (script) {
+      setJobForm(prev => ({ ...prev, query_sql: script.content }));
+    }
+  }, [availableScripts]);
+
+  const handleSubmit = useCallback(async () => {
+    try {
+      if (!jobForm.job_name || !jobForm.target_schema || !jobForm.target_table) {
+        alert('Please fill in all required fields');
+        return;
+      }
+      
+      if (jobForm.source_db_engine === 'Python' && !jobForm.query_sql.trim()) {
+        alert('Please select a Python script or enter script content');
+        return;
+      }
+      
+      if (jobForm.source_db_engine !== 'Python' && !jobForm.query_sql.trim()) {
+        alert('Please enter SQL query');
+        return;
+      }
+
+      const response = await fetch('/api/custom-jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(jobForm)
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || error.details || 'Error saving job');
+      }
+      
+      await fetchJobs();
+      handleCloseModal();
+    } catch (err) {
+      if (isMountedRef.current) {
+        setError(extractApiError(err));
+      }
+    }
+  }, [jobForm, fetchJobs, handleCloseModal]);
+
+  useEffect(() => {
+    if (isModalOpen && jobForm.source_db_engine === 'Python') {
+      loadScripts();
+    }
+  }, [isModalOpen, jobForm.source_db_engine, loadScripts]);
+
   if (loading && data.length === 0) {
     return <LoadingOverlay>Loading Custom Jobs...</LoadingOverlay>;
   }
 
   return (
     <Container>
-      <Header>■ Custom Jobs</Header>
+      <Header>
+        <HeaderContent>
+          <span>■ Custom Jobs</span>
+          <Button onClick={() => handleOpenModal()}>
+            + Add Job
+          </Button>
+        </HeaderContent>
+      </Header>
       
       {error && <ErrorMessage>{error}</ErrorMessage>}
 
@@ -219,6 +459,7 @@ const CustomJobs = () => {
           <option value="MSSQL">MSSQL</option>
           <option value="MongoDB">MongoDB</option>
           <option value="Oracle">Oracle</option>
+          <option value="Python">Python</option>
         </Select>
 
         <Select
@@ -316,6 +557,11 @@ const CustomJobs = () => {
                     ▶
                   </PlayButton>
                   <ActionButton
+                    onClick={() => handleOpenModal(job)}
+                  >
+                    Edit
+                  </ActionButton>
+                  <ActionButton
                     onClick={() => handleToggleActive(job.job_name, job.active)}
                   >
                     {job.active ? 'Deactivate' : 'Activate'}
@@ -329,6 +575,13 @@ const CustomJobs = () => {
                 </Td>
               </TableRow>
             ))}
+            {!loading && data.length === 0 && (
+              <tr>
+                <td colSpan={13} style={{ textAlign: 'center', padding: '40px', color: theme.colors.text.secondary }}>
+                  No custom jobs found. Create a new job to get started.
+                </td>
+              </tr>
+            )}
           </tbody>
         </Table>
       </TableContainer>
@@ -359,6 +612,176 @@ const CustomJobs = () => {
           </Pagination>
         </>
       )}
+
+      <ModalOverlay $isOpen={isModalOpen} onClick={handleCloseModal}>
+        <ModalContent onClick={(e) => e.stopPropagation()}>
+          <ModalHeader>
+            <ModalTitle>{editingJob ? 'Edit Job' : 'Create New Job'}</ModalTitle>
+            <CloseButton onClick={handleCloseModal}>×</CloseButton>
+          </ModalHeader>
+
+          <FormGroup>
+            <Label>Job Name *</Label>
+            <Input
+              value={jobForm.job_name}
+              onChange={(e) => setJobForm(prev => ({ ...prev, job_name: e.target.value }))}
+              placeholder="Enter unique job name"
+              disabled={!!editingJob}
+            />
+          </FormGroup>
+
+          <FormGroup>
+            <Label>Description</Label>
+            <Input
+              value={jobForm.description}
+              onChange={(e) => setJobForm(prev => ({ ...prev, description: e.target.value }))}
+              placeholder="Job description"
+            />
+          </FormGroup>
+
+          <FormGroup>
+            <Label>Source DB Engine *</Label>
+            <Select
+              value={jobForm.source_db_engine}
+              onChange={(e) => {
+                setJobForm(prev => ({ 
+                  ...prev, 
+                  source_db_engine: e.target.value,
+                  query_sql: e.target.value === 'Python' ? '' : prev.query_sql
+                }));
+                setSelectedScript('');
+              }}
+            >
+              <option value="PostgreSQL">PostgreSQL</option>
+              <option value="MariaDB">MariaDB</option>
+              <option value="MSSQL">MSSQL</option>
+              <option value="MongoDB">MongoDB</option>
+              <option value="Oracle">Oracle</option>
+              <option value="Python">Python</option>
+            </Select>
+          </FormGroup>
+
+          {jobForm.source_db_engine !== 'Python' && (
+            <FormGroup>
+              <Label>Source Connection String</Label>
+              <Input
+                value={jobForm.source_connection_string}
+                onChange={(e) => setJobForm(prev => ({ ...prev, source_connection_string: e.target.value }))}
+                placeholder="host=localhost port=5432 dbname=..."
+              />
+            </FormGroup>
+          )}
+
+          {jobForm.source_db_engine === 'Python' && (
+            <FormGroup>
+              <Label>Select Python Script</Label>
+              <ScriptSelector
+                value={selectedScript}
+                onChange={(e) => handleScriptSelect(e.target.value)}
+              >
+                <option value="">-- Select a script or write custom --</option>
+                {availableScripts.map(script => (
+                  <option key={script.name} value={script.name}>
+                    {script.name}
+                  </option>
+                ))}
+              </ScriptSelector>
+            </FormGroup>
+          )}
+
+          <FormGroup>
+            <Label>{jobForm.source_db_engine === 'Python' ? 'Python Script *' : 'SQL Query *'}</Label>
+            <TextArea
+              value={jobForm.query_sql}
+              onChange={(e) => setJobForm(prev => ({ ...prev, query_sql: e.target.value }))}
+              placeholder={jobForm.source_db_engine === 'Python' 
+                ? 'import json\n\ndata = [...]\nprint(json.dumps(data))'
+                : 'SELECT * FROM table...'}
+            />
+          </FormGroup>
+
+          <FormGroup>
+            <Label>Target DB Engine *</Label>
+            <Select
+              value={jobForm.target_db_engine}
+              onChange={(e) => setJobForm(prev => ({ ...prev, target_db_engine: e.target.value }))}
+            >
+              <option value="PostgreSQL">PostgreSQL</option>
+              <option value="MariaDB">MariaDB</option>
+              <option value="MSSQL">MSSQL</option>
+              <option value="MongoDB">MongoDB</option>
+              <option value="Oracle">Oracle</option>
+            </Select>
+          </FormGroup>
+
+          <FormGroup>
+            <Label>Target Connection String *</Label>
+            <Input
+              value={jobForm.target_connection_string}
+              onChange={(e) => setJobForm(prev => ({ ...prev, target_connection_string: e.target.value }))}
+              placeholder="host=localhost port=5432 dbname=..."
+            />
+          </FormGroup>
+
+          <FormGroup>
+            <Label>Target Schema *</Label>
+            <Input
+              value={jobForm.target_schema}
+              onChange={(e) => setJobForm(prev => ({ ...prev, target_schema: e.target.value }))}
+              placeholder="public"
+            />
+          </FormGroup>
+
+          <FormGroup>
+            <Label>Target Table *</Label>
+            <Input
+              value={jobForm.target_table}
+              onChange={(e) => setJobForm(prev => ({ ...prev, target_table: e.target.value }))}
+              placeholder="table_name"
+            />
+          </FormGroup>
+
+          <FormGroup>
+            <Label>Schedule Cron (optional)</Label>
+            <Input
+              value={jobForm.schedule_cron}
+              onChange={(e) => setJobForm(prev => ({ ...prev, schedule_cron: e.target.value }))}
+              placeholder="* * * * * (minute hour day month day-of-week)"
+            />
+          </FormGroup>
+
+          <FormGroup>
+            <Label>
+              <input
+                type="checkbox"
+                checked={jobForm.active}
+                onChange={(e) => setJobForm(prev => ({ ...prev, active: e.target.checked }))}
+              />
+              {' '}Active
+            </Label>
+          </FormGroup>
+
+          <FormGroup>
+            <Label>
+              <input
+                type="checkbox"
+                checked={jobForm.enabled}
+                onChange={(e) => setJobForm(prev => ({ ...prev, enabled: e.target.checked }))}
+              />
+              {' '}Enabled
+            </Label>
+          </FormGroup>
+
+          <ButtonGroup>
+            <Button onClick={handleCloseModal} $variant="secondary">
+              Cancel
+            </Button>
+            <Button onClick={handleSubmit}>
+              {editingJob ? 'Update' : 'Create'}
+            </Button>
+          </ButtonGroup>
+        </ModalContent>
+      </ModalOverlay>
     </Container>
   );
 };

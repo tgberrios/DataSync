@@ -99,12 +99,18 @@ const APICatalog = () => {
       setLoading(true);
       setError(null);
       const sanitizedSearch = sanitizeSearch(search, 100);
-      const response = await apiCatalogApi.getAPIs({
+      const params: any = {
         page,
         limit,
-        ...filters,
         search: sanitizedSearch
-      });
+      };
+      
+      if (filters.api_type) params.api_type = filters.api_type;
+      if (filters.target_db_engine) params.target_db_engine = filters.target_db_engine;
+      if (filters.status) params.status = filters.status;
+      if (filters.active) params.active = filters.active;
+      
+      const response = await apiCatalogApi.getAPIs(params);
       if (isMountedRef.current) {
         setData(response.data);
         setPagination(response.pagination);

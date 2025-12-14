@@ -4,6 +4,9 @@
 #include <algorithm>
 #include <bson/bson.h>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
 #include <iomanip>
 #include <mongoc/mongoc.h>
 #include <mysql/mysql.h>
@@ -11,6 +14,7 @@
 #include <sql.h>
 #include <sqlext.h>
 #include <sstream>
+#include <unistd.h>
 #include <unordered_set>
 
 CustomJobExecutor::CustomJobExecutor(std::string metadataConnectionString)
@@ -711,6 +715,105 @@ void CustomJobExecutor::insertDataToMongoDB(const CustomJob &job,
                   "MongoDB data insertion not yet fully implemented");
 }
 
+std::vector<json>
+CustomJobExecutor::executePythonScript(const std::string &script) {
+  std::vector<json> results;
+  std::string tempScriptPath;
+  std::string tempOutputPath;
+  FILE *pipe = nullptr;
+
+  try {
+    char tempScriptTemplate[] = "/tmp/datasync_python_script_XXXXXX.py";
+    char tempOutputTemplate[] = "/tmp/datasync_python_output_XXXXXX.json";
+    int scriptFd = mkstemps(tempScriptTemplate, 3);
+    int outputFd = mkstemps(tempOutputTemplate, 5);
+
+    if (scriptFd == -1 || outputFd == -1) {
+      throw std::runtime_error("Failed to create temporary files");
+    }
+
+    tempScriptPath = tempScriptTemplate;
+    tempOutputPath = tempOutputTemplate;
+
+    close(scriptFd);
+    close(outputFd);
+
+    std::ofstream scriptFile(tempScriptPath);
+    if (!scriptFile.is_open()) {
+      throw std::runtime_error("Failed to open temporary script file");
+    }
+
+    scriptFile << "#!/usr/bin/env python3\n";
+    scriptFile << "import json\n";
+    scriptFile << "import sys\n";
+    scriptFile << "\n";
+    scriptFile << script << "\n";
+    scriptFile.close();
+
+    std::string command =
+        "python3 " + tempScriptPath + " > " + tempOutputPath + " 2>&1";
+    int ret = system(command.c_str());
+
+    if (ret != 0) {
+      std::ifstream errorFile(tempOutputPath);
+      std::string errorOutput((std::istreambuf_iterator<char>(errorFile)),
+                              std::istreambuf_iterator<char>());
+      errorFile.close();
+      throw std::runtime_error("Python script execution failed: " +
+                               errorOutput);
+    }
+
+    std::ifstream outputFile(tempOutputPath);
+    if (!outputFile.is_open()) {
+      throw std::runtime_error("Failed to open Python script output file");
+    }
+
+    std::string jsonOutput((std::istreambuf_iterator<char>(outputFile)),
+                           std::istreambuf_iterator<char>());
+    outputFile.close();
+
+    if (jsonOutput.empty()) {
+      Logger::warning(LogCategory::TRANSFER, "executePythonScript",
+                      "Python script returned empty output");
+      return results;
+    }
+
+    json parsedJson;
+    try {
+      parsedJson = json::parse(jsonOutput);
+    } catch (const json::parse_error &e) {
+      throw std::runtime_error("Failed to parse Python script JSON output: " +
+                               std::string(e.what()) +
+                               "\nOutput: " + jsonOutput);
+    }
+
+    if (parsedJson.is_array()) {
+      for (const auto &item : parsedJson) {
+        results.push_back(item);
+      }
+    } else if (parsedJson.is_object()) {
+      results.push_back(parsedJson);
+    } else {
+      throw std::runtime_error(
+          "Python script must return a JSON array or object");
+    }
+
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "executePythonScript",
+                  "Error executing Python script: " + std::string(e.what()));
+    throw;
+  }
+
+  if (!tempScriptPath.empty()) {
+    std::remove(tempScriptPath.c_str());
+  }
+  if (!tempOutputPath.empty()) {
+    std::remove(tempOutputPath.c_str());
+  }
+
+  return results;
+}
+
 void CustomJobExecutor::saveJobResult(const std::string &jobName,
                                       int64_t processLogId, int64_t rowCount,
                                       const std::vector<json> &sample) {
@@ -794,7 +897,9 @@ int64_t CustomJobExecutor::executeJobAndGetLogId(const std::string &jobName) {
     processLogId = logToProcessLog(jobName, "IN_PROGRESS", 0, "", logMetadata);
 
     std::vector<json> results;
-    if (job.source_db_engine == "PostgreSQL") {
+    if (job.source_db_engine == "Python") {
+      results = executePythonScript(job.query_sql);
+    } else if (job.source_db_engine == "PostgreSQL") {
       results =
           executeQueryPostgreSQL(job.source_connection_string, job.query_sql);
     } else if (job.source_db_engine == "MariaDB") {

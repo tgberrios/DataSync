@@ -3959,6 +3959,37 @@ app.get("/api/api-catalog/metrics", async (req, res) => {
   }
 });
 
+app.get("/api/custom-jobs/scripts", async (req, res) => {
+  try {
+    const scriptsPath = path.join(process.cwd(), "scripts");
+    if (!fs.existsSync(scriptsPath)) {
+      return res.json([]);
+    }
+    const files = fs.readdirSync(scriptsPath);
+    const scripts = files
+      .filter((file) => file.endsWith(".py"))
+      .map((file) => {
+        const filePath = path.join(scriptsPath, file);
+        const content = fs.readFileSync(filePath, "utf8");
+        return {
+          name: file,
+          content: content,
+        };
+      });
+    res.json(scripts);
+  } catch (err) {
+    console.error("Error reading Python scripts:", err);
+    res.status(500).json({
+      error: "Error al leer scripts de Python",
+      details: sanitizeError(
+        err,
+        "Error en el servidor",
+        process.env.NODE_ENV === "production"
+      ),
+    });
+  }
+});
+
 app.post("/api/custom-jobs", async (req, res) => {
   try {
     const {
@@ -4039,12 +4070,12 @@ app.get("/api/custom-jobs", async (req, res) => {
     const offset = (page - 1) * limit;
     const source_db_engine = validateEnum(
       req.query.source_db_engine,
-      ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle", ""],
+      ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle", "Python", ""],
       ""
     );
     const target_db_engine = validateEnum(
       req.query.target_db_engine,
-      ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle", ""],
+      ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle", "Python", ""],
       ""
     );
     const active =
@@ -4132,15 +4163,64 @@ app.get("/api/custom-jobs", async (req, res) => {
 app.post("/api/custom-jobs/:jobName/execute", async (req, res) => {
   try {
     const { jobName } = req.params;
+
+    const jobCheck = await pool.query(
+      "SELECT job_name, active, enabled FROM metadata.custom_jobs WHERE job_name = $1",
+      [jobName]
+    );
+
+    if (jobCheck.rows.length === 0) {
+      return res.status(404).json({
+        error: "Job not found",
+        job_name: jobName,
+      });
+    }
+
+    const job = jobCheck.rows[0];
+    if (!job.active || !job.enabled) {
+      return res.status(400).json({
+        error: "Job is not active or enabled",
+        job_name: jobName,
+        active: job.active,
+        enabled: job.enabled,
+      });
+    }
+
+    const executeMetadata = {
+      execute_now: true,
+      execute_timestamp: new Date().toISOString(),
+    };
+
+    await pool.query(
+      `UPDATE metadata.custom_jobs 
+       SET metadata = COALESCE(metadata, '{}'::jsonb) || $1::jsonb
+       WHERE job_name = $2`,
+      [JSON.stringify(executeMetadata), jobName]
+    );
+
+    const processLogId = await pool.query(
+      `INSERT INTO metadata.process_log 
+       (process_type, process_name, status, start_time, end_time, total_rows_processed, error_message, metadata)
+       VALUES ($1, $2, $3, NOW(), NOW(), 0, '', $4::jsonb)
+       RETURNING id`,
+      [
+        "CUSTOM_JOB",
+        jobName,
+        "PENDING",
+        JSON.stringify({ triggered_by: "api", job_name: jobName }),
+      ]
+    );
+
     res.json({
-      message: "Job execution triggered. Check process_log for results.",
+      message: "Job execution queued. DataSync will execute it shortly.",
       job_name: jobName,
+      process_log_id: processLogId.rows[0].id,
     });
   } catch (err) {
     console.error("Error executing custom job:", err);
     res.status(500).json({
       error: "Error al ejecutar job personalizado",
-      error: sanitizeError(
+      details: sanitizeError(
         err,
         "Error en el servidor",
         process.env.NODE_ENV === "production"

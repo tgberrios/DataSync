@@ -3,11 +3,15 @@
 #include "core/database_config.h"
 #include "governance/QueryActivityLogger.h"
 #include "governance/QueryStoreCollector.h"
+#include "third_party/json.hpp"
 #include <chrono>
 #include <ctime>
 #include <mutex>
+#include <pqxx/pqxx>
 #include <sstream>
 #include <thread>
+
+using json = nlohmann::json;
 
 // Constructor initializes API sync component with PostgreSQL connection string
 StreamingData::StreamingData()
@@ -865,6 +869,7 @@ void StreamingData::customJobsSchedulerThread() {
 
       CustomJobsRepository repo(DatabaseConfig::getPostgresConnectionString());
       std::vector<CustomJob> scheduledJobs = repo.getScheduledJobs();
+      std::vector<CustomJob> activeJobs = repo.getActiveJobs();
 
       auto now = std::chrono::system_clock::now();
       auto timeT = std::chrono::system_clock::to_time_t(now);
@@ -874,6 +879,31 @@ void StreamingData::customJobsSchedulerThread() {
       int currentDay = tm->tm_mday;
       int currentMonth = tm->tm_mon + 1;
       int currentDow = tm->tm_wday;
+
+      for (const auto &job : activeJobs) {
+        if (job.metadata.contains("execute_now") &&
+            job.metadata["execute_now"].get<bool>()) {
+          Logger::info(LogCategory::MONITORING, "customJobsSchedulerThread",
+                       "Executing manual job: " + job.job_name);
+          try {
+            customJobExecutor->executeJob(job.job_name);
+            pqxx::connection conn(
+                DatabaseConfig::getPostgresConnectionString());
+            pqxx::work txn(conn);
+            json updatedMetadata = job.metadata;
+            updatedMetadata["execute_now"] = false;
+            updatedMetadata.erase("execute_timestamp");
+            txn.exec_params("UPDATE metadata.custom_jobs SET metadata = "
+                            "$1::jsonb WHERE job_name = $2",
+                            updatedMetadata.dump(), job.job_name);
+            txn.commit();
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::MONITORING, "customJobsSchedulerThread",
+                          "Error executing manual job " + job.job_name + ": " +
+                              std::string(e.what()));
+          }
+        }
+      }
 
       for (const auto &job : scheduledJobs) {
         if (job.schedule_cron.empty()) {

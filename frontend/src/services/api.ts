@@ -1822,4 +1822,21 @@ export const customJobsApi = {
       throw error;
     }
   },
+
+  getScripts: async () => {
+    try {
+      const response = await api.get("/custom-jobs/scripts");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching Python scripts:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
 };

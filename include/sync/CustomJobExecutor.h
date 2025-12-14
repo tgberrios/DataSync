@@ -29,6 +29,7 @@ class CustomJobExecutor {
                                        const std::string &query);
   std::vector<json> executeQueryMongoDB(const std::string &connectionString,
                                         const std::string &query);
+  std::vector<json> executePythonScript(const std::string &script);
 
   std::vector<json> transformData(const std::vector<json> &data,
                                   const json &transformConfig);
