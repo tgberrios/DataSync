@@ -81,6 +81,7 @@ const Dashboard = () => {
   const [currentlyProcessing, setCurrentlyProcessing] =
     useState<CurrentlyProcessing | null>(null);
   const isMountedRef = useRef(true);
+  const isInitialLoadRef = useRef(true);
 
   const [stats, setStats] = useState<DashboardStats>({
     syncStatus: {
@@ -147,16 +148,13 @@ const Dashboard = () => {
     stats.syncStatus.fullLoadActive,
   ]);
 
-  /**
-   * Obtiene las estadísticas del dashboard desde la API
-   *
-   * @returns {Promise<void>}
-   */
   const fetchStats = useCallback(async () => {
     try {
       if (!isMountedRef.current) return;
-      setLoading(true);
-      setError(null);
+      if (isInitialLoadRef.current) {
+        setLoading(true);
+        setError(null);
+      }
       const [dashboardData, batchData] = await Promise.all([
         dashboardApi.getDashboardStats(),
         configApi.getBatchConfig(),
@@ -164,14 +162,56 @@ const Dashboard = () => {
       if (isMountedRef.current) {
         setStats(dashboardData);
         setBatchConfig(batchData);
+        if (isInitialLoadRef.current) {
+          isInitialLoadRef.current = false;
+        }
+        setError(null);
       }
     } catch (err) {
       if (isMountedRef.current) {
-        setError(extractApiError(err));
+        if (isInitialLoadRef.current) {
+          setError(extractApiError(err));
+        } else {
+          console.error("Error fetching dashboard stats:", err);
+        }
       }
     } finally {
       if (isMountedRef.current) {
         setLoading(false);
+      }
+    }
+  }, []);
+
+  const fetchSyncStats = useCallback(async () => {
+    try {
+      if (!isMountedRef.current) return;
+      const dashboardData = await dashboardApi.getDashboardStats();
+      if (isMountedRef.current) {
+        setStats((prev) => ({
+          ...prev,
+          syncStatus: dashboardData.syncStatus,
+        }));
+      }
+    } catch (err) {
+      if (isMountedRef.current) {
+        console.error("Error fetching sync stats:", err);
+      }
+    }
+  }, []);
+
+  const fetchSystemResources = useCallback(async () => {
+    try {
+      if (!isMountedRef.current) return;
+      const dashboardData = await dashboardApi.getDashboardStats();
+      if (isMountedRef.current) {
+        setStats((prev) => ({
+          ...prev,
+          systemResources: dashboardData.systemResources,
+        }));
+      }
+    } catch (err) {
+      if (isMountedRef.current) {
+        console.error("Error fetching system resources:", err);
       }
     }
   }, []);
@@ -207,18 +247,21 @@ const Dashboard = () => {
 
   useEffect(() => {
     isMountedRef.current = true;
+    isInitialLoadRef.current = true;
     fetchStats();
     fetchCurrentlyProcessing();
 
-    const statsInterval = setInterval(fetchStats, 30000);
-    const processingInterval = setInterval(fetchCurrentlyProcessing, 2000);
+    const syncStatsInterval = setInterval(fetchSyncStats, 500);
+    const processingInterval = setInterval(fetchCurrentlyProcessing, 500);
+    const systemResourcesInterval = setInterval(fetchSystemResources, 10000);
 
     return () => {
       isMountedRef.current = false;
-      clearInterval(statsInterval);
+      clearInterval(syncStatsInterval);
       clearInterval(processingInterval);
+      clearInterval(systemResourcesInterval);
     };
-  }, [fetchStats, fetchCurrentlyProcessing]);
+  }, [fetchStats, fetchSyncStats, fetchCurrentlyProcessing, fetchSystemResources]);
 
   if (loading) {
     return (
@@ -252,7 +295,7 @@ const Dashboard = () => {
 
       <Section>
         <SectionTitle>■ SYNCHRONIZATION STATUS</SectionTitle>
-        <ProgressBar $progress={stats.syncStatus.progress} />
+        <ProgressBar $progress={progressPercentage} />
         <Grid>
           <Value>Listening Changes: {stats.syncStatus.listeningChanges || 0}</Value>
           <Value>Pending: {stats.syncStatus.pending || 0}</Value>
@@ -398,138 +441,6 @@ const Dashboard = () => {
           </Value>
         </Grid>
       </Section>
-
-      {stats.metricsCards && (
-        <>
-          <Section>
-            <SectionTitle>■ PERFORMANCE METRICS</SectionTitle>
-            <Grid>
-              <Value>
-                <div style={{ marginBottom: "5px", fontWeight: "bold" }}>
-                  Current IO Operations
-                </div>
-                <div style={{ fontSize: "1.2em", color: "#333" }}>
-                  {stats.metricsCards.currentIops.toFixed(2)} IOPS
-                </div>
-                <div style={{ fontSize: "0.8em", color: "#666" }}>
-                  Average (last hour)
-                </div>
-              </Value>
-
-              <Value>
-                <div style={{ marginBottom: "5px", fontWeight: "bold" }}>
-                  Current Throughput
-                </div>
-                <div style={{ fontSize: "1.2em", color: "#333" }}>
-                  {stats.metricsCards.currentThroughput.avgRps.toFixed(0)} RPS
-                </div>
-                <div style={{ fontSize: "0.8em", color: "#666" }}>
-                  {formatNumberWithCommas(
-                    stats.metricsCards.currentThroughput.totalRecords
-                  )}{" "}
-                  records (last hour)
-                </div>
-              </Value>
-            </Grid>
-
-            <div style={{ marginTop: "20px" }}>
-              <div
-                style={{
-                  fontWeight: "bold",
-                  marginBottom: "15px",
-                  color: "#222",
-                  borderBottom: "1px solid #333",
-                  paddingBottom: "5px",
-                }}
-              >
-                Top Tables by Throughput
-              </div>
-              <Grid $columns="repeat(auto-fit, minmax(300px, 1fr))">
-                {stats.metricsCards.topTablesThroughput
-                  .slice(0, 5)
-                  .map((table, index) => (
-                    <Value
-                      key={index}
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                      }}
-                    >
-                      <div>
-                        <div
-                          style={{ fontWeight: "bold", fontSize: "0.9em" }}
-                        >
-                          {table.tableName}
-                        </div>
-                        <div style={{ fontSize: "0.8em", color: "#666" }}>
-                          [{table.dbEngine}]
-                        </div>
-                      </div>
-                      <div style={{ textAlign: "right" }}>
-                        <div
-                          style={{ fontWeight: "bold", color: "#333" }}
-                        >
-                          {table.throughputRps.toFixed(0)} RPS
-                        </div>
-                        <div style={{ fontSize: "0.8em", color: "#666" }}>
-                          {formatNumberWithCommas(table.recordsTransferred)}{" "}
-                          records
-                        </div>
-                      </div>
-                    </Value>
-                  ))}
-              </Grid>
-            </div>
-          </Section>
-
-          <Section>
-            <SectionTitle>■ DATA VOLUME METRICS</SectionTitle>
-            <Grid $columns="repeat(auto-fit, minmax(350px, 1fr))">
-              {stats.metricsCards.dataVolumeByTable.slice(0, 6).map((table, index) => {
-                const totalMB = table.totalBytes / (1024 * 1024);
-                const totalGB = totalMB / 1024;
-                const displaySize =
-                  totalGB >= 1 ? `${totalGB.toFixed(2)} GB` : `${totalMB.toFixed(0)} MB`;
-
-                return (
-                  <Value
-                    key={index}
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                    }}
-                  >
-                    <div>
-                      <div style={{ fontWeight: "bold", fontSize: "1em" }}>
-                        {table.tableName}
-                      </div>
-                      <div style={{ fontSize: "0.9em", color: "#666" }}>
-                        [{table.dbEngine}] • {table.transferCount} transfers
-                      </div>
-                    </div>
-                    <div style={{ textAlign: "right" }}>
-                      <div
-                        style={{
-                          fontWeight: "bold",
-                          color: "#333",
-                          fontSize: "1.1em",
-                        }}
-                      >
-                        {displaySize}
-                      </div>
-                      <div style={{ fontSize: "0.8em", color: "#666" }}>
-                        7 days
-                      </div>
-                    </div>
-                  </Value>
-                );
-              })}
-            </Grid>
-          </Section>
-        </>
-      )}
     </Container>
   );
 };

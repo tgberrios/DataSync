@@ -19,10 +19,7 @@ y el de mssql de azure
     [NOTA: Licencia propietaria ya implementada ✓]
 
 
-   7.5. Backup Control Dashboard (metadata.backup_control_log)
-        [DASHBOARD - Visualización de operaciones de backup]
-        [TABLA: metadata.backup_control_log]
-        [PRIORIDAD: Media - Útil para monitoreo de backups]
+    proyecto de los backups
 
         eso es otro 
 14. anadir algo que simule el programa liquidbase o crear mi propia version
