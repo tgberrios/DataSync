@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import EditModal from "./EditModal";
+import AddTableModal from "./AddTableModal";
 import {
   Container,
   Header,
@@ -151,6 +152,7 @@ const Catalog = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedEntry, setSelectedEntry] = useState<CatalogEntry | null>(null);
+  const [showAddModal, setShowAddModal] = useState(false);
   const [pagination, setPagination] = useState({
     total: 0,
     totalPages: 0,
@@ -220,6 +222,30 @@ const Catalog = () => {
     sortDirection
   ]);
 
+
+  /**
+   * Maneja la creación de una nueva entrada del catálogo
+   *
+   * @param {Omit<CatalogEntry, 'last_sync_time' | 'updated_at'>} newEntry - Nueva entrada
+   * @returns {Promise<void>}
+   */
+  const handleAdd = useCallback(
+    async (newEntry: Omit<CatalogEntry, 'last_sync_time' | 'updated_at'>) => {
+      try {
+        setLoading(true);
+        setError(null);
+        await catalogApi.createEntry(newEntry);
+        await fetchData();
+        setShowAddModal(false);
+        alert(`Table "${newEntry.schema_name}.${newEntry.table_name}" added successfully.`);
+      } catch (err) {
+        setError(extractApiError(err));
+      } finally {
+        setLoading(false);
+      }
+    },
+    [fetchData]
+  );
 
   /**
    * Maneja la edición de una entrada del catálogo
@@ -507,9 +533,18 @@ const Catalog = () => {
           Showing {data.length} of {pagination.total} entries (Page{" "}
           {pagination.currentPage} of {pagination.totalPages})
         </PaginationInfo>
-        <ExportButton $variant="secondary" onClick={handleExportCSV}>
-          Export CSV
-        </ExportButton>
+        <div style={{ display: 'flex', gap: theme.spacing.sm }}>
+          <Button
+            $variant="primary"
+            onClick={() => setShowAddModal(true)}
+            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+          >
+            Add Table
+          </Button>
+          <ExportButton $variant="secondary" onClick={handleExportCSV}>
+            Export CSV
+          </ExportButton>
+        </div>
       </TableActions>
 
       <TableContainer>
@@ -676,6 +711,13 @@ const Catalog = () => {
           entry={selectedEntry}
           onClose={() => setSelectedEntry(null)}
           onSave={handleEdit}
+        />
+      )}
+
+      {showAddModal && (
+        <AddTableModal
+          onClose={() => setShowAddModal(false)}
+          onSave={handleAdd}
         />
       )}
     </Container>

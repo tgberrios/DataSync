@@ -278,6 +278,82 @@ app.post("/api/catalog/sync", async (req, res) => {
   }
 });
 
+// Crear nueva entrada en el catálogo
+app.post("/api/catalog", async (req, res) => {
+  const schema_name = validateIdentifier(req.body.schema_name);
+  const table_name = validateIdentifier(req.body.table_name);
+  const db_engine = validateEnum(
+    req.body.db_engine,
+    ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle"],
+    null
+  );
+  const connection_string = req.body.connection_string;
+  const status = validateEnum(
+    req.body.status,
+    ["PENDING", "IN_PROGRESS", "LISTENING_CHANGES", "NO_DATA", "ERROR", "SKIP"],
+    "PENDING"
+  );
+  const active = validateBoolean(req.body.active, true);
+  const cluster_name = req.body.cluster_name || "";
+  const pk_strategy = validateEnum(
+    req.body.pk_strategy,
+    ["PK", "OFFSET"],
+    "OFFSET"
+  );
+  const last_sync_column = req.body.last_sync_column || null;
+
+  if (!schema_name || !table_name || !db_engine || !connection_string) {
+    return res.status(400).json({
+      error:
+        "schema_name, table_name, db_engine, and connection_string are required",
+    });
+  }
+
+  try {
+    const checkResult = await pool.query(
+      `SELECT schema_name, table_name, db_engine FROM metadata.catalog 
+       WHERE schema_name = $1 AND table_name = $2 AND db_engine = $3`,
+      [schema_name, table_name, db_engine]
+    );
+
+    if (checkResult.rows.length > 0) {
+      return res.status(409).json({
+        error:
+          "Entry already exists with this schema_name, table_name, and db_engine",
+      });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO metadata.catalog 
+       (schema_name, table_name, db_engine, connection_string, status, active, 
+        cluster_name, pk_strategy, last_sync_column, last_sync_time)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL)
+       RETURNING *`,
+      [
+        schema_name,
+        table_name,
+        db_engine,
+        connection_string,
+        status,
+        active,
+        cluster_name,
+        pk_strategy,
+        last_sync_column,
+      ]
+    );
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("Database error:", err);
+    const safeError = sanitizeError(
+      err,
+      "Error creating catalog entry",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
+  }
+});
+
 // Obtener todos los schemas únicos
 app.get("/api/catalog/schemas", async (req, res) => {
   try {

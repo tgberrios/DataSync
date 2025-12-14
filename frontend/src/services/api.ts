@@ -458,6 +458,19 @@ export const catalogApi = {
     }
   },
 
+  // Crear una nueva entrada del catálogo
+  createEntry: async (
+    entry: Omit<CatalogEntry, "last_sync_time" | "updated_at">
+  ) => {
+    try {
+      const response = await api.post<CatalogEntry>("/catalog", entry);
+      return response.data;
+    } catch (error) {
+      console.error("Error creating entry:", error);
+      throw error;
+    }
+  },
+
   // Actualizar una entrada del catálogo
   updateEntry: async (entry: CatalogEntry) => {
     try {
