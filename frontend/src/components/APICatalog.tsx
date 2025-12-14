@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { format } from 'date-fns';
+import AddAPIModal from './AddAPIModal';
 import {
   Container,
   Header,
@@ -85,6 +86,7 @@ const APICatalog = () => {
   const [data, setData] = useState<APICatalogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showAddModal, setShowAddModal] = useState(false);
   const [pagination, setPagination] = useState({
     total: 0,
     totalPages: 0,
@@ -158,6 +160,28 @@ const APICatalog = () => {
     setPage(1);
   }, [setFilter, setPage]);
 
+  const handleAdd = useCallback(
+    async (newEntry: any) => {
+      try {
+        setLoading(true);
+        setError(null);
+        await apiCatalogApi.createAPI(newEntry);
+        await fetchData();
+        setShowAddModal(false);
+        alert(`API "${newEntry.api_name}" added successfully.`);
+      } catch (err) {
+        if (isMountedRef.current) {
+          setError(extractApiError(err));
+        }
+      } finally {
+        if (isMountedRef.current) {
+          setLoading(false);
+        }
+      }
+    },
+    [fetchData]
+  );
+
   const handleToggleActive = useCallback(async (apiName: string, currentActive: boolean) => {
     try {
       await apiCatalogApi.updateActive(apiName, !currentActive);
@@ -194,6 +218,14 @@ const APICatalog = () => {
       </SearchContainer>
 
       <FiltersContainer>
+        <Button
+          $variant="primary"
+          onClick={() => setShowAddModal(true)}
+          style={{ marginRight: 'auto' }}
+        >
+          Add API
+        </Button>
+        
         <Select
           value={filters.api_type as string}
           onChange={(e) => handleFilterChange('api_type', e.target.value)}
@@ -333,6 +365,13 @@ const APICatalog = () => {
             </PageButton>
           </Pagination>
         </>
+      )}
+
+      {showAddModal && (
+        <AddAPIModal
+          onClose={() => setShowAddModal(false)}
+          onSave={handleAdd}
+        />
       )}
     </Container>
   );

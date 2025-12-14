@@ -1673,6 +1673,41 @@ export const apiCatalogApi = {
     }
   },
 
+  createAPI: async (entry: {
+    api_name: string;
+    api_type: string;
+    base_url: string;
+    endpoint: string;
+    http_method: string;
+    auth_type: string;
+    auth_config: Record<string, unknown>;
+    target_db_engine: string;
+    target_connection_string: string;
+    target_schema: string;
+    target_table: string;
+    request_body?: string | null;
+    request_headers: Record<string, unknown>;
+    query_params: Record<string, unknown>;
+    sync_interval: number;
+    status: string;
+    active: boolean;
+  }) => {
+    try {
+      const response = await api.post("/api-catalog", entry);
+      return response.data;
+    } catch (error) {
+      console.error("Error creating API:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
   updateActive: async (apiName: string, active: boolean) => {
     try {
       const response = await api.patch("/api-catalog/active", {

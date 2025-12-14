@@ -4093,6 +4093,143 @@ app.patch("/api/api-catalog/active", async (req, res) => {
   }
 });
 
+app.post("/api/api-catalog", async (req, res) => {
+  const {
+    api_name,
+    api_type,
+    base_url,
+    endpoint,
+    http_method,
+    auth_type,
+    auth_config,
+    target_db_engine,
+    target_connection_string,
+    target_schema,
+    target_table,
+    request_body,
+    request_headers,
+    query_params,
+    sync_interval,
+    status,
+    active,
+  } = req.body;
+
+  if (
+    !api_name ||
+    !api_type ||
+    !base_url ||
+    !endpoint ||
+    !http_method ||
+    !auth_type ||
+    !target_db_engine ||
+    !target_connection_string ||
+    !target_schema ||
+    !target_table
+  ) {
+    return res.status(400).json({
+      error:
+        "Missing required fields: api_name, api_type, base_url, endpoint, http_method, auth_type, target_db_engine, target_connection_string, target_schema, target_table",
+    });
+  }
+
+  const validApiType = validateEnum(
+    api_type,
+    ["REST", "GraphQL", "SOAP"],
+    null
+  );
+  if (!validApiType) {
+    return res.status(400).json({ error: "Invalid api_type" });
+  }
+
+  const validHttpMethod = validateEnum(
+    http_method,
+    ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    null
+  );
+  if (!validHttpMethod) {
+    return res.status(400).json({ error: "Invalid http_method" });
+  }
+
+  const validAuthType = validateEnum(
+    auth_type,
+    ["NONE", "BASIC", "BEARER", "API_KEY", "OAUTH2"],
+    null
+  );
+  if (!validAuthType) {
+    return res.status(400).json({ error: "Invalid auth_type" });
+  }
+
+  const validTargetEngine = validateEnum(
+    target_db_engine,
+    ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle"],
+    null
+  );
+  if (!validTargetEngine) {
+    return res.status(400).json({ error: "Invalid target_db_engine" });
+  }
+
+  const validStatus = validateEnum(
+    status || "PENDING",
+    ["SUCCESS", "ERROR", "IN_PROGRESS", "PENDING"],
+    "PENDING"
+  );
+
+  const interval =
+    sync_interval && sync_interval > 0 ? parseInt(sync_interval) : 3600;
+  const isActive = active !== undefined ? validateBoolean(active, true) : true;
+
+  try {
+    const checkResult = await pool.query(
+      `SELECT api_name FROM metadata.api_catalog WHERE api_name = $1`,
+      [api_name]
+    );
+
+    if (checkResult.rows.length > 0) {
+      return res.status(409).json({
+        error: "API with this name already exists",
+      });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO metadata.api_catalog 
+       (api_name, api_type, base_url, endpoint, http_method, auth_type, auth_config,
+        target_db_engine, target_connection_string, target_schema, target_table,
+        request_body, request_headers, query_params, status, active, sync_interval)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15, $16, $17)
+       RETURNING *`,
+      [
+        api_name,
+        api_type,
+        base_url,
+        endpoint,
+        http_method,
+        auth_type,
+        JSON.stringify(auth_config || {}),
+        target_db_engine,
+        target_connection_string,
+        target_schema.toLowerCase(),
+        target_table.toLowerCase(),
+        request_body || null,
+        JSON.stringify(request_headers || {}),
+        JSON.stringify(query_params || {}),
+        validStatus,
+        isActive,
+        interval,
+      ]
+    );
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("Database error:", err);
+    const safeError = sanitizeError(
+      err,
+      "Error creating API entry",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
+  }
+});
+
 app.get("/api/api-catalog/metrics", async (req, res) => {
   try {
     const result = await pool.query(`
