@@ -112,6 +112,41 @@ const AddButton = styled(Button)`
   animation-fill-mode: both;
 `;
 
+const ExpandableValue = styled.div`
+  position: relative;
+`;
+
+const ValuePreview = styled.div`
+  font-family: monospace;
+  font-size: 0.9em;
+  color: ${theme.colors.text.secondary};
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  padding-right: 30px;
+`;
+
+const ValueExpanded = styled.pre`
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: monospace;
+  font-size: 0.9em;
+  background: ${theme.colors.background.secondary};
+  padding: ${theme.spacing.sm};
+  border-radius: ${theme.borderRadius.sm};
+  border: 1px solid ${theme.colors.border.light};
+  max-height: 400px;
+  overflow-y: auto;
+`;
+
+const ExpandButton = styled(Button)`
+  padding: 6px 12px;
+  margin-right: 5px;
+  font-size: 0.9em;
+`;
+
 /**
  * Configuration component
  * Manages application configuration entries with CRUD operations
@@ -122,6 +157,7 @@ const Config = () => {
   const [error, setError] = useState<string | null>(null);
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<ConfigEntry | null>(null);
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
   const isMountedRef = useRef(true);
 
   const fetchConfigs = useCallback(async () => {
@@ -213,6 +249,71 @@ const Config = () => {
     return new Date(dateString).toLocaleString();
   }, []);
 
+  const isJsonValue = useCallback((value: string): boolean => {
+    if (!value || value.trim().length === 0) return false;
+    const trimmed = value.trim();
+    if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || 
+        (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+      try {
+        JSON.parse(value);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }, []);
+
+  const isLongValue = useCallback((value: string): boolean => {
+    return value && value.length > 100;
+  }, []);
+
+  const shouldBeExpandable = useCallback((value: string): boolean => {
+    return isJsonValue(value) || isLongValue(value);
+  }, [isJsonValue, isLongValue]);
+
+  const formatJsonValue = useCallback((value: string): string => {
+    if (isJsonValue(value)) {
+      try {
+        return JSON.stringify(JSON.parse(value), null, 2);
+      } catch {
+        return value;
+      }
+    }
+    return value;
+  }, [isJsonValue]);
+
+  const getValuePreview = useCallback((value: string): string => {
+    if (isJsonValue(value)) {
+      try {
+        const parsed = JSON.parse(value);
+        const keys = Object.keys(parsed);
+        if (keys.length > 0) {
+          return `{ ${keys.slice(0, 3).join(', ')}${keys.length > 3 ? '...' : ''} }`;
+        }
+        return '{ }';
+      } catch {
+        return value.substring(0, 50) + '...';
+      }
+    }
+    if (isLongValue(value)) {
+      return value.substring(0, 50) + '...';
+    }
+    return value;
+  }, [isJsonValue, isLongValue]);
+
+  const toggleExpand = useCallback((key: string) => {
+    setExpandedKeys(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(key)) {
+        newSet.delete(key);
+      } else {
+        newSet.add(key);
+      }
+      return newSet;
+    });
+  }, []);
+
   if (loading && configs.length === 0) {
     return (
       <Container>
@@ -284,6 +385,18 @@ const Config = () => {
                     value={editForm?.value || ''}
                     onChange={e => setEditForm(prev => prev ? { ...prev, value: e.target.value } : null)}
                   />
+                ) : shouldBeExpandable(config.value) ? (
+                  <ExpandableValue>
+                    {expandedKeys.has(config.key) ? (
+                      <ValueExpanded>
+                        {formatJsonValue(config.value)}
+                      </ValueExpanded>
+                    ) : (
+                      <ValuePreview>
+                        {getValuePreview(config.value)}
+                      </ValuePreview>
+                    )}
+                  </ExpandableValue>
                 ) : (
                   <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
                     {config.value}
@@ -301,7 +414,17 @@ const Config = () => {
                     <DangerButton onClick={handleCancel}>Cancel</DangerButton>
                   </>
                 ) : (
-                  <Button onClick={() => handleEdit(config)}>Edit</Button>
+                  <>
+                    {shouldBeExpandable(config.value) && (
+                      <ExpandButton
+                        $variant="secondary"
+                        onClick={() => toggleExpand(config.key)}
+                      >
+                        {expandedKeys.has(config.key) ? 'Collapse' : 'Expand'}
+                      </ExpandButton>
+                    )}
+                    <Button onClick={() => handleEdit(config)}>Edit</Button>
+                  </>
                 )}
               </ActionCell>
             </TableRow>
