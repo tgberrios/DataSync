@@ -58,6 +58,48 @@ const PaginationInfo = styled.div`
   animation: fadeIn 0.25s ease-in;
 `;
 
+const TableActions = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: ${theme.spacing.md};
+  gap: ${theme.spacing.sm};
+`;
+
+const ExportButton = styled(Button)`
+  padding: 8px 16px;
+  font-size: 0.9em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+`;
+
+const SortableTh = styled(Th)<{ $sortable?: boolean; $active?: boolean; $direction?: "asc" | "desc" }>`
+  cursor: ${props => props.$sortable ? "pointer" : "default"};
+  user-select: none;
+  position: relative;
+  transition: all ${theme.transitions.normal};
+  
+  ${props => props.$sortable && `
+    &:hover {
+      background: linear-gradient(180deg, ${theme.colors.primary.light} 0%, ${theme.colors.primary.main} 100%);
+      color: ${theme.colors.text.white};
+    }
+  `}
+  
+  ${props => props.$active && `
+    background: linear-gradient(180deg, ${theme.colors.primary.main} 0%, ${theme.colors.primary.dark} 100%);
+    color: ${theme.colors.text.white};
+    
+    &::after {
+      content: "${props.$direction === "asc" ? "▲" : "▼"}";
+      position: absolute;
+      right: 8px;
+      font-size: 0.8em;
+    }
+  `}
+`;
+
 const SearchInput = styled(Input)`
   flex: 1;
   font-size: 14px;
@@ -99,8 +141,8 @@ const Catalog = () => {
     strategy: "",
   });
 
-  const [sortField] = useState("active");
-  const [sortDirection] = useState("desc");
+  const [sortField, setSortField] = useState("active");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
 
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
@@ -279,6 +321,45 @@ const Catalog = () => {
     [fetchData]
   );
 
+  const handleSort = useCallback((field: string) => {
+    if (sortField === field) {
+      setSortDirection(prev => prev === "asc" ? "desc" : "asc");
+    } else {
+      setSortField(field);
+      setSortDirection("asc");
+    }
+    setPage(1);
+  }, [sortField, setPage]);
+
+  const handleExportCSV = useCallback(() => {
+    const headers = ["Schema", "Table", "Engine", "Status", "Active", "PK Strategy", "Sync Column", "Cluster"];
+    const rows = data.map(entry => [
+      entry.schema_name,
+      entry.table_name,
+      entry.db_engine,
+      entry.status,
+      entry.active ? "Yes" : "No",
+      entry.pk_strategy || "OFFSET",
+      entry.last_sync_column || "",
+      entry.cluster_name || ""
+    ]);
+    
+    const csvContent = [
+      headers.join(","),
+      ...rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+    ].join("\n");
+    
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `catalog_export_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, [data]);
+
   /**
    * Maneja la búsqueda con debounce
    */
@@ -421,20 +502,60 @@ const Catalog = () => {
         </SchemaActionSelect>
       </FiltersContainer>
 
-      <PaginationInfo>
-        Showing {data.length} of {pagination.total} entries (Page{" "}
-        {pagination.currentPage} of {pagination.totalPages})
-      </PaginationInfo>
+      <TableActions>
+        <PaginationInfo>
+          Showing {data.length} of {pagination.total} entries (Page{" "}
+          {pagination.currentPage} of {pagination.totalPages})
+        </PaginationInfo>
+        <ExportButton $variant="secondary" onClick={handleExportCSV}>
+          Export CSV
+        </ExportButton>
+      </TableActions>
 
       <TableContainer>
         <Table $minWidth="1200px">
           <thead>
             <tr>
-              <Th>Schema.Table</Th>
-              <Th>Engine</Th>
-              <Th>Status</Th>
-              <Th>Active</Th>
-              <Th>PK Strategy</Th>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "schema_name"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("schema_name")}
+              >
+                Schema.Table
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "db_engine"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("db_engine")}
+              >
+                Engine
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "status"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("status")}
+              >
+                Status
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "active"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("active")}
+              >
+                Active
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "pk_strategy"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("pk_strategy")}
+              >
+                PK Strategy
+              </SortableTh>
               <Th>Sync Column</Th>
               <Th>Cluster</Th>
               <Th>Actions</Th>
@@ -444,9 +565,23 @@ const Catalog = () => {
             {data.map((entry, index) => (
               <TableRow key={`${entry.schema_name}-${entry.table_name}-${entry.db_engine}-${index}`}>
                 <Td>
-                  {entry.schema_name}.{entry.table_name}
+                  <strong style={{ color: theme.colors.primary.main }}>
+                    {entry.schema_name}
+                  </strong>
+                  <span style={{ color: theme.colors.text.secondary }}>.
+                    {entry.table_name}
+                  </span>
                 </Td>
-                <Td>{entry.db_engine}</Td>
+                <Td>
+                  <span style={{ 
+                    padding: "2px 8px", 
+                    borderRadius: theme.borderRadius.sm,
+                    backgroundColor: theme.colors.background.secondary,
+                    fontSize: "0.85em"
+                  }}>
+                    {entry.db_engine}
+                  </span>
+                </Td>
                 <Td>
                   <StatusBadge $status={entry.status}>
                     {entry.status}
@@ -457,9 +592,23 @@ const Catalog = () => {
                     {entry.active ? "Active" : "Inactive"}
                   </ActiveBadge>
                 </Td>
-                <Td>{entry.pk_strategy || "OFFSET"}</Td>
-                <Td>{entry.last_sync_column || "-"}</Td>
-                <Td>{entry.cluster_name || "-"}</Td>
+                <Td>
+                  <span style={{ 
+                    padding: "2px 8px", 
+                    borderRadius: theme.borderRadius.sm,
+                    backgroundColor: theme.colors.background.secondary,
+                    fontSize: "0.85em",
+                    fontFamily: "monospace"
+                  }}>
+                    {entry.pk_strategy || "OFFSET"}
+                  </span>
+                </Td>
+                <Td style={{ color: theme.colors.text.secondary }}>
+                  {entry.last_sync_column || "-"}
+                </Td>
+                <Td style={{ color: theme.colors.text.secondary }}>
+                  {entry.cluster_name || "-"}
+                </Td>
                 <Td>
                   <ActionButton
                     $variant="secondary"

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import styled from 'styled-components';
 import {
   Container,
@@ -8,6 +8,11 @@ import {
   Grid,
   Value,
   Button,
+  TableContainer,
+  Table,
+  Th,
+  Td,
+  TableRow,
 } from './shared/BaseComponents';
 import { catalogLocksApi } from '../services/api';
 import { extractApiError } from '../utils/errorHandler';
@@ -60,35 +65,7 @@ const DangerButton = styled(Button)`
   }
 `;
 
-const LocksTable = styled.div`
-  border: 1px solid ${theme.colors.border.medium};
-  border-radius: ${theme.borderRadius.md};
-  overflow: hidden;
-  animation: slideUp 0.25s ease-out;
-  animation-delay: 0.2s;
-  animation-fill-mode: both;
-`;
-
-const TableHeader = styled.div`
-  display: grid;
-  grid-template-columns: 200px 150px 150px 150px 100px 1fr 120px;
-  background: ${theme.colors.gradient.primary};
-  padding: 12px 15px;
-  font-weight: bold;
-  font-size: 0.85em;
-  border-bottom: 2px solid ${theme.colors.border.dark};
-  gap: 10px;
-`;
-
-const TableRow = styled.div<{ $expired?: boolean; $warning?: boolean }>`
-  display: grid;
-  grid-template-columns: 200px 150px 150px 150px 100px 1fr 120px;
-  padding: 12px 15px;
-  border-bottom: 1px solid ${theme.colors.border.light};
-  transition: all ${theme.transitions.normal};
-  gap: 10px;
-  align-items: center;
-  font-size: 0.85em;
+const StyledTableRow = styled(TableRow)<{ $expired?: boolean; $warning?: boolean }>`
   background-color: ${props => {
     if (props.$expired) return theme.colors.status.error.bg;
     if (props.$warning) return theme.colors.status.warning.bg;
@@ -100,19 +77,34 @@ const TableRow = styled.div<{ $expired?: boolean; $warning?: boolean }>`
       if (props.$expired) return '#ffcdd2';
       if (props.$warning) return '#ffe0b2';
       return theme.colors.background.secondary;
-    }};
-    border-left: 3px solid ${theme.colors.primary.main};
-  }
-  
-  &:last-child {
-    border-bottom: none;
+    }} !important;
   }
 `;
 
-const TableCell = styled.div`
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+const SortableTh = styled(Th)<{ $sortable?: boolean; $active?: boolean; $direction?: "asc" | "desc" }>`
+  cursor: ${props => props.$sortable ? "pointer" : "default"};
+  user-select: none;
+  position: relative;
+  transition: all ${theme.transitions.normal};
+  
+  ${props => props.$sortable && `
+    &:hover {
+      background: linear-gradient(180deg, ${theme.colors.primary.light} 0%, ${theme.colors.primary.main} 100%);
+      color: ${theme.colors.text.white};
+    }
+  `}
+  
+  ${props => props.$active && `
+    background: linear-gradient(180deg, ${theme.colors.primary.main} 0%, ${theme.colors.primary.dark} 100%);
+    color: ${theme.colors.text.white};
+    
+    &::after {
+      content: "${props.$direction === "asc" ? "▲" : "▼"}";
+      position: absolute;
+      right: 8px;
+      font-size: 0.8em;
+    }
+  `}
 `;
 
 const Badge = styled.span<{ $status?: string }>`
@@ -151,6 +143,23 @@ const UnlockButton = styled(Button)`
   }
 `;
 
+const TableActions = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: ${theme.spacing.md};
+  gap: ${theme.spacing.sm};
+`;
+
+const ExportButton = styled(Button)`
+  padding: 8px 16px;
+  font-size: 0.9em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+`;
+
+
 const SuccessMessage = styled.div`
   background-color: ${theme.colors.status.success.bg};
   color: ${theme.colors.status.success.text};
@@ -170,6 +179,8 @@ const CatalogLocks = () => {
   const [success, setSuccess] = useState<string | null>(null);
   const [locks, setLocks] = useState<any[]>([]);
   const [metrics, setMetrics] = useState<any>({});
+  const [sortField, setSortField] = useState<string>("");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const isMountedRef = useRef(true);
 
   const fetchData = useCallback(async () => {
@@ -291,6 +302,72 @@ const CatalogLocks = () => {
     return new Date(date).toLocaleString();
   }, []);
 
+  const sortedLocks = useMemo(() => {
+    if (!sortField) return locks;
+    return [...locks].sort((a, b) => {
+      let aVal: any = a[sortField as keyof typeof a];
+      let bVal: any = b[sortField as keyof typeof b];
+      
+      if (sortField === "expires_at" || sortField === "acquired_at") {
+        aVal = aVal ? new Date(aVal).getTime() : 0;
+        bVal = bVal ? new Date(bVal).getTime() : 0;
+        return sortDirection === "asc" ? aVal - bVal : bVal - aVal;
+      }
+      
+      if (aVal === null || aVal === undefined) aVal = "";
+      if (bVal === null || bVal === undefined) bVal = "";
+      
+      if (typeof aVal === "string" && typeof bVal === "string") {
+        return sortDirection === "asc" 
+          ? aVal.localeCompare(bVal)
+          : bVal.localeCompare(aVal);
+      }
+      
+      return sortDirection === "asc"
+        ? String(aVal).localeCompare(String(bVal))
+        : String(bVal).localeCompare(String(aVal));
+    });
+  }, [locks, sortField, sortDirection]);
+
+  const handleSort = useCallback((field: string) => {
+    if (sortField === field) {
+      setSortDirection(prev => prev === "asc" ? "desc" : "asc");
+    } else {
+      setSortField(field);
+      setSortDirection("desc");
+    }
+  }, [sortField]);
+
+  const handleExportCSV = useCallback(() => {
+    const headers = ["Lock Name", "Acquired By", "Acquired At", "Expires At", "Status", "Time Remaining"];
+    const rows = sortedLocks.map(lock => {
+      const status = getLockStatus(lock.expires_at);
+      return [
+        lock.lock_name,
+        lock.acquired_by || "",
+        formatDate(lock.acquired_at),
+        formatDate(lock.expires_at),
+        status.label,
+        formatTimeRemaining(lock.expires_at)
+      ];
+    });
+    
+    const csvContent = [
+      headers.join(","),
+      ...rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+    ].join("\n");
+    
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `catalog_locks_export_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, [sortedLocks, getLockStatus, formatDate, formatTimeRemaining]);
+
   if (loading && locks.length === 0) {
     return (
       <Container>
@@ -340,48 +417,117 @@ const CatalogLocks = () => {
         </DangerButton>
       </ActionBar>
 
-      <LocksTable>
-        <TableHeader>
-          <TableCell>Lock Name</TableCell>
-          <TableCell>Acquired By</TableCell>
-          <TableCell>Acquired At</TableCell>
-          <TableCell>Expires At</TableCell>
-          <TableCell>Status</TableCell>
-          <TableCell>Time Remaining</TableCell>
-          <TableCell>Actions</TableCell>
-        </TableHeader>
-        {locks.length === 0 ? (
-          <div style={{ padding: '40px', textAlign: 'center', color: theme.colors.text.secondary }}>
-            No active locks. Locks will appear here when catalog operations are running.
-          </div>
-        ) : (
-          locks.map((lock) => {
-            const status = getLockStatus(lock.expires_at);
-            const isExpired = status.status === 'expired';
-            const isWarning = status.status === 'warning';
-            
-            return (
-              <TableRow key={lock.lock_name} $expired={isExpired} $warning={isWarning}>
-                <TableCell>
-                  <strong>{lock.lock_name}</strong>
-                </TableCell>
-                <TableCell>{lock.acquired_by || 'N/A'}</TableCell>
-                <TableCell>{formatDate(lock.acquired_at)}</TableCell>
-                <TableCell>{formatDate(lock.expires_at)}</TableCell>
-                <TableCell>
-                  <Badge $status={status.status}>{status.label}</Badge>
-                </TableCell>
-                <TableCell>{formatTimeRemaining(lock.expires_at)}</TableCell>
-                <TableCell>
-                  <UnlockButton onClick={() => handleUnlock(lock.lock_name)}>
-                    Force Unlock
-                  </UnlockButton>
-                </TableCell>
+      <TableActions>
+        <div style={{ fontSize: "0.9em", color: theme.colors.text.secondary }}>
+          Showing {sortedLocks.length} lock{sortedLocks.length !== 1 ? 's' : ''}
+        </div>
+        <ExportButton $variant="secondary" onClick={handleExportCSV}>
+          Export CSV
+        </ExportButton>
+      </TableActions>
+
+      <TableContainer>
+        <Table $minWidth="1200px">
+          <thead>
+            <tr>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "lock_name"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("lock_name")}
+              >
+                Lock Name
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "acquired_by"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("acquired_by")}
+              >
+                Acquired By
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "acquired_at"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("acquired_at")}
+              >
+                Acquired At
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "expires_at"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("expires_at")}
+              >
+                Expires At
+              </SortableTh>
+              <Th>Status</Th>
+              <Th>Time Remaining</Th>
+              <Th>Actions</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {sortedLocks.length === 0 ? (
+              <TableRow>
+                <Td colSpan={7} style={{ padding: '40px', textAlign: 'center', color: theme.colors.text.secondary }}>
+                  No active locks. Locks will appear here when catalog operations are running.
+                </Td>
               </TableRow>
-            );
-          })
-        )}
-      </LocksTable>
+            ) : (
+              sortedLocks.map((lock) => {
+                const status = getLockStatus(lock.expires_at);
+                const isExpired = status.status === 'expired';
+                const isWarning = status.status === 'warning';
+                
+                return (
+                  <StyledTableRow key={lock.lock_name} $expired={isExpired} $warning={isWarning}>
+                    <Td>
+                      <strong style={{ 
+                        color: isExpired ? theme.colors.status.error.text : theme.colors.text.primary 
+                      }}>
+                        {lock.lock_name}
+                      </strong>
+                    </Td>
+                    <Td>
+                      <span style={{ 
+                        padding: "2px 8px", 
+                        borderRadius: theme.borderRadius.sm,
+                        backgroundColor: theme.colors.background.secondary,
+                        fontSize: "0.85em"
+                      }}>
+                        {lock.acquired_by || 'N/A'}
+                      </span>
+                    </Td>
+                    <Td style={{ color: theme.colors.text.secondary }}>
+                      {formatDate(lock.acquired_at)}
+                    </Td>
+                    <Td style={{ 
+                      color: isExpired ? theme.colors.status.error.text : theme.colors.text.secondary 
+                    }}>
+                      {formatDate(lock.expires_at)}
+                    </Td>
+                    <Td>
+                      <Badge $status={status.status}>{status.label}</Badge>
+                    </Td>
+                    <Td style={{ 
+                      color: isWarning ? theme.colors.status.warning.text : theme.colors.text.secondary,
+                      fontWeight: isWarning ? "bold" : "normal"
+                    }}>
+                      {formatTimeRemaining(lock.expires_at)}
+                    </Td>
+                    <Td>
+                      <UnlockButton onClick={() => handleUnlock(lock.lock_name)}>
+                        Force Unlock
+                      </UnlockButton>
+                    </Td>
+                  </StyledTableRow>
+                );
+              })
+            )}
+          </tbody>
+        </Table>
+      </TableContainer>
     </Container>
   );
 };

@@ -274,6 +274,8 @@ export const StatusBadge = styled.span<{ $status: string }>`
     switch (props.$status) {
       case 'ERROR': return theme.colors.status.error.bg;
       case 'LISTENING_CHANGES': return theme.colors.status.success.bg;
+      case 'IN_PROGRESS': return theme.colors.status.warning.bg;
+      case 'FULL_LOAD': return theme.colors.status.warning.bg;
       case 'NO_DATA': return theme.colors.status.warning.bg;
       case 'SKIP': return theme.colors.status.skip.bg;
       default: return theme.colors.background.secondary;
@@ -283,6 +285,8 @@ export const StatusBadge = styled.span<{ $status: string }>`
     switch (props.$status) {
       case 'ERROR': return theme.colors.status.error.text;
       case 'LISTENING_CHANGES': return theme.colors.status.success.text;
+      case 'IN_PROGRESS': return theme.colors.status.warning.text;
+      case 'FULL_LOAD': return theme.colors.status.warning.text;
       case 'NO_DATA': return theme.colors.status.warning.text;
       case 'SKIP': return theme.colors.status.skip.text;
       default: return theme.colors.text.primary;

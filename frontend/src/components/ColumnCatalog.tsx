@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import styled from 'styled-components';
 import {
   Container,
@@ -9,6 +9,16 @@ import {
   Value,
   Pagination,
   PageButton,
+  Button,
+  FiltersContainer,
+  Select,
+  TableContainer,
+  Table,
+  Th,
+  Td,
+  TableRow,
+  SearchContainer,
+  Input,
 } from './shared/BaseComponents';
 import { usePagination } from '../hooks/usePagination';
 import { useTableFilters } from '../hooks/useTableFilters';
@@ -42,106 +52,109 @@ const MetricValue = styled.div`
   color: ${theme.colors.text.primary};
 `;
 
-const FiltersContainer = styled.div`
-  display: flex;
-  gap: ${theme.spacing.sm};
-  margin-bottom: ${theme.spacing.lg};
-  flex-wrap: wrap;
-  animation: slideUp 0.25s ease-out;
-  animation-delay: 0.15s;
-  animation-fill-mode: both;
-`;
-
-const FilterSelect = styled.select`
-  padding: 8px 12px;
-  border: 1px solid ${theme.colors.border.medium};
-  border-radius: ${theme.borderRadius.md};
-  background: ${theme.colors.background.main};
-  color: ${theme.colors.text.primary};
-  font-family: ${theme.fonts.primary};
-  cursor: pointer;
-  transition: all ${theme.transitions.normal};
-  font-size: 0.9em;
+const Tooltip = styled.div`
+  position: relative;
+  display: inline-block;
   
-  &:hover {
-    background: ${theme.colors.background.secondary};
-    border-color: rgba(10, 25, 41, 0.3);
-  }
-  
-  &:focus {
-    outline: none;
-    border-color: ${theme.colors.primary.main};
-    box-shadow: 0 0 0 3px rgba(10, 25, 41, 0.1);
-  }
-  
-  &:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
+  &:hover .tooltip-content {
+    visibility: visible;
+    opacity: 1;
   }
 `;
 
-const SearchInput = styled.input`
-  flex: 1;
-  min-width: 200px;
-  padding: 8px 12px;
-  border: 1px solid ${theme.colors.border.medium};
-  border-radius: ${theme.borderRadius.md};
-  font-family: ${theme.fonts.primary};
-  font-size: 0.9em;
-  transition: all ${theme.transitions.normal};
-  
-  &:focus {
-    outline: none;
-    border-color: ${theme.colors.primary.main};
-    box-shadow: 0 0 0 3px rgba(10, 25, 41, 0.1);
-  }
-`;
-
-const ColumnTable = styled.div`
-  border: 1px solid ${theme.colors.border.medium};
-  border-radius: ${theme.borderRadius.md};
-  overflow: hidden;
-  animation: slideUp 0.25s ease-out;
-  animation-delay: 0.2s;
-  animation-fill-mode: both;
-`;
-
-const TableHeader = styled.div`
-  display: grid;
-  grid-template-columns: 150px 150px 150px 100px 120px 100px 100px 100px 100px 100px 1fr;
-  background: ${theme.colors.gradient.primary};
-  padding: 12px 15px;
-  font-weight: bold;
-  font-size: 0.8em;
-  border-bottom: 2px solid ${theme.colors.border.dark};
-  gap: 10px;
-`;
-
-const TableRow = styled.div`
-  display: grid;
-  grid-template-columns: 150px 150px 150px 100px 120px 100px 100px 100px 100px 100px 1fr;
-  padding: 12px 15px;
-  border-bottom: 1px solid ${theme.colors.border.light};
-  transition: all ${theme.transitions.normal};
-  cursor: pointer;
-  gap: 10px;
-  align-items: center;
+const TooltipContent = styled.div`
+  visibility: hidden;
+  opacity: 0;
+  position: absolute;
+  z-index: 1000;
+  bottom: 125%;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: ${theme.colors.text.primary};
+  color: ${theme.colors.text.white};
+  text-align: left;
+  border-radius: ${theme.borderRadius.sm};
+  padding: 10px 14px;
   font-size: 0.85em;
+  white-space: normal;
+  min-width: 200px;
+  max-width: 350px;
+  box-shadow: ${theme.shadows.lg};
+  transition: opacity ${theme.transitions.normal};
+  line-height: 1.4;
   
-  &:hover {
-    background: linear-gradient(90deg, ${theme.colors.background.secondary} 0%, ${theme.colors.background.tertiary} 100%);
-    border-left: 3px solid ${theme.colors.primary.main};
-  }
-  
-  &:last-child {
-    border-bottom: none;
+  &:after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    margin-left: -5px;
+    border-width: 5px;
+    border-style: solid;
+    border-color: ${theme.colors.text.primary} transparent transparent transparent;
   }
 `;
 
-const TableCell = styled.div`
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+const ThWithTooltip = styled(Th)<{ $sortable?: boolean; $active?: boolean; $direction?: "asc" | "desc" }>`
+  position: relative;
+  cursor: ${props => props.$sortable ? "pointer" : "default"};
+  user-select: none;
+  transition: all ${theme.transitions.normal};
+  
+  ${props => props.$sortable && `
+    &:hover {
+      background: linear-gradient(180deg, ${theme.colors.primary.light} 0%, ${theme.colors.primary.main} 100%);
+      color: ${theme.colors.text.white};
+    }
+  `}
+  
+  ${props => props.$active && `
+    background: linear-gradient(180deg, ${theme.colors.primary.main} 0%, ${theme.colors.primary.dark} 100%);
+    color: ${theme.colors.text.white};
+    
+    &::after {
+      content: "${props.$direction === "asc" ? "▲" : "▼"}";
+      position: absolute;
+      right: 8px;
+      font-size: 0.8em;
+    }
+  `}
+  
+  &:hover .tooltip-content {
+    visibility: visible;
+    opacity: 1;
+  }
+`;
+
+const FilterWithTooltip = styled.div`
+  position: relative;
+  display: inline-block;
+`;
+
+const SortableTh = styled(Th)<{ $sortable?: boolean; $active?: boolean; $direction?: "asc" | "desc" }>`
+  cursor: ${props => props.$sortable ? "pointer" : "default"};
+  user-select: none;
+  position: relative;
+  transition: all ${theme.transitions.normal};
+  
+  ${props => props.$sortable && `
+    &:hover {
+      background: linear-gradient(180deg, ${theme.colors.primary.light} 0%, ${theme.colors.primary.main} 100%);
+      color: ${theme.colors.text.white};
+    }
+  `}
+  
+  ${props => props.$active && `
+    background: linear-gradient(180deg, ${theme.colors.primary.main} 0%, ${theme.colors.primary.dark} 100%);
+    color: ${theme.colors.text.white};
+    
+    &::after {
+      content: "${props.$direction === "asc" ? "▲" : "▼"}";
+      position: absolute;
+      right: 8px;
+      font-size: 0.8em;
+    }
+  `}
 `;
 
 const Badge = styled.span<{ $type?: string; $level?: string; $flag?: boolean }>`
@@ -221,13 +234,30 @@ const FlagItem = styled.div`
   font-size: 0.9em;
 `;
 
+const TableActions = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: ${theme.spacing.md};
+  gap: ${theme.spacing.sm};
+`;
+
+const ExportButton = styled(Button)`
+  padding: 8px 16px;
+  font-size: 0.9em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+`;
+
+
 /**
  * Column Catalog component
  * Displays detailed metadata about database columns including data types, sensitivity levels, and PII/PHI flags
  */
 const ColumnCatalog = () => {
   const { page, limit, setPage } = usePagination(1, 20);
-  const { filters, setFilter } = useTableFilters({
+  const { filters, setFilter, clearFilters } = useTableFilters({
     schema_name: '',
     table_name: '',
     db_engine: '',
@@ -251,6 +281,8 @@ const ColumnCatalog = () => {
   });
   const [schemas, setSchemas] = useState<string[]>([]);
   const [tables, setTables] = useState<string[]>([]);
+  const [sortField, setSortField] = useState<string>("");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const isMountedRef = useRef(true);
 
   const fetchData = useCallback(async () => {
@@ -375,6 +407,83 @@ const ColumnCatalog = () => {
     setPage(1);
   }, [setFilter, setPage]);
 
+  const handleResetFilters = useCallback(() => {
+    clearFilters();
+    setPage(1);
+  }, [clearFilters, setPage]);
+
+  const handleSort = useCallback((field: string) => {
+    if (sortField === field) {
+      setSortDirection(prev => prev === "asc" ? "desc" : "asc");
+    } else {
+      setSortField(field);
+      setSortDirection("asc");
+    }
+    setPage(1);
+  }, [sortField, setPage]);
+
+  const handleExportCSV = useCallback(() => {
+    const headers = ["Schema", "Table", "Column", "Engine", "Data Type", "Position", "Nullable", "Sensitivity", "PII", "PHI", "Primary Key", "Foreign Key", "Unique", "Indexed"];
+    const rows = columns.map(col => [
+      col.schema_name,
+      col.table_name,
+      col.column_name,
+      col.db_engine || "",
+      col.data_type || "",
+      col.ordinal_position || "",
+      col.is_nullable ? "Yes" : "No",
+      col.sensitivity_level || "",
+      col.contains_pii ? "Yes" : "No",
+      col.contains_phi ? "Yes" : "No",
+      col.is_primary_key ? "Yes" : "No",
+      col.is_foreign_key ? "Yes" : "No",
+      col.is_unique ? "Yes" : "No",
+      col.is_indexed ? "Yes" : "No"
+    ]);
+    
+    const csvContent = [
+      headers.join(","),
+      ...rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+    ].join("\n");
+    
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `column_catalog_export_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, [columns]);
+
+  const sortedColumns = useMemo(() => {
+    if (!sortField) return columns;
+    return [...columns].sort((a, b) => {
+      let aVal = a[sortField as keyof typeof a];
+      let bVal = b[sortField as keyof typeof b];
+      
+      if (aVal === null || aVal === undefined) aVal = "";
+      if (bVal === null || bVal === undefined) bVal = "";
+      
+      if (typeof aVal === "string" && typeof bVal === "string") {
+        return sortDirection === "asc" 
+          ? aVal.localeCompare(bVal)
+          : bVal.localeCompare(aVal);
+      }
+      
+      const aNum = Number(aVal);
+      const bNum = Number(bVal);
+      if (!isNaN(aNum) && !isNaN(bNum)) {
+        return sortDirection === "asc" ? aNum - bNum : bNum - aNum;
+      }
+      
+      return sortDirection === "asc"
+        ? String(aVal).localeCompare(String(bVal))
+        : String(bVal).localeCompare(String(aVal));
+    });
+  }, [columns, sortField, sortDirection]);
+
   if (loading && columns.length === 0) {
     return (
       <Container>
@@ -391,241 +500,469 @@ const ColumnCatalog = () => {
       {error && <ErrorMessage>{error}</ErrorMessage>}
       
       <MetricsGrid $columns="repeat(auto-fit, minmax(180px, 1fr))">
-        <MetricCard>
-          <MetricLabel>Total Columns</MetricLabel>
-          <MetricValue>{formatNumber(metrics.total_columns)}</MetricValue>
-        </MetricCard>
-        <MetricCard>
-          <MetricLabel>PII Columns</MetricLabel>
-          <MetricValue>{formatNumber(metrics.pii_columns)}</MetricValue>
-        </MetricCard>
-        <MetricCard>
-          <MetricLabel>PHI Columns</MetricLabel>
-          <MetricValue>{formatNumber(metrics.phi_columns)}</MetricValue>
-        </MetricCard>
-        <MetricCard>
-          <MetricLabel>High Sensitivity</MetricLabel>
-          <MetricValue>{formatNumber(metrics.high_sensitivity)}</MetricValue>
-        </MetricCard>
-        <MetricCard>
-          <MetricLabel>Primary Keys</MetricLabel>
-          <MetricValue>{formatNumber(metrics.primary_keys)}</MetricValue>
-        </MetricCard>
-        <MetricCard>
-          <MetricLabel>Indexed Columns</MetricLabel>
-          <MetricValue>{formatNumber(metrics.indexed_columns)}</MetricValue>
-        </MetricCard>
+        <Tooltip>
+          <MetricCard>
+            <MetricLabel>Total Columns</MetricLabel>
+            <MetricValue>{formatNumber(metrics.total_columns)}</MetricValue>
+          </MetricCard>
+          <TooltipContent className="tooltip-content">
+            Total number of columns cataloged across all schemas and tables in the system.
+          </TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <MetricCard>
+            <MetricLabel>PII Columns</MetricLabel>
+            <MetricValue>{formatNumber(metrics.pii_columns)}</MetricValue>
+          </MetricCard>
+          <TooltipContent className="tooltip-content">
+            Columns containing Personally Identifiable Information (PII) such as names, emails, phone numbers, or social security numbers.
+          </TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <MetricCard>
+            <MetricLabel>PHI Columns</MetricLabel>
+            <MetricValue>{formatNumber(metrics.phi_columns)}</MetricValue>
+          </MetricCard>
+          <TooltipContent className="tooltip-content">
+            Columns containing Protected Health Information (PHI) such as medical records, health conditions, or patient identifiers.
+          </TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <MetricCard>
+            <MetricLabel>High Sensitivity</MetricLabel>
+            <MetricValue>{formatNumber(metrics.high_sensitivity)}</MetricValue>
+          </MetricCard>
+          <TooltipContent className="tooltip-content">
+            Columns classified with HIGH sensitivity level, indicating they contain sensitive data requiring special protection.
+          </TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <MetricCard>
+            <MetricLabel>Primary Keys</MetricLabel>
+            <MetricValue>{formatNumber(metrics.primary_keys)}</MetricValue>
+          </MetricCard>
+          <TooltipContent className="tooltip-content">
+            Columns that serve as primary keys, uniquely identifying each row in their respective tables.
+          </TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <MetricCard>
+            <MetricLabel>Indexed Columns</MetricLabel>
+            <MetricValue>{formatNumber(metrics.indexed_columns)}</MetricValue>
+          </MetricCard>
+          <TooltipContent className="tooltip-content">
+            Columns that have database indexes created on them, improving query performance for searches and joins.
+          </TooltipContent>
+        </Tooltip>
       </MetricsGrid>
 
       <FiltersContainer>
-        <FilterSelect
-          value={filters.schema_name as string}
-          onChange={(e) => handleFilterChange('schema_name', e.target.value)}
-        >
-          <option value="">All Schemas</option>
-          {schemas.map(schema => (
-            <option key={schema} value={schema}>{schema}</option>
-          ))}
-        </FilterSelect>
+        <FilterWithTooltip>
+          <Tooltip>
+            <Select
+              value={filters.schema_name as string}
+              onChange={(e) => handleFilterChange('schema_name', e.target.value)}
+            >
+              <option value="">All Schemas</option>
+              {schemas.map(schema => (
+                <option key={schema} value={schema}>{schema}</option>
+              ))}
+            </Select>
+            <TooltipContent className="tooltip-content">
+              Filter columns by database schema. A schema is a logical container that groups related database objects.
+            </TooltipContent>
+          </Tooltip>
+        </FilterWithTooltip>
         
-        <FilterSelect
-          value={filters.table_name as string}
-          onChange={(e) => handleFilterChange('table_name', e.target.value)}
-          disabled={!filters.schema_name}
-        >
-          <option value="">All Tables</option>
-          {tables.map(table => (
-            <option key={table} value={table}>{table}</option>
-          ))}
-        </FilterSelect>
+        <FilterWithTooltip>
+          <Tooltip>
+            <Select
+              value={filters.table_name as string}
+              onChange={(e) => handleFilterChange('table_name', e.target.value)}
+              disabled={!filters.schema_name}
+            >
+              <option value="">All Tables</option>
+              {tables.map(table => (
+                <option key={table} value={table}>{table}</option>
+              ))}
+            </Select>
+            <TooltipContent className="tooltip-content">
+              Filter columns by table name. Select a schema first to see available tables. A table is a collection of related data organized in rows and columns.
+            </TooltipContent>
+          </Tooltip>
+        </FilterWithTooltip>
         
-        <FilterSelect
-          value={filters.db_engine as string}
-          onChange={(e) => handleFilterChange('db_engine', e.target.value)}
-        >
-          <option value="">All Engines</option>
-          <option value="PostgreSQL">PostgreSQL</option>
-          <option value="MariaDB">MariaDB</option>
-          <option value="MSSQL">MSSQL</option>
-        </FilterSelect>
+        <FilterWithTooltip>
+          <Tooltip>
+            <Select
+              value={filters.db_engine as string}
+              onChange={(e) => handleFilterChange('db_engine', e.target.value)}
+            >
+              <option value="">All Engines</option>
+              <option value="PostgreSQL">PostgreSQL</option>
+              <option value="MariaDB">MariaDB</option>
+              <option value="MSSQL">MSSQL</option>
+            </Select>
+            <TooltipContent className="tooltip-content">
+              Filter columns by database engine type. Different engines may have different data type representations and capabilities.
+            </TooltipContent>
+          </Tooltip>
+        </FilterWithTooltip>
         
-        <FilterSelect
-          value={filters.data_type as string}
-          onChange={(e) => handleFilterChange('data_type', e.target.value)}
-        >
-          <option value="">All Types</option>
-          <option value="varchar">VARCHAR</option>
-          <option value="integer">INTEGER</option>
-          <option value="bigint">BIGINT</option>
-          <option value="numeric">NUMERIC</option>
-          <option value="timestamp">TIMESTAMP</option>
-          <option value="boolean">BOOLEAN</option>
-        </FilterSelect>
+        <FilterWithTooltip>
+          <Tooltip>
+            <Select
+              value={filters.data_type as string}
+              onChange={(e) => handleFilterChange('data_type', e.target.value)}
+            >
+              <option value="">All Types</option>
+              <option value="varchar">VARCHAR</option>
+              <option value="integer">INTEGER</option>
+              <option value="bigint">BIGINT</option>
+              <option value="numeric">NUMERIC</option>
+              <option value="timestamp">TIMESTAMP</option>
+              <option value="boolean">BOOLEAN</option>
+            </Select>
+            <TooltipContent className="tooltip-content">
+              Filter columns by their data type. Data types define what kind of data can be stored in a column (text, numbers, dates, etc.).
+            </TooltipContent>
+          </Tooltip>
+        </FilterWithTooltip>
         
-        <FilterSelect
-          value={filters.sensitivity_level as string}
-          onChange={(e) => handleFilterChange('sensitivity_level', e.target.value)}
-        >
-          <option value="">All Sensitivity</option>
-          <option value="HIGH">HIGH</option>
-          <option value="MEDIUM">MEDIUM</option>
-          <option value="LOW">LOW</option>
-        </FilterSelect>
+        <FilterWithTooltip>
+          <Tooltip>
+            <Select
+              value={filters.sensitivity_level as string}
+              onChange={(e) => handleFilterChange('sensitivity_level', e.target.value)}
+            >
+              <option value="">All Sensitivity</option>
+              <option value="HIGH">HIGH</option>
+              <option value="MEDIUM">MEDIUM</option>
+              <option value="LOW">LOW</option>
+            </Select>
+            <TooltipContent className="tooltip-content">
+              Filter columns by sensitivity classification. HIGH = very sensitive (PII/PHI), MEDIUM = moderately sensitive, LOW = public or non-sensitive data.
+            </TooltipContent>
+          </Tooltip>
+        </FilterWithTooltip>
         
-        <FilterSelect
-          value={filters.contains_pii as string}
-          onChange={(e) => handleFilterChange('contains_pii', e.target.value)}
-        >
-          <option value="">All PII</option>
-          <option value="true">Has PII</option>
-          <option value="false">No PII</option>
-        </FilterSelect>
+        <FilterWithTooltip>
+          <Tooltip>
+            <Select
+              value={filters.contains_pii as string}
+              onChange={(e) => handleFilterChange('contains_pii', e.target.value)}
+            >
+              <option value="">All PII</option>
+              <option value="true">Has PII</option>
+              <option value="false">No PII</option>
+            </Select>
+            <TooltipContent className="tooltip-content">
+              Filter columns that contain Personally Identifiable Information (PII). PII includes data that can identify an individual like names, emails, or IDs.
+            </TooltipContent>
+          </Tooltip>
+        </FilterWithTooltip>
         
-        <SearchInput
-          type="text"
-          placeholder="Search column name..."
-          value={filters.search as string}
-          onChange={(e) => handleFilterChange('search', e.target.value)}
-        />
+        <Tooltip>
+          <Input
+            type="text"
+            placeholder="Search column name..."
+            value={filters.search as string}
+            onChange={(e) => handleFilterChange('search', e.target.value)}
+            style={{ flex: 1, minWidth: "200px" }}
+          />
+          <TooltipContent className="tooltip-content">
+            Search for columns by name. This will search across all column names in the catalog.
+          </TooltipContent>
+        </Tooltip>
+        
+        <Button
+          $variant="secondary"
+          onClick={handleResetFilters}
+          style={{ padding: "8px 16px", fontSize: "0.9em" }}
+        >
+          Reset All
+        </Button>
       </FiltersContainer>
 
-      <ColumnTable>
-        <TableHeader>
-          <TableCell>Schema</TableCell>
-          <TableCell>Table</TableCell>
-          <TableCell>Column</TableCell>
-          <TableCell>Engine</TableCell>
-          <TableCell>Data Type</TableCell>
-          <TableCell>Position</TableCell>
-          <TableCell>Nullable</TableCell>
-          <TableCell>Sensitivity</TableCell>
-          <TableCell>PII</TableCell>
-          <TableCell>PHI</TableCell>
-          <TableCell>Flags</TableCell>
-        </TableHeader>
-        {columns.length === 0 ? (
-          <div style={{ padding: '40px', textAlign: 'center', color: theme.colors.text.secondary }}>
-            No column data available. Columns will appear here once cataloged.
-          </div>
-        ) : (
-          columns.map((column) => (
-            <div key={column.id}>
-              <TableRow onClick={() => toggleColumn(column.id)}>
-                <TableCell>{column.schema_name}</TableCell>
-                <TableCell>{column.table_name}</TableCell>
-                <TableCell>{column.column_name}</TableCell>
-                <TableCell>{column.db_engine || 'N/A'}</TableCell>
-                <TableCell>
-                  <Badge $type={column.data_type}>{column.data_type}</Badge>
-                </TableCell>
-                <TableCell>{column.ordinal_position || 'N/A'}</TableCell>
-                <TableCell>{column.is_nullable ? 'Yes' : 'No'}</TableCell>
-                <TableCell>
-                  {column.sensitivity_level && (
-                    <Badge $level={column.sensitivity_level}>{column.sensitivity_level}</Badge>
-                  )}
-                </TableCell>
-                <TableCell>
-                  {column.contains_pii && <Badge $flag={true}>PII</Badge>}
-                </TableCell>
-                <TableCell>
-                  {column.contains_phi && <Badge $flag={true}>PHI</Badge>}
-                </TableCell>
-                <TableCell>
-                  {column.is_primary_key && <Badge $type="PK">PK</Badge>}
-                  {column.is_foreign_key && <Badge $type="FK">FK</Badge>}
-                  {column.is_unique && <Badge $type="UQ">UQ</Badge>}
-                  {column.is_indexed && <Badge $type="IDX">IDX</Badge>}
-                </TableCell>
+      <TableActions>
+        <div style={{ fontSize: "0.9em", color: theme.colors.text.secondary }}>
+          Showing {sortedColumns.length} of {pagination.total} columns
+        </div>
+        <ExportButton $variant="secondary" onClick={handleExportCSV}>
+          Export CSV
+        </ExportButton>
+      </TableActions>
+
+      <TableContainer>
+        <Table $minWidth="1400px">
+          <thead>
+            <tr>
+              <ThWithTooltip 
+                $sortable 
+                $active={sortField === "schema_name"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("schema_name")}
+              >
+                Schema
+                <TooltipContent className="tooltip-content">
+                  Database schema name. A schema is a logical container that groups related database objects like tables and views.
+                </TooltipContent>
+              </ThWithTooltip>
+              <ThWithTooltip 
+                $sortable 
+                $active={sortField === "table_name"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("table_name")}
+              >
+                Table
+                <TooltipContent className="tooltip-content">
+                  Table name containing this column. Tables store data in rows and columns.
+                </TooltipContent>
+              </ThWithTooltip>
+              <ThWithTooltip 
+                $sortable 
+                $active={sortField === "column_name"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("column_name")}
+              >
+                Column
+                <TooltipContent className="tooltip-content">
+                  Column name. Each column represents a specific attribute or field in the table.
+                </TooltipContent>
+              </ThWithTooltip>
+              <ThWithTooltip 
+                $sortable 
+                $active={sortField === "db_engine"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("db_engine")}
+              >
+                Engine
+                <TooltipContent className="tooltip-content">
+                  Database engine type (PostgreSQL, MariaDB, MSSQL, etc.). Different engines have different features and data type support.
+                </TooltipContent>
+              </ThWithTooltip>
+              <ThWithTooltip 
+                $sortable 
+                $active={sortField === "data_type"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("data_type")}
+              >
+                Data Type
+                <TooltipContent className="tooltip-content">
+                  The data type of the column (VARCHAR, INTEGER, TIMESTAMP, etc.). Defines what kind of data can be stored.
+                </TooltipContent>
+              </ThWithTooltip>
+              <ThWithTooltip 
+                $sortable 
+                $active={sortField === "ordinal_position"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("ordinal_position")}
+              >
+                Position
+                <TooltipContent className="tooltip-content">
+                  The ordinal position of the column in the table (1-based). Indicates the order of columns as defined in the table schema.
+                </TooltipContent>
+              </ThWithTooltip>
+              <ThWithTooltip>
+                Nullable
+                <TooltipContent className="tooltip-content">
+                  Whether the column allows NULL values. NULL means the value is unknown or not applicable.
+                </TooltipContent>
+              </ThWithTooltip>
+              <ThWithTooltip 
+                $sortable 
+                $active={sortField === "sensitivity_level"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("sensitivity_level")}
+              >
+                Sensitivity
+                <TooltipContent className="tooltip-content">
+                  Data sensitivity classification: HIGH (PII/PHI), MEDIUM (moderately sensitive), LOW (public data). Used for data governance and compliance.
+                </TooltipContent>
+              </ThWithTooltip>
+              <ThWithTooltip>
+                PII
+                <TooltipContent className="tooltip-content">
+                  Personally Identifiable Information flag. Indicates if the column contains data that can identify an individual (names, emails, IDs, etc.).
+                </TooltipContent>
+              </ThWithTooltip>
+              <ThWithTooltip>
+                PHI
+                <TooltipContent className="tooltip-content">
+                  Protected Health Information flag. Indicates if the column contains health-related data that requires special protection under HIPAA.
+                </TooltipContent>
+              </ThWithTooltip>
+              <ThWithTooltip>
+                Flags
+                <TooltipContent className="tooltip-content">
+                  Column flags: PK (Primary Key), FK (Foreign Key), UQ (Unique), IDX (Indexed). These indicate special properties and constraints.
+                </TooltipContent>
+              </ThWithTooltip>
+            </tr>
+          </thead>
+          <tbody>
+            {sortedColumns.length === 0 ? (
+              <TableRow>
+                <Td colSpan={11} style={{ padding: '40px', textAlign: 'center', color: theme.colors.text.secondary }}>
+                  No column data available. Columns will appear here once cataloged.
+                </Td>
               </TableRow>
-              <ColumnDetails $isOpen={openColumnId === column.id}>
-                <DetailGrid>
-                  <DetailLabel>Ordinal Position:</DetailLabel>
-                  <DetailValue>{column.ordinal_position || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Data Type:</DetailLabel>
-                  <DetailValue>{column.data_type || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Character Max Length:</DetailLabel>
-                  <DetailValue>{column.character_maximum_length || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Numeric Precision:</DetailLabel>
-                  <DetailValue>{column.numeric_precision || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Numeric Scale:</DetailLabel>
-                  <DetailValue>{column.numeric_scale || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Column Default:</DetailLabel>
-                  <DetailValue>{column.column_default || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Data Category:</DetailLabel>
-                  <DetailValue>{column.data_category || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Null Count:</DetailLabel>
-                  <DetailValue>{formatNumber(column.null_count)}</DetailValue>
-                  
-                  <DetailLabel>Null Percentage:</DetailLabel>
-                  <DetailValue>{formatPercentage(column.null_percentage)}</DetailValue>
-                  
-                  <DetailLabel>Distinct Count:</DetailLabel>
-                  <DetailValue>{formatNumber(column.distinct_count)}</DetailValue>
-                  
-                  <DetailLabel>Distinct Percentage:</DetailLabel>
-                  <DetailValue>{formatPercentage(column.distinct_percentage)}</DetailValue>
-                  
-                  <DetailLabel>Min Value:</DetailLabel>
-                  <DetailValue>{column.min_value || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Max Value:</DetailLabel>
-                  <DetailValue>{column.max_value || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Avg Value:</DetailLabel>
-                  <DetailValue>{column.avg_value || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>First Seen:</DetailLabel>
-                  <DetailValue>{formatDate(column.first_seen_at)}</DetailValue>
-                  
-                  <DetailLabel>Last Seen:</DetailLabel>
-                  <DetailValue>{formatDate(column.last_seen_at)}</DetailValue>
-                  
-                  <DetailLabel>Last Analyzed:</DetailLabel>
-                  <DetailValue>{formatDate(column.last_analyzed_at)}</DetailValue>
-                </DetailGrid>
-                
-                <FlagsGrid>
-                  <FlagItem>
-                    <Badge $flag={column.is_primary_key}>Primary Key</Badge>
-                  </FlagItem>
-                  <FlagItem>
-                    <Badge $flag={column.is_foreign_key}>Foreign Key</Badge>
-                  </FlagItem>
-                  <FlagItem>
-                    <Badge $flag={column.is_unique}>Unique</Badge>
-                  </FlagItem>
-                  <FlagItem>
-                    <Badge $flag={column.is_indexed}>Indexed</Badge>
-                  </FlagItem>
-                  <FlagItem>
-                    <Badge $flag={column.is_auto_increment}>Auto Increment</Badge>
-                  </FlagItem>
-                  <FlagItem>
-                    <Badge $flag={column.is_generated}>Generated</Badge>
-                  </FlagItem>
-                  <FlagItem>
-                    <Badge $flag={column.is_nullable}>Nullable</Badge>
-                  </FlagItem>
-                  <FlagItem>
-                    <Badge $flag={column.contains_pii}>Contains PII</Badge>
-                  </FlagItem>
-                  <FlagItem>
-                    <Badge $flag={column.contains_phi}>Contains PHI</Badge>
-                  </FlagItem>
-                </FlagsGrid>
-              </ColumnDetails>
-            </div>
-          ))
-        )}
-      </ColumnTable>
+            ) : (
+              sortedColumns.map((column) => (
+                <React.Fragment key={column.id}>
+                  <TableRow onClick={() => toggleColumn(column.id)} style={{ cursor: 'pointer' }}>
+                    <Td>
+                      <strong style={{ color: theme.colors.primary.main }}>
+                        {column.schema_name}
+                      </strong>
+                    </Td>
+                    <Td>
+                      <span style={{ color: theme.colors.text.secondary }}>
+                        {column.table_name}
+                      </span>
+                    </Td>
+                    <Td>
+                      <strong>{column.column_name}</strong>
+                    </Td>
+                    <Td>
+                      <span style={{ 
+                        padding: "2px 8px", 
+                        borderRadius: theme.borderRadius.sm,
+                        backgroundColor: theme.colors.background.secondary,
+                        fontSize: "0.85em"
+                      }}>
+                        {column.db_engine || 'N/A'}
+                      </span>
+                    </Td>
+                    <Td>
+                      <Badge $type={column.data_type}>{column.data_type}</Badge>
+                    </Td>
+                    <Td style={{ color: theme.colors.text.secondary }}>
+                      {column.ordinal_position || 'N/A'}
+                    </Td>
+                    <Td>
+                      {column.is_nullable ? (
+                        <span style={{ color: theme.colors.status.warning.text }}>Yes</span>
+                      ) : (
+                        <span style={{ color: theme.colors.status.success.text }}>No</span>
+                      )}
+                    </Td>
+                    <Td>
+                      {column.sensitivity_level && (
+                        <Badge $level={column.sensitivity_level}>{column.sensitivity_level}</Badge>
+                      )}
+                    </Td>
+                    <Td>
+                      {column.contains_pii && <Badge $flag={true}>PII</Badge>}
+                    </Td>
+                    <Td>
+                      {column.contains_phi && <Badge $flag={true}>PHI</Badge>}
+                    </Td>
+                    <Td>
+                      <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
+                        {column.is_primary_key && <Badge $type="PK">PK</Badge>}
+                        {column.is_foreign_key && <Badge $type="FK">FK</Badge>}
+                        {column.is_unique && <Badge $type="UQ">UQ</Badge>}
+                        {column.is_indexed && <Badge $type="IDX">IDX</Badge>}
+                      </div>
+                    </Td>
+                  </TableRow>
+                  {openColumnId === column.id && (
+                    <TableRow>
+                      <Td colSpan={11} style={{ padding: 0, border: 'none' }}>
+                        <ColumnDetails $isOpen={openColumnId === column.id}>
+                          <DetailGrid>
+                            <DetailLabel>Ordinal Position:</DetailLabel>
+                            <DetailValue>{column.ordinal_position || 'N/A'}</DetailValue>
+                            
+                            <DetailLabel>Data Type:</DetailLabel>
+                            <DetailValue>{column.data_type || 'N/A'}</DetailValue>
+                            
+                            <DetailLabel>Character Max Length:</DetailLabel>
+                            <DetailValue>{column.character_maximum_length || 'N/A'}</DetailValue>
+                            
+                            <DetailLabel>Numeric Precision:</DetailLabel>
+                            <DetailValue>{column.numeric_precision || 'N/A'}</DetailValue>
+                            
+                            <DetailLabel>Numeric Scale:</DetailLabel>
+                            <DetailValue>{column.numeric_scale || 'N/A'}</DetailValue>
+                            
+                            <DetailLabel>Column Default:</DetailLabel>
+                            <DetailValue>{column.column_default || 'N/A'}</DetailValue>
+                            
+                            <DetailLabel>Data Category:</DetailLabel>
+                            <DetailValue>{column.data_category || 'N/A'}</DetailValue>
+                            
+                            <DetailLabel>Null Count:</DetailLabel>
+                            <DetailValue>{formatNumber(column.null_count)}</DetailValue>
+                            
+                            <DetailLabel>Null Percentage:</DetailLabel>
+                            <DetailValue>{formatPercentage(column.null_percentage)}</DetailValue>
+                            
+                            <DetailLabel>Distinct Count:</DetailLabel>
+                            <DetailValue>{formatNumber(column.distinct_count)}</DetailValue>
+                            
+                            <DetailLabel>Distinct Percentage:</DetailLabel>
+                            <DetailValue>{formatPercentage(column.distinct_percentage)}</DetailValue>
+                            
+                            <DetailLabel>Min Value:</DetailLabel>
+                            <DetailValue>{column.min_value || 'N/A'}</DetailValue>
+                            
+                            <DetailLabel>Max Value:</DetailLabel>
+                            <DetailValue>{column.max_value || 'N/A'}</DetailValue>
+                            
+                            <DetailLabel>Avg Value:</DetailLabel>
+                            <DetailValue>{column.avg_value || 'N/A'}</DetailValue>
+                            
+                            <DetailLabel>First Seen:</DetailLabel>
+                            <DetailValue>{formatDate(column.first_seen_at)}</DetailValue>
+                            
+                            <DetailLabel>Last Seen:</DetailLabel>
+                            <DetailValue>{formatDate(column.last_seen_at)}</DetailValue>
+                            
+                            <DetailLabel>Last Analyzed:</DetailLabel>
+                            <DetailValue>{formatDate(column.last_analyzed_at)}</DetailValue>
+                          </DetailGrid>
+                          
+                          <FlagsGrid>
+                            <FlagItem>
+                              <Badge $flag={column.is_primary_key}>Primary Key</Badge>
+                            </FlagItem>
+                            <FlagItem>
+                              <Badge $flag={column.is_foreign_key}>Foreign Key</Badge>
+                            </FlagItem>
+                            <FlagItem>
+                              <Badge $flag={column.is_unique}>Unique</Badge>
+                            </FlagItem>
+                            <FlagItem>
+                              <Badge $flag={column.is_indexed}>Indexed</Badge>
+                            </FlagItem>
+                            <FlagItem>
+                              <Badge $flag={column.is_auto_increment}>Auto Increment</Badge>
+                            </FlagItem>
+                            <FlagItem>
+                              <Badge $flag={column.is_generated}>Generated</Badge>
+                            </FlagItem>
+                            <FlagItem>
+                              <Badge $flag={column.is_nullable}>Nullable</Badge>
+                            </FlagItem>
+                            <FlagItem>
+                              <Badge $flag={column.contains_pii}>Contains PII</Badge>
+                            </FlagItem>
+                            <FlagItem>
+                              <Badge $flag={column.contains_phi}>Contains PHI</Badge>
+                            </FlagItem>
+                          </FlagsGrid>
+                        </ColumnDetails>
+                      </Td>
+                    </TableRow>
+                  )}
+                </React.Fragment>
+              ))
+            )}
+          </tbody>
+        </Table>
+      </TableContainer>
 
       {pagination.totalPages > 1 && (
         <Pagination>
