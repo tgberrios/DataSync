@@ -131,7 +131,7 @@ const ProcessingItem = styled.div`
 
 const ProcessingSummary = styled.div`
   display: grid;
-  grid-template-columns: max-content 120px 150px 1fr 140px 140px 140px 140px;
+  grid-template-columns: max-content 120px 150px 1fr 140px 140px;
   align-items: center;
   padding: 12px 15px;
   cursor: pointer;
@@ -400,29 +400,23 @@ const LiveChanges = () => {
                     <RegularCell>
                       {processing.db_engine} - {processing.status}
                     </RegularCell>
-                    {processing.pk_strategy === 'PK' ? (
+                    {processing.pk_strategy === 'PK' && processing.new_pk ? (
                       <>
                         <DataCell>
-                          <div style={{ fontSize: '0.8em', color: theme.colors.text.secondary, marginBottom: '2px' }}>Old PK</div>
-                          {processing.old_pk || '0'}
+                          <div style={{ fontSize: '0.8em', color: theme.colors.text.secondary, marginBottom: '2px' }}>Last PK</div>
+                          {processing.new_pk || 'N/A'}
                         </DataCell>
-                        <DataCell>
-                          <div style={{ fontSize: '0.8em', color: theme.colors.text.secondary, marginBottom: '2px' }}>New PK</div>
-                          {processing.new_pk || '0'}
-                        </DataCell>
+                        <DataCell style={{ visibility: 'hidden' }} />
                         <DataCell style={{ visibility: 'hidden' }} />
                         <DataCell style={{ visibility: 'hidden' }} />
                       </>
                     ) : (
                       <>
                         <DataCell>
-                          <div style={{ fontSize: '0.8em', color: theme.colors.text.secondary, marginBottom: '2px' }}>Old Offset</div>
-                          {processing.old_offset || '0'}
+                          <div style={{ fontSize: '0.8em', color: theme.colors.text.secondary, marginBottom: '2px' }}>Record Count</div>
+                          {processing.record_count !== null && processing.record_count !== undefined ? processing.record_count.toLocaleString() : 'N/A'}
                         </DataCell>
-                        <DataCell>
-                          <div style={{ fontSize: '0.8em', color: theme.colors.text.secondary, marginBottom: '2px' }}>New Offset</div>
-                          {processing.new_offset || '1000'}
-                        </DataCell>
+                        <DataCell style={{ visibility: 'hidden' }} />
                         <DataCell style={{ visibility: 'hidden' }} />
                         <DataCell style={{ visibility: 'hidden' }} />
                       </>
@@ -446,26 +440,19 @@ const LiveChanges = () => {
                       <DetailLabel>PK Strategy:</DetailLabel>
                       <DetailValue>{processing.pk_strategy || 'N/A'}</DetailValue>
                       
-                      {processing.old_pk && (
-                        <>
-                          <DetailLabel>Old PK:</DetailLabel>
-                          <DetailValue>{processing.old_pk}</DetailValue>
-                        </>
-                      )}
-                      
                       {processing.new_pk && (
                         <>
-                          <DetailLabel>New PK:</DetailLabel>
+                          <DetailLabel>Last PK:</DetailLabel>
                           <DetailValue>{processing.new_pk}</DetailValue>
                         </>
                       )}
                       
-                      {processing.record_count !== null && processing.record_count !== undefined && (
-                        <>
-                          <DetailLabel>Record Count:</DetailLabel>
-                          <DetailValue>{processing.record_count.toLocaleString()}</DetailValue>
-                        </>
-                      )}
+                      <DetailLabel>Record Count:</DetailLabel>
+                      <DetailValue>
+                        {processing.record_count !== null && processing.record_count !== undefined 
+                          ? processing.record_count.toLocaleString() 
+                          : 'N/A'}
+                      </DetailValue>
                       
                       <DetailLabel>Processed At:</DetailLabel>
                       <DetailValue>{processing.processed_at ? new Date(processing.processed_at).toLocaleString() : 'N/A'}</DetailValue>

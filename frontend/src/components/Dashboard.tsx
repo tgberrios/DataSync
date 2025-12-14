@@ -79,7 +79,17 @@ const Dashboard = () => {
     updated_at: new Date().toISOString(),
   });
   const [currentlyProcessing, setCurrentlyProcessing] =
-    useState<CurrentlyProcessing | null>(null);
+    useState<CurrentlyProcessing[]>([]);
+  const [processingPagination, setProcessingPagination] = useState<{
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+  } | null>(null);
+  const [processingPage, setProcessingPage] = useState(1);
+  const [isProcessingExpanded, setIsProcessingExpanded] = useState(false);
   const isMountedRef = useRef(true);
   const isInitialLoadRef = useRef(true);
 
@@ -224,16 +234,17 @@ const Dashboard = () => {
   const fetchCurrentlyProcessing = useCallback(async () => {
     try {
       if (!isMountedRef.current) return;
-      const data = await dashboardApi.getCurrentlyProcessing();
+      const response = await dashboardApi.getCurrentlyProcessing(processingPage);
       if (isMountedRef.current) {
-        setCurrentlyProcessing(data);
+        setCurrentlyProcessing(response.data);
+        setProcessingPagination(response.pagination);
       }
     } catch (err) {
       if (isMountedRef.current) {
-        console.error("Error fetching currently processing table:", err);
+        console.error("Error fetching currently processing tables:", err);
       }
     }
-  }, []);
+  }, [processingPage]);
 
   /**
    * Maneja el reintento de carga de datos después de un error
@@ -261,7 +272,7 @@ const Dashboard = () => {
       clearInterval(processingInterval);
       clearInterval(systemResourcesInterval);
     };
-  }, [fetchStats, fetchSyncStats, fetchCurrentlyProcessing, fetchSystemResources]);
+  }, [fetchStats, fetchSyncStats, fetchCurrentlyProcessing, fetchSystemResources, processingPage]);
 
   if (loading) {
     return (
@@ -304,7 +315,8 @@ const Dashboard = () => {
           <Value>No Data: {stats.syncStatus.noData || 0}</Value>
           <Value>Skip: {stats.syncStatus.skip || 0}</Value>
           <Value>Errors: {stats.syncStatus.errors || 0}</Value>
-          <Value>Total Tables: {(stats.syncStatus.listeningChanges || 0) + (stats.syncStatus.pending || 0) + (stats.syncStatus.fullLoadActive || 0) + (stats.syncStatus.fullLoadInactive || 0) + (stats.syncStatus.noData || 0) + (stats.syncStatus.skip || 0)}</Value>
+          <Value>In Progress: {stats.syncStatus.inProgress || 0}</Value>
+          <Value>Total Tables: {(stats.syncStatus.listeningChanges || 0) + (stats.syncStatus.pending || 0) + (stats.syncStatus.fullLoadActive || 0) + (stats.syncStatus.fullLoadInactive || 0) + (stats.syncStatus.noData || 0) + (stats.syncStatus.skip || 0) + (stats.syncStatus.inProgress || 0)}</Value>
         </Grid>
 
         <div style={{ marginTop: "20px" }}>
@@ -326,50 +338,150 @@ const Dashboard = () => {
           </Grid>
         </div>
 
-        <Value
-          style={{
-            marginTop: "20px",
-            background:
-              "linear-gradient(135deg, #ffffff 0%, #f0f7ff 100%)",
-            borderLeft: "4px solid #0d1b2a",
-            animation: currentlyProcessing ? "pulse 2s infinite" : "none",
-          }}
-        >
-          ► Currently Processing:{" "}
-          {currentlyProcessing
-            ? `${currentlyProcessing.schema_name}.${currentlyProcessing.table_name} [${currentlyProcessing.db_engine}] (${formatNumberWithCommas(currentlyProcessing.total_records)} records) - ${currentlyProcessing.status}`
-            : "No active processing detected"}
-        </Value>
-
-        <div style={{ marginTop: "15px" }}>
-          <SectionTitle style={{ fontSize: "1em", marginBottom: "10px" }}>
-            ■ PK STRATEGY INFORMATION
-          </SectionTitle>
-          <Grid>
-            <Value>
-              <div style={{ fontWeight: "bold", marginBottom: "5px" }}>
-                Current Table Strategy
-              </div>
-              <div style={{ fontSize: "1.2em", color: "#333" }}>
-                {currentlyProcessing ? "PK" : "N/A"}
-              </div>
-              <div style={{ fontSize: "0.8em", color: "#666" }}>
-                Primary Key based pagination
-              </div>
+        <div style={{ marginTop: "20px" }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              cursor: "pointer",
+              marginBottom: "10px",
+            }}
+            onClick={() => setIsProcessingExpanded(!isProcessingExpanded)}
+          >
+            <SectionTitle style={{ fontSize: "1em", marginBottom: "0" }}>
+              ► Currently Processing & Recent Activity
+            </SectionTitle>
+            <div style={{ fontSize: "0.9em", color: "#666" }}>
+              {isProcessingExpanded ? "▼" : "▶"} {processingPagination?.total || currentlyProcessing.length} {(processingPagination?.total || currentlyProcessing.length) === 1 ? "table" : "tables"}
+            </div>
+          </div>
+          {currentlyProcessing.length === 0 ? (
+            <Value
+              style={{
+                background:
+                  "linear-gradient(135deg, #ffffff 0%, #f0f7ff 100%)",
+                borderLeft: "4px solid #0d1b2a",
+                padding: "15px",
+              }}
+            >
+              No active processing detected
             </Value>
-            <Value>
-              <div style={{ fontWeight: "bold", marginBottom: "5px" }}>
-                Strategy Status
-              </div>
-              <div style={{ fontSize: "1.2em", color: "#333" }}>
-                {currentlyProcessing ? "Active" : "Idle"}
-              </div>
-              <div style={{ fontSize: "0.8em", color: "#666" }}>
-                Cursor-based processing
-              </div>
-            </Value>
-          </Grid>
+          ) : (
+            <>
+              {currentlyProcessing[0] && (
+                <Value
+                  style={{
+                    background:
+                      "linear-gradient(135deg, #ffffff 0%, #f0f7ff 100%)",
+                    borderLeft: "4px solid #0d1b2a",
+                    padding: "12px 15px",
+                    marginBottom: isProcessingExpanded ? "10px" : "0",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <strong>{currentlyProcessing[0].schema_name}.{currentlyProcessing[0].table_name}</strong> [{currentlyProcessing[0].db_engine}]
+                      <div style={{ fontSize: "0.9em", color: "#666", marginTop: "4px", display: "flex", alignItems: "center", gap: "8px" }}>
+                        {formatNumberWithCommas(currentlyProcessing[0].total_records)} records
+                        {currentlyProcessing[0].status === "IN_PROGRESS" && (
+                          <span style={{
+                            backgroundColor: "#ff9800",
+                            color: "white",
+                            padding: "2px 8px",
+                            borderRadius: "12px",
+                            fontSize: "0.8em",
+                            fontWeight: "bold"
+                          }}>
+                            IN_PROGRESS
+                          </span>
+                        )}
+                        {currentlyProcessing[0].status !== "IN_PROGRESS" && (
+                          <span>{currentlyProcessing[0].status}</span>
+                        )}
+                        {currentlyProcessing[0].processed_at && (
+                          <span>
+                            • {new Date(currentlyProcessing[0].processed_at).toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </Value>
+              )}
+              {isProcessingExpanded && (
+                <>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                    {currentlyProcessing.slice(1).map((item, index) => (
+                      <Value
+                        key={index + 1}
+                        style={{
+                          background:
+                            "linear-gradient(135deg, #ffffff 0%, #f0f7ff 100%)",
+                          borderLeft: "4px solid #0d1b2a",
+                          padding: "12px 15px",
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <div>
+                            <strong>{item.schema_name}.{item.table_name}</strong> [{item.db_engine}]
+                            <div style={{ fontSize: "0.9em", color: "#666", marginTop: "4px", display: "flex", alignItems: "center", gap: "8px" }}>
+                              {formatNumberWithCommas(item.total_records)} records
+                              {item.status === "IN_PROGRESS" && (
+                                <span style={{
+                                  backgroundColor: "#ff9800",
+                                  color: "white",
+                                  padding: "2px 8px",
+                                  borderRadius: "12px",
+                                  fontSize: "0.8em",
+                                  fontWeight: "bold"
+                                }}>
+                                  IN_PROGRESS
+                                </span>
+                              )}
+                              {item.status !== "IN_PROGRESS" && (
+                                <span>{item.status}</span>
+                              )}
+                              {item.processed_at && (
+                                <span>
+                                  • {new Date(item.processed_at).toLocaleString()}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </Value>
+                    ))}
+                  </div>
+                  {processingPagination && processingPagination.totalPages > 1 && (
+                    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: "10px", marginTop: "15px" }}>
+                      <Button
+                        $variant="secondary"
+                        onClick={() => setProcessingPage(Math.max(1, processingPage - 1))}
+                        disabled={!processingPagination.hasPrev}
+                        style={{ padding: "8px 14px", fontSize: "0.9em" }}
+                      >
+                        {'[<]'} Prev
+                      </Button>
+                      <div style={{ fontSize: "0.9em", color: "#666" }}>
+                        Page {processingPagination.page} of {processingPagination.totalPages}
+                      </div>
+                      <Button
+                        $variant="secondary"
+                        onClick={() => setProcessingPage(Math.min(processingPagination.totalPages, processingPage + 1))}
+                        disabled={!processingPagination.hasNext}
+                        style={{ padding: "8px 14px", fontSize: "0.9em" }}
+                      >
+                        Next {'[>]'}
+                      </Button>
+                    </div>
+                  )}
+                </>
+              )}
+            </>
+          )}
         </div>
+
       </Section>
 
       <Section>

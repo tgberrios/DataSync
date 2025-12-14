@@ -39,6 +39,7 @@ export interface DashboardStats {
     noData: number;
     skip: number;
     errors: number;
+    inProgress: number;
     currentProcess: string;
     totalData?: number;
   };
@@ -104,8 +105,7 @@ export interface CurrentlyProcessing {
   schema_name: string;
   table_name: string;
   db_engine: string;
-  new_offset: number;
-  new_pk: string;
+  new_pk: string | null;
   status: string;
   processed_at: string;
   total_records: number;
@@ -129,14 +129,22 @@ export const dashboardApi = {
       throw error;
     }
   },
-  getCurrentlyProcessing: async () => {
+  getCurrentlyProcessing: async (page: number = 1) => {
     try {
-      const response = await api.get<CurrentlyProcessing | null>(
-        "/dashboard/currently-processing"
-      );
+      const response = await api.get<{
+        data: CurrentlyProcessing[];
+        pagination: {
+          page: number;
+          limit: number;
+          total: number;
+          totalPages: number;
+          hasNext: boolean;
+          hasPrev: boolean;
+        };
+      }>(`/dashboard/currently-processing?page=${page}`);
       return response.data;
     } catch (error) {
-      console.error("Error fetching currently processing table:", error);
+      console.error("Error fetching currently processing tables:", error);
       if (axios.isAxiosError(error) && error.response) {
         console.error("Server error details:", error.response.data);
         throw new Error(
