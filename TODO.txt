@@ -7,6 +7,12 @@ Media prioridad
 Redshift — Data warehouse de AWS.
 DB2 — IBM (común en entornos legacy enterprise).
 
+csv
+google sheets
+
+
+el monitor deberia monitorear todos los motores y que tenga charts como por ejemplo redgate
+
 
 y el de mssql de azure
 ┌─────────────────────────────────────────────────────────────────┐
