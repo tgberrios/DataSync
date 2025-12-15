@@ -11,6 +11,8 @@ csv
 google sheets
 
 
+que aguante webhooks ?  
+
 el monitor deberia monitorear todos los motores y que tenga charts como por ejemplo redgate
 
 
