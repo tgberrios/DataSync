@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { lazy, Suspense } from "react";
 import Layout from "./components/Layout";
+import ProtectedRoute from "./components/ProtectedRoute";
 import { Container, Header } from "./components/shared/BaseComponents";
 
 const LoadingFallback = () => (
@@ -40,194 +41,257 @@ const GovernanceCatalogOracle = lazy(
 );
 const APICatalog = lazy(() => import("./components/APICatalog"));
 const CustomJobs = lazy(() => import("./components/CustomJobs"));
+const UserManagement = lazy(() => import("./components/UserManagement"));
+const Login = lazy(() => import("./components/Login"));
 
 function App() {
   return (
     <BrowserRouter>
       <Routes>
+        <Route path="/login" element={
+          <Suspense fallback={<LoadingFallback />}>
+            <Login />
+          </Suspense>
+        } />
         <Route path="/" element={<Layout />}>
           <Route
             index
             element={
-              <Suspense fallback={<LoadingFallback />}>
-                <Dashboard />
-              </Suspense>
+              <ProtectedRoute>
+                <Suspense fallback={<LoadingFallback />}>
+                  <Dashboard />
+                </Suspense>
+              </ProtectedRoute>
             }
           />
           <Route
             path="catalog"
             element={
-              <Suspense fallback={<LoadingFallback />}>
-                <Catalog />
-              </Suspense>
+              <ProtectedRoute>
+                <Suspense fallback={<LoadingFallback />}>
+                  <Catalog />
+                </Suspense>
+              </ProtectedRoute>
             }
           />
           <Route
             path="column-catalog"
             element={
-              <Suspense fallback={<LoadingFallback />}>
-                <ColumnCatalog />
-              </Suspense>
+              <ProtectedRoute>
+                <Suspense fallback={<LoadingFallback />}>
+                  <ColumnCatalog />
+                </Suspense>
+              </ProtectedRoute>
             }
           />
           <Route
             path="catalog-locks"
             element={
-              <Suspense fallback={<LoadingFallback />}>
-                <CatalogLocks />
-              </Suspense>
+              <ProtectedRoute>
+                <Suspense fallback={<LoadingFallback />}>
+                  <CatalogLocks />
+                </Suspense>
+              </ProtectedRoute>
             }
           />
           <Route
             path="data-lineage-mariadb"
             element={
-              <Suspense fallback={<LoadingFallback />}>
-                <DataLineageMariaDB />
-              </Suspense>
+              <ProtectedRoute>
+                <Suspense fallback={<LoadingFallback />}>
+                  <DataLineageMariaDB />
+                </Suspense>
+              </ProtectedRoute>
             }
           />
           <Route
             path="data-lineage-mssql"
             element={
-              <Suspense fallback={<LoadingFallback />}>
-                <DataLineageMSSQL />
-              </Suspense>
+              <ProtectedRoute>
+                <Suspense fallback={<LoadingFallback />}>
+                  <DataLineageMSSQL />
+                </Suspense>
+              </ProtectedRoute>
             }
           />
           <Route
             path="data-lineage-mongodb"
             element={
-              <Suspense fallback={<LoadingFallback />}>
-                <DataLineageMongoDB />
-              </Suspense>
+              <ProtectedRoute>
+                <Suspense fallback={<LoadingFallback />}>
+                  <DataLineageMongoDB />
+                </Suspense>
+              </ProtectedRoute>
             }
           />
           <Route
             path="data-lineage-oracle"
             element={
-              <Suspense fallback={<LoadingFallback />}>
-                <DataLineageOracle />
-              </Suspense>
+              <ProtectedRoute>
+                <Suspense fallback={<LoadingFallback />}>
+                  <DataLineageOracle />
+                </Suspense>
+              </ProtectedRoute>
             }
           />
           <Route
             path="governance-catalog-mariadb"
             element={
-              <Suspense fallback={<LoadingFallback />}>
-                <GovernanceCatalogMariaDB />
-              </Suspense>
+              <ProtectedRoute>
+                <Suspense fallback={<LoadingFallback />}>
+                  <GovernanceCatalogMariaDB />
+                </Suspense>
+              </ProtectedRoute>
             }
           />
           <Route
             path="governance-catalog-mssql"
             element={
-              <Suspense fallback={<LoadingFallback />}>
-                <GovernanceCatalogMSSQL />
-              </Suspense>
+              <ProtectedRoute>
+                <Suspense fallback={<LoadingFallback />}>
+                  <GovernanceCatalogMSSQL />
+                </Suspense>
+              </ProtectedRoute>
             }
           />
           <Route
             path="governance-catalog-mongodb"
             element={
-              <Suspense fallback={<LoadingFallback />}>
-                <GovernanceCatalogMongoDB />
-              </Suspense>
+              <ProtectedRoute>
+                <Suspense fallback={<LoadingFallback />}>
+                  <GovernanceCatalogMongoDB />
+                </Suspense>
+              </ProtectedRoute>
             }
           />
           <Route
             path="governance-catalog-oracle"
             element={
-              <Suspense fallback={<LoadingFallback />}>
-                <GovernanceCatalogOracle />
-              </Suspense>
+              <ProtectedRoute>
+                <Suspense fallback={<LoadingFallback />}>
+                  <GovernanceCatalogOracle />
+                </Suspense>
+              </ProtectedRoute>
             }
           />
           <Route
             path="api-catalog"
             element={
-              <Suspense fallback={<LoadingFallback />}>
-                <APICatalog />
-              </Suspense>
+              <ProtectedRoute>
+                <Suspense fallback={<LoadingFallback />}>
+                  <APICatalog />
+                </Suspense>
+              </ProtectedRoute>
             }
           />
           <Route
             path="custom-jobs"
             element={
-              <Suspense fallback={<LoadingFallback />}>
-                <CustomJobs />
-              </Suspense>
+              <ProtectedRoute>
+                <Suspense fallback={<LoadingFallback />}>
+                  <CustomJobs />
+                </Suspense>
+              </ProtectedRoute>
             }
           />
           <Route
             path="monitor"
             element={
-              <Suspense fallback={<LoadingFallback />}>
-                <Monitor />
-              </Suspense>
+              <ProtectedRoute>
+                <Suspense fallback={<LoadingFallback />}>
+                  <Monitor />
+                </Suspense>
+              </ProtectedRoute>
             }
           />
           <Route
             path="query-performance"
             element={
-              <Suspense fallback={<LoadingFallback />}>
-                <QueryPerformance />
-              </Suspense>
+              <ProtectedRoute>
+                <Suspense fallback={<LoadingFallback />}>
+                  <QueryPerformance />
+                </Suspense>
+              </ProtectedRoute>
             }
           />
           <Route
             path="maintenance"
             element={
-              <Suspense fallback={<LoadingFallback />}>
-                <Maintenance />
-              </Suspense>
+              <ProtectedRoute>
+                <Suspense fallback={<LoadingFallback />}>
+                  <Maintenance />
+                </Suspense>
+              </ProtectedRoute>
             }
           />
           <Route
             path="live-changes"
             element={
-              <Suspense fallback={<LoadingFallback />}>
-                <LiveChanges />
-              </Suspense>
+              <ProtectedRoute>
+                <Suspense fallback={<LoadingFallback />}>
+                  <LiveChanges />
+                </Suspense>
+              </ProtectedRoute>
             }
           />
           <Route
             path="quality"
             element={
-              <Suspense fallback={<LoadingFallback />}>
-                <Quality />
-              </Suspense>
+              <ProtectedRoute>
+                <Suspense fallback={<LoadingFallback />}>
+                  <Quality />
+                </Suspense>
+              </ProtectedRoute>
             }
           />
           <Route
             path="governance"
             element={
-              <Suspense fallback={<LoadingFallback />}>
-                <Governance />
-              </Suspense>
+              <ProtectedRoute>
+                <Suspense fallback={<LoadingFallback />}>
+                  <Governance />
+                </Suspense>
+              </ProtectedRoute>
             }
           />
           <Route
             path="security"
             element={
-              <Suspense fallback={<LoadingFallback />}>
-                <Security />
-              </Suspense>
+              <ProtectedRoute>
+                <Suspense fallback={<LoadingFallback />}>
+                  <Security />
+                </Suspense>
+              </ProtectedRoute>
             }
           />
           <Route
             path="logs"
             element={
-              <Suspense fallback={<LoadingFallback />}>
-                <LogsViewer />
-              </Suspense>
+              <ProtectedRoute>
+                <Suspense fallback={<LoadingFallback />}>
+                  <LogsViewer />
+                </Suspense>
+              </ProtectedRoute>
             }
           />
           <Route
             path="config"
             element={
-              <Suspense fallback={<LoadingFallback />}>
-                <Config />
-              </Suspense>
+              <ProtectedRoute>
+                <Suspense fallback={<LoadingFallback />}>
+                  <Config />
+                </Suspense>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="user-management"
+            element={
+              <ProtectedRoute>
+                <Suspense fallback={<LoadingFallback />}>
+                  <UserManagement />
+                </Suspense>
+              </ProtectedRoute>
             }
           />
         </Route>

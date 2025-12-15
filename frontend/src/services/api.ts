@@ -1,12 +1,132 @@
 import axios from "axios";
 
 const api = axios.create({
-  baseURL: "/api", // Esto usará el proxy de Vite
+  baseURL: "/api",
   headers: {
     "Content-Type": "application/json",
   },
-  timeout: 60000, // 60 segundos timeout
+  timeout: 60000,
 });
+
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem("authToken");
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      const isLoginEndpoint = error.config?.url?.includes("/auth/login");
+      if (!isLoginEndpoint) {
+        localStorage.removeItem("authToken");
+        localStorage.removeItem("authUser");
+        if (window.location.pathname !== "/login") {
+          window.location.href = "/login";
+        }
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
+export const authApi = {
+  login: async (username: string, password: string) => {
+    const response = await api.post("/auth/login", { username, password });
+    if (response.data.token) {
+      localStorage.setItem("authToken", response.data.token);
+      localStorage.setItem("authUser", JSON.stringify(response.data.user));
+    }
+    return response.data;
+  },
+
+  logout: async () => {
+    try {
+      await api.post("/auth/logout");
+    } catch (err) {
+      console.error("Logout error:", err);
+    } finally {
+      localStorage.removeItem("authToken");
+      localStorage.removeItem("authUser");
+    }
+  },
+
+  getCurrentUser: async () => {
+    const response = await api.get("/auth/me");
+    return response.data.user;
+  },
+
+  changePassword: async (oldPassword: string, newPassword: string) => {
+    const response = await api.post("/auth/change-password", {
+      oldPassword,
+      newPassword,
+    });
+    return response.data;
+  },
+
+  getUsers: async (params?: {
+    page?: number;
+    limit?: number;
+    role?: string;
+    active?: string;
+    search?: string;
+  }) => {
+    const response = await api.get("/auth/users", { params });
+    return response.data;
+  },
+
+  createUser: async (
+    username: string,
+    email: string,
+    password: string,
+    role?: string
+  ) => {
+    const response = await api.post("/auth/users", {
+      username,
+      email,
+      password,
+      role: role || "user",
+    });
+    return response.data;
+  },
+
+  updateUser: async (
+    id: number,
+    data: {
+      username?: string;
+      email?: string;
+      role?: string;
+      active?: boolean;
+    }
+  ) => {
+    const response = await api.patch(`/auth/users/${id}`, data);
+    return response.data;
+  },
+
+  deleteUser: async (id: number) => {
+    const response = await api.delete(`/auth/users/${id}`);
+    return response.data;
+  },
+
+  resetUserPassword: async (id: number, newPassword: string) => {
+    const response = await api.post(`/auth/users/${id}/reset-password`, {
+      newPassword,
+    });
+    return response.data;
+  },
+};
+
+export const getCurrentUser = () => {
+  const userStr = localStorage.getItem("authUser");
+  return userStr ? JSON.parse(userStr) : null;
+};
+
+export const isAuthenticated = () => {
+  return !!localStorage.getItem("authToken");
+};
 
 export interface CatalogEntry {
   schema_name: string;
@@ -404,9 +524,7 @@ export const catalogApi = {
     } = {}
   ) => {
     try {
-      console.log("Fetching catalog entries with params:", params);
       const response = await api.get("/catalog", { params });
-      console.log("Received catalog data:", response.data);
       return response.data;
     } catch (error) {
       console.error("Error fetching catalog:", error);

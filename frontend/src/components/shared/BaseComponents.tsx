@@ -454,3 +454,94 @@ export const Label = styled.label`
   font-family: ${theme.fonts.primary};
 `;
 
+export const SearchInput = styled(Input)`
+  flex: 1;
+  font-size: 14px;
+`;
+
+export const SearchButton = styled(Button)`
+  padding: 10px 20px;
+  font-weight: bold;
+`;
+
+export const ClearSearchButton = styled(Button)`
+  padding: 10px 15px;
+`;
+
+export const PaginationInfo = styled.div`
+  text-align: center;
+  margin-bottom: ${theme.spacing.sm};
+  color: ${theme.colors.text.secondary};
+  font-size: 0.9em;
+  animation: fadeIn 0.25s ease-in;
+`;
+
+export const ModalOverlay = styled.div<{ $isOpen: boolean }>`
+  display: ${props => props.$isOpen ? 'flex' : 'none'};
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.2s ease-in;
+`;
+
+export const ModalContent = styled.div`
+  background: ${theme.colors.background.main};
+  border-radius: ${theme.borderRadius.md};
+  padding: ${theme.spacing.xl};
+  max-width: 800px;
+  width: 90%;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: ${theme.shadows.xl};
+  animation: slideUp 0.3s ease-out;
+`;
+
+export const ModalHeader = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: ${theme.spacing.lg};
+  padding-bottom: ${theme.spacing.md};
+  border-bottom: 2px solid ${theme.colors.border.medium};
+`;
+
+export const ModalTitle = styled.h2`
+  margin: 0;
+  color: ${theme.colors.text.primary};
+`;
+
+export const TextArea = styled.textarea`
+  padding: ${theme.spacing.sm};
+  border: 1px solid ${theme.colors.border.medium};
+  border-radius: ${theme.borderRadius.md};
+  font-family: ${theme.fonts.primary};
+  background: ${theme.colors.background.main};
+  color: ${theme.colors.text.primary};
+  transition: all ${theme.transitions.normal};
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+  
+  &:hover:not(:disabled) {
+    border-color: rgba(10, 25, 41, 0.3);
+    box-shadow: ${theme.shadows.sm};
+  }
+  
+  &:focus:not(:disabled) {
+    outline: none;
+    border-color: ${theme.colors.primary.main};
+    box-shadow: 0 0 0 3px rgba(10, 25, 41, 0.1);
+  }
+  
+  &:disabled {
+    background-color: ${theme.colors.background.secondary};
+    cursor: not-allowed;
+  }
+`;
+

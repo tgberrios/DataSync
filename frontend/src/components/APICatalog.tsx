@@ -17,40 +17,19 @@ import {
   ErrorMessage,
   LoadingOverlay,
   SearchContainer,
-  Input,
   Button,
   ActiveBadge,
   ActionButton,
+  SearchInput,
+  SearchButton,
+  ClearSearchButton,
+  PaginationInfo,
 } from './shared/BaseComponents';
 import { usePagination } from '../hooks/usePagination';
 import { useTableFilters } from '../hooks/useTableFilters';
 import { apiCatalogApi } from '../services/api';
 import { extractApiError } from '../utils/errorHandler';
 import { sanitizeSearch } from '../utils/validation';
-import styled from 'styled-components';
-import { theme } from '../theme/theme';
-
-const SearchInput = styled(Input)`
-  flex: 1;
-  font-size: 14px;
-`;
-
-const SearchButton = styled(Button)`
-  padding: 10px 20px;
-  font-weight: bold;
-`;
-
-const ClearSearchButton = styled(Button)`
-  padding: 10px 15px;
-`;
-
-const PaginationInfo = styled.div`
-  text-align: center;
-  margin-bottom: ${theme.spacing.sm};
-  color: ${theme.colors.text.secondary};
-  font-size: 0.9em;
-  animation: fadeIn 0.25s ease-in;
-`;
 
 interface APICatalogEntry {
   id: number;

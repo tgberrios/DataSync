@@ -1,6 +1,7 @@
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useState } from 'react';
 import styled from 'styled-components';
+import { authApi, getCurrentUser } from '../services/api';
 
 const LayoutContainer = styled.div`
   display: flex;
@@ -15,6 +16,8 @@ const Sidebar = styled.div`
   border-right: 1px solid #333;
   box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 `;
 
 const MainContent = styled.div`
@@ -156,7 +159,53 @@ const Logo = styled.div`
   }
 `;
 
+const UserInfo = styled.div`
+  padding: 20px 25px;
+  border-top: 1px solid #333;
+  margin-top: auto;
+`;
+
+const UsernameDisplay = styled.div`
+  font-size: 1.1em;
+  font-weight: 600;
+  color: #fff;
+  margin-bottom: 8px;
+  font-family: monospace;
+  letter-spacing: 0.5px;
+`;
+
+const RoleDisplay = styled.div`
+  font-size: 0.95em;
+  font-weight: 500;
+  color: #4a9eff;
+  margin-bottom: 15px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-family: monospace;
+`;
+
+const LogoutButton = styled.button`
+  width: 100%;
+  padding: 10px 15px;
+  margin-top: 10px;
+  background: transparent;
+  border: 1px solid #555;
+  color: #aaa;
+  cursor: pointer;
+  border-radius: 4px;
+  font-family: monospace;
+  transition: all 0.2s ease;
+  
+  &:hover {
+    background: rgba(255, 0, 0, 0.1);
+    border-color: #ff4444;
+    color: #ff6666;
+  }
+`;
+
 const Layout = () => {
+  const navigate = useNavigate();
+  const currentUser = getCurrentUser();
   const [openGroups, setOpenGroups] = useState<{ [key: string]: boolean }>({
     catalog: false,
     lineage: false,
@@ -172,6 +221,11 @@ const Layout = () => {
       ...prev,
       [group]: !prev[group]
     }));
+  };
+
+  const handleLogout = async () => {
+    await authApi.logout();
+    navigate('/login');
   };
 
   return (
@@ -323,8 +377,23 @@ const Layout = () => {
             <NavSubItem to="/config">
               ■ Config
             </NavSubItem>
+            <NavSubItem to="/user-management">
+              ■ User Management
+            </NavSubItem>
           </NavGroupContent>
         </NavGroup>
+
+        <UserInfo>
+          {currentUser && (
+            <>
+              <UsernameDisplay>{currentUser.username}</UsernameDisplay>
+              <RoleDisplay>{currentUser.role}</RoleDisplay>
+              <LogoutButton onClick={handleLogout}>
+                Logout
+              </LogoutButton>
+            </>
+          )}
+        </UserInfo>
       </Sidebar>
       <MainContent>
         <Outlet />

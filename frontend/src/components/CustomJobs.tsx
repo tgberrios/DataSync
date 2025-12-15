@@ -22,6 +22,15 @@ import {
   PlayButton,
   FormGroup,
   Label,
+  SearchInput,
+  SearchButton,
+  ClearSearchButton,
+  PaginationInfo,
+  ModalOverlay,
+  ModalContent,
+  ModalHeader,
+  ModalTitle,
+  TextArea,
 } from './shared/BaseComponents';
 import { usePagination } from '../hooks/usePagination';
 import { useTableFilters } from '../hooks/useTableFilters';
@@ -31,68 +40,6 @@ import { extractApiError } from '../utils/errorHandler';
 import { sanitizeSearch } from '../utils/validation';
 import styled from 'styled-components';
 import { theme } from '../theme/theme';
-
-const SearchInput = styled(Input)`
-  flex: 1;
-  font-size: 14px;
-`;
-
-const SearchButton = styled(Button)`
-  padding: 10px 20px;
-  font-weight: bold;
-`;
-
-const ClearSearchButton = styled(Button)`
-  padding: 10px 15px;
-`;
-
-const PaginationInfo = styled.div`
-  text-align: center;
-  margin-bottom: ${theme.spacing.sm};
-  color: ${theme.colors.text.secondary};
-  font-size: 0.9em;
-  animation: fadeIn 0.25s ease-in;
-`;
-
-const ModalOverlay = styled.div<{ $isOpen: boolean }>`
-  display: ${props => props.$isOpen ? 'flex' : 'none'};
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
-  z-index: 1000;
-  align-items: center;
-  justify-content: center;
-  animation: fadeIn 0.2s ease-in;
-`;
-
-const ModalContent = styled.div`
-  background: ${theme.colors.background.main};
-  border-radius: ${theme.borderRadius.md};
-  padding: ${theme.spacing.xl};
-  max-width: 800px;
-  width: 90%;
-  max-height: 90vh;
-  overflow-y: auto;
-  box-shadow: ${theme.shadows.xl};
-  animation: slideUp 0.3s ease-out;
-`;
-
-const ModalHeader = styled.div`
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: ${theme.spacing.lg};
-  padding-bottom: ${theme.spacing.md};
-  border-bottom: 2px solid ${theme.colors.border.medium};
-`;
-
-const ModalTitle = styled.h2`
-  margin: 0;
-  color: ${theme.colors.text.primary};
-`;
 
 const HeaderContent = styled.div`
   display: flex;
@@ -116,25 +63,6 @@ const CloseButton = styled.button`
   
   &:hover {
     color: ${theme.colors.text.primary};
-  }
-`;
-
-const TextArea = styled.textarea`
-  width: 100%;
-  padding: ${theme.spacing.sm};
-  border: 1px solid ${theme.colors.border.medium};
-  border-radius: ${theme.borderRadius.md};
-  font-family: ${theme.fonts.primary};
-  font-size: 0.9em;
-  min-height: 200px;
-  resize: vertical;
-  background: ${theme.colors.background.main};
-  color: ${theme.colors.text.primary};
-  
-  &:focus {
-    outline: none;
-    border-color: ${theme.colors.primary.main};
-    box-shadow: 0 0 0 2px ${theme.colors.primary.light}40;
   }
 `;
 
@@ -224,7 +152,6 @@ const CustomJobs = () => {
       
       const response = await customJobsApi.getJobs(params);
       if (isMountedRef.current) {
-        console.log('CustomJobs response:', response);
         setData(response.data || []);
         setPagination(response.pagination || {
           total: 0,

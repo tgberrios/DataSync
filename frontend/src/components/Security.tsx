@@ -110,9 +110,9 @@ const Badge = styled.span<{ type: string }>`
   }
 `;
 
-const ExpandableRow = styled.tr<{ expanded: boolean }>`
+const ExpandableRow = styled.tr<{ $expanded: boolean }>`
   cursor: pointer;
-  background-color: ${props => props.expanded ? '#f8f9fa' : 'white'};
+  background-color: ${props => props.$expanded ? '#f8f9fa' : 'white'};
   transition: all 0.2s ease;
   
   &:hover {
@@ -391,7 +391,7 @@ const Security = () => {
                   return (
                     <React.Fragment key={index}>
                       <ExpandableRow 
-                        expanded={isExpanded}
+                        $expanded={isExpanded}
                         onClick={() => toggleUserExpansion(user.username)}
                       >
                         <ExpandableTd>

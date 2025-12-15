@@ -2,6 +2,7 @@ import express from "express";
 import pkg from "pg";
 const { Pool } = pkg;
 import cors from "cors";
+import helmet from "helmet";
 import { spawn } from "child_process";
 import os from "os";
 import path from "path";
@@ -38,7 +39,56 @@ function loadConfig() {
 const config = loadConfig();
 
 const app = express();
-app.use(cors());
+
+const isProduction = process.env.NODE_ENV === "production";
+
+if (isProduction) {
+  app.use((req, res, next) => {
+    if (req.header("x-forwarded-proto") !== "https") {
+      res.redirect(`https://${req.header("host")}${req.url}`);
+    } else {
+      next();
+    }
+  });
+}
+
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+        imgSrc: ["'self'", "data:", "https:"],
+        connectSrc: ["'self'"],
+        fontSrc: ["'self'", "data:"],
+        objectSrc: ["'none'"],
+        mediaSrc: ["'self'"],
+        frameSrc: ["'none'"],
+      },
+    },
+    hsts: {
+      maxAge: 31536000,
+      includeSubDomains: true,
+      preload: true,
+    },
+    xFrameOptions: { action: "deny" },
+    xContentTypeOptions: true,
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+  })
+);
+
+const corsOptions = {
+  origin: isProduction
+    ? process.env.ALLOWED_ORIGINS?.split(",") || false
+    : true,
+  credentials: true,
+  optionsSuccessStatus: 200,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // Middleware: normalize schema/table identifiers to lowercase in body and query
@@ -91,9 +141,400 @@ import {
   validateEnum,
 } from "./server-utils/validation.js";
 import { sanitizeError } from "./server-utils/errorHandler.js";
+import {
+  initializeUsersTable,
+  authenticateUser,
+  requireAuth,
+  requireRole,
+  createUser,
+  changePassword,
+} from "./server-utils/auth.js";
+import bcrypt from "bcryptjs";
+import { generalLimiter, authLimiter } from "./server-utils/rateLimiter.js";
+
+initializeUsersTable().catch((err) => {
+  console.error("Failed to initialize users table:", err);
+});
+
+app.use(generalLimiter);
+
+const publicPaths = ["/api/auth/login", "/api/health"];
+app.use((req, res, next) => {
+  if (!req.path.startsWith("/api")) {
+    return next();
+  }
+  const requestPath = req.path || (req.url ? req.url.split("?")[0] : "");
+  if (publicPaths.includes(requestPath)) {
+    return next();
+  }
+  requireAuth(req, res, next);
+});
+
+app.post("/api/auth/login", authLimiter, async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+      return res.status(400).json({
+        error: "Username and password are required",
+      });
+    }
+
+    const result = await authenticateUser(username, password);
+
+    if (!result.success) {
+      return res.status(401).json({ error: result.error });
+    }
+
+    res.json({
+      user: result.user,
+      token: result.token,
+    });
+  } catch (err) {
+    console.error("Login error:", err);
+    const safeError = sanitizeError(
+      err,
+      "Login failed",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
+  }
+});
+
+app.post("/api/auth/logout", requireAuth, async (req, res) => {
+  res.json({ message: "Logged out successfully" });
+});
+
+app.get("/api/auth/me", requireAuth, async (req, res) => {
+  res.json({ user: req.user });
+});
+
+app.post("/api/auth/change-password", requireAuth, async (req, res) => {
+  try {
+    const { oldPassword, newPassword } = req.body;
+
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({
+        error: "Old password and new password are required",
+      });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({
+        error: "New password must be at least 8 characters long",
+      });
+    }
+
+    const result = await changePassword(
+      req.user.userId,
+      oldPassword,
+      newPassword
+    );
+
+    if (!result.success) {
+      return res.status(400).json({ error: result.error });
+    }
+
+    res.json({ message: "Password changed successfully" });
+  } catch (err) {
+    console.error("Change password error:", err);
+    const safeError = sanitizeError(
+      err,
+      "Failed to change password",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
+  }
+});
+
+app.get(
+  "/api/auth/users",
+  requireAuth,
+  requireRole("admin"),
+  async (req, res) => {
+    try {
+      const page = validatePage(req.query.page);
+      const limit = validateLimit(req.query.limit, 1, 100);
+      const roleFilter = req.query.role || "";
+      const activeFilter = req.query.active;
+      const search = sanitizeSearch(req.query.search, 100) || "";
+      const offset = (page - 1) * limit;
+
+      let whereClause = "WHERE 1=1";
+      const countParams = [];
+      let paramCount = 0;
+
+      if (roleFilter) {
+        paramCount++;
+        whereClause += ` AND role = $${paramCount}`;
+        countParams.push(roleFilter);
+      }
+
+      if (activeFilter !== undefined) {
+        paramCount++;
+        whereClause += ` AND active = $${paramCount}`;
+        countParams.push(activeFilter === "true");
+      }
+
+      if (search) {
+        paramCount++;
+        whereClause += ` AND (username ILIKE $${paramCount} OR email ILIKE $${paramCount})`;
+        countParams.push(`%${search}%`);
+      }
+
+      const countQuery = `SELECT COUNT(*) as total FROM metadata.users ${whereClause}`;
+      const countResult = await pool.query(countQuery, countParams);
+      const total = parseInt(countResult.rows[0]?.total || 0);
+
+      const dataParams = [...countParams];
+      let query = `SELECT id, username, email, role, active, created_at, updated_at, last_login FROM metadata.users ${whereClause} ORDER BY created_at DESC`;
+
+      paramCount++;
+      query += ` LIMIT $${paramCount}`;
+      dataParams.push(limit);
+      paramCount++;
+      query += ` OFFSET $${paramCount}`;
+      dataParams.push(offset);
+
+      const result = await pool.query(query, dataParams);
+
+      res.json({
+        data: result.rows,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
+      });
+    } catch (err) {
+      console.error("List users error:", err);
+      const safeError = sanitizeError(
+        err,
+        "Failed to list users",
+        process.env.NODE_ENV === "production"
+      );
+      res.status(500).json({ error: safeError });
+    }
+  }
+);
+
+app.post(
+  "/api/auth/users",
+  requireAuth,
+  requireRole("admin"),
+  async (req, res) => {
+    try {
+      const { username, email, password, role } = req.body;
+
+      if (!username || !email || !password) {
+        return res.status(400).json({
+          error: "Username, email, and password are required",
+        });
+      }
+
+      if (password.length < 8) {
+        return res.status(400).json({
+          error: "Password must be at least 8 characters long",
+        });
+      }
+
+      const result = await createUser(
+        username,
+        email,
+        password,
+        role || "user"
+      );
+
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+
+      res.status(201).json({ user: result.user });
+    } catch (err) {
+      console.error("Create user error:", err);
+      const safeError = sanitizeError(
+        err,
+        "Failed to create user",
+        process.env.NODE_ENV === "production"
+      );
+      res.status(500).json({ error: safeError });
+    }
+  }
+);
+
+app.patch(
+  "/api/auth/users/:id",
+  requireAuth,
+  requireRole("admin"),
+  async (req, res) => {
+    try {
+      const userId = parseInt(req.params.id);
+      const { username, email, role, active } = req.body;
+
+      if (isNaN(userId)) {
+        return res.status(400).json({ error: "Invalid user ID" });
+      }
+
+      const updates = [];
+      const params = [];
+      let paramCount = 0;
+
+      if (username !== undefined) {
+        paramCount++;
+        updates.push(`username = $${paramCount}`);
+        params.push(username);
+      }
+
+      if (email !== undefined) {
+        paramCount++;
+        updates.push(`email = $${paramCount}`);
+        params.push(email);
+      }
+
+      if (role !== undefined) {
+        if (!["admin", "user", "viewer"].includes(role)) {
+          return res.status(400).json({ error: "Invalid role" });
+        }
+        paramCount++;
+        updates.push(`role = $${paramCount}`);
+        params.push(role);
+      }
+
+      if (active !== undefined) {
+        paramCount++;
+        updates.push(`active = $${paramCount}`);
+        params.push(validateBoolean(active, true));
+      }
+
+      if (updates.length === 0) {
+        return res.status(400).json({ error: "No fields to update" });
+      }
+
+      paramCount++;
+      updates.push(`updated_at = NOW()`);
+      paramCount++;
+      params.push(userId);
+
+      const query = `UPDATE metadata.users SET ${updates.join(
+        ", "
+      )} WHERE id = $${paramCount} RETURNING id, username, email, role, active, created_at, updated_at, last_login`;
+
+      const result = await pool.query(query, params);
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      res.json({ user: result.rows[0] });
+    } catch (err) {
+      console.error("Update user error:", err);
+      const safeError = sanitizeError(
+        err,
+        "Failed to update user",
+        process.env.NODE_ENV === "production"
+      );
+      res.status(500).json({ error: safeError });
+    }
+  }
+);
+
+app.delete(
+  "/api/auth/users/:id",
+  requireAuth,
+  requireRole("admin"),
+  async (req, res) => {
+    try {
+      const userId = parseInt(req.params.id);
+
+      if (isNaN(userId)) {
+        return res.status(400).json({ error: "Invalid user ID" });
+      }
+
+      const userCheck = await pool.query(
+        "SELECT id, username FROM metadata.users WHERE id = $1",
+        [userId]
+      );
+
+      if (userCheck.rows.length === 0) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      if (userCheck.rows[0].username === req.user.username) {
+        return res
+          .status(400)
+          .json({ error: "Cannot delete your own account" });
+      }
+
+      await pool.query("DELETE FROM metadata.users WHERE id = $1", [userId]);
+
+      res.json({ message: "User deleted successfully" });
+    } catch (err) {
+      console.error("Delete user error:", err);
+      const safeError = sanitizeError(
+        err,
+        "Failed to delete user",
+        process.env.NODE_ENV === "production"
+      );
+      res.status(500).json({ error: safeError });
+    }
+  }
+);
+
+app.post(
+  "/api/auth/users/:id/reset-password",
+  requireAuth,
+  requireRole("admin"),
+  async (req, res) => {
+    try {
+      const userId = parseInt(req.params.id);
+      const { newPassword } = req.body;
+
+      if (isNaN(userId)) {
+        return res.status(400).json({ error: "Invalid user ID" });
+      }
+
+      if (!newPassword || newPassword.length < 8) {
+        return res.status(400).json({
+          error: "Password must be at least 8 characters long",
+        });
+      }
+
+      const userCheck = await pool.query(
+        "SELECT id FROM metadata.users WHERE id = $1",
+        [userId]
+      );
+
+      if (userCheck.rows.length === 0) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      const passwordHash = await bcrypt.hash(newPassword, 10);
+
+      await pool.query(
+        "UPDATE metadata.users SET password_hash = $1, updated_at = NOW() WHERE id = $2",
+        [passwordHash, userId]
+      );
+
+      res.json({ message: "Password reset successfully" });
+    } catch (err) {
+      console.error("Reset password error:", err);
+      const safeError = sanitizeError(
+        err,
+        "Failed to reset password",
+        process.env.NODE_ENV === "production"
+      );
+      res.status(500).json({ error: safeError });
+    }
+  }
+);
+
+app.get("/api/health", (req, res) => {
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
 
 // Obtener catálogo con paginación, filtros y búsqueda
-app.get("/api/catalog", async (req, res) => {
+app.get("/api/catalog", requireAuth, async (req, res) => {
   try {
     const page = validatePage(req.query.page, 1);
     const limit = validateLimit(req.query.limit, 1, 100);
@@ -206,153 +647,175 @@ app.get("/api/catalog", async (req, res) => {
 });
 
 // Actualizar estado
-app.patch("/api/catalog/status", async (req, res) => {
-  const schema_name = validateIdentifier(req.body.schema_name);
-  const table_name = validateIdentifier(req.body.table_name);
-  const db_engine = validateEnum(
-    req.body.db_engine,
-    ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle"],
-    null
-  );
-  const active = validateBoolean(req.body.active);
+app.patch(
+  "/api/catalog/status",
+  requireAuth,
+  requireRole("admin", "user"),
+  async (req, res) => {
+    const schema_name = validateIdentifier(req.body.schema_name);
+    const table_name = validateIdentifier(req.body.table_name);
+    const db_engine = validateEnum(
+      req.body.db_engine,
+      ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle"],
+      null
+    );
+    const active = validateBoolean(req.body.active);
 
-  if (!schema_name || !table_name || !db_engine) {
-    return res
-      .status(400)
-      .json({ error: "Invalid schema_name, table_name, or db_engine" });
-  }
+    if (!schema_name || !table_name || !db_engine) {
+      return res
+        .status(400)
+        .json({ error: "Invalid schema_name, table_name, or db_engine" });
+    }
 
-  try {
-    const result = await pool.query(
-      `UPDATE metadata.catalog 
+    try {
+      const result = await pool.query(
+        `UPDATE metadata.catalog 
        SET active = $1
        WHERE schema_name = $2 AND table_name = $3 AND db_engine = $4
        RETURNING *`,
-      [active, schema_name, table_name, db_engine]
-    );
-    res.json(result.rows[0]);
-  } catch (err) {
-    console.error("Database error:", err);
-    const safeError = sanitizeError(
-      err,
-      "Error fetching catalog data",
-      process.env.NODE_ENV === "production"
-    );
-    res.status(500).json({ error: safeError });
+        [active, schema_name, table_name, db_engine]
+      );
+      res.json(result.rows[0]);
+    } catch (err) {
+      console.error("Database error:", err);
+      const safeError = sanitizeError(
+        err,
+        "Error fetching catalog data",
+        process.env.NODE_ENV === "production"
+      );
+      res.status(500).json({ error: safeError });
+    }
   }
-});
+);
 
 // Forzar sincronización
-app.post("/api/catalog/sync", async (req, res) => {
-  const schema_name = validateIdentifier(req.body.schema_name);
-  const table_name = validateIdentifier(req.body.table_name);
-  const db_engine = validateEnum(
-    req.body.db_engine,
-    ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle"],
-    null
-  );
+app.post(
+  "/api/catalog/sync",
+  requireAuth,
+  requireRole("admin", "user"),
+  async (req, res) => {
+    const schema_name = validateIdentifier(req.body.schema_name);
+    const table_name = validateIdentifier(req.body.table_name);
+    const db_engine = validateEnum(
+      req.body.db_engine,
+      ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle"],
+      null
+    );
 
-  if (!schema_name || !table_name || !db_engine) {
-    return res
-      .status(400)
-      .json({ error: "Invalid schema_name, table_name, or db_engine" });
-  }
+    if (!schema_name || !table_name || !db_engine) {
+      return res
+        .status(400)
+        .json({ error: "Invalid schema_name, table_name, or db_engine" });
+    }
 
-  try {
-    const result = await pool.query(
-      `UPDATE metadata.catalog 
+    try {
+      const result = await pool.query(
+        `UPDATE metadata.catalog 
        SET status = 'full_load'
        WHERE schema_name = $1 AND table_name = $2 AND db_engine = $3
        RETURNING *`,
-      [schema_name, table_name, db_engine]
-    );
-    res.json(result.rows[0]);
-  } catch (err) {
-    console.error("Database error:", err);
-    const safeError = sanitizeError(
-      err,
-      "Error fetching catalog data",
-      process.env.NODE_ENV === "production"
-    );
-    res.status(500).json({ error: safeError });
+        [schema_name, table_name, db_engine]
+      );
+      res.json(result.rows[0]);
+    } catch (err) {
+      console.error("Database error:", err);
+      const safeError = sanitizeError(
+        err,
+        "Error fetching catalog data",
+        process.env.NODE_ENV === "production"
+      );
+      res.status(500).json({ error: safeError });
+    }
   }
-});
+);
 
 // Crear nueva entrada en el catálogo
-app.post("/api/catalog", async (req, res) => {
-  const schema_name = validateIdentifier(req.body.schema_name);
-  const table_name = validateIdentifier(req.body.table_name);
-  const db_engine = validateEnum(
-    req.body.db_engine,
-    ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle"],
-    null
-  );
-  const connection_string = req.body.connection_string;
-  const status = validateEnum(
-    req.body.status,
-    ["PENDING", "IN_PROGRESS", "LISTENING_CHANGES", "NO_DATA", "ERROR", "SKIP"],
-    "PENDING"
-  );
-  const active = validateBoolean(req.body.active, true);
-  const cluster_name = req.body.cluster_name || "";
-  const pk_strategy = validateEnum(
-    req.body.pk_strategy,
-    ["PK", "OFFSET"],
-    "OFFSET"
-  );
-  const last_sync_column = req.body.last_sync_column || null;
-
-  if (!schema_name || !table_name || !db_engine || !connection_string) {
-    return res.status(400).json({
-      error:
-        "schema_name, table_name, db_engine, and connection_string are required",
-    });
-  }
-
-  try {
-    const checkResult = await pool.query(
-      `SELECT schema_name, table_name, db_engine FROM metadata.catalog 
-       WHERE schema_name = $1 AND table_name = $2 AND db_engine = $3`,
-      [schema_name, table_name, db_engine]
+app.post(
+  "/api/catalog",
+  requireAuth,
+  requireRole("admin", "user"),
+  async (req, res) => {
+    const schema_name = validateIdentifier(req.body.schema_name);
+    const table_name = validateIdentifier(req.body.table_name);
+    const db_engine = validateEnum(
+      req.body.db_engine,
+      ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle"],
+      null
     );
+    const connection_string = req.body.connection_string;
+    const status = validateEnum(
+      req.body.status,
+      [
+        "PENDING",
+        "IN_PROGRESS",
+        "LISTENING_CHANGES",
+        "NO_DATA",
+        "ERROR",
+        "SKIP",
+      ],
+      "PENDING"
+    );
+    const active = validateBoolean(req.body.active, true);
+    const cluster_name = req.body.cluster_name || "";
+    const pk_strategy = validateEnum(
+      req.body.pk_strategy,
+      ["PK", "OFFSET"],
+      "OFFSET"
+    );
+    const last_sync_column = req.body.last_sync_column || null;
 
-    if (checkResult.rows.length > 0) {
-      return res.status(409).json({
+    if (!schema_name || !table_name || !db_engine || !connection_string) {
+      return res.status(400).json({
         error:
-          "Entry already exists with this schema_name, table_name, and db_engine",
+          "schema_name, table_name, db_engine, and connection_string are required",
       });
     }
 
-    const result = await pool.query(
-      `INSERT INTO metadata.catalog 
+    try {
+      const checkResult = await pool.query(
+        `SELECT schema_name, table_name, db_engine FROM metadata.catalog 
+       WHERE schema_name = $1 AND table_name = $2 AND db_engine = $3`,
+        [schema_name, table_name, db_engine]
+      );
+
+      if (checkResult.rows.length > 0) {
+        return res.status(409).json({
+          error:
+            "Entry already exists with this schema_name, table_name, and db_engine",
+        });
+      }
+
+      const result = await pool.query(
+        `INSERT INTO metadata.catalog 
        (schema_name, table_name, db_engine, connection_string, status, active, 
         cluster_name, pk_strategy, last_sync_column, last_sync_time)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL)
        RETURNING *`,
-      [
-        schema_name,
-        table_name,
-        db_engine,
-        connection_string,
-        status,
-        active,
-        cluster_name,
-        pk_strategy,
-        last_sync_column,
-      ]
-    );
+        [
+          schema_name,
+          table_name,
+          db_engine,
+          connection_string,
+          status,
+          active,
+          cluster_name,
+          pk_strategy,
+          last_sync_column,
+        ]
+      );
 
-    res.json(result.rows[0]);
-  } catch (err) {
-    console.error("Database error:", err);
-    const safeError = sanitizeError(
-      err,
-      "Error creating catalog entry",
-      process.env.NODE_ENV === "production"
-    );
-    res.status(500).json({ error: safeError });
+      res.json(result.rows[0]);
+    } catch (err) {
+      console.error("Database error:", err);
+      const safeError = sanitizeError(
+        err,
+        "Error creating catalog entry",
+        process.env.NODE_ENV === "production"
+      );
+      res.status(500).json({ error: safeError });
+    }
   }
-});
+);
 
 // Obtener todos los schemas únicos
 app.get("/api/catalog/schemas", async (req, res) => {
@@ -373,65 +836,93 @@ app.get("/api/catalog/schemas", async (req, res) => {
 });
 
 // Marcar tabla como SKIP
-app.patch("/api/catalog/skip-table", async (req, res) => {
-  const { schema_name, table_name, db_engine } = req.body;
-  try {
-    const result = await pool.query(
-      `UPDATE metadata.catalog 
+app.patch(
+  "/api/catalog/skip-table",
+  requireAuth,
+  requireRole("admin", "user"),
+  async (req, res) => {
+    const schema_name = validateIdentifier(req.body.schema_name);
+    const table_name = validateIdentifier(req.body.table_name);
+    const db_engine = validateEnum(
+      req.body.db_engine,
+      ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle"],
+      null
+    );
+
+    if (!schema_name || !table_name || !db_engine) {
+      return res.status(400).json({
+        error: "Invalid schema_name, table_name, or db_engine",
+      });
+    }
+
+    try {
+      const result = await pool.query(
+        `UPDATE metadata.catalog 
        SET status = 'SKIP', active = false
        WHERE schema_name = $1 AND table_name = $2 AND db_engine = $3
        RETURNING *`,
-      [schema_name, table_name, db_engine]
-    );
+        [schema_name, table_name, db_engine]
+      );
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: "Table not found" });
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: "Table not found" });
+      }
+
+      res.json({
+        message: `Table ${schema_name}.${table_name} marked as SKIP`,
+        affectedRows: result.rows.length,
+        entry: result.rows[0],
+      });
+    } catch (err) {
+      console.error("Database error:", err);
+      const safeError = sanitizeError(
+        err,
+        "Error fetching catalog data",
+        process.env.NODE_ENV === "production"
+      );
+      res.status(500).json({ error: safeError });
     }
-
-    res.json({
-      message: `Table ${schema_name}.${table_name} marked as SKIP`,
-      affectedRows: result.rows.length,
-      entry: result.rows[0],
-    });
-  } catch (err) {
-    console.error("Database error:", err);
-    const safeError = sanitizeError(
-      err,
-      "Error fetching catalog data",
-      process.env.NODE_ENV === "production"
-    );
-    res.status(500).json({ error: safeError });
   }
-});
+);
 
 // Desactivar schema completo
-app.patch("/api/catalog/deactivate-schema", async (req, res) => {
-  const { schema_name } = req.body;
-  try {
-    const result = await pool.query(
-      `UPDATE metadata.catalog 
+app.patch(
+  "/api/catalog/deactivate-schema",
+  requireAuth,
+  requireRole("admin"),
+  async (req, res) => {
+    const schema_name = validateIdentifier(req.body.schema_name);
+
+    if (!schema_name) {
+      return res.status(400).json({ error: "Invalid schema_name" });
+    }
+
+    try {
+      const result = await pool.query(
+        `UPDATE metadata.catalog 
        SET status = 'SKIPPED'
        WHERE schema_name = $1
        RETURNING *`,
-      [schema_name]
-    );
-    res.json({
-      message: `Schema ${schema_name} deactivated successfully`,
-      affectedRows: result.rows.length,
-      rows: result.rows,
-    });
-  } catch (err) {
-    console.error("Database error:", err);
-    const safeError = sanitizeError(
-      err,
-      "Error fetching catalog data",
-      process.env.NODE_ENV === "production"
-    );
-    res.status(500).json({ error: safeError });
+        [schema_name]
+      );
+      res.json({
+        message: `Schema ${schema_name} deactivated successfully`,
+        affectedRows: result.rows.length,
+        rows: result.rows,
+      });
+    } catch (err) {
+      console.error("Database error:", err);
+      const safeError = sanitizeError(
+        err,
+        "Error fetching catalog data",
+        process.env.NODE_ENV === "production"
+      );
+      res.status(500).json({ error: safeError });
+    }
   }
-});
+);
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 // Obtener estadísticas del dashboard
 app.get("/api/dashboard/stats", async (req, res) => {
   try {
@@ -981,14 +1472,26 @@ app.get("/api/quality/metrics", async (req, res) => {
 // Obtener datos de governance
 app.get("/api/governance/data", async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    const page = validatePage(req.query.page, 1);
+    const limit = validateLimit(req.query.limit, 1, 100);
     const offset = (page - 1) * limit;
-    const engine = req.query.engine || "";
-    const category = req.query.category || "";
-    const health = req.query.health || "";
-    const domain = req.query.domain || "";
-    const sensitivity = req.query.sensitivity || "";
+    const engine = validateEnum(
+      req.query.engine,
+      ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle", ""],
+      ""
+    );
+    const category = sanitizeSearch(req.query.category, 50);
+    const health = validateEnum(
+      req.query.health,
+      ["EXCELLENT", "HEALTHY", "WARNING", "CRITICAL", ""],
+      ""
+    );
+    const domain = sanitizeSearch(req.query.domain, 50);
+    const sensitivity = validateEnum(
+      req.query.sensitivity,
+      ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED", ""],
+      ""
+    );
 
     // Construir WHERE clause dinámicamente
     const whereConditions = [];
@@ -1122,7 +1625,7 @@ app.get("/api/config", async (req, res) => {
   }
 });
 
-app.post("/api/config", async (req, res) => {
+app.post("/api/config", requireAuth, requireRole("admin"), async (req, res) => {
   const { key, value, description } = req.body;
   try {
     const result = await pool.query(
@@ -1141,52 +1644,73 @@ app.post("/api/config", async (req, res) => {
   }
 });
 
-app.put("/api/config/:key", async (req, res) => {
-  const { key } = req.params;
-  const { value, description } = req.body;
-  try {
-    const result = await pool.query(
-      "UPDATE metadata.config SET value = $1, description = $2, updated_at = NOW() WHERE key = $3 RETURNING *",
-      [value, description, key]
-    );
-    if (result.rows.length === 0) {
-      res.status(404).json({ error: "Configuración no encontrada" });
-      return;
-    }
-    res.json(result.rows[0]);
-  } catch (err) {
-    console.error("Error updating configuration:", err);
-    const safeError = sanitizeError(
-      err,
-      "Error al actualizar configuración",
-      process.env.NODE_ENV === "production"
-    );
-    res.status(500).json({ error: safeError });
-  }
-});
+app.put(
+  "/api/config/:key",
+  requireAuth,
+  requireRole("admin"),
+  async (req, res) => {
+    const key = sanitizeSearch(req.params.key, 100);
+    const value = sanitizeSearch(req.body.value, 500);
+    const description = sanitizeSearch(req.body.description, 500);
 
-app.delete("/api/config/:key", async (req, res) => {
-  const { key } = req.params;
-  try {
-    const result = await pool.query(
-      "DELETE FROM metadata.config WHERE key = $1 RETURNING *",
-      [key]
-    );
-    if (result.rows.length === 0) {
-      res.status(404).json({ error: "Configuración no encontrada" });
-      return;
+    if (!key || key.trim() === "") {
+      return res.status(400).json({ error: "Invalid key" });
     }
-    res.json({ message: "Configuración eliminada correctamente" });
-  } catch (err) {
-    console.error("Error deleting configuration:", err);
-    const safeError = sanitizeError(
-      err,
-      "Error al eliminar configuración",
-      process.env.NODE_ENV === "production"
-    );
-    res.status(500).json({ error: safeError });
+
+    try {
+      const result = await pool.query(
+        "UPDATE metadata.config SET value = $1, description = $2, updated_at = NOW() WHERE key = $3 RETURNING *",
+        [value || "", description || "", key]
+      );
+      if (result.rows.length === 0) {
+        res.status(404).json({ error: "Configuración no encontrada" });
+        return;
+      }
+      res.json(result.rows[0]);
+    } catch (err) {
+      console.error("Error updating configuration:", err);
+      const safeError = sanitizeError(
+        err,
+        "Error al actualizar configuración",
+        process.env.NODE_ENV === "production"
+      );
+      res.status(500).json({ error: safeError });
+    }
   }
-});
+);
+
+app.delete(
+  "/api/config/:key",
+  requireAuth,
+  requireRole("admin"),
+  async (req, res) => {
+    const key = sanitizeSearch(req.params.key, 100);
+
+    if (!key || key.trim() === "") {
+      return res.status(400).json({ error: "Invalid key" });
+    }
+
+    try {
+      const result = await pool.query(
+        "DELETE FROM metadata.config WHERE key = $1 RETURNING *",
+        [key]
+      );
+      if (result.rows.length === 0) {
+        res.status(404).json({ error: "Configuración no encontrada" });
+        return;
+      }
+      res.json({ message: "Configuración eliminada correctamente" });
+    } catch (err) {
+      console.error("Error deleting configuration:", err);
+      const safeError = sanitizeError(
+        err,
+        "Error al eliminar configuración",
+        process.env.NODE_ENV === "production"
+      );
+      res.status(500).json({ error: safeError });
+    }
+  }
+);
 
 // Obtener configuración de batch size específicamente
 app.get("/api/config/batch", async (req, res) => {
@@ -1218,15 +1742,30 @@ app.get("/api/config/batch", async (req, res) => {
 // Endpoint para leer logs desde DB (metadata.logs)
 app.get("/api/logs", async (req, res) => {
   try {
-    const {
-      lines = 100,
-      level = "ALL",
-      category = "ALL",
-      function: func = "ALL",
-      search = "",
-      startDate = "",
-      endDate = "",
-    } = req.query;
+    const lines = validateLimit(req.query.lines, 1, 1000);
+    const level = validateEnum(
+      req.query.level,
+      ["ALL", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+      "ALL"
+    );
+    const category = validateEnum(
+      req.query.category,
+      [
+        "ALL",
+        "SYSTEM",
+        "DATABASE",
+        "TRANSFER",
+        "CUSTOM_JOB",
+        "API",
+        "QUALITY",
+        "GOVERNANCE",
+      ],
+      "ALL"
+    );
+    const func = sanitizeSearch(req.query.function, 100) || "ALL";
+    const search = sanitizeSearch(req.query.search, 200);
+    const startDate = sanitizeSearch(req.query.startDate, 50);
+    const endDate = sanitizeSearch(req.query.endDate, 50);
 
     const params = [];
     let where = [];
@@ -1243,7 +1782,7 @@ app.get("/api/logs", async (req, res) => {
       params.push(func);
       where.push(`function = $${params.length}`);
     }
-    if (search && String(search).trim() !== "") {
+    if (search && search.trim() !== "") {
       params.push(`%${search}%`);
       params.push(`%${search}%`);
       where.push(
@@ -1262,7 +1801,7 @@ app.get("/api/logs", async (req, res) => {
     }
 
     const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
-    const limit = Math.max(1, parseInt(lines));
+    const limit = lines;
 
     const query = `
       SELECT ts, level, category, function, message
@@ -1311,20 +1850,31 @@ app.get("/api/logs", async (req, res) => {
 // Endpoint para obtener logs de errores desde DB (niveles WARNING/ERROR/CRITICAL)
 app.get("/api/logs/errors", async (req, res) => {
   try {
-    const {
-      lines = 100,
-      category = "ALL",
-      search = "",
-      startDate = "",
-      endDate = "",
-    } = req.query;
+    const lines = validateLimit(req.query.lines, 1, 1000);
+    const category = validateEnum(
+      req.query.category,
+      [
+        "ALL",
+        "SYSTEM",
+        "DATABASE",
+        "TRANSFER",
+        "CUSTOM_JOB",
+        "API",
+        "QUALITY",
+        "GOVERNANCE",
+      ],
+      "ALL"
+    );
+    const search = sanitizeSearch(req.query.search, 200);
+    const startDate = sanitizeSearch(req.query.startDate, 50);
+    const endDate = sanitizeSearch(req.query.endDate, 50);
     const params = [];
     let where = ["level IN ('WARNING','ERROR','CRITICAL')"];
     if (category && category !== "ALL") {
       params.push(category);
       where.push(`category = $${params.length}`);
     }
-    if (search && String(search).trim() !== "") {
+    if (search && search.trim() !== "") {
       params.push(`%${search}%`);
       params.push(`%${search}%`);
       where.push(
@@ -1342,7 +1892,7 @@ app.get("/api/logs/errors", async (req, res) => {
       where.push(`ts <= $${params.length}`);
     }
     const whereClause = `WHERE ${where.join(" AND ")}`;
-    const limit = Math.max(1, parseInt(lines));
+    const limit = lines;
     const q = `SELECT ts, level, category, function, message FROM metadata.logs ${whereClause} ORDER BY ts DESC LIMIT $${
       params.length + 1
     }`;
@@ -1589,7 +2139,7 @@ app.get("/api/logs/stats", async (req, res) => {
 });
 
 // Endpoint para limpiar logs
-app.delete("/api/logs", async (req, res) => {
+app.delete("/api/logs", requireAuth, requireRole("admin"), async (req, res) => {
   try {
     await pool.query("TRUNCATE TABLE metadata.logs");
     res.json({
@@ -1599,16 +2149,19 @@ app.delete("/api/logs", async (req, res) => {
     });
   } catch (err) {
     console.error("Error truncating logs:", err);
-    res
-      .status(500)
-      .json({ error: "Error al truncar logs", details: err.message });
+    const safeError = sanitizeError(
+      err,
+      "Error al truncar logs",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
 // Endpoint para obtener tabla actualmente procesándose
 app.get("/api/dashboard/currently-processing", async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
+    const page = validatePage(req.query.page, 1);
 
     const maxWorkersResult = await pool.query(
       "SELECT value FROM metadata.config WHERE key = 'max_workers'"
@@ -1616,7 +2169,7 @@ app.get("/api/dashboard/currently-processing", async (req, res) => {
     const maxWorkers = maxWorkersResult.rows[0]
       ? parseInt(maxWorkersResult.rows[0].value) || 8
       : 8;
-    const limit = parseInt(req.query.limit) || maxWorkers;
+    const limit = validateLimit(req.query.limit, 1, Math.max(maxWorkers, 100));
     const pageSize = limit;
     const offset = (page - 1) * pageSize;
 
@@ -1854,10 +2407,14 @@ app.get("/api/security/data", async (req, res) => {
 
 app.get("/api/monitor/processing-logs", async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
+    const page = validatePage(req.query.page, 1);
+    const limit = validateLimit(req.query.limit, 1, 100);
     const offset = (page - 1) * limit;
-    const strategy = req.query.strategy || "";
+    const strategy = validateEnum(
+      req.query.strategy,
+      ["AUTO_INCREMENT", "TIMESTAMP", "UUID", ""],
+      ""
+    );
 
     const params = [];
     let paramCount = 1;
@@ -2012,29 +2569,34 @@ app.get("/api/monitor/processing-logs/stats", async (req, res) => {
   }
 });
 
-app.post("/api/monitor/processing-logs/cleanup", async (req, res) => {
-  try {
-    const result = await pool.query(`
+app.post(
+  "/api/monitor/processing-logs/cleanup",
+  requireAuth,
+  requireRole("admin"),
+  async (req, res) => {
+    try {
+      const result = await pool.query(`
       DELETE FROM metadata.processing_log 
       WHERE processed_at < NOW() - INTERVAL '24 hours'
     `);
 
-    res.json({
-      success: true,
-      message: `Cleaned up ${result.rowCount} old processing log entries`,
-      deletedCount: result.rowCount,
-      cleanedAt: new Date().toISOString(),
-    });
-  } catch (err) {
-    console.error("Error cleaning up processing logs:", err);
-    const safeError = sanitizeError(
-      err,
-      "Error al limpiar logs antiguos",
-      process.env.NODE_ENV === "production"
-    );
-    res.status(500).json({ error: safeError });
+      res.json({
+        success: true,
+        message: `Cleaned up ${result.rowCount} old processing log entries`,
+        deletedCount: result.rowCount,
+        cleanedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error("Error cleaning up processing logs:", err);
+      const safeError = sanitizeError(
+        err,
+        "Error al limpiar logs antiguos",
+        process.env.NODE_ENV === "production"
+      );
+      res.status(500).json({ error: safeError });
+    }
   }
-});
+);
 
 app.get("/api/query-performance/queries", async (req, res) => {
   try {
@@ -2424,7 +2986,10 @@ app.get("/api/column-catalog/schemas", async (req, res) => {
 
 app.get("/api/column-catalog/tables/:schemaName", async (req, res) => {
   try {
-    const schemaName = req.params.schemaName;
+    const schemaName = validateIdentifier(req.params.schemaName);
+    if (!schemaName) {
+      return res.status(400).json({ error: "Invalid schemaName" });
+    }
     const result = await pool.query(
       `
         SELECT DISTINCT table_name
@@ -2495,58 +3060,73 @@ app.get("/api/catalog-locks/metrics", async (req, res) => {
   }
 });
 
-app.delete("/api/catalog-locks/locks/:lockName", async (req, res) => {
-  try {
-    const lockName = req.params.lockName;
-    const result = await pool.query(
-      `DELETE FROM metadata.catalog_locks WHERE lock_name = $1 RETURNING lock_name`,
-      [lockName]
-    );
+app.delete(
+  "/api/catalog-locks/locks/:lockName",
+  requireAuth,
+  requireRole("admin"),
+  async (req, res) => {
+    const lockName = validateIdentifier(req.params.lockName);
 
-    if (result.rowCount === 0) {
-      return res.status(404).json({
-        error: "Lock not found",
-        details: `Lock "${lockName}" does not exist`,
-      });
+    if (!lockName) {
+      return res.status(400).json({ error: "Invalid lockName" });
     }
 
-    res.json({
-      success: true,
-      message: `Lock "${lockName}" has been released`,
-      lock_name: result.rows[0].lock_name,
-    });
-  } catch (err) {
-    console.error("Error unlocking lock:", err);
-    const safeError = sanitizeError(
-      err,
-      "Error al liberar lock",
-      process.env.NODE_ENV === "production"
-    );
-    res.status(500).json({ error: safeError });
-  }
-});
+    try {
+      const result = await pool.query(
+        `DELETE FROM metadata.catalog_locks WHERE lock_name = $1 RETURNING lock_name`,
+        [lockName]
+      );
 
-app.post("/api/catalog-locks/clean-expired", async (req, res) => {
-  try {
-    const result = await pool.query(
-      `DELETE FROM metadata.catalog_locks WHERE expires_at <= NOW() RETURNING lock_name`
-    );
+      if (result.rowCount === 0) {
+        return res.status(404).json({
+          error: "Lock not found",
+          details: `Lock "${lockName}" does not exist`,
+        });
+      }
 
-    res.json({
-      success: true,
-      message: `Cleaned ${result.rowCount} expired lock(s)`,
-      cleaned_count: result.rowCount,
-    });
-  } catch (err) {
-    console.error("Error cleaning expired locks:", err);
-    const safeError = sanitizeError(
-      err,
-      "Error al limpiar locks expirados",
-      process.env.NODE_ENV === "production"
-    );
-    res.status(500).json({ error: safeError });
+      res.json({
+        success: true,
+        message: `Lock "${lockName}" has been released`,
+        lock_name: result.rows[0].lock_name,
+      });
+    } catch (err) {
+      console.error("Error unlocking lock:", err);
+      const safeError = sanitizeError(
+        err,
+        "Error al liberar lock",
+        process.env.NODE_ENV === "production"
+      );
+      res.status(500).json({ error: safeError });
+    }
   }
-});
+);
+
+app.post(
+  "/api/catalog-locks/clean-expired",
+  requireAuth,
+  requireRole("admin"),
+  async (req, res) => {
+    try {
+      const result = await pool.query(
+        `DELETE FROM metadata.catalog_locks WHERE expires_at <= NOW() RETURNING lock_name`
+      );
+
+      res.json({
+        success: true,
+        message: `Cleaned ${result.rowCount} expired lock(s)`,
+        cleaned_count: result.rowCount,
+      });
+    } catch (err) {
+      console.error("Error cleaning expired locks:", err);
+      const safeError = sanitizeError(
+        err,
+        "Error al limpiar locks expirados",
+        process.env.NODE_ENV === "production"
+      );
+      res.status(500).json({ error: safeError });
+    }
+  }
+);
 
 app.get("/api/data-lineage/mariadb", async (req, res) => {
   try {
@@ -2867,7 +3447,10 @@ app.get("/api/data-lineage/mssql/servers", async (req, res) => {
 
 app.get("/api/data-lineage/mssql/instances/:serverName", async (req, res) => {
   try {
-    const serverName = req.params.serverName;
+    const serverName = sanitizeSearch(req.params.serverName, 100);
+    if (!serverName) {
+      return res.status(400).json({ error: "Invalid serverName" });
+    }
     const result = await pool.query(
       `
         SELECT DISTINCT instance_name
@@ -3414,7 +3997,10 @@ app.get("/api/data-lineage/mongodb/servers", async (req, res) => {
 
 app.get("/api/data-lineage/mongodb/databases/:serverName", async (req, res) => {
   try {
-    const serverName = req.params.serverName;
+    const serverName = sanitizeSearch(req.params.serverName, 100);
+    if (!serverName) {
+      return res.status(400).json({ error: "Invalid serverName" });
+    }
     const result = await pool.query(
       `
         SELECT DISTINCT database_name
@@ -3752,7 +4338,10 @@ app.get("/api/data-lineage/oracle/servers", async (req, res) => {
 
 app.get("/api/data-lineage/oracle/schemas/:serverName", async (req, res) => {
   try {
-    const serverName = req.params.serverName;
+    const serverName = sanitizeSearch(req.params.serverName, 100);
+    if (!serverName) {
+      return res.status(400).json({ error: "Invalid serverName" });
+    }
     const result = await pool.query(
       `
         SELECT DISTINCT schema_name
@@ -3766,14 +4355,12 @@ app.get("/api/data-lineage/oracle/schemas/:serverName", async (req, res) => {
     res.json(result.rows.map((row) => row.schema_name));
   } catch (err) {
     console.error("Error getting Oracle schemas:", err);
-    res.status(500).json({
-      error: "Error al obtener schemas",
-      error: sanitizeError(
-        err,
-        "Error en el servidor",
-        process.env.NODE_ENV === "production"
-      ),
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener schemas de Oracle",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
@@ -4093,142 +4680,148 @@ app.patch("/api/api-catalog/active", async (req, res) => {
   }
 });
 
-app.post("/api/api-catalog", async (req, res) => {
-  const {
-    api_name,
-    api_type,
-    base_url,
-    endpoint,
-    http_method,
-    auth_type,
-    auth_config,
-    target_db_engine,
-    target_connection_string,
-    target_schema,
-    target_table,
-    request_body,
-    request_headers,
-    query_params,
-    sync_interval,
-    status,
-    active,
-  } = req.body;
+app.post(
+  "/api/api-catalog",
+  requireAuth,
+  requireRole("admin", "user"),
+  async (req, res) => {
+    const {
+      api_name,
+      api_type,
+      base_url,
+      endpoint,
+      http_method,
+      auth_type,
+      auth_config,
+      target_db_engine,
+      target_connection_string,
+      target_schema,
+      target_table,
+      request_body,
+      request_headers,
+      query_params,
+      sync_interval,
+      status,
+      active,
+    } = req.body;
 
-  if (
-    !api_name ||
-    !api_type ||
-    !base_url ||
-    !endpoint ||
-    !http_method ||
-    !auth_type ||
-    !target_db_engine ||
-    !target_connection_string ||
-    !target_schema ||
-    !target_table
-  ) {
-    return res.status(400).json({
-      error:
-        "Missing required fields: api_name, api_type, base_url, endpoint, http_method, auth_type, target_db_engine, target_connection_string, target_schema, target_table",
-    });
-  }
-
-  const validApiType = validateEnum(
-    api_type,
-    ["REST", "GraphQL", "SOAP"],
-    null
-  );
-  if (!validApiType) {
-    return res.status(400).json({ error: "Invalid api_type" });
-  }
-
-  const validHttpMethod = validateEnum(
-    http_method,
-    ["GET", "POST", "PUT", "PATCH", "DELETE"],
-    null
-  );
-  if (!validHttpMethod) {
-    return res.status(400).json({ error: "Invalid http_method" });
-  }
-
-  const validAuthType = validateEnum(
-    auth_type,
-    ["NONE", "BASIC", "BEARER", "API_KEY", "OAUTH2"],
-    null
-  );
-  if (!validAuthType) {
-    return res.status(400).json({ error: "Invalid auth_type" });
-  }
-
-  const validTargetEngine = validateEnum(
-    target_db_engine,
-    ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle"],
-    null
-  );
-  if (!validTargetEngine) {
-    return res.status(400).json({ error: "Invalid target_db_engine" });
-  }
-
-  const validStatus = validateEnum(
-    status || "PENDING",
-    ["SUCCESS", "ERROR", "IN_PROGRESS", "PENDING"],
-    "PENDING"
-  );
-
-  const interval =
-    sync_interval && sync_interval > 0 ? parseInt(sync_interval) : 3600;
-  const isActive = active !== undefined ? validateBoolean(active, true) : true;
-
-  try {
-    const checkResult = await pool.query(
-      `SELECT api_name FROM metadata.api_catalog WHERE api_name = $1`,
-      [api_name]
-    );
-
-    if (checkResult.rows.length > 0) {
-      return res.status(409).json({
-        error: "API with this name already exists",
+    if (
+      !api_name ||
+      !api_type ||
+      !base_url ||
+      !endpoint ||
+      !http_method ||
+      !auth_type ||
+      !target_db_engine ||
+      !target_connection_string ||
+      !target_schema ||
+      !target_table
+    ) {
+      return res.status(400).json({
+        error:
+          "Missing required fields: api_name, api_type, base_url, endpoint, http_method, auth_type, target_db_engine, target_connection_string, target_schema, target_table",
       });
     }
 
-    const result = await pool.query(
-      `INSERT INTO metadata.api_catalog 
+    const validApiType = validateEnum(
+      api_type,
+      ["REST", "GraphQL", "SOAP"],
+      null
+    );
+    if (!validApiType) {
+      return res.status(400).json({ error: "Invalid api_type" });
+    }
+
+    const validHttpMethod = validateEnum(
+      http_method,
+      ["GET", "POST", "PUT", "PATCH", "DELETE"],
+      null
+    );
+    if (!validHttpMethod) {
+      return res.status(400).json({ error: "Invalid http_method" });
+    }
+
+    const validAuthType = validateEnum(
+      auth_type,
+      ["NONE", "BASIC", "BEARER", "API_KEY", "OAUTH2"],
+      null
+    );
+    if (!validAuthType) {
+      return res.status(400).json({ error: "Invalid auth_type" });
+    }
+
+    const validTargetEngine = validateEnum(
+      target_db_engine,
+      ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle"],
+      null
+    );
+    if (!validTargetEngine) {
+      return res.status(400).json({ error: "Invalid target_db_engine" });
+    }
+
+    const validStatus = validateEnum(
+      status || "PENDING",
+      ["SUCCESS", "ERROR", "IN_PROGRESS", "PENDING"],
+      "PENDING"
+    );
+
+    const interval =
+      sync_interval && sync_interval > 0 ? parseInt(sync_interval) : 3600;
+    const isActive =
+      active !== undefined ? validateBoolean(active, true) : true;
+
+    try {
+      const checkResult = await pool.query(
+        `SELECT api_name FROM metadata.api_catalog WHERE api_name = $1`,
+        [api_name]
+      );
+
+      if (checkResult.rows.length > 0) {
+        return res.status(409).json({
+          error: "API with this name already exists",
+        });
+      }
+
+      const result = await pool.query(
+        `INSERT INTO metadata.api_catalog 
        (api_name, api_type, base_url, endpoint, http_method, auth_type, auth_config,
         target_db_engine, target_connection_string, target_schema, target_table,
         request_body, request_headers, query_params, status, active, sync_interval)
        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15, $16, $17)
        RETURNING *`,
-      [
-        api_name,
-        api_type,
-        base_url,
-        endpoint,
-        http_method,
-        auth_type,
-        JSON.stringify(auth_config || {}),
-        target_db_engine,
-        target_connection_string,
-        target_schema.toLowerCase(),
-        target_table.toLowerCase(),
-        request_body || null,
-        JSON.stringify(request_headers || {}),
-        JSON.stringify(query_params || {}),
-        validStatus,
-        isActive,
-        interval,
-      ]
-    );
+        [
+          api_name,
+          api_type,
+          base_url,
+          endpoint,
+          http_method,
+          auth_type,
+          JSON.stringify(auth_config || {}),
+          target_db_engine,
+          target_connection_string,
+          target_schema.toLowerCase(),
+          target_table.toLowerCase(),
+          request_body || null,
+          JSON.stringify(request_headers || {}),
+          JSON.stringify(query_params || {}),
+          validStatus,
+          isActive,
+          interval,
+        ]
+      );
 
-    res.json(result.rows[0]);
-  } catch (err) {
-    console.error("Database error:", err);
-    const safeError = sanitizeError(
-      err,
-      "Error creating API entry",
-      process.env.NODE_ENV === "production"
-    );
-    res.status(500).json({ error: safeError });
+      res.json(result.rows[0]);
+    } catch (err) {
+      console.error("Database error:", err);
+      const safeError = sanitizeError(
+        err,
+        "Error creating API entry",
+        process.env.NODE_ENV === "production"
+      );
+      res.status(500).json({ error: safeError });
+    }
   }
-});
+);
 
 app.get("/api/api-catalog/metrics", async (req, res) => {
   try {
@@ -4278,38 +4871,67 @@ app.get("/api/custom-jobs/scripts", async (req, res) => {
     res.json(scripts);
   } catch (err) {
     console.error("Error reading Python scripts:", err);
-    res.status(500).json({
-      error: "Error al leer scripts de Python",
-      details: sanitizeError(
-        err,
-        "Error en el servidor",
-        process.env.NODE_ENV === "production"
-      ),
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al leer scripts de Python",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
-app.post("/api/custom-jobs", async (req, res) => {
-  try {
-    const {
-      job_name,
-      description,
-      source_db_engine,
-      source_connection_string,
-      query_sql,
-      target_db_engine,
-      target_connection_string,
-      target_schema,
-      target_table,
-      schedule_cron,
-      active,
-      enabled,
-      transform_config,
-      metadata,
-    } = req.body;
+app.post(
+  "/api/custom-jobs",
+  requireAuth,
+  requireRole("admin", "user"),
+  async (req, res) => {
+    try {
+      const job_name = validateIdentifier(req.body.job_name);
+      const description = sanitizeSearch(req.body.description, 500);
+      const source_db_engine = validateEnum(
+        req.body.source_db_engine,
+        ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle"],
+        null
+      );
+      const source_connection_string = sanitizeSearch(
+        req.body.source_connection_string,
+        500
+      );
+      const query_sql = sanitizeSearch(req.body.query_sql, 10000);
+      const target_db_engine = validateEnum(
+        req.body.target_db_engine,
+        ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle"],
+        null
+      );
+      const target_connection_string = sanitizeSearch(
+        req.body.target_connection_string,
+        500
+      );
+      const target_schema = validateIdentifier(req.body.target_schema);
+      const target_table = validateIdentifier(req.body.target_table);
+      const schedule_cron = sanitizeSearch(req.body.schedule_cron, 100);
+      const active = validateBoolean(req.body.active, true);
+      const enabled = validateBoolean(req.body.enabled, true);
+      const transform_config = req.body.transform_config || {};
+      const metadata = req.body.metadata || {};
 
-    const result = await pool.query(
-      `INSERT INTO metadata.custom_jobs 
+      if (!job_name) {
+        return res.status(400).json({ error: "job_name is required" });
+      }
+      if (!source_db_engine) {
+        return res.status(400).json({ error: "Invalid source_db_engine" });
+      }
+      if (!target_db_engine) {
+        return res.status(400).json({ error: "Invalid target_db_engine" });
+      }
+      if (!target_schema || !target_table) {
+        return res
+          .status(400)
+          .json({ error: "target_schema and target_table are required" });
+      }
+
+      const result = await pool.query(
+        `INSERT INTO metadata.custom_jobs 
        (job_name, description, source_db_engine, source_connection_string, 
         query_sql, target_db_engine, target_connection_string, target_schema, 
         target_table, schedule_cron, active, enabled, transform_config, metadata)
@@ -4331,36 +4953,37 @@ app.post("/api/custom-jobs", async (req, res) => {
          metadata = EXCLUDED.metadata,
          updated_at = NOW()
        RETURNING *`,
-      [
-        job_name,
-        description || null,
-        source_db_engine,
-        source_connection_string,
-        query_sql,
-        target_db_engine,
-        target_connection_string,
-        target_schema,
-        target_table,
-        schedule_cron || null,
-        active !== undefined ? active : true,
-        enabled !== undefined ? enabled : true,
-        JSON.stringify(transform_config || {}),
-        JSON.stringify(metadata || {}),
-      ]
-    );
-    res.json(result.rows[0]);
-  } catch (err) {
-    console.error("Error creating/updating custom job:", err);
-    res.status(500).json({
-      error: "Error al crear/actualizar job personalizado",
-      error: sanitizeError(
-        err,
-        "Error en el servidor",
-        process.env.NODE_ENV === "production"
-      ),
-    });
+        [
+          job_name,
+          description || null,
+          source_db_engine,
+          source_connection_string,
+          query_sql,
+          target_db_engine,
+          target_connection_string,
+          target_schema,
+          target_table,
+          schedule_cron || null,
+          active !== undefined ? active : true,
+          enabled !== undefined ? enabled : true,
+          JSON.stringify(transform_config || {}),
+          JSON.stringify(metadata || {}),
+        ]
+      );
+      res.json(result.rows[0]);
+    } catch (err) {
+      console.error("Error creating/updating custom job:", err);
+      res.status(500).json({
+        error: "Error al crear/actualizar job personalizado",
+        error: sanitizeError(
+          err,
+          "Error en el servidor",
+          process.env.NODE_ENV === "production"
+        ),
+      });
+    }
   }
-});
+);
 
 app.get("/api/custom-jobs", async (req, res) => {
   try {
@@ -4461,7 +5084,10 @@ app.get("/api/custom-jobs", async (req, res) => {
 
 app.post("/api/custom-jobs/:jobName/execute", async (req, res) => {
   try {
-    const { jobName } = req.params;
+    const jobName = validateIdentifier(req.params.jobName);
+    if (!jobName) {
+      return res.status(400).json({ error: "Invalid jobName" });
+    }
 
     const jobCheck = await pool.query(
       "SELECT job_name, active, enabled FROM metadata.custom_jobs WHERE job_name = $1",
@@ -4517,20 +5143,21 @@ app.post("/api/custom-jobs/:jobName/execute", async (req, res) => {
     });
   } catch (err) {
     console.error("Error executing custom job:", err);
-    res.status(500).json({
-      error: "Error al ejecutar job personalizado",
-      details: sanitizeError(
-        err,
-        "Error en el servidor",
-        process.env.NODE_ENV === "production"
-      ),
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al ejecutar job personalizado",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
 app.get("/api/custom-jobs/:jobName/results", async (req, res) => {
   try {
-    const { jobName } = req.params;
+    const jobName = validateIdentifier(req.params.jobName);
+    if (!jobName) {
+      return res.status(400).json({ error: "Invalid jobName" });
+    }
     const result = await pool.query(
       `SELECT * FROM metadata.job_results 
        WHERE job_name = $1 
@@ -4554,7 +5181,10 @@ app.get("/api/custom-jobs/:jobName/results", async (req, res) => {
 
 app.get("/api/custom-jobs/:jobName/history", async (req, res) => {
   try {
-    const { jobName } = req.params;
+    const jobName = validateIdentifier(req.params.jobName);
+    if (!jobName) {
+      return res.status(400).json({ error: "Invalid jobName" });
+    }
     const result = await pool.query(
       `SELECT * FROM metadata.process_log 
        WHERE process_type = 'CUSTOM_JOB' AND process_name = $1 
@@ -4565,71 +5195,91 @@ app.get("/api/custom-jobs/:jobName/history", async (req, res) => {
     res.json(result.rows);
   } catch (err) {
     console.error("Error fetching job history:", err);
-    res.status(500).json({
-      error: "Error al obtener historial del job",
-      error: sanitizeError(
-        err,
-        "Error en el servidor",
-        process.env.NODE_ENV === "production"
-      ),
-    });
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener historial del job",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
   }
 });
 
-app.patch("/api/custom-jobs/:jobName/active", async (req, res) => {
-  try {
-    const { jobName } = req.params;
-    const { active } = req.body;
-    const result = await pool.query(
-      `UPDATE metadata.custom_jobs 
+app.patch(
+  "/api/custom-jobs/:jobName/active",
+  requireAuth,
+  requireRole("admin", "user"),
+  async (req, res) => {
+    try {
+      const jobName = validateIdentifier(req.params.jobName);
+      if (!jobName) {
+        return res.status(400).json({ error: "Invalid jobName" });
+      }
+      const active = validateBoolean(req.body.active);
+      const result = await pool.query(
+        `UPDATE metadata.custom_jobs 
        SET active = $1, updated_at = NOW()
        WHERE job_name = $2
        RETURNING *`,
-      [active, jobName]
-    );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: "Job not found" });
+        [active, jobName]
+      );
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: "Job not found" });
+      }
+      res.json(result.rows[0]);
+    } catch (err) {
+      console.error("Error updating job active status:", err);
+      res.status(500).json({
+        error: "Error al actualizar estado del job",
+        error: sanitizeError(
+          err,
+          "Error en el servidor",
+          process.env.NODE_ENV === "production"
+        ),
+      });
     }
-    res.json(result.rows[0]);
-  } catch (err) {
-    console.error("Error updating job active status:", err);
-    res.status(500).json({
-      error: "Error al actualizar estado del job",
-      error: sanitizeError(
-        err,
-        "Error en el servidor",
-        process.env.NODE_ENV === "production"
-      ),
-    });
   }
-});
+);
 
-app.delete("/api/custom-jobs/:jobName", async (req, res) => {
-  try {
-    const { jobName } = req.params;
-    const result = await pool.query(
-      `DELETE FROM metadata.custom_jobs 
+app.delete(
+  "/api/custom-jobs/:jobName",
+  requireAuth,
+  requireRole("admin"),
+  async (req, res) => {
+    try {
+      const jobName = validateIdentifier(req.params.jobName);
+      if (!jobName) {
+        return res.status(400).json({ error: "Invalid jobName" });
+      }
+      const result = await pool.query(
+        `DELETE FROM metadata.custom_jobs 
        WHERE job_name = $1
        RETURNING *`,
-      [jobName]
-    );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: "Job not found" });
+        [jobName]
+      );
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: "Job not found" });
+      }
+      res.json({ message: "Job deleted successfully", job: result.rows[0] });
+    } catch (err) {
+      console.error("Error deleting custom job:", err);
+      res.status(500).json({
+        error: "Error al eliminar job personalizado",
+        error: sanitizeError(
+          err,
+          "Error en el servidor",
+          process.env.NODE_ENV === "production"
+        ),
+      });
     }
-    res.json({ message: "Job deleted successfully", job: result.rows[0] });
-  } catch (err) {
-    console.error("Error deleting custom job:", err);
-    res.status(500).json({
-      error: "Error al eliminar job personalizado",
-      error: sanitizeError(
-        err,
-        "Error en el servidor",
-        process.env.NODE_ENV === "production"
-      ),
-    });
   }
-});
+);
 
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+// Export app for testing
+export default app;
+
+// Only start server if not in test environment
+if (process.env.NODE_ENV !== "test") {
+  app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+  });
+}

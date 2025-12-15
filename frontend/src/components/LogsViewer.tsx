@@ -149,11 +149,11 @@ const LogsArea = styled.div<{ $isTransitioning?: boolean }>`
   }
 `;
 
-const LogLine = styled.div<{ level: string; category: string }>`
+const LogLine = styled.div<{ $level: string; $category: string }>`
   margin-bottom: 2px;
   padding: 4px 0;
   border-left: 3px solid ${props => {
-    switch (props.level) {
+    switch (props.$level) {
       case 'ERROR':
       case 'CRITICAL':
         return theme.colors.status.error.text;
@@ -183,11 +183,11 @@ const LogTimestamp = styled.span`
   font-size: 0.9em;
 `;
 
-const LogLevel = styled.span<{ level: string }>`
+const LogLevel = styled.span<{ $level: string }>`
   font-weight: bold;
   margin-right: 10px;
   color: ${props => {
-    switch (props.level) {
+    switch (props.$level) {
       case 'ERROR':
       case 'CRITICAL':
         return theme.colors.status.error.text;
@@ -209,7 +209,7 @@ const LogFunction = styled.span`
   font-size: 0.9em;
 `;
 
-const LogCategory = styled.span<{ category: string }>`
+const LogCategory = styled.span<{ $category: string }>`
   color: ${theme.colors.text.secondary};
   margin-right: 10px;
   font-size: 0.8em;
@@ -759,10 +759,10 @@ const LogsViewer = () => {
         <SectionTitle>■ LOG ENTRIES (DB)</SectionTitle>
         <LogsArea $isTransitioning={isPageTransitioning}>
           {logs.map((log, index) => (
-            <LogLine key={log.id || index} level={log.level} category={log.category || 'SYSTEM'}>
+            <LogLine key={log.id || index} $level={log.level} $category={log.category || 'SYSTEM'}>
               <LogTimestamp>{log.timestamp ? formatDate(log.timestamp) : ''}</LogTimestamp>
-              <LogLevel level={log.level}>[{(log.level || '').toUpperCase()}]</LogLevel>
-              {log.category && <LogCategory category={log.category}>[{(log.category || '').toUpperCase()}]</LogCategory>}
+              <LogLevel $level={log.level}>[{(log.level || '').toUpperCase()}]</LogLevel>
+              {log.category && <LogCategory $category={log.category}>[{(log.category || '').toUpperCase()}]</LogCategory>}
               {log.function && <LogFunction>[{log.function}]</LogFunction>}
               <LogMessage>{log.message}</LogMessage>
             </LogLine>

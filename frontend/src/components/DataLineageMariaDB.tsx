@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import styled from 'styled-components';
 import {
   Container,
@@ -18,6 +18,7 @@ import {
   Td,
   TableRow,
   Button,
+  PaginationInfo,
 } from './shared/BaseComponents';
 import { usePagination } from '../hooks/usePagination';
 import { useTableFilters } from '../hooks/useTableFilters';
@@ -67,13 +68,6 @@ const ExportButton = styled(Button)`
   gap: 6px;
 `;
 
-const PaginationInfo = styled.div`
-  text-align: center;
-  margin-bottom: ${theme.spacing.sm};
-  color: ${theme.colors.text.secondary};
-  font-size: 0.9em;
-  animation: fadeIn 0.25s ease-in;
-`;
 
 const SortableTh = styled(Th)<{ $sortable?: boolean; $active?: boolean; $direction?: "asc" | "desc" }>`
   cursor: ${props => props.$sortable ? "pointer" : "default"};
