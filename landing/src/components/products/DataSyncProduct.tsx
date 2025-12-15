@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import styled, { keyframes } from 'styled-components';
 import { theme } from '../../theme/theme';
 
@@ -32,6 +32,44 @@ const pulse = keyframes`
     transform: scale(1.05);
   }
 `;
+
+const screenshots = [
+  {
+    src: '/screenshots/Screenshot 2025-12-15 at 10-20-08 DataSync Monitor.png',
+    alt: 'DataSync Real-Time Dashboard',
+    caption: 'Real-Time Dashboard: synchronization status, system resources, and database health.'
+  },
+  {
+    src: '/screenshots/Screenshot 2025-12-15 at 10-20-25 DataSync Monitor.png',
+    alt: 'DataLake Catalog Manager',
+    caption: 'DataLake Catalog Manager: multi-engine table catalog with sync strategies and status.'
+  },
+  {
+    src: '/screenshots/Screenshot 2025-12-15 at 10-22-12 DataSync Monitor.png',
+    alt: 'Data Governance Catalog',
+    caption: 'Data Governance Catalog: health, sensitivity, and quality metrics per table.'
+  },
+  {
+    src: '/screenshots/Screenshot 2025-12-15 at 10-21-58 DataSync Monitor.png',
+    alt: 'API Catalog',
+    caption: 'API Catalog: unified management of REST integrations and sync status.'
+  },
+  {
+    src: '/screenshots/Screenshot 2025-12-15 at 10-21-36 DataSync Monitor.png',
+    alt: 'Custom Jobs',
+    caption: 'Custom Jobs: Python and SQL jobs orchestrated across your data platform.'
+  },
+  {
+    src: '/screenshots/Screenshot 2025-12-15 at 10-21-43 DataSync Monitor.png',
+    alt: 'System Logs',
+    caption: 'Enterprise Logging: detailed monitoring of parallel processing and transfers.'
+  },
+  {
+    src: '/screenshots/Screenshot 2025-12-15 at 10-22-05 DataSync Monitor.png',
+    alt: 'System Configuration',
+    caption: 'Configuration: tuning chunk size, workers, and sync intervals for your environment.'
+  }
+];
 
 
 const ProductContainer = styled.div`
@@ -146,17 +184,8 @@ const DemoSection = styled.div`
 `;
 
 const DemoContainer = styled.div`
-  max-width: 900px;
+  max-width: 1200px;
   margin: 0 auto;
-`;
-
-const DemoPlaceholder = styled.div`
-  background: ${theme.colors.background.main};
-  border: 2px dashed ${theme.colors.border.medium};
-  border-radius: ${theme.borderRadius.lg};
-  padding: 60px ${theme.spacing.xl};
-  color: ${theme.colors.text.secondary};
-  font-size: 1.1em;
 `;
 
 const TechnicalSection = styled.div`
@@ -727,6 +756,29 @@ const SubmitButton = styled.button`
 `;
 
 const DataSyncProduct = () => {
+  const [activeScreenshot, setActiveScreenshot] = useState(0);
+  const [isFading, setIsFading] = useState(false);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setActiveScreenshot(prev => (prev + 1) % screenshots.length);
+    }, 6000);
+
+    return () => {
+      window.clearInterval(id);
+    };
+  }, []);
+
+  useEffect(() => {
+    setIsFading(true);
+    const timeout = window.setTimeout(() => {
+      setIsFading(false);
+    }, 600);
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [activeScreenshot]);
+
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -817,15 +869,123 @@ const DataSyncProduct = () => {
 
       <DemoSection>
         <DemoContainer>
-          <DemoPlaceholder>
-            [VID] Video demo and screenshots coming soon
-            <br />
-            <br />
-            <small>
-              Shows the complete interface, synchronization in action, 
-              data lineage visualization and more.
-            </small>
-          </DemoPlaceholder>
+          <SectionTitle style={{ fontSize: '1.9em', marginBottom: theme.spacing.md }}>
+            Product Screenshots
+          </SectionTitle>
+          <SectionSubtitle style={{ marginBottom: theme.spacing.lg }}>
+            Real interface from the DataSync platform, in carousel view
+          </SectionSubtitle>
+
+          <div
+            style={{
+              position: 'relative',
+              width: '100%',
+              maxWidth: '1200px',
+              margin: '0 auto',
+            }}
+          >
+            <img
+              src={screenshots[activeScreenshot].src}
+              alt={screenshots[activeScreenshot].alt}
+              style={{
+                width: '100%',
+                borderRadius: theme.borderRadius.lg,
+                boxShadow: theme.shadows.xl,
+                display: 'block',
+                opacity: isFading ? 0 : 1,
+                transform: isFading ? 'translateY(10px)' : 'translateY(0)',
+                transition: 'opacity 0.6s ease-out, transform 0.6s ease-out',
+              }}
+            />
+            <p
+              style={{
+                marginTop: theme.spacing.md,
+                fontSize: '0.95rem',
+                color: theme.colors.text.secondary,
+              }}
+            >
+              {screenshots[activeScreenshot].caption}
+            </p>
+
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                marginTop: theme.spacing.md,
+                gap: theme.spacing.md,
+              }}
+            >
+              <button
+                type="button"
+                onClick={() =>
+                  setActiveScreenshot(
+                    (activeScreenshot - 1 + screenshots.length) % screenshots.length
+                  )
+                }
+                style={{
+                  flex: 1,
+                  padding: theme.spacing.sm,
+                  borderRadius: theme.borderRadius.md,
+                  border: `1px solid ${theme.colors.border.medium}`,
+                  background: theme.colors.background.main,
+                  color: theme.colors.text.primary,
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                }}
+              >
+                {'< Previous'}
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setActiveScreenshot((activeScreenshot + 1) % screenshots.length)
+                }
+                style={{
+                  flex: 1,
+                  padding: theme.spacing.sm,
+                  borderRadius: theme.borderRadius.md,
+                  border: `1px solid ${theme.colors.primary.main}`,
+                  background: theme.colors.primary.main,
+                  color: theme.colors.text.white,
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                }}
+              >
+                {'Next >'}
+              </button>
+            </div>
+
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'center',
+                gap: theme.spacing.xs,
+                marginTop: theme.spacing.md,
+                flexWrap: 'wrap',
+              }}
+            >
+              {screenshots.map((_, index) => (
+                <button
+                  key={index}
+                  type="button"
+                  onClick={() => setActiveScreenshot(index)}
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: '50%',
+                    border: 'none',
+                    padding: 0,
+                    cursor: 'pointer',
+                    background:
+                      index === activeScreenshot
+                        ? theme.colors.primary.main
+                        : theme.colors.border.medium,
+                  }}
+                />
+              ))}
+            </div>
+          </div>
         </DemoContainer>
       </DemoSection>
 
