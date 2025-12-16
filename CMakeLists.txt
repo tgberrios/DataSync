@@ -66,6 +66,8 @@ add_executable(DataSync
     src/governance/ComplianceManager.cpp
     src/governance/AccessControlManager.cpp
     src/governance/DataRetentionManager.cpp
+    src/governance/BusinessGlossaryManager.cpp
+    src/governance/AlertingManager.cpp
     src/metrics/MetricsCollector.cpp
     src/utils/connection_utils.cpp
     src/utils/cluster_name_resolver.cpp
