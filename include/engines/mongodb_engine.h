@@ -28,6 +28,7 @@ public:
   MongoDBEngine &operator=(const MongoDBEngine &) = delete;
 
   std::vector<CatalogTableInfo> discoverTables() override;
+  std::vector<CatalogTableInfo> discoverAllDatabasesAndCollections();
   std::vector<std::string> detectPrimaryKey(const std::string &schema,
                                             const std::string &table) override;
   std::string detectTimeColumn(const std::string &schema,
@@ -39,6 +40,7 @@ public:
   bool isValid() const { return valid_ && client_ != nullptr; }
   mongoc_client_t *getClient() const { return client_; }
   std::string getDatabaseName() const { return databaseName_; }
+  std::string getBaseConnectionString() const;
 
 private:
   bool parseConnectionString(const std::string &connectionString);

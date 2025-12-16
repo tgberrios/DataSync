@@ -180,6 +180,99 @@ std::vector<CatalogTableInfo> MongoDBEngine::discoverTables() {
   return collections;
 }
 
+std::vector<CatalogTableInfo>
+MongoDBEngine::discoverAllDatabasesAndCollections() {
+  std::vector<CatalogTableInfo> allCollections;
+
+  if (!isValid()) {
+    Logger::error(LogCategory::DATABASE, "MongoDBEngine",
+                  "Cannot discover all databases: invalid connection");
+    return allCollections;
+  }
+
+  try {
+    std::lock_guard<std::mutex> lock(clientMutex_);
+    bson_error_t error;
+    char **database_names =
+        mongoc_client_get_database_names_with_opts(client_, nullptr, &error);
+
+    if (!database_names) {
+      Logger::error(LogCategory::DATABASE, "MongoDBEngine",
+                    "Failed to get database names: " +
+                        std::string(error.message));
+      return allCollections;
+    }
+
+    for (size_t i = 0; database_names[i]; i++) {
+      std::string dbName = database_names[i];
+
+      if (dbName == "admin" || dbName == "local" || dbName == "config") {
+        continue;
+      }
+
+      mongoc_database_t *db =
+          mongoc_client_get_database(client_, dbName.c_str());
+      char **collection_names =
+          mongoc_database_get_collection_names(db, &error);
+
+      if (collection_names) {
+        for (size_t j = 0; collection_names[j]; j++) {
+          CatalogTableInfo info;
+          info.schema = dbName;
+          info.table = collection_names[j];
+          std::string baseConn = getBaseConnectionString();
+          if (baseConn.back() == '/') {
+            info.connectionString = baseConn + dbName;
+          } else {
+            info.connectionString = baseConn + "/" + dbName;
+          }
+          allCollections.push_back(info);
+        }
+        bson_strfreev(collection_names);
+      }
+
+      mongoc_database_destroy(db);
+    }
+
+    bson_strfreev(database_names);
+
+    Logger::info(LogCategory::DATABASE, "MongoDBEngine",
+                 "Discovered " + std::to_string(allCollections.size()) +
+                     " collections across all databases");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::DATABASE, "MongoDBEngine",
+                  "Error discovering all databases: " + std::string(e.what()));
+  }
+
+  return allCollections;
+}
+
+std::string MongoDBEngine::getBaseConnectionString() const {
+  size_t dbStart = connectionString_.find_last_of('/');
+  if (dbStart == std::string::npos) {
+    return connectionString_;
+  }
+
+  size_t dbEnd = connectionString_.find('?', dbStart);
+  if (dbEnd == std::string::npos) {
+    dbEnd = connectionString_.length();
+  }
+
+  std::string base = connectionString_.substr(0, dbStart + 1);
+  std::string queryParams = "";
+  if (dbEnd < connectionString_.length()) {
+    queryParams = connectionString_.substr(dbEnd);
+  }
+
+  if (!queryParams.empty() && queryParams[0] == '?') {
+    return base + queryParams;
+  } else if (!queryParams.empty()) {
+    return base + "?" + queryParams;
+  }
+
+  return base;
+}
+
 std::vector<std::string>
 MongoDBEngine::detectPrimaryKey(const std::string &schema,
                                 const std::string &table) {

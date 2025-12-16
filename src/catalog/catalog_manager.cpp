@@ -426,9 +426,38 @@ void CatalogManager::syncCatalog(const std::string &dbEngine) {
         engine = std::make_unique<MSSQLEngine>(connStr);
       else if (dbEngine == "PostgreSQL")
         engine = std::make_unique<PostgreSQLEngine>(connStr);
-      else if (dbEngine == "MongoDB")
-        engine = std::make_unique<MongoDBEngine>(connStr);
-      else if (dbEngine == "Oracle")
+      else if (dbEngine == "MongoDB") {
+        auto mongoEngine = std::make_unique<MongoDBEngine>(connStr);
+        if (mongoEngine && mongoEngine->isValid()) {
+          std::vector<CatalogTableInfo> allTables;
+          try {
+            allTables = mongoEngine->discoverAllDatabasesAndCollections();
+            for (const auto &table : allTables) {
+              auto timeColumn =
+                  mongoEngine->detectTimeColumn(table.schema, table.table);
+              auto pkColumns =
+                  mongoEngine->detectPrimaryKey(table.schema, table.table);
+              bool hasPK = !pkColumns.empty();
+
+              std::string lowerSchema = StringUtils::toLower(table.schema);
+              std::string lowerTable = StringUtils::toLower(table.table);
+              std::string key = lowerSchema + "|" + lowerTable;
+              int64_t tableSize = (tableSizes.find(key) != tableSizes.end())
+                                      ? tableSizes[key]
+                                      : 0;
+
+              repo_->insertOrUpdateTable(table, timeColumn, pkColumns, hasPK,
+                                         tableSize, dbEngine);
+            }
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::DATABASE, "CatalogManager",
+                          "Error discovering all MongoDB databases: " +
+                              std::string(e.what()));
+          }
+          continue;
+        }
+        engine = std::move(mongoEngine);
+      } else if (dbEngine == "Oracle")
         engine = std::make_unique<OracleEngine>(connStr);
 
       if (!engine)
