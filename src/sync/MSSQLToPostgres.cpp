@@ -195,12 +195,7 @@ void MSSQLToPostgres::processTableCDC(
 
     std::vector<std::string> pkColumns =
         getPKColumnsFromCatalog(pgConn, table.schema_name, table.table_name);
-    if (pkColumns.empty()) {
-      Logger::warning(LogCategory::TRANSFER, "processTableCDC",
-                      "No PK columns found for " + tableKey +
-                          " in catalog; skipping CDC processing");
-      return;
-    }
+    bool hasPK = !pkColumns.empty();
 
     std::string databaseName = extractDatabaseName(table.connection_string);
     std::string useQuery = "USE [" + databaseName + "];";
@@ -256,97 +251,191 @@ void MSSQLToPostgres::processTableCDC(
         }
 
         try {
-          std::vector<std::string> pkValues;
           json pkObject = json::parse(pkJson);
-          for (const auto &pkCol : pkColumns) {
-            if (pkObject.contains(pkCol) && !pkObject[pkCol].is_null()) {
-              if (pkObject[pkCol].is_string()) {
-                pkValues.push_back(pkObject[pkCol].get<std::string>());
-              } else {
-                pkValues.push_back(pkObject[pkCol].dump());
-              }
-            } else {
-              pkValues.push_back("NULL");
-            }
-          }
+          bool isNoPKTable = !hasPK && pkObject.contains("_hash");
 
-          if (pkValues.size() != pkColumns.size()) {
-            continue;
-          }
+          if (isNoPKTable) {
+            std::string hashValue = pkObject["_hash"].get<std::string>();
 
-          if (op == "D") {
-            deletedPKs.push_back(pkValues);
-          } else if (op == "I" || op == "U") {
-            bool useRowData = false;
-            std::vector<std::string> record;
+            if (op == "D") {
+              if (row.size() >= 4 && !row[3].empty() && row[3] != "NULL") {
+                try {
+                  json rowData = json::parse(row[3]);
+                  std::vector<std::string> record;
+                  record.reserve(columnNames.size());
 
-            if (row.size() >= 4 && !row[3].empty() && row[3] != "NULL") {
-              try {
-                json rowData = json::parse(row[3]);
-                record.reserve(columnNames.size());
-                bool allColumnsFound = true;
-
-                for (const auto &colName : columnNames) {
-                  if (rowData.contains(colName) &&
-                      !rowData[colName].is_null()) {
-                    if (rowData[colName].is_string()) {
-                      record.push_back(rowData[colName].get<std::string>());
+                  for (const auto &colName : columnNames) {
+                    if (rowData.contains(colName) &&
+                        !rowData[colName].is_null()) {
+                      if (rowData[colName].is_string()) {
+                        record.push_back(rowData[colName].get<std::string>());
+                      } else {
+                        record.push_back(rowData[colName].dump());
+                      }
                     } else {
-                      record.push_back(rowData[colName].dump());
+                      record.push_back("");
                     }
+                  }
+
+                  if (record.size() == columnNames.size()) {
+                    std::vector<std::string> deleteRecord;
+                    deleteRecord.push_back(hashValue);
+                    deleteRecord.insert(deleteRecord.end(), record.begin(),
+                                        record.end());
+                    deletedPKs.push_back(deleteRecord);
+                  }
+                } catch (const std::exception &e) {
+                  Logger::warning(LogCategory::TRANSFER, "processTableCDC",
+                                  "Failed to parse row_data for DELETE: " +
+                                      std::string(e.what()));
+                }
+              } else {
+                std::vector<std::string> deleteRecord;
+                deleteRecord.push_back(hashValue);
+                deletedPKs.push_back(deleteRecord);
+              }
+            } else if (op == "I" || op == "U") {
+              bool useRowData = false;
+              std::vector<std::string> record;
+
+              if (row.size() >= 4 && !row[3].empty() && row[3] != "NULL") {
+                try {
+                  json rowData = json::parse(row[3]);
+                  record.reserve(columnNames.size());
+                  bool allColumnsFound = true;
+
+                  for (const auto &colName : columnNames) {
+                    if (rowData.contains(colName) &&
+                        !rowData[colName].is_null()) {
+                      if (rowData[colName].is_string()) {
+                        record.push_back(rowData[colName].get<std::string>());
+                      } else {
+                        record.push_back(rowData[colName].dump());
+                      }
+                    } else {
+                      record.push_back("");
+                      allColumnsFound = false;
+                    }
+                  }
+
+                  if (allColumnsFound && record.size() == columnNames.size()) {
+                    recordsToUpsert.push_back(record);
+                    useRowData = true;
+                  }
+                } catch (const std::exception &e) {
+                  Logger::warning(LogCategory::TRANSFER, "processTableCDC",
+                                  "Failed to parse row_data: " +
+                                      std::string(e.what()));
+                }
+              }
+
+              if (!useRowData) {
+                Logger::warning(
+                    LogCategory::TRANSFER, "processTableCDC",
+                    "row_data not available for table without PK: " + tableKey);
+              }
+            }
+          } else {
+            if (!hasPK) {
+              Logger::warning(
+                  LogCategory::TRANSFER, "processTableCDC",
+                  "Table " + tableKey +
+                      " has no PK but pk_values doesn't contain _hash");
+              continue;
+            }
+
+            std::vector<std::string> pkValues;
+            for (const auto &pkCol : pkColumns) {
+              if (pkObject.contains(pkCol) && !pkObject[pkCol].is_null()) {
+                if (pkObject[pkCol].is_string()) {
+                  pkValues.push_back(pkObject[pkCol].get<std::string>());
+                } else {
+                  pkValues.push_back(pkObject[pkCol].dump());
+                }
+              } else {
+                pkValues.push_back("NULL");
+              }
+            }
+
+            if (pkValues.size() != pkColumns.size()) {
+              continue;
+            }
+
+            if (op == "D") {
+              deletedPKs.push_back(pkValues);
+            } else if (op == "I" || op == "U") {
+              bool useRowData = false;
+              std::vector<std::string> record;
+
+              if (row.size() >= 4 && !row[3].empty() && row[3] != "NULL") {
+                try {
+                  json rowData = json::parse(row[3]);
+                  record.reserve(columnNames.size());
+                  bool allColumnsFound = true;
+
+                  for (const auto &colName : columnNames) {
+                    if (rowData.contains(colName) &&
+                        !rowData[colName].is_null()) {
+                      if (rowData[colName].is_string()) {
+                        record.push_back(rowData[colName].get<std::string>());
+                      } else {
+                        record.push_back(rowData[colName].dump());
+                      }
+                    } else {
+                      record.push_back("");
+                      allColumnsFound = false;
+                    }
+                  }
+
+                  if (allColumnsFound && record.size() == columnNames.size()) {
+                    recordsToUpsert.push_back(record);
+                    useRowData = true;
+                  }
+                } catch (const std::exception &e) {
+                  Logger::warning(LogCategory::TRANSFER, "processTableCDC",
+                                  "Failed to parse row_data for " + tableKey +
+                                      ": " + std::string(e.what()) +
+                                      ", falling back to SELECT");
+                }
+              }
+
+              if (!useRowData) {
+                std::string whereClause = "";
+                for (size_t i = 0; i < pkColumns.size(); ++i) {
+                  if (i > 0) {
+                    whereClause += " AND ";
+                  }
+                  std::string pkValue = pkValues[i];
+                  if (pkValue == "NULL") {
+                    whereClause += "[" + pkColumns[i] + "] IS NULL";
                   } else {
-                    record.push_back("");
-                    allColumnsFound = false;
+                    whereClause +=
+                        "[" + pkColumns[i] + "] = '" + escapeSQL(pkValue) + "'";
                   }
                 }
 
-                if (allColumnsFound && record.size() == columnNames.size()) {
-                  recordsToUpsert.push_back(record);
-                  useRowData = true;
+                std::string selectQuery = "SELECT ";
+                for (size_t i = 0; i < columnNames.size(); ++i) {
+                  if (i > 0) {
+                    selectQuery += ", ";
+                  }
+                  selectQuery += "[" + columnNames[i] + "]";
                 }
-              } catch (const std::exception &e) {
-                Logger::warning(LogCategory::TRANSFER, "processTableCDC",
-                                "Failed to parse row_data for " + tableKey +
-                                    ": " + std::string(e.what()) +
-                                    ", falling back to SELECT");
-              }
-            }
+                selectQuery += " FROM [" + table.schema_name + "].[" +
+                               table.table_name + "] WHERE " + whereClause;
 
-            if (!useRowData) {
-              std::string whereClause = "";
-              for (size_t i = 0; i < pkColumns.size(); ++i) {
-                if (i > 0) {
-                  whereClause += " AND ";
-                }
-                std::string pkValue = pkValues[i];
-                if (pkValue == "NULL") {
-                  whereClause += "[" + pkColumns[i] + "] IS NULL";
+                std::vector<std::vector<std::string>> recordResult =
+                    executeQueryMSSQL(mssqlConn, selectQuery);
+
+                if (!recordResult.empty() &&
+                    recordResult[0].size() == columnNames.size()) {
+                  recordsToUpsert.push_back(recordResult[0]);
                 } else {
-                  whereClause +=
-                      "[" + pkColumns[i] + "] = '" + escapeSQL(pkValue) + "'";
+                  Logger::warning(LogCategory::TRANSFER, "processTableCDC",
+                                  "Record not found in source for " + tableKey +
+                                      " operation " + op +
+                                      " with PK: " + pkJson);
                 }
-              }
-
-              std::string selectQuery = "SELECT ";
-              for (size_t i = 0; i < columnNames.size(); ++i) {
-                if (i > 0) {
-                  selectQuery += ", ";
-                }
-                selectQuery += "[" + columnNames[i] + "]";
-              }
-              selectQuery += " FROM [" + table.schema_name + "].[" +
-                             table.table_name + "] WHERE " + whereClause;
-
-              std::vector<std::vector<std::string>> recordResult =
-                  executeQueryMSSQL(mssqlConn, selectQuery);
-
-              if (!recordResult.empty() &&
-                  recordResult[0].size() == columnNames.size()) {
-                recordsToUpsert.push_back(recordResult[0]);
-              } else {
-                Logger::warning(LogCategory::TRANSFER, "processTableCDC",
-                                "Record not found in source for " + tableKey +
-                                    " operation " + op + " with PK: " + pkJson);
               }
             }
           }
@@ -365,8 +454,15 @@ void MSSQLToPostgres::processTableCDC(
         std::string lowerTableName = table.table_name;
         std::transform(lowerTableName.begin(), lowerTableName.end(),
                        lowerTableName.begin(), ::tolower);
-        deletedCount = deleteRecordsByPrimaryKey(
-            pgConn, lowerSchemaName, lowerTableName, deletedPKs, pkColumns);
+
+        bool isNoPKTable = !hasPK;
+        if (isNoPKTable && !deletedPKs.empty()) {
+          deletedCount = deleteRecordsByHash(
+              pgConn, lowerSchemaName, lowerTableName, deletedPKs, columnNames);
+        } else if (hasPK && !deletedPKs.empty()) {
+          deletedCount = deleteRecordsByPrimaryKey(
+              pgConn, lowerSchemaName, lowerTableName, deletedPKs, pkColumns);
+        }
       }
 
       size_t upsertedCount = 0;
@@ -378,8 +474,16 @@ void MSSQLToPostgres::processTableCDC(
         std::transform(lowerTableName.begin(), lowerTableName.end(),
                        lowerTableName.begin(), ::tolower);
         try {
-          performBulkUpsert(pgConn, recordsToUpsert, columnNames, columnTypes,
-                            lowerSchemaName, lowerTableName, table.schema_name);
+          bool isNoPKTable = !hasPK;
+          if (isNoPKTable) {
+            performBulkUpsertNoPK(pgConn, recordsToUpsert, columnNames,
+                                  columnTypes, lowerSchemaName, lowerTableName,
+                                  table.schema_name);
+          } else {
+            performBulkUpsert(pgConn, recordsToUpsert, columnNames, columnTypes,
+                              lowerSchemaName, lowerTableName,
+                              table.schema_name);
+          }
           upsertedCount = recordsToUpsert.size();
         } catch (const std::exception &e) {
           Logger::error(LogCategory::TRANSFER, "processTableCDC",

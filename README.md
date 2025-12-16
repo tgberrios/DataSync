@@ -86,6 +86,49 @@ DataSync es una solución enterprise para:
   - MongoDB: libmongoc-1.0-dev, libbson-1.0-dev
   - Oracle: Oracle Instant Client (libclntsh.so)
 
+### ⚠️ Requisitos Especiales por Motor de Base de Datos
+
+#### MongoDB - Replica Set Obligatorio
+
+**MongoDB requiere estar configurado como Replica Set (incluso single-node) para habilitar Change Streams**, que son necesarios para CDC (Change Data Capture).
+
+**Pasos para configurar MongoDB como Single-Node Replica Set:**
+
+1. **Editar configuración de MongoDB:**
+
+   ```bash
+   sudo nano /etc/mongod.conf
+   ```
+
+2. **Agregar o descomentar la sección `replication`:**
+
+   ```yaml
+   replication:
+     replSetName: "rs0"
+   ```
+
+3. **Reiniciar MongoDB:**
+
+   ```bash
+   sudo systemctl restart mongod
+   ```
+
+4. **Iniciar el Replica Set:**
+
+   ```bash
+   mongosh
+   rs.initiate()
+   ```
+
+5. **Verificar el estado:**
+   ```javascript
+   rs.status();
+   ```
+
+El prompt debería cambiar a `rs0 [primary] test>`, indicando que el replica set está activo.
+
+**Nota:** Sin esta configuración, Change Streams no funcionarán y el CDC de MongoDB no estará disponible.
+
 ### Frontend
 
 - **Node.js**: 18.x o superior
@@ -183,6 +226,9 @@ sudo apt install -y libmariadb-dev
 
 # MongoDB
 sudo apt install -y libmongoc-1.0-dev libbson-1.0-dev
+
+# ⚠️ IMPORTANTE: MongoDB debe estar configurado como Replica Set
+# Ver sección "Requisitos Especiales por Motor de Base de Datos" arriba
 
 # ODBC para MSSQL (opcional)
 sudo apt install -y unixodbc-dev

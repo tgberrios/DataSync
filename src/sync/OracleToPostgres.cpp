@@ -412,9 +412,81 @@ void OracleToPostgres::setupTableTargetOracleToPostgres() {
       return;
     }
 
+    std::set<std::string> processedSchemas;
+
     for (const auto &table : tables) {
       if (table.db_engine != "Oracle") {
         continue;
+      }
+
+      std::string upperSchema = table.schema_name;
+      std::transform(upperSchema.begin(), upperSchema.end(),
+                     upperSchema.begin(), ::toupper);
+
+      if (processedSchemas.find(upperSchema) == processedSchemas.end()) {
+        auto setupConn = getOracleConnection(table.connection_string);
+        if (!setupConn || !setupConn->isValid()) {
+          Logger::error(LogCategory::TRANSFER,
+                        "setupTableTargetOracleToPostgres",
+                        "Failed to get Oracle connection for schema " +
+                            table.schema_name);
+          continue;
+        }
+
+        std::string createSchemaQuery =
+            "BEGIN "
+            "EXECUTE IMMEDIATE 'CREATE USER datasync_metadata IDENTIFIED BY "
+            "datasync_metadata DEFAULT TABLESPACE USERS'; "
+            "EXCEPTION WHEN OTHERS THEN NULL; "
+            "END;";
+        executeQueryOracle(setupConn.get(), createSchemaQuery);
+
+        std::string grantQuery =
+            "BEGIN "
+            "EXECUTE IMMEDIATE 'GRANT CONNECT, RESOURCE TO datasync_metadata'; "
+            "EXECUTE IMMEDIATE 'GRANT EXECUTE ON DBMS_CRYPTO TO "
+            "datasync_metadata'; "
+            "EXCEPTION WHEN OTHERS THEN NULL; "
+            "END;";
+        executeQueryOracle(setupConn.get(), grantQuery);
+
+        std::string createTableQuery =
+            "BEGIN "
+            "EXECUTE IMMEDIATE 'CREATE TABLE datasync_metadata.ds_change_log ("
+            "change_id NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, "
+            "change_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+            "operation CHAR(1) NOT NULL, "
+            "schema_name VARCHAR2(255) NOT NULL, "
+            "table_name VARCHAR2(255) NOT NULL, "
+            "pk_values CLOB NOT NULL, "
+            "row_data CLOB NOT NULL)'; "
+            "EXCEPTION WHEN OTHERS THEN NULL; "
+            "END;";
+        executeQueryOracle(setupConn.get(), createTableQuery);
+
+        std::string createIndex1Query =
+            "BEGIN "
+            "EXECUTE IMMEDIATE 'CREATE INDEX idx_ds_change_log_table_time ON "
+            "datasync_metadata.ds_change_log (schema_name, table_name, "
+            "change_time)'; "
+            "EXCEPTION WHEN OTHERS THEN NULL; "
+            "END;";
+        executeQueryOracle(setupConn.get(), createIndex1Query);
+
+        std::string createIndex2Query =
+            "BEGIN "
+            "EXECUTE IMMEDIATE 'CREATE INDEX idx_ds_change_log_table_change ON "
+            "datasync_metadata.ds_change_log (schema_name, table_name, "
+            "change_id)'; "
+            "EXCEPTION WHEN OTHERS THEN NULL; "
+            "END;";
+        executeQueryOracle(setupConn.get(), createIndex2Query);
+
+        Logger::info(LogCategory::TRANSFER, "setupTableTargetOracleToPostgres",
+                     "Ensured datasync_metadata user and ds_change_log table "
+                     "exist");
+
+        processedSchemas.insert(upperSchema);
       }
 
       auto oracleConn = getOracleConnection(table.connection_string);
@@ -425,9 +497,6 @@ void OracleToPostgres::setupTableTargetOracleToPostgres() {
         continue;
       }
 
-      std::string upperSchema = table.schema_name;
-      std::transform(upperSchema.begin(), upperSchema.end(),
-                     upperSchema.begin(), ::toupper);
       std::string upperTable = table.table_name;
       std::transform(upperTable.begin(), upperTable.end(), upperTable.begin(),
                      ::toupper);
@@ -471,192 +540,181 @@ void OracleToPostgres::setupTableTargetOracleToPostgres() {
       std::vector<std::string> primaryKeys = getPrimaryKeyColumns(
           oracleConn.get(), table.schema_name, table.table_name);
 
-      std::string createSchemaQuery =
-          "BEGIN "
-          "EXECUTE IMMEDIATE 'CREATE USER datasync_metadata IDENTIFIED BY "
-          "datasync_metadata DEFAULT TABLESPACE USERS'; "
-          "EXCEPTION WHEN OTHERS THEN NULL; "
-          "END;";
-      executeQueryOracle(oracleConn.get(), createSchemaQuery);
+      std::string allColumnsQuery =
+          "SELECT column_name FROM all_tab_columns WHERE UPPER(owner) = '" +
+          escapeOracleValue(upperSchema) + "' AND UPPER(table_name) = '" +
+          escapeOracleValue(upperTable) + "' ORDER BY column_id";
+      auto allColumns = executeQueryOracle(oracleConn.get(), allColumnsQuery);
 
-      std::string grantQuery =
-          "BEGIN "
-          "EXECUTE IMMEDIATE 'GRANT CONNECT, RESOURCE TO datasync_metadata'; "
-          "EXCEPTION WHEN OTHERS THEN NULL; "
-          "END;";
-      executeQueryOracle(oracleConn.get(), grantQuery);
-
-      std::string createTableQuery =
-          "BEGIN "
-          "EXECUTE IMMEDIATE 'CREATE TABLE datasync_metadata.ds_change_log ("
-          "change_id NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, "
-          "change_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
-          "operation CHAR(1) NOT NULL, "
-          "schema_name VARCHAR2(255) NOT NULL, "
-          "table_name VARCHAR2(255) NOT NULL, "
-          "pk_values CLOB NOT NULL, "
-          "row_data CLOB NULL)'; "
-          "EXCEPTION WHEN OTHERS THEN NULL; "
-          "END;";
-      executeQueryOracle(oracleConn.get(), createTableQuery);
-
-      std::string createIndex1Query =
-          "BEGIN "
-          "EXECUTE IMMEDIATE 'CREATE INDEX idx_ds_change_log_table_time ON "
-          "datasync_metadata.ds_change_log (schema_name, table_name, "
-          "change_time)'; "
-          "EXCEPTION WHEN OTHERS THEN NULL; "
-          "END;";
-      executeQueryOracle(oracleConn.get(), createIndex1Query);
-
-      std::string createIndex2Query =
-          "BEGIN "
-          "EXECUTE IMMEDIATE 'CREATE INDEX idx_ds_change_log_table_change ON "
-          "datasync_metadata.ds_change_log (schema_name, table_name, "
-          "change_id)'; "
-          "EXCEPTION WHEN OTHERS THEN NULL; "
-          "END;";
-      executeQueryOracle(oracleConn.get(), createIndex2Query);
-
-      if (!primaryKeys.empty()) {
-        std::string allColumnsQuery =
-            "SELECT column_name FROM all_tab_columns WHERE UPPER(owner) = '" +
-            escapeOracleValue(upperSchema) + "' AND UPPER(table_name) = '" +
-            escapeOracleValue(upperTable) + "' ORDER BY column_id";
-        auto allColumns = executeQueryOracle(oracleConn.get(), allColumnsQuery);
-
-        if (!allColumns.empty()) {
-          std::string jsonObjectNew = "'{' || ";
-          std::string jsonObjectOld = "'{' || ";
-          for (size_t i = 0; i < primaryKeys.size(); ++i) {
-            if (i > 0) {
-              jsonObjectNew += "',' || ";
-              jsonObjectOld += "',' || ";
-            }
-            std::string upperPk = primaryKeys[i];
-            std::transform(upperPk.begin(), upperPk.end(), upperPk.begin(),
-                           ::toupper);
-            jsonObjectNew +=
-                "'\"" + primaryKeys[i] +
-                "\":\"' || "
-                "REPLACE(REPLACE(REPLACE(TO_CHAR(:NEW." +
-                upperPk +
-                "), '\\', '\\\\'), '\"', '\\\"'), CHR(10), '\\n') || "
-                "'\"'";
-            jsonObjectOld +=
-                "'\"" + primaryKeys[i] +
-                "\":\"' || "
-                "REPLACE(REPLACE(REPLACE(TO_CHAR(:OLD." +
-                upperPk +
-                "), '\\', '\\\\'), '\"', '\\\"'), CHR(10), '\\n') || "
-                "'\"'";
-          }
-          jsonObjectNew += " || '}'";
-          jsonObjectOld += " || '}'";
-
-          std::string rowDataNew = "'{' || ";
-          std::string rowDataOld = "'{' || ";
-          for (size_t i = 0; i < allColumns.size(); ++i) {
-            if (i > 0) {
-              rowDataNew += "',' || ";
-              rowDataOld += "',' || ";
-            }
-            std::string colName = allColumns[i][0];
-            std::string upperCol = colName;
-            std::transform(upperCol.begin(), upperCol.end(), upperCol.begin(),
-                           ::toupper);
-            rowDataNew += "'\"" + colName +
-                          "\":\"' || "
-                          "REPLACE(REPLACE(REPLACE(TO_CHAR(:NEW." +
-                          upperCol +
-                          "), '\\', '\\\\'), '\"', '\\\"'), CHR(10), '\\n') || "
-                          "'\"'";
-            rowDataOld += "'\"" + colName +
-                          "\":\"' || "
-                          "REPLACE(REPLACE(REPLACE(TO_CHAR(:OLD." +
-                          upperCol +
-                          "), '\\', '\\\\'), '\"', '\\\"'), CHR(10), '\\n') || "
-                          "'\"'";
-          }
-          rowDataNew += " || '}'";
-          rowDataOld += " || '}'";
-
-          std::string triggerInsert =
-              "ds_tr_" + upperSchema + "_" + upperTable + "_ai";
-          std::string triggerUpdate =
-              "ds_tr_" + upperSchema + "_" + upperTable + "_au";
-          std::string triggerDelete =
-              "ds_tr_" + upperSchema + "_" + upperTable + "_ad";
-
-          std::string dropInsert = "DROP TRIGGER " + triggerInsert;
-          std::string dropUpdate = "DROP TRIGGER " + triggerUpdate;
-          std::string dropDelete = "DROP TRIGGER " + triggerDelete;
-
-          try {
-            executeQueryOracle(oracleConn.get(), dropInsert);
-          } catch (...) {
-          }
-          try {
-            executeQueryOracle(oracleConn.get(), dropUpdate);
-          } catch (...) {
-          }
-          try {
-            executeQueryOracle(oracleConn.get(), dropDelete);
-          } catch (...) {
-          }
-
-          std::string createInsertTrigger =
-              "CREATE OR REPLACE TRIGGER " + upperSchema + "." + triggerInsert +
-              " AFTER INSERT ON " + upperSchema + "." + upperTable +
-              " FOR EACH ROW "
-              "BEGIN "
-              "INSERT INTO datasync_metadata.ds_change_log "
-              "(operation, schema_name, table_name, pk_values, row_data) "
-              "VALUES ('I', '" +
-              escapeOracleValue(table.schema_name) + "', '" +
-              escapeOracleValue(table.table_name) + "', " + jsonObjectNew +
-              ", " + rowDataNew +
-              "); "
-              "END;";
-
-          std::string createUpdateTrigger =
-              "CREATE OR REPLACE TRIGGER " + upperSchema + "." + triggerUpdate +
-              " AFTER UPDATE ON " + upperSchema + "." + upperTable +
-              " FOR EACH ROW "
-              "BEGIN "
-              "INSERT INTO datasync_metadata.ds_change_log "
-              "(operation, schema_name, table_name, pk_values, row_data) "
-              "VALUES ('U', '" +
-              escapeOracleValue(table.schema_name) + "', '" +
-              escapeOracleValue(table.table_name) + "', " + jsonObjectNew +
-              ", " + rowDataNew +
-              "); "
-              "END;";
-
-          std::string createDeleteTrigger =
-              "CREATE OR REPLACE TRIGGER " + upperSchema + "." + triggerDelete +
-              " AFTER DELETE ON " + upperSchema + "." + upperTable +
-              " FOR EACH ROW "
-              "BEGIN "
-              "INSERT INTO datasync_metadata.ds_change_log "
-              "(operation, schema_name, table_name, pk_values, row_data) "
-              "VALUES ('D', '" +
-              escapeOracleValue(table.schema_name) + "', '" +
-              escapeOracleValue(table.table_name) + "', " + jsonObjectOld +
-              ", " + rowDataOld +
-              "); "
-              "END;";
-
-          executeQueryOracle(oracleConn.get(), createInsertTrigger);
-          executeQueryOracle(oracleConn.get(), createUpdateTrigger);
-          executeQueryOracle(oracleConn.get(), createDeleteTrigger);
-
-          Logger::info(LogCategory::TRANSFER,
-                       "setupTableTargetOracleToPostgres",
-                       "Created CDC triggers for " + table.schema_name + "." +
-                           table.table_name);
-        }
+      if (allColumns.empty()) {
+        Logger::warning(LogCategory::TRANSFER,
+                        "setupTableTargetOracleToPostgres",
+                        "No columns found for " + table.schema_name + "." +
+                            table.table_name + " - skipping trigger creation");
+        continue;
       }
+
+      bool hasPK = !primaryKeys.empty();
+      std::string jsonObjectNew;
+      std::string jsonObjectOld;
+
+      if (hasPK) {
+        jsonObjectNew = "'{' || ";
+        jsonObjectOld = "'{' || ";
+        for (size_t i = 0; i < primaryKeys.size(); ++i) {
+          if (i > 0) {
+            jsonObjectNew += "',' || ";
+            jsonObjectOld += "',' || ";
+          }
+          std::string upperPk = primaryKeys[i];
+          std::transform(upperPk.begin(), upperPk.end(), upperPk.begin(),
+                         ::toupper);
+          jsonObjectNew +=
+              "'\"" + primaryKeys[i] +
+              "\":\"' || "
+              "REPLACE(REPLACE(REPLACE(TO_CHAR(:NEW." +
+              upperPk +
+              "), '\\', '\\\\'), '\"', '\\\"'), CHR(10), '\\n') || "
+              "'\"'";
+          jsonObjectOld +=
+              "'\"" + primaryKeys[i] +
+              "\":\"' || "
+              "REPLACE(REPLACE(REPLACE(TO_CHAR(:OLD." +
+              upperPk +
+              "), '\\', '\\\\'), '\"', '\\\"'), CHR(10), '\\n') || "
+              "'\"'";
+        }
+        jsonObjectNew += " || '}'";
+        jsonObjectOld += " || '}'";
+      } else {
+        std::string upperColFirst = allColumns[0][0];
+        std::transform(upperColFirst.begin(), upperColFirst.end(),
+                       upperColFirst.begin(), ::toupper);
+        std::string concatFieldsNew =
+            "NVL(TO_CHAR(:NEW." + upperColFirst + "), '')";
+        std::string concatFieldsOld =
+            "NVL(TO_CHAR(:OLD." + upperColFirst + "), '')";
+        for (size_t i = 1; i < allColumns.size(); ++i) {
+          std::string upperCol = allColumns[i][0];
+          std::transform(upperCol.begin(), upperCol.end(), upperCol.begin(),
+                         ::toupper);
+          concatFieldsNew +=
+              " || '|' || NVL(TO_CHAR(:NEW." + upperCol + "), '')";
+          concatFieldsOld +=
+              " || '|' || NVL(TO_CHAR(:OLD." + upperCol + "), '')";
+        }
+        jsonObjectNew = "'{\"_hash\":\"' || "
+                        "RAWTOHEX(DBMS_CRYPTO.HASH(UTL_RAW.CAST_TO_RAW(" +
+                        concatFieldsNew + "), 2)) || '\"}'";
+        jsonObjectOld = "'{\"_hash\":\"' || "
+                        "RAWTOHEX(DBMS_CRYPTO.HASH(UTL_RAW.CAST_TO_RAW(" +
+                        concatFieldsOld + "), 2)) || '\"}'";
+      }
+
+      std::string rowDataNew = "'{' || ";
+      std::string rowDataOld = "'{' || ";
+      for (size_t i = 0; i < allColumns.size(); ++i) {
+        if (i > 0) {
+          rowDataNew += "',' || ";
+          rowDataOld += "',' || ";
+        }
+        std::string colName = allColumns[i][0];
+        std::string upperCol = colName;
+        std::transform(upperCol.begin(), upperCol.end(), upperCol.begin(),
+                       ::toupper);
+        rowDataNew += "'\"" + colName +
+                      "\":\"' || "
+                      "REPLACE(REPLACE(REPLACE(TO_CHAR(:NEW." +
+                      upperCol +
+                      "), '\\', '\\\\'), '\"', '\\\"'), CHR(10), '\\n') || "
+                      "'\"'";
+        rowDataOld += "'\"" + colName +
+                      "\":\"' || "
+                      "REPLACE(REPLACE(REPLACE(TO_CHAR(:OLD." +
+                      upperCol +
+                      "), '\\', '\\\\'), '\"', '\\\"'), CHR(10), '\\n') || "
+                      "'\"'";
+      }
+      rowDataNew += " || '}'";
+      rowDataOld += " || '}'";
+
+      std::string triggerInsert =
+          "ds_tr_" + upperSchema + "_" + upperTable + "_ai";
+      std::string triggerUpdate =
+          "ds_tr_" + upperSchema + "_" + upperTable + "_au";
+      std::string triggerDelete =
+          "ds_tr_" + upperSchema + "_" + upperTable + "_ad";
+
+      std::string dropInsert =
+          "DROP TRIGGER " + upperSchema + "." + triggerInsert;
+      std::string dropUpdate =
+          "DROP TRIGGER " + upperSchema + "." + triggerUpdate;
+      std::string dropDelete =
+          "DROP TRIGGER " + upperSchema + "." + triggerDelete;
+
+      try {
+        executeQueryOracle(oracleConn.get(), dropInsert);
+      } catch (...) {
+      }
+      try {
+        executeQueryOracle(oracleConn.get(), dropUpdate);
+      } catch (...) {
+      }
+      try {
+        executeQueryOracle(oracleConn.get(), dropDelete);
+      } catch (...) {
+      }
+
+      std::string createInsertTrigger =
+          "CREATE OR REPLACE TRIGGER " + upperSchema + "." + triggerInsert +
+          " AFTER INSERT ON " + upperSchema + "." + upperTable +
+          " FOR EACH ROW "
+          "BEGIN "
+          "INSERT INTO datasync_metadata.ds_change_log "
+          "(operation, schema_name, table_name, pk_values, row_data) "
+          "VALUES ('I', '" +
+          escapeOracleValue(table.schema_name) + "', '" +
+          escapeOracleValue(table.table_name) + "', " + jsonObjectNew + ", " +
+          rowDataNew +
+          "); "
+          "END;";
+
+      std::string createUpdateTrigger =
+          "CREATE OR REPLACE TRIGGER " + upperSchema + "." + triggerUpdate +
+          " AFTER UPDATE ON " + upperSchema + "." + upperTable +
+          " FOR EACH ROW "
+          "BEGIN "
+          "INSERT INTO datasync_metadata.ds_change_log "
+          "(operation, schema_name, table_name, pk_values, row_data) "
+          "VALUES ('U', '" +
+          escapeOracleValue(table.schema_name) + "', '" +
+          escapeOracleValue(table.table_name) + "', " + jsonObjectNew + ", " +
+          rowDataNew +
+          "); "
+          "END;";
+
+      std::string createDeleteTrigger =
+          "CREATE OR REPLACE TRIGGER " + upperSchema + "." + triggerDelete +
+          " AFTER DELETE ON " + upperSchema + "." + upperTable +
+          " FOR EACH ROW "
+          "BEGIN "
+          "INSERT INTO datasync_metadata.ds_change_log "
+          "(operation, schema_name, table_name, pk_values, row_data) "
+          "VALUES ('D', '" +
+          escapeOracleValue(table.schema_name) + "', '" +
+          escapeOracleValue(table.table_name) + "', " + jsonObjectOld + ", " +
+          rowDataOld +
+          "); "
+          "END;";
+
+      executeQueryOracle(oracleConn.get(), createInsertTrigger);
+      executeQueryOracle(oracleConn.get(), createUpdateTrigger);
+      executeQueryOracle(oracleConn.get(), createDeleteTrigger);
+
+      Logger::info(LogCategory::TRANSFER, "setupTableTargetOracleToPostgres",
+                   "Created CDC triggers for " + table.schema_name + "." +
+                       table.table_name +
+                       (hasPK ? " (with PK)" : " (no PK, using hash)"));
 
       std::string createQuery = "CREATE TABLE IF NOT EXISTS \"" + lowerSchema +
                                 "\".\"" + lowerTable + "\" (";
@@ -1106,13 +1164,7 @@ void OracleToPostgres::processTableCDC(const TableInfo &table,
 
     std::vector<std::string> pkColumns =
         getPKColumnsFromCatalog(pgConn, table.schema_name, table.table_name);
-    if (pkColumns.empty()) {
-      Logger::warning(LogCategory::TRANSFER, "processTableCDC",
-                      "No PK columns found for " + table.schema_name + "." +
-                          table.table_name +
-                          " in catalog; skipping CDC processing");
-      return;
-    }
+    bool hasPK = !pkColumns.empty();
 
     auto oracleConn = getOracleConnection(table.connection_string);
     if (!oracleConn || !oracleConn->isValid()) {
@@ -1210,96 +1262,191 @@ void OracleToPostgres::processTableCDC(const TableInfo &table,
         }
 
         try {
-          std::vector<std::string> pkValues;
           json pkObject = json::parse(pkJson);
-          for (const auto &pkCol : pkColumns) {
-            if (pkObject.contains(pkCol) && !pkObject[pkCol].is_null()) {
-              if (pkObject[pkCol].is_string()) {
-                pkValues.push_back(pkObject[pkCol].get<std::string>());
-              } else {
-                pkValues.push_back(pkObject[pkCol].dump());
-              }
-            } else {
-              pkValues.push_back("NULL");
-            }
-          }
+          bool isNoPKTable = !hasPK && pkObject.contains("_hash");
 
-          if (pkValues.size() != pkColumns.size()) {
-            continue;
-          }
+          if (isNoPKTable) {
+            std::string hashValue = pkObject["_hash"].get<std::string>();
 
-          if (op == "D") {
-            deletedPKs.push_back(pkValues);
-          } else if (op == "I" || op == "U") {
-            bool useRowData = false;
-            std::vector<std::string> record;
+            if (op == "D") {
+              if (row.size() >= 4 && !row[3].empty() && row[3] != "NULL") {
+                try {
+                  json rowData = json::parse(row[3]);
+                  std::vector<std::string> record;
+                  record.reserve(columnNames.size());
 
-            if (row.size() >= 4 && !row[3].empty() && row[3] != "NULL") {
-              try {
-                json rowData = json::parse(row[3]);
-                record.reserve(columnNames.size());
-                bool allColumnsFound = true;
-
-                for (const auto &colName : columnNames) {
-                  if (rowData.contains(colName) &&
-                      !rowData[colName].is_null()) {
-                    if (rowData[colName].is_string()) {
-                      record.push_back(rowData[colName].get<std::string>());
+                  for (const auto &colName : columnNames) {
+                    if (rowData.contains(colName) &&
+                        !rowData[colName].is_null()) {
+                      if (rowData[colName].is_string()) {
+                        record.push_back(rowData[colName].get<std::string>());
+                      } else {
+                        record.push_back(rowData[colName].dump());
+                      }
                     } else {
-                      record.push_back(rowData[colName].dump());
+                      record.push_back("");
                     }
+                  }
+
+                  if (record.size() == columnNames.size()) {
+                    std::vector<std::string> deleteRecord;
+                    deleteRecord.push_back(hashValue);
+                    deleteRecord.insert(deleteRecord.end(), record.begin(),
+                                        record.end());
+                    deletedPKs.push_back(deleteRecord);
+                  }
+                } catch (const std::exception &e) {
+                  Logger::warning(LogCategory::TRANSFER, "processTableCDC",
+                                  "Failed to parse row_data for DELETE: " +
+                                      std::string(e.what()));
+                }
+              } else {
+                std::vector<std::string> deleteRecord;
+                deleteRecord.push_back(hashValue);
+                deletedPKs.push_back(deleteRecord);
+              }
+            } else if (op == "I" || op == "U") {
+              bool useRowData = false;
+              std::vector<std::string> record;
+
+              if (row.size() >= 4 && !row[3].empty() && row[3] != "NULL") {
+                try {
+                  json rowData = json::parse(row[3]);
+                  record.reserve(columnNames.size());
+                  bool allColumnsFound = true;
+
+                  for (const auto &colName : columnNames) {
+                    if (rowData.contains(colName) &&
+                        !rowData[colName].is_null()) {
+                      if (rowData[colName].is_string()) {
+                        record.push_back(rowData[colName].get<std::string>());
+                      } else {
+                        record.push_back(rowData[colName].dump());
+                      }
+                    } else {
+                      record.push_back("");
+                      allColumnsFound = false;
+                    }
+                  }
+
+                  if (allColumnsFound && record.size() == columnNames.size()) {
+                    recordsToUpsert.push_back(record);
+                    useRowData = true;
+                  }
+                } catch (const std::exception &e) {
+                  Logger::warning(LogCategory::TRANSFER, "processTableCDC",
+                                  "Failed to parse row_data: " +
+                                      std::string(e.what()));
+                }
+              }
+
+              if (!useRowData) {
+                Logger::warning(
+                    LogCategory::TRANSFER, "processTableCDC",
+                    "row_data not available for table without PK: " +
+                        table.schema_name + "." + table.table_name);
+              }
+            }
+          } else {
+            if (!hasPK) {
+              Logger::warning(
+                  LogCategory::TRANSFER, "processTableCDC",
+                  "Table " + table.schema_name + "." + table.table_name +
+                      " has no PK but pk_values doesn't contain _hash");
+              continue;
+            }
+
+            std::vector<std::string> pkValues;
+            for (const auto &pkCol : pkColumns) {
+              if (pkObject.contains(pkCol) && !pkObject[pkCol].is_null()) {
+                if (pkObject[pkCol].is_string()) {
+                  pkValues.push_back(pkObject[pkCol].get<std::string>());
+                } else {
+                  pkValues.push_back(pkObject[pkCol].dump());
+                }
+              } else {
+                pkValues.push_back("NULL");
+              }
+            }
+
+            if (pkValues.size() != pkColumns.size()) {
+              continue;
+            }
+
+            if (op == "D") {
+              deletedPKs.push_back(pkValues);
+            } else if (op == "I" || op == "U") {
+              bool useRowData = false;
+              std::vector<std::string> record;
+
+              if (row.size() >= 4 && !row[3].empty() && row[3] != "NULL") {
+                try {
+                  json rowData = json::parse(row[3]);
+                  record.reserve(columnNames.size());
+                  bool allColumnsFound = true;
+
+                  for (const auto &colName : columnNames) {
+                    if (rowData.contains(colName) &&
+                        !rowData[colName].is_null()) {
+                      if (rowData[colName].is_string()) {
+                        record.push_back(rowData[colName].get<std::string>());
+                      } else {
+                        record.push_back(rowData[colName].dump());
+                      }
+                    } else {
+                      record.push_back("");
+                      allColumnsFound = false;
+                    }
+                  }
+
+                  if (allColumnsFound && record.size() == columnNames.size()) {
+                    recordsToUpsert.push_back(record);
+                    useRowData = true;
+                  }
+                } catch (const std::exception &e) {
+                  Logger::warning(
+                      LogCategory::TRANSFER, "processTableCDC",
+                      "Failed to parse row_data for " + table.schema_name +
+                          "." + table.table_name + ": " +
+                          std::string(e.what()) + ", falling back to SELECT");
+                }
+              }
+
+              if (!useRowData) {
+                std::string whereClause = "";
+                for (size_t i = 0; i < pkColumns.size(); ++i) {
+                  if (i > 0) {
+                    whereClause += " AND ";
+                  }
+                  std::string pkValue = pkValues[i];
+                  std::string upperPk = pkColumns[i];
+                  std::transform(upperPk.begin(), upperPk.end(),
+                                 upperPk.begin(), ::toupper);
+                  if (pkValue == "NULL") {
+                    whereClause += upperPk + " IS NULL";
                   } else {
-                    record.push_back("");
-                    allColumnsFound = false;
+                    whereClause +=
+                        upperPk + " = '" + escapeOracleValue(pkValue) + "'";
                   }
                 }
 
-                if (allColumnsFound && record.size() == columnNames.size()) {
-                  recordsToUpsert.push_back(record);
-                  useRowData = true;
-                }
-              } catch (const std::exception &e) {
-                Logger::warning(LogCategory::TRANSFER, "processTableCDC",
-                                "Failed to parse row_data for " +
-                                    table.schema_name + "." + table.table_name +
-                                    ": " + std::string(e.what()) +
-                                    ", falling back to SELECT");
-              }
-            }
+                std::string selectQuery = "SELECT * FROM " + upperSchema + "." +
+                                          upperTable + " WHERE " + whereClause +
+                                          " AND ROWNUM <= 1";
 
-            if (!useRowData) {
-              std::string whereClause = "";
-              for (size_t i = 0; i < pkColumns.size(); ++i) {
-                if (i > 0) {
-                  whereClause += " AND ";
-                }
-                std::string pkValue = pkValues[i];
-                std::string upperPk = pkColumns[i];
-                std::transform(upperPk.begin(), upperPk.end(), upperPk.begin(),
-                               ::toupper);
-                if (pkValue == "NULL") {
-                  whereClause += upperPk + " IS NULL";
+                std::vector<std::vector<std::string>> recordResult =
+                    executeQueryOracle(oracleConn.get(), selectQuery);
+
+                if (!recordResult.empty() &&
+                    recordResult[0].size() == columnNames.size()) {
+                  recordsToUpsert.push_back(recordResult[0]);
                 } else {
-                  whereClause +=
-                      upperPk + " = '" + escapeOracleValue(pkValue) + "'";
+                  Logger::warning(LogCategory::TRANSFER, "processTableCDC",
+                                  "Record not found in source for " +
+                                      table.schema_name + "." +
+                                      table.table_name + " operation " + op +
+                                      " with PK: " + pkJson);
                 }
-              }
-
-              std::string selectQuery = "SELECT * FROM " + upperSchema + "." +
-                                        upperTable + " WHERE " + whereClause +
-                                        " AND ROWNUM <= 1";
-
-              std::vector<std::vector<std::string>> recordResult =
-                  executeQueryOracle(oracleConn.get(), selectQuery);
-
-              if (!recordResult.empty() &&
-                  recordResult[0].size() == columnNames.size()) {
-                recordsToUpsert.push_back(recordResult[0]);
-              } else {
-                Logger::warning(LogCategory::TRANSFER, "processTableCDC",
-                                "Record not found in source for " +
-                                    table.schema_name + "." + table.table_name +
-                                    " operation " + op + " with PK: " + pkJson);
               }
             }
           }
@@ -1316,8 +1463,18 @@ void OracleToPostgres::processTableCDC(const TableInfo &table,
         std::string lowerSchemaName = table.schema_name;
         std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
                        lowerSchemaName.begin(), ::tolower);
-        deletedCount = deleteRecordsByPrimaryKey(
-            pgConn, lowerSchemaName, table.table_name, deletedPKs, pkColumns);
+        std::string lowerTableName = table.table_name;
+        std::transform(lowerTableName.begin(), lowerTableName.end(),
+                       lowerTableName.begin(), ::tolower);
+
+        bool isNoPKTable = !hasPK;
+        if (isNoPKTable && !deletedPKs.empty()) {
+          deletedCount = deleteRecordsByHash(
+              pgConn, lowerSchemaName, lowerTableName, deletedPKs, columnNames);
+        } else if (hasPK && !deletedPKs.empty()) {
+          deletedCount = deleteRecordsByPrimaryKey(
+              pgConn, lowerSchemaName, lowerTableName, deletedPKs, pkColumns);
+        }
       }
 
       size_t upsertedCount = 0;
@@ -1325,10 +1482,20 @@ void OracleToPostgres::processTableCDC(const TableInfo &table,
         std::string lowerSchemaName = table.schema_name;
         std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
                        lowerSchemaName.begin(), ::tolower);
+        std::string lowerTableName = table.table_name;
+        std::transform(lowerTableName.begin(), lowerTableName.end(),
+                       lowerTableName.begin(), ::tolower);
         try {
-          performBulkUpsert(pgConn, recordsToUpsert, columnNames, columnTypes,
-                            lowerSchemaName, table.table_name,
-                            table.schema_name);
+          bool isNoPKTable = !hasPK;
+          if (isNoPKTable) {
+            performBulkUpsertNoPK(pgConn, recordsToUpsert, columnNames,
+                                  columnTypes, lowerSchemaName, lowerTableName,
+                                  table.schema_name);
+          } else {
+            performBulkUpsert(pgConn, recordsToUpsert, columnNames, columnTypes,
+                              lowerSchemaName, lowerTableName,
+                              table.schema_name);
+          }
           upsertedCount = recordsToUpsert.size();
         } catch (const std::exception &e) {
           Logger::error(LogCategory::TRANSFER, "processTableCDC",

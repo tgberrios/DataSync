@@ -1167,8 +1167,13 @@ void MongoDBToPostgres::processTableCDC(const TableInfo &table,
     bson_destroy(pipeline);
 
     if (!stream) {
-      Logger::error(LogCategory::TRANSFER, "processTableCDC",
-                    "Failed to create change stream");
+      Logger::error(
+          LogCategory::TRANSFER, "processTableCDC",
+          "Failed to create change stream. MongoDB Change Streams "
+          "require a replica set or sharded cluster. Standalone "
+          "instances are not supported. To enable Change Streams on "
+          "a standalone instance, convert it to a single-node replica "
+          "set using: rs.initiate()");
       mongoc_collection_destroy(coll);
       return;
     }

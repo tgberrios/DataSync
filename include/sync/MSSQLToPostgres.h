@@ -352,42 +352,7 @@ public:
         return;
       }
 
-      SQLHDBC setupDbc = getMSSQLConnection(tables[0].connection_string);
-      if (!setupDbc) {
-        Logger::error(LogCategory::TRANSFER, "setupTableTargetMSSQLToPostgres",
-                      "Failed to get MSSQL connection for setup");
-        return;
-      }
-
-      std::string createSchemaQuery =
-          "IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = "
-          "'datasync_metadata') BEGIN EXEC('CREATE SCHEMA "
-          "datasync_metadata') "
-          "END;";
-      executeQueryMSSQL(setupDbc, createSchemaQuery);
-
-      std::string createTableQuery =
-          "IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = "
-          "OBJECT_ID(N'datasync_metadata.ds_change_log') AND type in "
-          "(N'U')) BEGIN CREATE TABLE datasync_metadata.ds_change_log ("
-          "change_id BIGINT IDENTITY(1,1) PRIMARY KEY, "
-          "change_time DATETIME NOT NULL DEFAULT GETDATE(), "
-          "operation CHAR(1) NOT NULL, "
-          "schema_name NVARCHAR(255) NOT NULL, "
-          "table_name NVARCHAR(255) NOT NULL, "
-          "pk_values NVARCHAR(MAX) NOT NULL, "
-          "row_data NVARCHAR(MAX) NULL); "
-          "CREATE INDEX idx_ds_change_log_table_time ON "
-          "datasync_metadata.ds_change_log (schema_name, table_name, "
-          "change_time); "
-          "CREATE INDEX idx_ds_change_log_table_change ON "
-          "datasync_metadata.ds_change_log (schema_name, table_name, "
-          "change_id); END;";
-      executeQueryMSSQL(setupDbc, createTableQuery);
-
-      Logger::info(LogCategory::TRANSFER, "setupTableTargetMSSQLToPostgres",
-                   "Ensured datasync_metadata schema and ds_change_log table "
-                   "exist");
+      std::set<std::string> processedDatabases;
 
       // Sort tables by priority: FULL_LOAD, RESET, LISTENING_CHANGES
       std::sort(tables.begin(), tables.end(),
@@ -412,7 +377,6 @@ public:
       Logger::info(LogCategory::TRANSFER,
                    "Processing " + std::to_string(tables.size()) +
                        " MSSQL tables in priority order");
-      // Removed individual table status logs to reduce noise
 
       for (const auto &table : tables) {
         if (table.db_engine != "MSSQL") {
@@ -421,6 +385,55 @@ public:
                               " - " + table.schema_name + "." +
                               table.table_name);
           continue;
+        }
+
+        std::string databaseName = extractDatabaseName(table.connection_string);
+
+        if (processedDatabases.find(databaseName) == processedDatabases.end()) {
+          SQLHDBC setupDbc = getMSSQLConnection(table.connection_string);
+          if (!setupDbc) {
+            Logger::error(
+                LogCategory::TRANSFER, "setupTableTargetMSSQLToPostgres",
+                "Failed to get MSSQL connection for database " + databaseName);
+            continue;
+          }
+
+          std::string useQuery = "USE [" + databaseName + "];";
+          executeQueryMSSQL(setupDbc, useQuery);
+
+          std::string createSchemaQuery =
+              "IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = "
+              "'datasync_metadata') BEGIN EXEC('CREATE SCHEMA "
+              "datasync_metadata') "
+              "END;";
+          executeQueryMSSQL(setupDbc, createSchemaQuery);
+
+          std::string createTableQuery =
+              "IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = "
+              "OBJECT_ID(N'datasync_metadata.ds_change_log') AND type in "
+              "(N'U')) BEGIN CREATE TABLE datasync_metadata.ds_change_log ("
+              "change_id BIGINT IDENTITY(1,1) PRIMARY KEY, "
+              "change_time DATETIME NOT NULL DEFAULT GETDATE(), "
+              "operation CHAR(1) NOT NULL, "
+              "schema_name NVARCHAR(255) NOT NULL, "
+              "table_name NVARCHAR(255) NOT NULL, "
+              "pk_values NVARCHAR(MAX) NOT NULL, "
+              "row_data NVARCHAR(MAX) NOT NULL); "
+              "CREATE INDEX idx_ds_change_log_table_time ON "
+              "datasync_metadata.ds_change_log (schema_name, table_name, "
+              "change_time); "
+              "CREATE INDEX idx_ds_change_log_table_change ON "
+              "datasync_metadata.ds_change_log (schema_name, table_name, "
+              "change_id); END;";
+          executeQueryMSSQL(setupDbc, createTableQuery);
+
+          Logger::info(
+              LogCategory::TRANSFER, "setupTableTargetMSSQLToPostgres",
+              "Ensured datasync_metadata schema and ds_change_log table "
+              "exist for database " +
+                  databaseName);
+
+          processedDatabases.insert(databaseName);
         }
 
         SQLHDBC dbc = getMSSQLConnection(table.connection_string);
@@ -432,9 +445,6 @@ public:
                   " - skipping table setup");
           continue;
         }
-
-        // Usar USE [database] para cambiar el contexto de base de datos
-        std::string databaseName = extractDatabaseName(table.connection_string);
 
         // Primero cambiar a la base de datos correcta
         std::string useQuery = "USE [" + databaseName + "];";
@@ -620,36 +630,21 @@ public:
         std::vector<std::vector<std::string>> allColumns =
             executeQueryMSSQL(dbc, allColumnsQuery);
 
-        if (!pkColumns.empty() && !allColumns.empty()) {
+        if (allColumns.empty()) {
+          Logger::warning(
+              LogCategory::TRANSFER, "setupTableTargetMSSQLToPostgres",
+              "No columns found for " + table.schema_name + "." +
+                  table.table_name + " - skipping trigger creation");
+          closeMSSQLConnection(dbc);
+          continue;
+        }
 
-          std::string triggerInsert =
-              "ds_tr_" + table.schema_name + "_" + table.table_name + "_ai";
-          std::string triggerUpdate =
-              "ds_tr_" + table.schema_name + "_" + table.table_name + "_au";
-          std::string triggerDelete =
-              "ds_tr_" + table.schema_name + "_" + table.table_name + "_ad";
+        bool hasPK = !pkColumns.empty();
+        std::string jsonObjectNew;
+        std::string jsonObjectOld;
 
-          std::string dropInsert =
-              "IF EXISTS (SELECT * FROM sys.triggers WHERE "
-              "name = '" +
-              triggerInsert + "') DROP TRIGGER [" + table.schema_name + "].[" +
-              triggerInsert + "];";
-          std::string dropUpdate =
-              "IF EXISTS (SELECT * FROM sys.triggers WHERE "
-              "name = '" +
-              triggerUpdate + "') DROP TRIGGER [" + table.schema_name + "].[" +
-              triggerUpdate + "];";
-          std::string dropDelete =
-              "IF EXISTS (SELECT * FROM sys.triggers WHERE "
-              "name = '" +
-              triggerDelete + "') DROP TRIGGER [" + table.schema_name + "].[" +
-              triggerDelete + "];";
-
-          executeQueryMSSQL(dbc, dropInsert);
-          executeQueryMSSQL(dbc, dropUpdate);
-          executeQueryMSSQL(dbc, dropDelete);
-
-          std::string jsonObjectNew = "CONCAT('{', ";
+        if (hasPK) {
+          jsonObjectNew = "CONCAT('{', ";
           for (size_t i = 0; i < pkColumns.size(); ++i) {
             if (i > 0) {
               jsonObjectNew += ", ',', ";
@@ -663,7 +658,7 @@ public:
           }
           jsonObjectNew += ", '}')";
 
-          std::string jsonObjectOld = "CONCAT('{', ";
+          jsonObjectOld = "CONCAT('{', ";
           for (size_t i = 0; i < pkColumns.size(); ++i) {
             if (i > 0) {
               jsonObjectOld += ", ',', ";
@@ -676,73 +671,123 @@ public:
                 "CHAR(10), '\\n'), '\"') END";
           }
           jsonObjectOld += ", '}')";
-
-          std::string rowDataNew = "CONCAT('{', ";
+        } else {
+          std::string concatFieldsNew = "CONCAT(";
+          std::string concatFieldsOld = "CONCAT(";
           for (size_t i = 0; i < allColumns.size(); ++i) {
             if (i > 0) {
-              rowDataNew += ", ',', ";
+              concatFieldsNew += ", '|', ";
+              concatFieldsOld += ", '|', ";
             }
             std::string colName = allColumns[i][0];
-            rowDataNew += "'\"" + colName + "\":', " + "CASE WHEN INSERTED.[" +
-                          colName + "] IS NULL THEN 'null' ELSE CONCAT('\"', " +
-                          "REPLACE(REPLACE(REPLACE(CAST(INSERTED.[" + colName +
-                          "] AS NVARCHAR(MAX)), '\\', '\\\\'), '\"', '\\\"'), "
-                          "CHAR(13) + CHAR(10), '\\n'), '\"') END";
+            concatFieldsNew += "COALESCE(CAST(INSERTED.[" + colName +
+                               "] AS NVARCHAR(MAX)), '')";
+            concatFieldsOld += "COALESCE(CAST(DELETED.[" + colName +
+                               "] AS NVARCHAR(MAX)), '')";
           }
-          rowDataNew += ", '}')";
-
-          std::string rowDataOld = "CONCAT('{', ";
-          for (size_t i = 0; i < allColumns.size(); ++i) {
-            if (i > 0) {
-              rowDataOld += ", ',', ";
-            }
-            std::string colName = allColumns[i][0];
-            rowDataOld += "'\"" + colName + "\":', " + "CASE WHEN DELETED.[" +
-                          colName + "] IS NULL THEN 'null' ELSE CONCAT('\"', " +
-                          "REPLACE(REPLACE(REPLACE(CAST(DELETED.[" + colName +
-                          "] AS NVARCHAR(MAX)), '\\', '\\\\'), '\"', '\\\"'), "
-                          "CHAR(13) + CHAR(10), '\\n'), '\"') END";
-          }
-          rowDataOld += ", '}')";
-
-          std::string createInsertTrigger =
-              "CREATE TRIGGER [" + table.schema_name + "].[" + triggerInsert +
-              "] ON [" + table.schema_name + "].[" + table.table_name +
-              "] AFTER INSERT AS BEGIN INSERT INTO "
-              "datasync_metadata.ds_change_log "
-              "(operation, schema_name, table_name, pk_values, row_data) "
-              "SELECT 'I', '" +
-              table.schema_name + "', '" + table.table_name + "', " +
-              jsonObjectNew + ", " + rowDataNew + " FROM INSERTED; END;";
-
-          std::string createUpdateTrigger =
-              "CREATE TRIGGER [" + table.schema_name + "].[" + triggerUpdate +
-              "] ON [" + table.schema_name + "].[" + table.table_name +
-              "] AFTER UPDATE AS BEGIN INSERT INTO "
-              "datasync_metadata.ds_change_log "
-              "(operation, schema_name, table_name, pk_values, row_data) "
-              "SELECT 'U', '" +
-              table.schema_name + "', '" + table.table_name + "', " +
-              jsonObjectNew + ", " + rowDataNew + " FROM INSERTED; END;";
-
-          std::string createDeleteTrigger =
-              "CREATE TRIGGER [" + table.schema_name + "].[" + triggerDelete +
-              "] ON [" + table.schema_name + "].[" + table.table_name +
-              "] AFTER DELETE AS BEGIN INSERT INTO "
-              "datasync_metadata.ds_change_log "
-              "(operation, schema_name, table_name, pk_values, row_data) "
-              "SELECT 'D', '" +
-              table.schema_name + "', '" + table.table_name + "', " +
-              jsonObjectOld + ", " + rowDataOld + " FROM DELETED; END;";
-
-          executeQueryMSSQL(dbc, createInsertTrigger);
-          executeQueryMSSQL(dbc, createUpdateTrigger);
-          executeQueryMSSQL(dbc, createDeleteTrigger);
-
-          Logger::info(LogCategory::TRANSFER, "setupTableTargetMSSQLToPostgres",
-                       "Created CDC triggers for " + table.schema_name + "." +
-                           table.table_name);
+          concatFieldsNew += ")";
+          concatFieldsOld += ")";
+          jsonObjectNew = "CONCAT('{\"_hash\":\"', CONVERT(NVARCHAR(32), "
+                          "HASHBYTES('MD5', " +
+                          concatFieldsNew + "), 2), '\"}')";
+          jsonObjectOld = "CONCAT('{\"_hash\":\"', CONVERT(NVARCHAR(32), "
+                          "HASHBYTES('MD5', " +
+                          concatFieldsOld + "), 2), '\"}')";
         }
+
+        std::string rowDataNew = "CONCAT('{', ";
+        for (size_t i = 0; i < allColumns.size(); ++i) {
+          if (i > 0) {
+            rowDataNew += ", ',', ";
+          }
+          std::string colName = allColumns[i][0];
+          rowDataNew += "'\"" + colName + "\":', " + "CASE WHEN INSERTED.[" +
+                        colName + "] IS NULL THEN 'null' ELSE CONCAT('\"', " +
+                        "REPLACE(REPLACE(REPLACE(CAST(INSERTED.[" + colName +
+                        "] AS NVARCHAR(MAX)), '\\', '\\\\'), '\"', '\\\"'), "
+                        "CHAR(13) + CHAR(10), '\\n'), '\"') END";
+        }
+        rowDataNew += ", '}')";
+
+        std::string rowDataOld = "CONCAT('{', ";
+        for (size_t i = 0; i < allColumns.size(); ++i) {
+          if (i > 0) {
+            rowDataOld += ", ',', ";
+          }
+          std::string colName = allColumns[i][0];
+          rowDataOld += "'\"" + colName + "\":', " + "CASE WHEN DELETED.[" +
+                        colName + "] IS NULL THEN 'null' ELSE CONCAT('\"', " +
+                        "REPLACE(REPLACE(REPLACE(CAST(DELETED.[" + colName +
+                        "] AS NVARCHAR(MAX)), '\\', '\\\\'), '\"', '\\\"'), "
+                        "CHAR(13) + CHAR(10), '\\n'), '\"') END";
+        }
+        rowDataOld += ", '}')";
+
+        std::string triggerInsert =
+            "ds_tr_" + table.schema_name + "_" + table.table_name + "_ai";
+        std::string triggerUpdate =
+            "ds_tr_" + table.schema_name + "_" + table.table_name + "_au";
+        std::string triggerDelete =
+            "ds_tr_" + table.schema_name + "_" + table.table_name + "_ad";
+
+        std::string dropInsert = "IF EXISTS (SELECT * FROM sys.triggers WHERE "
+                                 "name = '" +
+                                 triggerInsert + "') DROP TRIGGER [" +
+                                 table.schema_name + "].[" + triggerInsert +
+                                 "];";
+        std::string dropUpdate = "IF EXISTS (SELECT * FROM sys.triggers WHERE "
+                                 "name = '" +
+                                 triggerUpdate + "') DROP TRIGGER [" +
+                                 table.schema_name + "].[" + triggerUpdate +
+                                 "];";
+        std::string dropDelete = "IF EXISTS (SELECT * FROM sys.triggers WHERE "
+                                 "name = '" +
+                                 triggerDelete + "') DROP TRIGGER [" +
+                                 table.schema_name + "].[" + triggerDelete +
+                                 "];";
+
+        executeQueryMSSQL(dbc, dropInsert);
+        executeQueryMSSQL(dbc, dropUpdate);
+        executeQueryMSSQL(dbc, dropDelete);
+
+        std::string createInsertTrigger =
+            "CREATE TRIGGER [" + table.schema_name + "].[" + triggerInsert +
+            "] ON [" + table.schema_name + "].[" + table.table_name +
+            "] AFTER INSERT AS BEGIN INSERT INTO "
+            "datasync_metadata.ds_change_log "
+            "(operation, schema_name, table_name, pk_values, row_data) "
+            "SELECT 'I', '" +
+            table.schema_name + "', '" + table.table_name + "', " +
+            jsonObjectNew + ", " + rowDataNew + " FROM INSERTED; END;";
+
+        std::string createUpdateTrigger =
+            "CREATE TRIGGER [" + table.schema_name + "].[" + triggerUpdate +
+            "] ON [" + table.schema_name + "].[" + table.table_name +
+            "] AFTER UPDATE AS BEGIN INSERT INTO "
+            "datasync_metadata.ds_change_log "
+            "(operation, schema_name, table_name, pk_values, row_data) "
+            "SELECT 'U', '" +
+            table.schema_name + "', '" + table.table_name + "', " +
+            jsonObjectNew + ", " + rowDataNew + " FROM INSERTED; END;";
+
+        std::string createDeleteTrigger =
+            "CREATE TRIGGER [" + table.schema_name + "].[" + triggerDelete +
+            "] ON [" + table.schema_name + "].[" + table.table_name +
+            "] AFTER DELETE AS BEGIN INSERT INTO "
+            "datasync_metadata.ds_change_log "
+            "(operation, schema_name, table_name, pk_values, row_data) "
+            "SELECT 'D', '" +
+            table.schema_name + "', '" + table.table_name + "', " +
+            jsonObjectOld + ", " + rowDataOld + " FROM DELETED; END;";
+
+        executeQueryMSSQL(dbc, createInsertTrigger);
+        executeQueryMSSQL(dbc, createUpdateTrigger);
+        executeQueryMSSQL(dbc, createDeleteTrigger);
+
+        Logger::info(LogCategory::TRANSFER, "setupTableTargetMSSQLToPostgres",
+                     "Created CDC triggers for " + table.schema_name + "." +
+                         table.table_name +
+                         (hasPK ? " (with PK)" : " (no PK, using hash)"));
 
         // Cerrar conexión para evitar "Connection is busy"
         closeMSSQLConnection(dbc);
