@@ -1,6 +1,7 @@
 #include "sync/DatabaseToPostgresSync.h"
 #include "engines/database_engine.h"
 #include <algorithm>
+#include <set>
 
 std::mutex DatabaseToPostgresSync::metadataUpdateMutex;
 
@@ -74,77 +75,10 @@ DatabaseToPostgresSync::parseJSONArray(const std::string &jsonArray) {
   return result;
 }
 
-// Parses the last processed primary key value into a vector. Currently
-// returns a single-element vector containing the lastPK string if it's not
-// empty. This is a simplified implementation that may need enhancement for
-// composite primary keys. Returns an empty vector if lastPK is empty. Catches
-// exceptions and logs errors, returning an empty vector on failure.
-std::vector<std::string>
-DatabaseToPostgresSync::parseLastPK(const std::string &lastPK) {
-  std::vector<std::string> pkValues;
-  try {
-    if (!lastPK.empty()) {
-      pkValues.push_back(lastPK);
-    }
-  } catch (const std::exception &e) {
-    Logger::error(LogCategory::TRANSFER, "parseLastPK",
-                  "Error parsing last PK: " + std::string(e.what()));
-  }
-  return pkValues;
-}
-
-// Updates the last_processed_pk field in metadata.catalog for a specific table.
-// Uses a static mutex to ensure thread-safe updates across multiple threads.
-// Escapes SQL values to prevent injection. Commits the transaction after
-// updating. Logs success and errors. This tracks the progress of incremental
-// syncs by recording the last primary key value that was successfully
-// processed.
-void DatabaseToPostgresSync::updateLastProcessedPK(
-    pqxx::connection &pgConn, const std::string &schema_name,
-    const std::string &table_name, const std::string &lastPK) {
-  try {
-    std::lock_guard<std::mutex> lock(metadataUpdateMutex);
-
-    pqxx::work txn(pgConn);
-    txn.exec(
-        "UPDATE metadata.catalog SET last_processed_pk=" + txn.quote(lastPK) +
-        " WHERE schema_name=" + txn.quote(schema_name) +
-        " AND table_name=" + txn.quote(table_name));
-    txn.commit();
-
-    Logger::info(LogCategory::TRANSFER, "updateLastProcessedPK",
-                 "Successfully updated last_processed_pk to '" + lastPK +
-                     "' for " + schema_name + "." + table_name);
-  } catch (const std::exception &e) {
-    Logger::error(LogCategory::TRANSFER, "updateLastProcessedPK",
-                  "Error updating last processed PK: " + std::string(e.what()));
-  }
-}
-
-// Retrieves the primary key strategy (e.g., "OFFSET", "PK") from
-// metadata.catalog for a specific table. Creates a separate connection to
-// avoid transaction conflicts. Escapes SQL values to prevent injection.
-// Returns the pk_strategy value if found, or "OFFSET" as the default if not
-// found or on error. Logs errors but does not throw exceptions.
 std::string DatabaseToPostgresSync::getPKStrategyFromCatalog(
-    pqxx::connection &pgConn, const std::string &schema_name,
+    pqxx::connection & /* pgConn */, const std::string &schema_name,
     const std::string &table_name) {
   try {
-    if (pgConn.is_open()) {
-      try {
-        pqxx::nontransaction ntxn(pgConn);
-        auto result = ntxn.exec("SELECT pk_strategy FROM metadata.catalog "
-                                "WHERE schema_name=" +
-                                ntxn.quote(schema_name) +
-                                " AND table_name=" + ntxn.quote(table_name));
-
-        if (!result.empty() && !result[0][0].is_null()) {
-          return result[0][0].as<std::string>();
-        }
-      } catch (const pqxx::broken_connection &) {
-      }
-    }
-
     pqxx::connection separateConn(
         DatabaseConfig::getPostgresConnectionString());
     pqxx::nontransaction ntxn(separateConn);
@@ -154,13 +88,21 @@ std::string DatabaseToPostgresSync::getPKStrategyFromCatalog(
                             " AND table_name=" + ntxn.quote(table_name));
 
     if (!result.empty() && !result[0][0].is_null()) {
-      return result[0][0].as<std::string>();
+      std::string strategy = result[0][0].as<std::string>();
+      if (strategy == "OFFSET" || strategy == "PK") {
+        Logger::info(LogCategory::TRANSFER, "getPKStrategyFromCatalog",
+                     "Legacy strategy '" + strategy + "' detected for " +
+                         schema_name + "." + table_name +
+                         " - defaulting to CDC");
+        return "CDC";
+      }
+      return strategy;
     }
   } catch (const std::exception &e) {
     Logger::error(LogCategory::TRANSFER, "getPKStrategyFromCatalog",
                   "Error getting PK strategy: " + std::string(e.what()));
   }
-  return "OFFSET";
+  return "CDC";
 }
 
 // Retrieves the primary key columns from metadata.catalog for a specific table.
@@ -208,95 +150,6 @@ DatabaseToPostgresSync::getPKColumnsFromCatalog(pqxx::connection &pgConn,
                   "Error getting PK columns: " + std::string(e.what()));
   }
   return pkColumns;
-}
-
-// Retrieves the last_processed_pk value from metadata.catalog for a specific
-// table. Creates a separate connection to avoid transaction conflicts. Escapes
-// SQL values to prevent injection. Returns the last_processed_pk string if
-// found, or an empty string if not found or on error. Logs errors but does not
-// throw exceptions. Used to resume incremental syncs from the last processed
-// position.
-std::string DatabaseToPostgresSync::getLastProcessedPKFromCatalog(
-    pqxx::connection &pgConn, const std::string &schema_name,
-    const std::string &table_name) {
-  try {
-    if (pgConn.is_open()) {
-      try {
-        pqxx::nontransaction ntxn(pgConn);
-        auto result =
-            ntxn.exec("SELECT last_processed_pk FROM metadata.catalog "
-                      "WHERE schema_name=" +
-                      ntxn.quote(schema_name) +
-                      " AND table_name=" + ntxn.quote(table_name));
-
-        if (!result.empty() && !result[0][0].is_null()) {
-          return result[0][0].as<std::string>();
-        }
-      } catch (const pqxx::broken_connection &) {
-      }
-    }
-
-    pqxx::connection separateConn(
-        DatabaseConfig::getPostgresConnectionString());
-    pqxx::nontransaction ntxn(separateConn);
-    auto result = ntxn.exec("SELECT last_processed_pk FROM metadata.catalog "
-                            "WHERE schema_name=" +
-                            ntxn.quote(schema_name) +
-                            " AND table_name=" + ntxn.quote(table_name));
-
-    if (!result.empty() && !result[0][0].is_null()) {
-      return result[0][0].as<std::string>();
-    }
-  } catch (const std::exception &e) {
-    Logger::error(LogCategory::TRANSFER, "getLastProcessedPKFromCatalog",
-                  "Error getting last processed PK: " + std::string(e.what()));
-  }
-  return "";
-}
-
-// Extracts the last primary key value from a result set. Takes the results
-// vector, pkColumns vector, and columnNames vector. Returns the value of the
-// first primary key column from the last row in the results. Returns an empty
-// string if results are empty, pkColumns is empty, or the column is not found.
-// Handles exceptions by logging errors and returning an empty string. Used to
-// track progress during batch processing.
-std::string DatabaseToPostgresSync::getLastPKFromResults(
-    const std::vector<std::vector<std::string>> &results,
-    const std::vector<std::string> &pkColumns,
-    const std::vector<std::string> &columnNames) {
-  if (results.empty() || pkColumns.empty() || columnNames.empty()) {
-    return "";
-  }
-
-  try {
-    const auto &lastRow = results.back();
-
-    if (lastRow.size() != columnNames.size()) {
-      Logger::warning(LogCategory::TRANSFER, "getLastPKFromResults",
-                      "Row size mismatch: " + std::to_string(lastRow.size()) +
-                          " vs " + std::to_string(columnNames.size()));
-      return "";
-    }
-
-    std::string lastPK;
-    size_t pkIndex = columnNames.size();
-    for (size_t j = 0; j < columnNames.size(); ++j) {
-      if (columnNames[j] == pkColumns[0]) {
-        pkIndex = j;
-        break;
-      }
-    }
-
-    if (pkIndex < lastRow.size()) {
-      lastPK = lastRow[pkIndex];
-    }
-
-    return lastPK;
-  } catch (const std::exception &e) {
-    Logger::error(LogCategory::TRANSFER, "getLastPKFromResults",
-                  "Error extracting last PK: " + std::string(e.what()));
-    return "";
-  }
 }
 
 // Deletes records from PostgreSQL by their primary key values. Takes a vector
@@ -426,8 +279,8 @@ DatabaseToPostgresSync::getPrimaryKeyColumnsFromPostgres(
 // the ON CONFLICT clause (see buildUpsertConflictClause).
 std::string DatabaseToPostgresSync::buildUpsertQuery(
     const std::vector<std::string> &columnNames,
-    const std::vector<std::string> &pkColumns, const std::string &schemaName,
-    const std::string &tableName) {
+    const std::vector<std::string> & /* pkColumns */,
+    const std::string &schemaName, const std::string &tableName) {
   if (columnNames.empty() || schemaName.empty() || tableName.empty()) {
     throw std::invalid_argument("Empty column names, schema, or table name");
   }
@@ -555,7 +408,7 @@ bool DatabaseToPostgresSync::compareAndUpdateRecord(
 
     const auto &currentRow = result[0];
 
-    if (currentRow.size() != columnNames.size()) {
+    if (static_cast<size_t>(currentRow.size()) != columnNames.size()) {
       Logger::error(
           LogCategory::TRANSFER, "compareAndUpdateRecord",
           "Column count mismatch: " + std::to_string(currentRow.size()) +
@@ -595,8 +448,13 @@ bool DatabaseToPostgresSync::compareAndUpdateRecord(
         if (cleanNewValue.empty() || cleanNewValue == "NULL") {
           valueToSet = "NULL";
         } else {
-          pqxx::work tempTxn(pgConn);
-          valueToSet = tempTxn.quote(cleanNewValue);
+          std::string escaped = cleanNewValue;
+          size_t pos = 0;
+          while ((pos = escaped.find("'", pos)) != std::string::npos) {
+            escaped.replace(pos, 1, "''");
+            pos += 2;
+          }
+          valueToSet = "'" + escaped + "'";
         }
 
         updateFields.push_back("\"" + columnName + "\" = " + valueToSet);
@@ -901,6 +759,9 @@ void DatabaseToPostgresSync::performBulkUpsert(
       std::vector<std::string> values;
       size_t querySize = upsertQuery.length() + conflictClause.length();
 
+      // Track PK values to detect duplicates within batch
+      std::set<std::string> seenPKs;
+
       for (size_t i = batchStart; i < batchEnd; ++i) {
         const auto &row = results[i];
         if (row.size() != columnNames.size()) {
@@ -908,6 +769,47 @@ void DatabaseToPostgresSync::performBulkUpsert(
                           "Row size mismatch: " + std::to_string(row.size()) +
                               " vs " + std::to_string(columnNames.size()));
           continue;
+        }
+
+        // Build PK key for duplicate detection
+        std::string pkKey;
+        bool hasAllPKs = true;
+        for (const auto &pkCol : pkColumns) {
+          auto it = std::find(columnNames.begin(), columnNames.end(), pkCol);
+          if (it != columnNames.end()) {
+            size_t pkIdx = std::distance(columnNames.begin(), it);
+            if (pkIdx < row.size()) {
+              if (!pkKey.empty())
+                pkKey += "|";
+              std::string pkValue = row[pkIdx];
+              if (pkValue.empty() || pkValue == "NULL" || pkValue == "null") {
+                pkKey += "<NULL>";
+                hasAllPKs = false;
+              } else {
+                pkKey += pkValue;
+              }
+            } else {
+              hasAllPKs = false;
+            }
+          } else {
+            hasAllPKs = false;
+          }
+        }
+
+        if (!pkColumns.empty()) {
+          if (hasAllPKs && !pkKey.empty()) {
+            if (seenPKs.find(pkKey) != seenPKs.end()) {
+              Logger::warning(LogCategory::TRANSFER, "performBulkUpsert",
+                              "Skipping duplicate PK in batch: " + pkKey);
+              continue;
+            }
+            seenPKs.insert(pkKey);
+          } else {
+            Logger::warning(LogCategory::TRANSFER, "performBulkUpsert",
+                            "Skipping row with incomplete PK for " +
+                                lowerSchemaName + "." + tableName);
+            continue;
+          }
         }
 
         std::string rowValues = buildRowValues(row, txn);
@@ -933,6 +835,66 @@ void DatabaseToPostgresSync::performBulkUpsert(
           totalProcessed += values.size();
         } catch (const std::exception &e) {
           std::string errorMsg = e.what();
+
+          if (errorMsg.find("violates not-null constraint") !=
+              std::string::npos) {
+            Logger::warning(
+                LogCategory::TRANSFER, "performBulkUpsert",
+                "NOT NULL constraint violation detected for " +
+                    lowerSchemaName + "." + tableName +
+                    " - attempting to alter columns to allow NULLs");
+
+            try {
+              txn.abort();
+            } catch (...) {
+            }
+
+            std::set<std::string> columnsToAlter;
+            size_t searchPos = 0;
+            while (true) {
+              size_t startPos = errorMsg.find("column \"", searchPos);
+              if (startPos == std::string::npos)
+                break;
+              startPos += 8;
+              size_t endPos = errorMsg.find("\"", startPos);
+              if (endPos != std::string::npos) {
+                std::string columnName =
+                    errorMsg.substr(startPos, endPos - startPos);
+                std::transform(columnName.begin(), columnName.end(),
+                               columnName.begin(), ::tolower);
+                columnsToAlter.insert(columnName);
+              }
+              searchPos = endPos + 1;
+            }
+
+            if (!columnsToAlter.empty()) {
+              try {
+                pqxx::work alterTxn(pgConn);
+                for (const auto &columnName : columnsToAlter) {
+                  alterTxn.exec("ALTER TABLE \"" + lowerSchemaName + "\".\"" +
+                                tableName + "\" ALTER COLUMN \"" + columnName +
+                                "\" DROP NOT NULL");
+                  Logger::info(LogCategory::TRANSFER, "performBulkUpsert",
+                               "Altered column " + columnName +
+                                   " to allow NULLs for " + lowerSchemaName +
+                                   "." + tableName);
+                }
+                alterTxn.commit();
+
+                pqxx::work retryTxn(pgConn);
+                retryTxn.exec("SET statement_timeout = '" +
+                              std::to_string(STATEMENT_TIMEOUT_SECONDS) + "s'");
+                retryTxn.exec(batchQuery);
+                retryTxn.commit();
+                totalProcessed += values.size();
+                continue;
+              } catch (const std::exception &alterError) {
+                Logger::error(LogCategory::TRANSFER, "performBulkUpsert",
+                              "Failed to alter columns or retry: " +
+                                  std::string(alterError.what()));
+              }
+            }
+          }
 
           if (errorMsg.find("current transaction is aborted") !=
               std::string::npos) {

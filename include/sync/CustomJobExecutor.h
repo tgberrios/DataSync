@@ -9,6 +9,8 @@
 #include "engines/oracle_engine.h"
 #include "engines/postgres_engine.h"
 #include "third_party/json.hpp"
+#include <bson/bson.h>
+#include <mongoc/mongoc.h>
 #include <pqxx/pqxx>
 #include <string>
 #include <vector>

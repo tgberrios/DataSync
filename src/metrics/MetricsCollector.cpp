@@ -2,7 +2,11 @@
 #include "engines/database_engine.h"
 #include "utils/string_utils.h"
 #include "utils/time_utils.h"
+#include <chrono>
 #include <ctime>
+#include <iomanip>
+#include <pqxx/pqxx>
+#include <sstream>
 #include <unordered_map>
 #ifdef _WIN32
 #include <errno.h>
@@ -188,7 +192,7 @@ void MetricsCollector::collectTransferMetrics() {
         metric.memory_used_mb = 0.0;
       }
 
-      metric.io_operations_total = 0;
+      metric.io_operations_per_second = 0;
 
       // Map transfer type based on status
       if (status == "full_load" || status == "FULL_LOAD") {
@@ -220,11 +224,17 @@ void MetricsCollector::collectTransferMetrics() {
       }
 
       if (!row[4].is_null()) {
-        metric.completed_at = row[4].as<std::string>();
-        metric.started_at = getEstimatedStartTime(metric.completed_at);
+        std::string completedTime = row[4].as<std::string>();
+        if (!completedTime.empty()) {
+          metric.completed_at = completedTime;
+          metric.started_at = getEstimatedStartTime(metric.completed_at);
+        } else {
+          metric.started_at = TimeUtils::getCurrentTimestamp();
+          metric.completed_at = "";
+        }
       } else {
         metric.started_at = TimeUtils::getCurrentTimestamp();
-        metric.completed_at = ""; // No completion time available
+        metric.completed_at = "";
       }
 
       metrics.push_back(metric);
@@ -292,28 +302,35 @@ void MetricsCollector::collectPerformanceMetrics() {
       if (row.size() < 10) {
         continue;
       }
+      if (row[0].is_null() || row[1].is_null()) {
+        continue;
+      }
       std::string key =
-          row[0].as<std::string>() + "|" + row[1].as<std::string>();
+          row[0].as<std::string>() + "\x1E" + row[1].as<std::string>();
       perfMap[key] = row;
     }
 
     for (auto &metric : metrics) {
-      std::string key = metric.schema_name + "|" + metric.table_name;
+      std::string key = metric.schema_name + "\x1E" + metric.table_name;
       auto it = perfMap.find(key);
       if (it != perfMap.end()) {
         const auto &row = it->second;
         if (row.size() >= 10) {
-          long long total_operations = row[2].as<long long>() +
-                                       row[3].as<long long>() +
-                                       row[4].as<long long>();
+          long long inserts = row[2].is_null() ? 0 : row[2].as<long long>();
+          long long updates = row[3].is_null() ? 0 : row[3].as<long long>();
+          long long deletes = row[4].is_null() ? 0 : row[4].as<long long>();
+          long long total_operations = inserts + updates + deletes;
 
           if (total_operations > 0 && total_operations <= 2147483647LL) {
-            metric.io_operations_total = static_cast<int>(total_operations);
+            metric.io_operations_per_second =
+                static_cast<int>(total_operations);
           }
 
-          long long tableSizeBytes = row[9].as<long long>();
-          if (tableSizeBytes > 0) {
-            metric.memory_used_mb = tableSizeBytes / (1024.0 * 1024.0);
+          if (!row[9].is_null()) {
+            long long tableSizeBytes = row[9].as<long long>();
+            if (tableSizeBytes > 0) {
+              metric.memory_used_mb = tableSizeBytes / (1024.0 * 1024.0);
+            }
           }
         }
       }
@@ -373,15 +390,18 @@ void MetricsCollector::collectMetadataMetrics() {
       if (row.size() < 6) {
         continue;
       }
-      std::string key = row[0].as<std::string>() + "|" +
-                        row[1].as<std::string>() + "|" +
+      if (row[0].is_null() || row[1].is_null() || row[2].is_null()) {
+        continue;
+      }
+      std::string key = row[0].as<std::string>() + "\x1E" +
+                        row[1].as<std::string>() + "\x1E" +
                         row[2].as<std::string>();
       metaMap[key] = row;
     }
 
     for (auto &metric : metrics) {
-      std::string key =
-          metric.schema_name + "|" + metric.table_name + "|" + metric.db_engine;
+      std::string key = metric.schema_name + "\x1E" + metric.table_name +
+                        "\x1E" + metric.db_engine;
       auto it = metaMap.find(key);
       if (it != metaMap.end()) {
         const auto &row = it->second;
@@ -391,7 +411,8 @@ void MetricsCollector::collectMetadataMetrics() {
             metric.transfer_type = "FULL_LOAD";
           } else if (status == "incremental") {
             metric.transfer_type = "INCREMENTAL";
-          } else {
+          } else if (metric.transfer_type.empty() ||
+                     metric.transfer_type == "UNKNOWN") {
             metric.transfer_type = "SYNC";
           }
 
@@ -400,9 +421,13 @@ void MetricsCollector::collectMetadataMetrics() {
             metric.status = "FAILED";
             metric.error_message = "Table marked as inactive";
           } else if (row[5].is_null()) {
-            metric.status = "PENDING";
+            if (metric.status.empty() || metric.status == "UNKNOWN") {
+              metric.status = "PENDING";
+            }
           } else {
-            metric.status = "SUCCESS";
+            if (metric.status != "FAILED") {
+              metric.status = "SUCCESS";
+            }
           }
         }
       }
@@ -458,21 +483,31 @@ void MetricsCollector::collectTimestampMetrics() {
       if (row.size() < 4) {
         continue;
       }
-      std::string key = row[0].as<std::string>() + "|" +
-                        row[1].as<std::string>() + "|" +
+      if (row[0].is_null() || row[1].is_null() || row[2].is_null()) {
+        continue;
+      }
+      std::string key = row[0].as<std::string>() + "\x1E" +
+                        row[1].as<std::string>() + "\x1E" +
                         row[2].as<std::string>();
       timeMap[key] = row;
     }
 
     for (auto &metric : metrics) {
-      std::string key =
-          metric.schema_name + "|" + metric.table_name + "|" + metric.db_engine;
+      std::string key = metric.schema_name + "\x1E" + metric.table_name +
+                        "\x1E" + metric.db_engine;
       auto it = timeMap.find(key);
       if (it != timeMap.end()) {
         const auto &row = it->second;
         if (row.size() >= 4 && !row[3].is_null()) {
-          metric.completed_at = row[3].as<std::string>();
-          metric.started_at = metric.completed_at;
+          std::string completedTime = row[3].as<std::string>();
+          if (!completedTime.empty()) {
+            if (metric.completed_at.empty()) {
+              metric.completed_at = completedTime;
+              metric.started_at = getEstimatedStartTime(metric.completed_at);
+            } else if (metric.started_at.empty()) {
+              metric.started_at = getEstimatedStartTime(metric.completed_at);
+            }
+          }
         }
       }
     }
@@ -541,7 +576,7 @@ void MetricsCollector::saveMetricsToDatabase() {
       txn.exec_params(
           insertQuery, metric.schema_name, metric.table_name, metric.db_engine,
           metric.records_transferred, metric.bytes_transferred,
-          metric.memory_used_mb, metric.io_operations_total,
+          metric.memory_used_mb, metric.io_operations_per_second,
           metric.transfer_type, metric.status,
           metric.error_message.empty() ? nullptr : metric.error_message.c_str(),
           metric.started_at.empty() ? nullptr : metric.started_at.c_str(),
@@ -638,15 +673,29 @@ void MetricsCollector::generateMetricsReport() {
 std::string
 MetricsCollector::getEstimatedStartTime(const std::string &completedAt) {
   try {
+    if (completedAt.empty()) {
+      return TimeUtils::getCurrentTimestamp();
+    }
+
     std::tm tm = {};
     std::istringstream ss(completedAt);
     ss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
 
-    if (ss.fail()) {
+    if (ss.fail() || !ss.eof()) {
       return TimeUtils::getCurrentTimestamp();
     }
 
-    auto time_point = std::chrono::system_clock::from_time_t(std::mktime(&tm));
+    std::time_t time = std::mktime(&tm);
+    if (time == -1) {
+      return TimeUtils::getCurrentTimestamp();
+    }
+
+    auto time_point = std::chrono::system_clock::from_time_t(time);
+    auto now = std::chrono::system_clock::now();
+    if (time_point > now) {
+      return TimeUtils::getCurrentTimestamp();
+    }
+
     auto estimated_start = time_point - std::chrono::hours(1);
     auto time_t_start = std::chrono::system_clock::to_time_t(estimated_start);
 

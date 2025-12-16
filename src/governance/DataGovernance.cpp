@@ -398,6 +398,8 @@ DataGovernance::extractTableMetadata(const std::string &schema_name,
     classifyTable(metadata);
     inferSourceEngine(metadata);
 
+    calculatePIIMetrics(conn, lowerSchema, lowerTable, metadata);
+
     // Calculate enhanced quality scores
     metadata.completeness_score = calculateCompletenessScore(metadata);
     metadata.accuracy_score = calculateAccuracyScore(metadata);
@@ -531,15 +533,11 @@ void DataGovernance::analyzeDataQuality(pqxx::connection &conn,
     // Analyze actual NULL values in data, not just nullable columns
     std::string nullQuery = "SELECT column_name, data_type, is_nullable "
                             "FROM information_schema.columns "
-                            "WHERE table_schema = '" +
-                            escapeSQL(schema_name) +
-                            "' "
-                            "AND table_name = '" +
-                            escapeSQL(table_name) +
-                            "' "
+                            "WHERE table_schema = $1 "
+                            "AND table_name = $2 "
                             "ORDER BY ordinal_position;";
 
-    auto nullResult = txn.exec(nullQuery);
+    auto nullResult = txn.exec_params(nullQuery, schema_name, table_name);
     if (!nullResult.empty()) {
       int totalColumns = nullResult.size();
       int nullableColumns = 0;
@@ -555,12 +553,12 @@ void DataGovernance::analyzeDataQuality(pqxx::connection &conn,
 
           // Check for actual NULL values in this column
           std::string columnNullQuery = "SELECT COUNT(*) as total_rows, "
-                                        "COUNT(*) FILTER (WHERE \"" +
-                                        escapeSQL(columnName) +
-                                        "\" IS NULL) as null_count "
-                                        "FROM \"" +
-                                        escapeSQL(schema_name) + "\".\"" +
-                                        escapeSQL(table_name) + "\";";
+                                        "COUNT(*) FILTER (WHERE " +
+                                        txn.quote_name(columnName) +
+                                        " IS NULL) as null_count "
+                                        "FROM " +
+                                        txn.quote_name(schema_name) + "." +
+                                        txn.quote_name(table_name);
 
           try {
             auto columnNullResult = txn.exec(columnNullQuery);
@@ -590,14 +588,13 @@ void DataGovernance::analyzeDataQuality(pqxx::connection &conn,
     // Use sampling for large tables to improve performance
     std::string duplicateQuery;
     if (metadata.total_rows > 1000000) {
-      duplicateQuery = "SELECT COUNT(*) - COUNT(DISTINCT ctid) FROM \"" +
-                       escapeSQL(schema_name) + "\".\"" +
-                       escapeSQL(table_name) +
-                       "\" TABLESAMPLE SYSTEM(10);"; // 10% sample
+      duplicateQuery = "SELECT COUNT(*) - COUNT(DISTINCT ctid) FROM " +
+                       txn.quote_name(schema_name) + "." +
+                       txn.quote_name(table_name) + " TABLESAMPLE SYSTEM(10)";
     } else {
-      duplicateQuery = "SELECT COUNT(*) - COUNT(DISTINCT ctid) FROM \"" +
-                       escapeSQL(schema_name) + "\".\"" +
-                       escapeSQL(table_name) + "\";";
+      duplicateQuery = "SELECT COUNT(*) - COUNT(DISTINCT ctid) FROM " +
+                       txn.quote_name(schema_name) + "." +
+                       txn.quote_name(table_name);
     }
 
     try {
@@ -657,15 +654,11 @@ void DataGovernance::analyzeUsageStatistics(pqxx::connection &conn,
                              "n_tup_upd,"
                              "n_tup_del "
                              "FROM pg_stat_user_tables "
-                             "WHERE schemaname = '" +
-                             escapeSQL(schema_name) +
-                             "' "
-                             "AND relname = '" +
-                             escapeSQL(table_name) +
-                             "' "
+                             "WHERE schemaname = $1 "
+                             "AND relname = $2 "
                              "LIMIT 1;";
 
-    auto usageResult = txn.exec(usageQuery);
+    auto usageResult = txn.exec_params(usageQuery, schema_name, table_name);
     if (!usageResult.empty()) {
       if (!usageResult[0][0].is_null()) {
         metadata.last_accessed = usageResult[0][0].as<std::string>();
@@ -721,15 +714,11 @@ void DataGovernance::analyzeHealthStatus(pqxx::connection &conn,
                               "last_vacuum,"
                               "last_autovacuum "
                               "FROM pg_stat_user_tables "
-                              "WHERE schemaname = '" +
-                              escapeSQL(schema_name) +
-                              "' "
-                              "AND relname = '" +
-                              escapeSQL(table_name) +
-                              "' "
+                              "WHERE schemaname = $1 "
+                              "AND relname = $2 "
                               "LIMIT 1;";
 
-    auto healthResult = txn.exec(healthQuery);
+    auto healthResult = txn.exec_params(healthQuery, schema_name, table_name);
     if (!healthResult.empty()) {
       long long deadTuples = healthResult[0][0].as<long long>();
       long long liveTuples = healthResult[0][1].as<long long>();
@@ -824,10 +813,9 @@ void DataGovernance::storeMetadata(const TableMetadata &metadata) {
 
     std::string checkQuery =
         "SELECT COUNT(*) FROM metadata.data_governance_catalog WHERE "
-        "schema_name = '" +
-        escapeSQL(metadata.schema_name) + "' AND table_name = '" +
-        escapeSQL(metadata.table_name) + "';";
-    auto checkResult = txn.exec(checkQuery);
+        "schema_name = $1 AND table_name = $2";
+    auto checkResult =
+        txn.exec_params(checkQuery, metadata.schema_name, metadata.table_name);
 
     if (!checkResult.empty() && checkResult[0][0].as<int>() > 0) {
       updateExistingMetadata(metadata);
@@ -840,43 +828,97 @@ void DataGovernance::storeMetadata(const TableMetadata &metadata) {
           "inferred_source_engine, last_analyzed,"
           "last_accessed, access_frequency, query_count_daily,"
           "data_category, business_domain, sensitivity_level,"
-          "health_status, last_vacuum, fragmentation_percentage, snapshot_date"
-          ") VALUES ("
-          "'" +
-          escapeSQL(metadata.schema_name) + "', '" +
-          escapeSQL(metadata.table_name) + "'," +
+          "health_status, last_vacuum, fragmentation_percentage,"
+          "data_owner, data_steward, data_custodian, owner_email, "
+          "steward_email,"
+          "business_glossary_term, data_dictionary_description,"
+          "encryption_at_rest, encryption_in_transit, masking_policy_applied,"
+          "row_level_security_enabled, column_level_security_enabled,"
+          "consent_required, legal_basis, retention_enforced,"
+          "pii_detection_method, pii_confidence_score, sensitive_data_count,"
+          "snapshot_date"
+          ") VALUES (" +
+          txn.quote(metadata.schema_name) + ", " +
+          txn.quote(metadata.table_name) + ", " +
           std::to_string(metadata.total_columns) + ", " +
           std::to_string(metadata.total_rows) + ", " +
-          std::to_string(metadata.table_size_mb) +
-          ","
-          "'" +
-          escapeSQL(metadata.primary_key_columns) + "', " +
-          std::to_string(metadata.index_count) + ", " +
-          std::to_string(metadata.constraint_count) + "," +
+          std::to_string(metadata.table_size_mb) + ", " +
+          (metadata.primary_key_columns.empty()
+               ? "NULL"
+               : txn.quote(metadata.primary_key_columns)) +
+          ", " + std::to_string(metadata.index_count) + ", " +
+          std::to_string(metadata.constraint_count) + ", " +
           std::to_string(metadata.data_quality_score) + ", " +
           std::to_string(metadata.null_percentage) + ", " +
-          std::to_string(metadata.duplicate_percentage) +
-          ","
-          "'" +
-          escapeSQL(metadata.inferred_source_engine) + "', NOW()," +
-          (metadata.last_accessed.empty()
+          std::to_string(metadata.duplicate_percentage) + ", " +
+          (metadata.inferred_source_engine.empty()
                ? "NULL"
-               : "'" + escapeSQL(metadata.last_accessed) + "'") +
-          ", '" + escapeSQL(metadata.access_frequency) + "', " +
-          std::to_string(metadata.query_count_daily) +
-          ","
-          "'" +
-          escapeSQL(metadata.data_category) + "', '" +
-          escapeSQL(metadata.business_domain) + "', '" +
-          escapeSQL(metadata.sensitivity_level) +
-          "',"
-          "'" +
-          escapeSQL(metadata.health_status) + "', " +
-          (metadata.last_vacuum.empty()
+               : txn.quote(metadata.inferred_source_engine)) +
+          ", NOW(), " +
+          (metadata.last_accessed.empty() ? "NULL"
+                                          : txn.quote(metadata.last_accessed)) +
+          ", " +
+          (metadata.access_frequency.empty()
                ? "NULL"
-               : "'" + escapeSQL(metadata.last_vacuum) + "'") +
-          ", " + std::to_string(metadata.fragmentation_percentage) +
-          ", NOW());";
+               : txn.quote(metadata.access_frequency)) +
+          ", " + std::to_string(metadata.query_count_daily) + ", " +
+          (metadata.data_category.empty() ? "NULL"
+                                          : txn.quote(metadata.data_category)) +
+          ", " +
+          (metadata.business_domain.empty()
+               ? "NULL"
+               : txn.quote(metadata.business_domain)) +
+          ", " +
+          (metadata.sensitivity_level.empty()
+               ? "NULL"
+               : txn.quote(metadata.sensitivity_level)) +
+          ", " +
+          (metadata.health_status.empty() ? "NULL"
+                                          : txn.quote(metadata.health_status)) +
+          ", " +
+          (metadata.last_vacuum.empty() ? "NULL"
+                                        : txn.quote(metadata.last_vacuum)) +
+          ", " + std::to_string(metadata.fragmentation_percentage) + ", " +
+          (metadata.data_owner.empty() ? "NULL"
+                                       : txn.quote(metadata.data_owner)) +
+          ", " +
+          (metadata.data_steward.empty() ? "NULL"
+                                         : txn.quote(metadata.data_steward)) +
+          ", " +
+          (metadata.data_custodian.empty()
+               ? "NULL"
+               : txn.quote(metadata.data_custodian)) +
+          ", " +
+          (metadata.owner_email.empty() ? "NULL"
+                                        : txn.quote(metadata.owner_email)) +
+          ", " +
+          (metadata.steward_email.empty() ? "NULL"
+                                          : txn.quote(metadata.steward_email)) +
+          ", " +
+          (metadata.business_glossary_term.empty()
+               ? "NULL"
+               : txn.quote(metadata.business_glossary_term)) +
+          ", " +
+          (metadata.data_dictionary_description.empty()
+               ? "NULL"
+               : txn.quote(metadata.data_dictionary_description)) +
+          ", " + (metadata.encryption_at_rest ? "true" : "false") + ", " +
+          (metadata.encryption_in_transit ? "true" : "false") + ", " +
+          (metadata.masking_policy_applied ? "true" : "false") + ", " +
+          (metadata.row_level_security_enabled ? "true" : "false") + ", " +
+          (metadata.column_level_security_enabled ? "true" : "false") + ", " +
+          (metadata.consent_required ? "true" : "false") + ", " +
+          (metadata.legal_basis.empty() ? "NULL"
+                                        : txn.quote(metadata.legal_basis)) +
+          ", " + (metadata.retention_enforced ? "true" : "false") + ", " +
+          (metadata.pii_detection_method.empty()
+               ? "NULL"
+               : txn.quote(metadata.pii_detection_method)) +
+          ", " +
+          (metadata.pii_confidence_score > 0.0
+               ? std::to_string(metadata.pii_confidence_score)
+               : "NULL") +
+          ", " + std::to_string(metadata.sensitive_data_count) + ", NOW())";
 
       txn.exec(insertQuery);
     }
@@ -909,9 +951,11 @@ void DataGovernance::updateExistingMetadata(const TableMetadata &metadata) {
         "table_size_mb = " +
         std::to_string(metadata.table_size_mb) +
         ","
-        "primary_key_columns = '" +
-        escapeSQL(metadata.primary_key_columns) +
-        "',"
+        "primary_key_columns = " +
+        (metadata.primary_key_columns.empty()
+             ? "NULL"
+             : txn.quote(metadata.primary_key_columns)) +
+        ", "
         "index_count = " +
         std::to_string(metadata.index_count) +
         ","
@@ -927,49 +971,122 @@ void DataGovernance::updateExistingMetadata(const TableMetadata &metadata) {
         "duplicate_percentage = " +
         std::to_string(metadata.duplicate_percentage) +
         ","
-        "inferred_source_engine = '" +
-        escapeSQL(metadata.inferred_source_engine) +
-        "',"
-        "last_analyzed = NOW()," +
-        "last_accessed = " +
-        (metadata.last_accessed.empty()
+        "inferred_source_engine = " +
+        (metadata.inferred_source_engine.empty()
              ? "NULL"
-             : "'" + escapeSQL(metadata.last_accessed) + "'") +
-        ","
-        "access_frequency = '" +
-        escapeSQL(metadata.access_frequency) +
-        "',"
+             : txn.quote(metadata.inferred_source_engine)) +
+        ", "
+        "last_analyzed = NOW(), "
+        "last_accessed = " +
+        (metadata.last_accessed.empty() ? "NULL"
+                                        : txn.quote(metadata.last_accessed)) +
+        ", "
+        "access_frequency = " +
+        (metadata.access_frequency.empty()
+             ? "NULL"
+             : txn.quote(metadata.access_frequency)) +
+        ", "
         "query_count_daily = " +
         std::to_string(metadata.query_count_daily) +
-        ","
-        "data_category = '" +
-        escapeSQL(metadata.data_category) +
-        "',"
-        "business_domain = '" +
-        escapeSQL(metadata.business_domain) +
-        "',"
-        "sensitivity_level = '" +
-        escapeSQL(metadata.sensitivity_level) +
-        "',"
-        "health_status = '" +
-        escapeSQL(metadata.health_status) +
-        "',"
-        "last_vacuum = " +
-        (metadata.last_vacuum.empty()
+        ", "
+        "data_category = " +
+        (metadata.data_category.empty() ? "NULL"
+                                        : txn.quote(metadata.data_category)) +
+        ", "
+        "business_domain = " +
+        (metadata.business_domain.empty()
              ? "NULL"
-             : "'" + escapeSQL(metadata.last_vacuum) + "'") +
-        ","
+             : txn.quote(metadata.business_domain)) +
+        ", "
+        "sensitivity_level = " +
+        (metadata.sensitivity_level.empty()
+             ? "NULL"
+             : txn.quote(metadata.sensitivity_level)) +
+        ", "
+        "health_status = " +
+        (metadata.health_status.empty() ? "NULL"
+                                        : txn.quote(metadata.health_status)) +
+        ", "
+        "last_vacuum = " +
+        (metadata.last_vacuum.empty() ? "NULL"
+                                      : txn.quote(metadata.last_vacuum)) +
+        ", "
         "fragmentation_percentage = " +
         std::to_string(metadata.fragmentation_percentage) +
-        ","
+        ", "
+        "data_owner = " +
+        (metadata.data_owner.empty() ? "NULL"
+                                     : txn.quote(metadata.data_owner)) +
+        ", "
+        "data_steward = " +
+        (metadata.data_steward.empty() ? "NULL"
+                                       : txn.quote(metadata.data_steward)) +
+        ", "
+        "data_custodian = " +
+        (metadata.data_custodian.empty() ? "NULL"
+                                         : txn.quote(metadata.data_custodian)) +
+        ", "
+        "owner_email = " +
+        (metadata.owner_email.empty() ? "NULL"
+                                      : txn.quote(metadata.owner_email)) +
+        ", "
+        "steward_email = " +
+        (metadata.steward_email.empty() ? "NULL"
+                                        : txn.quote(metadata.steward_email)) +
+        ", "
+        "business_glossary_term = " +
+        (metadata.business_glossary_term.empty()
+             ? "NULL"
+             : txn.quote(metadata.business_glossary_term)) +
+        ", "
+        "data_dictionary_description = " +
+        (metadata.data_dictionary_description.empty()
+             ? "NULL"
+             : txn.quote(metadata.data_dictionary_description)) +
+        ", "
+        "encryption_at_rest = " +
+        (metadata.encryption_at_rest ? "true" : "false") +
+        ", "
+        "encryption_in_transit = " +
+        (metadata.encryption_in_transit ? "true" : "false") +
+        ", "
+        "masking_policy_applied = " +
+        (metadata.masking_policy_applied ? "true" : "false") +
+        ", "
+        "row_level_security_enabled = " +
+        (metadata.row_level_security_enabled ? "true" : "false") +
+        ", "
+        "column_level_security_enabled = " +
+        (metadata.column_level_security_enabled ? "true" : "false") +
+        ", "
+        "consent_required = " +
+        (metadata.consent_required ? "true" : "false") +
+        ", "
+        "legal_basis = " +
+        (metadata.legal_basis.empty() ? "NULL"
+                                      : txn.quote(metadata.legal_basis)) +
+        ", "
+        "retention_enforced = " +
+        (metadata.retention_enforced ? "true" : "false") +
+        ", "
+        "pii_detection_method = " +
+        (metadata.pii_detection_method.empty()
+             ? "NULL"
+             : txn.quote(metadata.pii_detection_method)) +
+        ", "
+        "pii_confidence_score = " +
+        (metadata.pii_confidence_score > 0.0
+             ? std::to_string(metadata.pii_confidence_score)
+             : "NULL") +
+        ", "
+        "sensitive_data_count = " +
+        std::to_string(metadata.sensitive_data_count) +
+        ", "
         "updated_at = NOW() "
-        "WHERE schema_name = '" +
-        escapeSQL(metadata.schema_name) +
-        "' "
-        "AND table_name = '" +
-        escapeSQL(metadata.table_name) + "';";
+        "WHERE schema_name = $1 "
+        "AND table_name = $2";
 
-    txn.exec(updateQuery);
+    txn.exec_params(updateQuery, metadata.schema_name, metadata.table_name);
     txn.commit();
 
   } catch (const std::exception &e) {
@@ -1262,4 +1379,56 @@ double DataGovernance::calculateUniquenessScore(const TableMetadata &metadata) {
 // better data integrity (less fragmentation, better referential integrity).
 double DataGovernance::calculateIntegrityScore(const TableMetadata &metadata) {
   return 100.0 - (metadata.fragmentation_percentage * 0.3);
+}
+
+void DataGovernance::calculatePIIMetrics(pqxx::connection &conn,
+                                         const std::string &schema_name,
+                                         const std::string &table_name,
+                                         TableMetadata &metadata) {
+  try {
+    pqxx::work txn(conn);
+
+    std::string query = R"(
+      SELECT 
+        COUNT(*) FILTER (WHERE contains_pii = true) as pii_columns,
+        COUNT(*) FILTER (WHERE contains_phi = true) as phi_columns,
+        MAX(pii_confidence_score) as max_pii_confidence,
+        MAX(phi_confidence_score) as max_phi_confidence,
+        STRING_AGG(DISTINCT pii_category, ', ') as pii_categories
+      FROM metadata.column_catalog
+      WHERE schema_name = $1 AND table_name = $2
+    )";
+
+    auto result = txn.exec_params(query, schema_name, table_name);
+    if (!result.empty()) {
+      metadata.sensitive_data_count =
+          result[0][0].is_null() ? 0 : result[0][0].as<int>();
+      int phiColumns = result[0][1].is_null() ? 0 : result[0][1].as<int>();
+
+      if (metadata.sensitive_data_count > 0 || phiColumns > 0) {
+        metadata.pii_detection_method = "COLUMN_ANALYSIS";
+        metadata.pii_confidence_score =
+            result[0][2].is_null() ? 0.0 : result[0][2].as<double>();
+        metadata.phi_confidence_score =
+            result[0][3].is_null() ? 0.0 : result[0][3].as<double>();
+        metadata.pii_categories =
+            result[0][4].is_null() ? "" : result[0][4].as<std::string>();
+      }
+    }
+
+    txn.commit();
+  } catch (const std::exception &e) {
+    Logger::warning(LogCategory::GOVERNANCE, "DataGovernance",
+                    "Error calculating PII metrics: " + std::string(e.what()));
+  }
+}
+
+std::string DataGovernance::escapeSQL(const std::string &str) {
+  std::string escaped = str;
+  size_t pos = 0;
+  while ((pos = escaped.find('\'', pos)) != std::string::npos) {
+    escaped.replace(pos, 1, "''");
+    pos += 2;
+  }
+  return escaped;
 }

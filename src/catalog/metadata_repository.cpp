@@ -1,5 +1,6 @@
 #include "catalog/metadata_repository.h"
 #include "core/logger.h"
+#include "engines/database_engine.h"
 #include "utils/string_utils.h"
 
 // Constructor for MetadataRepository. Initializes the repository with a
@@ -97,20 +98,22 @@ MetadataRepository::getCatalogEntries(const std::string &dbEngine,
 }
 
 // Inserts a new table entry into the catalog or updates an existing one if it
-// already exists. For new entries, the table is inserted with status 'PENDING'
-// and active set to false. For existing entries, the function intelligently
-// updates only the fields that have changed (time column, primary key columns,
-// primary key strategy, has_pk flag) or just the table size if no other changes
-// are detected. This ensures the catalog stays synchronized with the actual
-// table structure while preserving existing metadata like sync status.
+// already exists. For new entries, the table is inserted with status
+// 'FULL_LOAD' and active set to false. For existing entries, the function
+// intelligently updates only the fields that have changed (time column, primary
+// key columns, primary key strategy, has_pk flag) or just the table size if no
+// other changes are detected. This ensures the catalog stays synchronized with
+// the actual table structure while preserving existing metadata like sync
+// status.
 void MetadataRepository::insertOrUpdateTable(
     const CatalogTableInfo &tableInfo, const std::string &timeColumn,
     const std::vector<std::string> &pkColumns, bool hasPK, int64_t tableSize,
     const std::string &dbEngine) {
-  if (tableInfo.schema.empty() || tableInfo.table.empty() || dbEngine.empty()) {
-    Logger::error(
-        LogCategory::DATABASE, "MetadataRepository",
-        "Invalid input: schema, table, and dbEngine must not be empty");
+  if (tableInfo.schema.empty() || tableInfo.table.empty() || dbEngine.empty() ||
+      tableInfo.connectionString.empty()) {
+    Logger::error(LogCategory::DATABASE, "MetadataRepository",
+                  "Invalid input: schema, table, dbEngine, and "
+                  "connectionString must not be empty");
     return;
   }
   try {
@@ -118,7 +121,7 @@ void MetadataRepository::insertOrUpdateTable(
     pqxx::work txn(conn);
 
     std::string pkColumnsJSON = columnsToJSON(pkColumns);
-    std::string pkStrategy = determinePKStrategy(pkColumns);
+    std::string pkStrategy = "CDC";
 
     auto existing = txn.exec_params(
         "SELECT last_sync_column, pk_columns, pk_strategy, has_pk, table_size "
@@ -137,7 +140,7 @@ void MetadataRepository::insertOrUpdateTable(
           "$8, $9)",
           tableInfo.schema, tableInfo.table, dbEngine,
           tableInfo.connectionString, timeColumn, pkColumnsJSON, pkStrategy,
-          hasPK, tableSize, std::string(CatalogStatus::PENDING));
+          hasPK, tableSize, std::string(CatalogStatus::FULL_LOAD));
     } else {
       std::string currentTimeColumn =
           existing[0][0].is_null() ? "" : existing[0][0].as<std::string>();
@@ -153,10 +156,11 @@ void MetadataRepository::insertOrUpdateTable(
         txn.exec_params(
             "UPDATE metadata.catalog SET "
             "last_sync_column = $1, pk_columns = $2, pk_strategy = $3, "
-            "has_pk = $4, table_size = $5 "
-            "WHERE schema_name = $6 AND table_name = $7 AND db_engine = $8",
+            "has_pk = $4, table_size = $5, status = $6 "
+            "WHERE schema_name = $7 AND table_name = $8 AND db_engine = $9",
             timeColumn, pkColumnsJSON, pkStrategy, hasPK, tableSize,
-            tableInfo.schema, tableInfo.table, dbEngine);
+            std::string(CatalogStatus::FULL_LOAD), tableInfo.schema,
+            tableInfo.table, dbEngine);
       } else {
         txn.exec_params(
             "UPDATE metadata.catalog SET table_size = $1 "
@@ -262,8 +266,9 @@ int MetadataRepository::reactivateTablesWithData() {
         "SELECT schema_name, table_name, db_engine FROM metadata.catalog "
         "WHERE active = false");
 
+    txn.commit();
+
     int reactivatedCount = 0;
-    bool transactionAborted = false;
     for (const auto &row : inactiveTables) {
       std::string schema = row[0].as<std::string>();
       std::string table = row[1].as<std::string>();
@@ -273,40 +278,27 @@ int MetadataRepository::reactivateTablesWithData() {
       std::string lowerTable = StringUtils::toLower(table);
 
       try {
-        auto countResult =
-            txn.exec("SELECT COUNT(*) FROM " + txn.quote_name(lowerSchema) +
-                     "." + txn.quote_name(lowerTable));
+        pqxx::work checkTxn(conn);
+        auto countResult = checkTxn.exec("SELECT COUNT(*) FROM " +
+                                         checkTxn.quote_name(lowerSchema) +
+                                         "." + checkTxn.quote_name(lowerTable));
         if (!countResult.empty() && countResult[0][0].as<int64_t>() > 0) {
-          txn.exec_params(
+          checkTxn.exec_params(
               "UPDATE metadata.catalog SET active = true "
               "WHERE schema_name = $1 AND table_name = $2 AND db_engine = $3",
               schema, table, dbEngine);
+          checkTxn.commit();
           reactivatedCount++;
+        } else {
+          checkTxn.commit();
         }
       } catch (const std::exception &e) {
-        std::string errorMsg = e.what();
-        if (errorMsg.find("current transaction is aborted") !=
-            std::string::npos) {
-          try {
-            txn.abort();
-          } catch (...) {
-          }
-          transactionAborted = true;
-          Logger::warning(LogCategory::DATABASE, "MetadataRepository",
-                          "Transaction aborted while checking " + schema + "." +
-                              table + ", skipping remaining tables");
-          break;
-        } else {
-          Logger::error(LogCategory::DATABASE, "MetadataRepository",
-                        "Error checking table data for " + schema + "." +
-                            table + ": " + std::string(e.what()));
-        }
+        Logger::error(LogCategory::DATABASE, "MetadataRepository",
+                      "Error checking table data for " + schema + "." + table +
+                          ": " + std::string(e.what()));
       }
     }
 
-    if (!transactionAborted) {
-      txn.commit();
-    }
     return reactivatedCount;
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "MetadataRepository",
@@ -359,6 +351,7 @@ int MetadataRepository::markInactiveTablesAsSkip(bool truncateTarget) {
                         "WHERE active = false AND status != $1",
                         std::string(CatalogStatus::NO_DATA));
 
+    std::vector<std::pair<std::string, std::string>> tablesToSkip;
     if (truncateTarget) {
       for (const auto &row : inactiveTables) {
         std::string schema = row[0].as<std::string>();
@@ -370,23 +363,37 @@ int MetadataRepository::markInactiveTablesAsSkip(bool truncateTarget) {
             txn.quote_name(lowerSchema) + "." + txn.quote_name(lowerTable);
         try {
           txn.exec("TRUNCATE TABLE " + target_full_table);
+          tablesToSkip.push_back({schema, table});
         } catch (const std::exception &e) {
           Logger::error(LogCategory::DATABASE, "MetadataRepository",
                         "Error truncating table " + target_full_table + ": " +
                             std::string(e.what()));
-          continue;
+          Logger::warning(LogCategory::DATABASE, "MetadataRepository",
+                          "Skipping marking " + schema + "." + table +
+                              " as SKIP due to truncate failure");
         }
+      }
+    } else {
+      for (const auto &row : inactiveTables) {
+        tablesToSkip.push_back(
+            {row[0].as<std::string>(), row[1].as<std::string>()});
       }
     }
 
-    auto result = txn.exec_params("UPDATE metadata.catalog SET "
-                                  "status = $1, "
-                                  "last_processed_pk = '' "
-                                  "WHERE active = false AND status != $2",
-                                  std::string(CatalogStatus::SKIP),
-                                  std::string(CatalogStatus::NO_DATA));
+    int updatedCount = 0;
+    for (const auto &entry : tablesToSkip) {
+      auto result =
+          txn.exec_params("UPDATE metadata.catalog SET "
+                          "status = $1, "
+                          "last_processed_pk = '' "
+                          "WHERE schema_name = $2 AND table_name = $3 "
+                          "AND active = false AND status != $4",
+                          std::string(CatalogStatus::SKIP), entry.first,
+                          entry.second, std::string(CatalogStatus::NO_DATA));
+      updatedCount += result.affected_rows();
+    }
     txn.commit();
-    return result.affected_rows();
+    return updatedCount;
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "MetadataRepository",
                   "Error marking inactive tables: " + std::string(e.what()));
@@ -435,22 +442,22 @@ int MetadataRepository::resetTable(const std::string &schema,
   }
 }
 
-// Cleans invalid offset tracking data from the catalog. This function removes
-// last_processed_pk values for tables using 'OFFSET' strategy (which should be
-// NULL for offset-based syncing). This ensures data consistency and prevents
-// sync errors. Returns the total number of entries cleaned. Returns 0 if an
-// error occurs. DEPRECATED: This function will be removed in a future version.
+// Migrates old strategy values (OFFSET, PK) to CDC and cleans invalid tracking
+// data. This function updates all tables with old strategies to use CDC,
+// ensuring consistency. Returns the total number of entries updated. Returns 0
+// if an error occurs. DEPRECATED: This function will be removed in a future
+// version.
 int MetadataRepository::cleanInvalidOffsets() {
   try {
     auto conn = getConnection();
     pqxx::work txn(conn);
 
-    auto offsetResult = txn.exec(
-        "UPDATE metadata.catalog SET last_processed_pk = NULL "
-        "WHERE pk_strategy = 'OFFSET' AND last_processed_pk IS NOT NULL");
+    auto strategyResult =
+        txn.exec("UPDATE metadata.catalog SET pk_strategy = 'CDC' "
+                 "WHERE pk_strategy IN ('OFFSET', 'PK')");
 
     txn.commit();
-    return offsetResult.affected_rows();
+    return strategyResult.affected_rows();
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "MetadataRepository",
                   "Error cleaning invalid offsets: " + std::string(e.what()));

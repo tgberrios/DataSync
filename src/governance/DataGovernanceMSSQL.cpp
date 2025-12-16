@@ -450,14 +450,17 @@ void DataGovernanceMSSQL::queryBackupInfo() {
 
     if (!results.empty() && results[0].size() >= 3) {
       bool found = false;
-      for (auto &data : governanceData_) {
-        if (data.database_name == databaseName &&
-            data.object_type == "DATABASE") {
-          data.last_full_backup = results[0][0].empty() ? "" : results[0][0];
-          data.last_diff_backup = results[0][1].empty() ? "" : results[0][1];
-          data.last_log_backup = results[0][2].empty() ? "" : results[0][2];
-          found = true;
-          break;
+      {
+        std::lock_guard<std::mutex> lock(governanceDataMutex_);
+        for (auto &data : governanceData_) {
+          if (data.database_name == databaseName &&
+              data.object_type == "DATABASE") {
+            data.last_full_backup = results[0][0].empty() ? "" : results[0][0];
+            data.last_diff_backup = results[0][1].empty() ? "" : results[0][1];
+            data.last_log_backup = results[0][2].empty() ? "" : results[0][2];
+            found = true;
+            break;
+          }
         }
       }
       if (!found) {

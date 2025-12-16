@@ -55,11 +55,12 @@ public:
 
 private:
   void initializeCurl();
-  void setupAuth(CURL *curl);
+  struct curl_slist *setupAuth(CURL *curl, struct curl_slist *headerList);
+  std::string urlEncode(const std::string &value);
   std::string buildURL(const std::string &endpoint, const json &queryParams);
   HTTPResponse executeRequest(const std::string &url, const std::string &method,
                               const std::string &body, const json &headers);
-  void handleRateLimit(int statusCode, int &retryCount);
+  bool handleRateLimit(int statusCode, int &retryCount);
 };
 
 #endif

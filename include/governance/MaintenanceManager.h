@@ -106,6 +106,7 @@ private:
   void loadThresholdsFromDatabase();
   std::string escapeSQL(pqxx::connection &conn, const std::string &str);
   std::string escapeSQL(MYSQL *conn, const std::string &str);
+  std::string escapeSQLMSSQL(const std::string &str);
 
 public:
   explicit MaintenanceManager(const std::string &metadataConnectionString);

@@ -85,7 +85,6 @@ void APIToDatabaseSync::syncAPIToDatabase(const std::string &apiName) {
 }
 
 void APIToDatabaseSync::processAPIFullLoad(const APICatalogEntry &entry) {
-  std::string processLogId;
   auto startTime = std::chrono::system_clock::now();
   auto timeT = std::chrono::system_clock::to_time_t(startTime);
   std::ostringstream startTimeStr;
@@ -152,7 +151,7 @@ void APIToDatabaseSync::processAPIFullLoad(const APICatalogEntry &entry) {
 
     if (entry.target_db_engine == "PostgreSQL") {
       createPostgreSQLTable(entry, columns, columnTypes);
-      insertDataToPostgreSQL(entry, data);
+      insertDataToPostgreSQL(entry, data, columns);
     } else if (entry.target_db_engine == "MariaDB") {
       createMariaDBTable(entry, columns, columnTypes);
       insertDataToMariaDB(entry, data);
@@ -219,7 +218,6 @@ std::vector<std::string>
 APIToDatabaseSync::detectColumnTypes(const std::vector<json> &data,
                                      const std::vector<std::string> &columns) {
   std::vector<std::string> types(columns.size(), "TEXT");
-  std::unordered_map<std::string, int> typeCounts;
 
   for (const auto &item : data) {
     if (item.is_object()) {
@@ -310,8 +308,9 @@ void APIToDatabaseSync::createPostgreSQLTable(
   }
 }
 
-void APIToDatabaseSync::insertDataToPostgreSQL(const APICatalogEntry &entry,
-                                               const std::vector<json> &data) {
+void APIToDatabaseSync::insertDataToPostgreSQL(
+    const APICatalogEntry &entry, const std::vector<json> &data,
+    const std::vector<std::string> &columns) {
   try {
     pqxx::connection conn(entry.target_connection_string);
     pqxx::work txn(conn);
@@ -328,18 +327,6 @@ void APIToDatabaseSync::insertDataToPostgreSQL(const APICatalogEntry &entry,
         txn.quote_name(schemaName) + "." + txn.quote_name(tableName);
 
     txn.exec("TRUNCATE TABLE " + fullTableName);
-
-    std::vector<std::string> columns;
-    for (const auto &item : data) {
-      if (item.is_object()) {
-        for (auto &element : item.items()) {
-          if (std::find(columns.begin(), columns.end(), element.key()) ==
-              columns.end()) {
-            columns.push_back(element.key());
-          }
-        }
-      }
-    }
 
     if (columns.empty()) {
       Logger::warning(LogCategory::TRANSFER, "insertDataToPostgreSQL",
@@ -380,8 +367,18 @@ void APIToDatabaseSync::insertDataToPostgreSQL(const APICatalogEntry &entry,
             const json &value = item[columns[k]];
             if (value.is_object() || value.is_array()) {
               insertQuery << txn.quote(value.dump()) << "::jsonb";
+            } else if (value.is_null()) {
+              insertQuery << "NULL";
+            } else if (value.is_string()) {
+              insertQuery << txn.quote(value.get<std::string>());
+            } else if (value.is_number_integer()) {
+              insertQuery << value.get<int64_t>();
+            } else if (value.is_number_float()) {
+              insertQuery << value.get<double>();
+            } else if (value.is_boolean()) {
+              insertQuery << (value.get<bool>() ? "true" : "false");
             } else {
-              insertQuery << txn.quote(value.is_null() ? "" : value.dump());
+              insertQuery << txn.quote(value.dump());
             }
           } else {
             insertQuery << "NULL";
@@ -842,6 +839,14 @@ void APIToDatabaseSync::insertDataToMSSQL(const APICatalogEntry &entry,
               for (char c : str) {
                 if (c == '\'')
                   escaped += "''";
+                else if (c == '\\')
+                  escaped += "\\\\";
+                else if (c == '\n')
+                  escaped += "\\n";
+                else if (c == '\r')
+                  escaped += "\\r";
+                else if (c == '\t')
+                  escaped += "\\t";
                 else
                   escaped += c;
               }
@@ -1131,17 +1136,17 @@ void APIToDatabaseSync::insertDataToOracle(const APICatalogEntry &entry,
     OCIError *err = conn->getErr();
     OCISvcCtx *svc = conn->getSvc();
 
-    std::string deleteQuery =
-        "DELETE FROM \"" + oracleSchema + "\".\"" + entry.target_table + "\"";
-    OCIStmt *deleteStmt = nullptr;
+    std::string truncateQuery = "TRUNCATE TABLE \"" + oracleSchema + "\".\"" +
+                                entry.target_table + "\"";
+    OCIStmt *truncateStmt = nullptr;
     sword status =
-        OCIHandleAlloc(env, (void **)&deleteStmt, OCI_HTYPE_STMT, 0, nullptr);
+        OCIHandleAlloc(env, (void **)&truncateStmt, OCI_HTYPE_STMT, 0, nullptr);
     if (status == OCI_SUCCESS) {
       status =
-          OCIStmtPrepare(deleteStmt, err, (OraText *)deleteQuery.c_str(),
-                         deleteQuery.length(), OCI_NTV_SYNTAX, OCI_DEFAULT);
+          OCIStmtPrepare(truncateStmt, err, (OraText *)truncateQuery.c_str(),
+                         truncateQuery.length(), OCI_NTV_SYNTAX, OCI_DEFAULT);
       if (status == OCI_SUCCESS) {
-        status = OCIStmtExecute(svc, deleteStmt, err, 1, 0, nullptr, nullptr,
+        status = OCIStmtExecute(svc, truncateStmt, err, 1, 0, nullptr, nullptr,
                                 OCI_DEFAULT);
         if (status != OCI_SUCCESS && status != OCI_SUCCESS_WITH_INFO) {
           char errbuf[512];
@@ -1150,12 +1155,12 @@ void APIToDatabaseSync::insertDataToOracle(const APICatalogEntry &entry,
                       sizeof(errbuf), OCI_HTYPE_ERROR);
           if (errcode != 942) {
             Logger::warning(LogCategory::TRANSFER, "insertDataToOracle",
-                            "Failed to delete from Oracle table: " +
+                            "Failed to truncate Oracle table: " +
                                 std::string(errbuf) + " (continuing anyway)");
           }
         }
       }
-      OCIHandleFree(deleteStmt, OCI_HTYPE_STMT);
+      OCIHandleFree(truncateStmt, OCI_HTYPE_STMT);
     }
 
     std::vector<std::string> columns;

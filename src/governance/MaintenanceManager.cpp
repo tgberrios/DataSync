@@ -307,15 +307,23 @@ void MaintenanceManager::detectReindexNeeds(pqxx::connection &conn,
       pqxx::work txn2(conn);
       std::string fragQuery = R"(
         SELECT 
-          CASE 
-            WHEN pg_relation_size($1::regclass) > 0 
-            THEN (pg_relation_size($1::regclass) - pg_relation_size($1::regclass, 'vm'))::float 
-                 / pg_relation_size($1::regclass) * 100
-            ELSE 0
-          END as fragmentation
+          COALESCE(
+            (SELECT 
+              CASE 
+                WHEN st.n_live_tup > 0 
+                THEN (st.n_dead_tup::float / NULLIF(st.n_live_tup, 0)) * 100.0
+                ELSE 0.0
+              END
+             FROM pg_stat_user_tables st
+             JOIN pg_index i ON i.indrelid = st.relid
+             JOIN pg_class idx ON i.indexrelid = idx.oid
+             JOIN pg_namespace n ON idx.relnamespace = n.oid
+             WHERE n.nspname = $1 AND idx.relname = $2
+             LIMIT 1),
+            0.0
+          ) as fragmentation
       )";
-      std::string indexFullName = schema + "." + index;
-      auto fragResult = txn2.exec_params(fragQuery, indexFullName);
+      auto fragResult = txn2.exec_params(fragQuery, schema, index);
       txn2.commit();
 
       if (!fragResult.empty()) {
@@ -947,7 +955,76 @@ void MaintenanceManager::executeMariaDBMaintenance(
 }
 
 void MaintenanceManager::executeMSSQLMaintenance(const MaintenanceTask &task) {
-  // Implementation for MSSQL maintenance execution
+  try {
+    ODBCConnection conn(task.connection_string);
+    if (!conn.isValid()) {
+      throw std::runtime_error("Failed to connect to MSSQL");
+    }
+
+    SQLHDBC hdbc = conn.getDbc();
+    SQLHSTMT stmt;
+    SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &stmt);
+    if (ret != SQL_SUCCESS) {
+      throw std::runtime_error("SQLAllocHandle(STMT) failed");
+    }
+
+    std::string query;
+    std::string escapedSchema = escapeSQLMSSQL(task.schema_name);
+    std::string escapedObject = escapeSQLMSSQL(task.object_name);
+
+    if (task.maintenance_type == "UPDATE STATISTICS") {
+      query =
+          "UPDATE STATISTICS [" + escapedSchema + "].[" + escapedObject + "]";
+    } else if (task.maintenance_type == "REBUILD INDEX") {
+      if (task.object_type == "INDEX") {
+        std::string tableName = task.object_name;
+        query = "ALTER INDEX [" + escapedObject + "] ON [" + escapedSchema +
+                "].[" + escapeSQLMSSQL(tableName) + "] REBUILD";
+      } else {
+        SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+        throw std::runtime_error(
+            "REBUILD INDEX requires object_type to be INDEX");
+      }
+    } else if (task.maintenance_type == "REORGANIZE INDEX") {
+      if (task.object_type == "INDEX") {
+        std::string tableName = task.object_name;
+        query = "ALTER INDEX [" + escapedObject + "] ON [" + escapedSchema +
+                "].[" + escapeSQLMSSQL(tableName) + "] REORGANIZE";
+      } else {
+        SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+        throw std::runtime_error(
+            "REORGANIZE INDEX requires object_type to be INDEX");
+      }
+    } else {
+      SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+      throw std::runtime_error("Unknown maintenance type: " +
+                               task.maintenance_type);
+    }
+
+    if (!query.empty()) {
+      ret = SQLExecDirect(stmt, (SQLCHAR *)query.c_str(), SQL_NTS);
+      if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
+        SQLCHAR sqlState[6];
+        SQLCHAR errorMsg[SQL_MAX_MESSAGE_LENGTH];
+        SQLINTEGER nativeError;
+        SQLSMALLINT msgLen;
+        std::string errorStr = "Query failed";
+        if (SQLGetDiagRec(SQL_HANDLE_STMT, stmt, 1, sqlState, &nativeError,
+                          errorMsg, sizeof(errorMsg), &msgLen) == SQL_SUCCESS) {
+          errorStr = std::string((char *)errorMsg);
+        }
+        SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+        throw std::runtime_error(errorStr);
+      }
+      SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+      Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
+                   "Executed " + task.maintenance_type + " on " +
+                       task.schema_name + "." + task.object_name);
+    }
+  } catch (const std::exception &e) {
+    throw std::runtime_error("MSSQL maintenance failed: " +
+                             std::string(e.what()));
+  }
 }
 
 MaintenanceMetrics
@@ -1353,10 +1430,221 @@ std::string MaintenanceManager::escapeSQL(MYSQL *conn, const std::string &str) {
   return std::string(escaped.data(), len);
 }
 
+std::string MaintenanceManager::escapeSQLMSSQL(const std::string &str) {
+  std::string escaped = str;
+  size_t pos = 0;
+  while ((pos = escaped.find(']', pos)) != std::string::npos) {
+    escaped.replace(pos, 1, "]]");
+    pos += 2;
+  }
+  return escaped;
+}
+
 void MaintenanceManager::executeManual(int maintenanceId) {
-  // Implementation for manual execution
+  Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
+               "Executing manual maintenance task: " +
+                   std::to_string(maintenanceId));
+
+  try {
+    pqxx::connection conn(metadataConnectionString_);
+    pqxx::work txn(conn);
+
+    std::string query = R"(
+      SELECT id, maintenance_type, db_engine, connection_string, schema_name,
+             object_name, object_type, auto_execute, enabled, priority, status,
+             next_maintenance_date, thresholds
+      FROM metadata.maintenance_control
+      WHERE id = $1
+    )";
+
+    auto results = txn.exec_params(query, maintenanceId);
+    txn.commit();
+
+    if (results.empty()) {
+      Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
+                    "Maintenance task not found: " +
+                        std::to_string(maintenanceId));
+      return;
+    }
+
+    const auto &row = results[0];
+    MaintenanceTask task;
+    task.id = row[0].as<int>();
+    task.maintenance_type = row[1].as<std::string>();
+    task.db_engine = row[2].as<std::string>();
+    task.connection_string = row[3].as<std::string>();
+    task.schema_name = row[4].as<std::string>();
+    task.object_name = row[5].as<std::string>();
+    task.object_type = row[6].as<std::string>();
+    task.auto_execute = row[7].as<bool>();
+    task.enabled = row[8].as<bool>();
+    task.priority = row[9].as<int>();
+    task.status = row[10].as<std::string>();
+
+    if (!row[11].is_null()) {
+      std::string dateStr = row[11].as<std::string>();
+      std::tm tm = {};
+      std::istringstream ss(dateStr);
+      ss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
+      task.next_maintenance_date =
+          std::chrono::system_clock::from_time_t(std::mktime(&tm));
+    }
+
+    if (!row[12].is_null()) {
+      task.thresholds = json::parse(row[12].as<std::string>());
+    }
+
+    updateTaskStatus(task.id, "RUNNING");
+    auto startTime = std::chrono::high_resolution_clock::now();
+
+    MaintenanceMetrics before = collectMetricsBefore(task);
+
+    if (task.db_engine == "PostgreSQL") {
+      executePostgreSQLMaintenance(task);
+    } else if (task.db_engine == "MariaDB") {
+      executeMariaDBMaintenance(task);
+    } else if (task.db_engine == "MSSQL") {
+      executeMSSQLMaintenance(task);
+    }
+
+    auto endTime = std::chrono::high_resolution_clock::now();
+    auto duration =
+        std::chrono::duration_cast<std::chrono::seconds>(endTime - startTime);
+
+    MaintenanceMetrics after = collectMetricsAfter(task);
+    MaintenanceTask updatedTask = task;
+    calculateImpact(updatedTask, before, after);
+
+    std::string resultMsg = "Manual maintenance completed successfully. ";
+    if (updatedTask.space_reclaimed_mb > 0) {
+      resultMsg +=
+          "Space reclaimed: " + std::to_string(updatedTask.space_reclaimed_mb) +
+          " MB. ";
+    }
+    if (updatedTask.performance_improvement_pct > 0) {
+      resultMsg += "Performance improvement: " +
+                   std::to_string(updatedTask.performance_improvement_pct) +
+                   "%. ";
+    }
+
+    updateTaskStatus(task.id, "COMPLETED", resultMsg);
+    storeExecutionMetrics(updatedTask, before, after);
+
+    Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
+                 "Manual maintenance task " + std::to_string(maintenanceId) +
+                     " completed in " + std::to_string(duration.count()) +
+                     " seconds");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
+                  "Error executing manual maintenance: " +
+                      std::string(e.what()));
+    try {
+      updateTaskStatus(maintenanceId, "FAILED", "", std::string(e.what()));
+    } catch (...) {
+    }
+  }
 }
 
 void MaintenanceManager::generateReport() {
-  // Implementation for report generation
+  Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
+               "Generating maintenance report");
+
+  try {
+    pqxx::connection conn(metadataConnectionString_);
+    pqxx::work txn(conn);
+
+    std::string reportQuery = R"(
+      SELECT 
+        COUNT(*) as total_tasks,
+        COUNT(*) FILTER (WHERE status = 'PENDING') as pending_tasks,
+        COUNT(*) FILTER (WHERE status = 'RUNNING') as running_tasks,
+        COUNT(*) FILTER (WHERE status = 'COMPLETED') as completed_tasks,
+        COUNT(*) FILTER (WHERE status = 'FAILED') as failed_tasks,
+        SUM(space_reclaimed_mb) as total_space_reclaimed_mb,
+        AVG(performance_improvement_pct) as avg_performance_improvement,
+        COUNT(*) FILTER (WHERE db_engine = 'PostgreSQL') as postgresql_tasks,
+        COUNT(*) FILTER (WHERE db_engine = 'MariaDB') as mariadb_tasks,
+        COUNT(*) FILTER (WHERE db_engine = 'MSSQL') as mssql_tasks
+      FROM metadata.maintenance_control
+    )";
+
+    auto result = txn.exec(reportQuery);
+    txn.commit();
+
+    if (!result.empty()) {
+      const auto &row = result[0];
+      int totalTasks = row[0].as<int>();
+      int pendingTasks = row[1].as<int>();
+      int runningTasks = row[2].as<int>();
+      int completedTasks = row[3].as<int>();
+      int failedTasks = row[4].as<int>();
+      double totalSpaceReclaimed = row[5].is_null() ? 0.0 : row[5].as<double>();
+      double avgPerformanceImprovement =
+          row[6].is_null() ? 0.0 : row[6].as<double>();
+      int postgresqlTasks = row[7].as<int>();
+      int mariadbTasks = row[8].as<int>();
+      int mssqlTasks = row[9].as<int>();
+
+      Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
+                   "=== Maintenance Report ===");
+      Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
+                   "Total tasks: " + std::to_string(totalTasks));
+      Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
+                   "Pending: " + std::to_string(pendingTasks) +
+                       ", Running: " + std::to_string(runningTasks) +
+                       ", Completed: " + std::to_string(completedTasks) +
+                       ", Failed: " + std::to_string(failedTasks));
+      Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
+                   "Total space reclaimed: " +
+                       std::to_string(totalSpaceReclaimed) + " MB");
+      Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
+                   "Average performance improvement: " +
+                       std::to_string(avgPerformanceImprovement) + "%");
+      Logger::info(
+          LogCategory::GOVERNANCE, "MaintenanceManager",
+          "By engine - PostgreSQL: " + std::to_string(postgresqlTasks) +
+              ", MariaDB: " + std::to_string(mariadbTasks) +
+              ", MSSQL: " + std::to_string(mssqlTasks));
+    }
+
+    std::string recentQuery = R"(
+      SELECT maintenance_type, db_engine, schema_name, object_name, status,
+             last_maintenance_date, space_reclaimed_mb, performance_improvement_pct
+      FROM metadata.maintenance_control
+      WHERE last_maintenance_date IS NOT NULL
+      ORDER BY last_maintenance_date DESC
+      LIMIT 10
+    )";
+
+    pqxx::work txn2(conn);
+    auto recentResults = txn2.exec(recentQuery);
+    txn2.commit();
+
+    if (!recentResults.empty()) {
+      Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
+                   "=== Recent Maintenance Activities ===");
+      for (const auto &row : recentResults) {
+        std::string maintType = row[0].as<std::string>();
+        std::string engine = row[1].as<std::string>();
+        std::string schema = row[2].as<std::string>();
+        std::string object = row[3].as<std::string>();
+        std::string status = row[4].as<std::string>();
+        std::string lastDate =
+            row[5].is_null() ? "N/A" : row[5].as<std::string>();
+        double spaceReclaimed = row[6].is_null() ? 0.0 : row[6].as<double>();
+
+        Logger::info(
+            LogCategory::GOVERNANCE, "MaintenanceManager",
+            engine + " - " + maintType + " on " + schema + "." + object +
+                " - Status: " + status +
+                (spaceReclaimed > 0
+                     ? " - Space: " + std::to_string(spaceReclaimed) + " MB"
+                     : "") +
+                " - Date: " + lastDate);
+      }
+    }
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
+                  "Error generating report: " + std::string(e.what()));
+  }
 }

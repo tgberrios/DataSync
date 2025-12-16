@@ -13,6 +13,7 @@
 #include <iomanip>
 #include <mysql/mysql.h>
 #include <pqxx/pqxx>
+#include <regex>
 #include <sql.h>
 #include <sqlext.h>
 #include <sstream>
@@ -227,6 +228,7 @@ void ColumnCatalogCollector::collectPostgreSQLColumns(
       columnMetadata["source_specific"]["postgresql"] = pgMetadata;
       col.column_metadata_json = columnMetadata;
 
+      analyzeColumnStatistics(col, connectionString);
       classifyColumn(col);
       columnData_.push_back(col);
     }
@@ -447,7 +449,8 @@ void ColumnCatalogCollector::collectMariaDBColumns(
       }
 
       try {
-        if (row[21] && strlen(row[21]) > 0 && strlen(row[21]) <= 2) {
+        if (numFields > 21 && row[21] && strlen(row[21]) > 0 &&
+            strlen(row[21]) <= 2) {
           col.is_generated = (std::stoi(row[21]) == 1);
         } else {
           col.is_generated = false;
@@ -470,6 +473,7 @@ void ColumnCatalogCollector::collectMariaDBColumns(
       columnMetadata["source_specific"]["mariadb"] = mariadbMetadata;
       col.column_metadata_json = columnMetadata;
 
+      analyzeColumnStatistics(col, connectionString);
       classifyColumn(col);
       columnData_.push_back(col);
       count++;
@@ -696,6 +700,7 @@ void ColumnCatalogCollector::collectMSSQLColumns(
       columnMetadata["source_specific"]["mssql"] = mssqlMetadata;
       col.column_metadata_json = columnMetadata;
 
+      analyzeColumnStatistics(col, connectionString);
       classifyColumn(col);
       columnData_.push_back(col);
       count++;
@@ -711,6 +716,240 @@ void ColumnCatalogCollector::collectMSSQLColumns(
   }
 }
 
+void ColumnCatalogCollector::analyzeColumnStatistics(
+    ColumnMetadata &column, const std::string &connectionString) {
+  try {
+    if (column.db_engine == "PostgreSQL") {
+      pqxx::connection conn(connectionString);
+      if (!conn.is_open()) {
+        return;
+      }
+
+      pqxx::work txn(conn);
+      std::string fullTableName = txn.quote_name(column.schema_name) + "." +
+                                  txn.quote_name(column.table_name);
+      std::string columnName = txn.quote_name(column.column_name);
+
+      std::string statsQuery = "SELECT "
+                               "COUNT(*) as total_rows, "
+                               "COUNT(*) FILTER (WHERE " +
+                               columnName +
+                               " IS NULL) as null_count, "
+                               "COUNT(DISTINCT " +
+                               columnName +
+                               ") as distinct_count "
+                               "FROM " +
+                               fullTableName;
+
+      try {
+        auto statsResult = txn.exec(statsQuery);
+        if (!statsResult.empty()) {
+          column.null_count = statsResult[0][1].as<long long>();
+          long long totalRows = statsResult[0][0].as<long long>();
+          column.distinct_count = statsResult[0][2].as<long long>();
+
+          if (totalRows > 0) {
+            column.null_percentage = (column.null_count * 100.0) / totalRows;
+            column.distinct_percentage =
+                (column.distinct_count * 100.0) / totalRows;
+          }
+
+          if (column.data_type.find("int") != std::string::npos ||
+              column.data_type.find("numeric") != std::string::npos ||
+              column.data_type.find("decimal") != std::string::npos ||
+              column.data_type.find("real") != std::string::npos ||
+              column.data_type.find("double") != std::string::npos ||
+              column.data_type.find("float") != std::string::npos) {
+            std::string numericQuery = "SELECT "
+                                       "MIN(" +
+                                       columnName +
+                                       ")::text, "
+                                       "MAX(" +
+                                       columnName +
+                                       ")::text, "
+                                       "AVG(" +
+                                       columnName +
+                                       ") "
+                                       "FROM " +
+                                       fullTableName;
+            try {
+              auto numericResult = txn.exec(numericQuery);
+              if (!numericResult.empty()) {
+                if (!numericResult[0][0].is_null()) {
+                  column.min_value = numericResult[0][0].as<std::string>();
+                }
+                if (!numericResult[0][1].is_null()) {
+                  column.max_value = numericResult[0][1].as<std::string>();
+                }
+                if (!numericResult[0][2].is_null()) {
+                  column.avg_value = numericResult[0][2].as<double>();
+                }
+              }
+            } catch (const std::exception &e) {
+              Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                              "Error calculating numeric stats: " +
+                                  std::string(e.what()));
+            }
+          } else if (column.data_type.find("char") != std::string::npos ||
+                     column.data_type.find("text") != std::string::npos ||
+                     column.data_type.find("varchar") != std::string::npos) {
+            std::string stringQuery = "SELECT "
+                                      "MIN(" +
+                                      columnName +
+                                      "), "
+                                      "MAX(" +
+                                      columnName +
+                                      ") "
+                                      "FROM " +
+                                      fullTableName;
+            try {
+              auto stringResult = txn.exec(stringQuery);
+              if (!stringResult.empty()) {
+                if (!stringResult[0][0].is_null()) {
+                  column.min_value = stringResult[0][0].as<std::string>();
+                }
+                if (!stringResult[0][1].is_null()) {
+                  column.max_value = stringResult[0][1].as<std::string>();
+                }
+              }
+            } catch (const std::exception &e) {
+              Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                              "Error calculating string stats: " +
+                                  std::string(e.what()));
+            }
+          }
+        }
+      } catch (const std::exception &e) {
+        Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                        "Error analyzing column statistics: " +
+                            std::string(e.what()));
+      }
+      txn.commit();
+    } else if (column.db_engine == "MariaDB") {
+      auto params = ConnectionStringParser::parse(connectionString);
+      if (!params) {
+        return;
+      }
+
+      MySQLConnection conn(*params);
+      if (!conn.isValid()) {
+        return;
+      }
+
+      MYSQL *mysqlConn = conn.get();
+      std::string dbEscaped = escapeSQL(column.schema_name);
+      std::string tableEscaped = escapeSQL(column.table_name);
+      std::string columnEscaped = escapeSQL(column.column_name);
+
+      std::string statsQuery = "SELECT "
+                               "COUNT(*) as total_rows, "
+                               "SUM(CASE WHEN `" +
+                               columnEscaped +
+                               "` IS NULL THEN 1 ELSE 0 END) as null_count, "
+                               "COUNT(DISTINCT `" +
+                               columnEscaped +
+                               "`) as distinct_count "
+                               "FROM `" +
+                               dbEscaped + "`.`" + tableEscaped + "`";
+
+      if (mysql_query(mysqlConn, statsQuery.c_str()) == 0) {
+        MYSQL_RES *res = mysql_store_result(mysqlConn);
+        if (res) {
+          MYSQL_ROW row = mysql_fetch_row(res);
+          if (row) {
+            long long totalRows = std::stoll(row[0] ? row[0] : "0");
+            column.null_count = std::stoll(row[1] ? row[1] : "0");
+            column.distinct_count = std::stoll(row[2] ? row[2] : "0");
+
+            if (totalRows > 0) {
+              column.null_percentage = (column.null_count * 100.0) / totalRows;
+              column.distinct_percentage =
+                  (column.distinct_count * 100.0) / totalRows;
+            }
+          }
+          mysql_free_result(res);
+        }
+      }
+    } else if (column.db_engine == "MSSQL") {
+      ODBCConnection conn(connectionString);
+      if (!conn.isValid()) {
+        return;
+      }
+
+      SQLHDBC hdbc = conn.getDbc();
+      SQLHSTMT stmt;
+      SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &stmt);
+      if (ret != SQL_SUCCESS) {
+        return;
+      }
+
+      auto escapeMSSQLIdentifier = [](const std::string &str) -> std::string {
+        std::string escaped = str;
+        size_t pos = 0;
+        while ((pos = escaped.find(']', pos)) != std::string::npos) {
+          escaped.replace(pos, 1, "]]");
+          pos += 2;
+        }
+        return escaped;
+      };
+
+      std::string colEscaped = escapeMSSQLIdentifier(column.column_name);
+      std::string schemaEscaped = escapeMSSQLIdentifier(column.schema_name);
+      std::string tableEscaped = escapeMSSQLIdentifier(column.table_name);
+
+      std::string statsQuery = "SELECT "
+                               "COUNT(*) as total_rows, "
+                               "SUM(CASE WHEN [" +
+                               colEscaped +
+                               "] IS NULL THEN 1 ELSE 0 END) as null_count, "
+                               "COUNT(DISTINCT [" +
+                               colEscaped +
+                               "]) as distinct_count "
+                               "FROM [" +
+                               schemaEscaped + "].[" + tableEscaped + "]";
+
+      ret = SQLExecDirect(stmt, (SQLCHAR *)statsQuery.c_str(), SQL_NTS);
+      if (ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) {
+        if (SQLFetch(stmt) == SQL_SUCCESS) {
+          SQLLEN len;
+          SQLBIGINT totalRows = 0;
+          SQLBIGINT nullCount = 0;
+          SQLBIGINT distinctCount = 0;
+
+          SQLGetData(stmt, 1, SQL_C_SBIGINT, &totalRows, 0, &len);
+          SQLGetData(stmt, 2, SQL_C_SBIGINT, &nullCount, 0, &len);
+          SQLGetData(stmt, 3, SQL_C_SBIGINT, &distinctCount, 0, &len);
+
+          column.null_count = nullCount;
+          column.distinct_count = distinctCount;
+
+          if (totalRows > 0) {
+            column.null_percentage = (column.null_count * 100.0) / totalRows;
+            column.distinct_percentage =
+                (column.distinct_count * 100.0) / totalRows;
+          }
+        }
+      } else {
+        SQLCHAR sqlState[6];
+        SQLCHAR errorMsg[SQL_MAX_MESSAGE_LENGTH];
+        SQLINTEGER nativeError;
+        SQLSMALLINT msgLen;
+        if (SQLGetDiagRec(SQL_HANDLE_STMT, stmt, 1, sqlState, &nativeError,
+                          errorMsg, sizeof(errorMsg), &msgLen) == SQL_SUCCESS) {
+          Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                          "SQLExecDirect failed in analyzeColumnStatistics: " +
+                              std::string((char *)errorMsg));
+        }
+      }
+      SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+    }
+  } catch (const std::exception &e) {
+    Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                    "Error in analyzeColumnStatistics: " +
+                        std::string(e.what()));
+  }
+}
+
 void ColumnCatalogCollector::classifyColumn(ColumnMetadata &column) {
   try {
     DataClassifier classifier;
@@ -719,9 +958,22 @@ void ColumnCatalogCollector::classifyColumn(ColumnMetadata &column) {
     column.sensitivity_level = classifier.classifySensitivityLevel(
         column.table_name, column.schema_name);
 
+    detectPIIAdvanced(column, metadataConnectionString_);
+  } catch (const std::exception &e) {
+    Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                    "Error classifying column: " + std::string(e.what()));
+  }
+}
+
+void ColumnCatalogCollector::detectPIIAdvanced(
+    ColumnMetadata &column, const std::string &connectionString) {
+  try {
     std::string columnLower = column.column_name;
     std::transform(columnLower.begin(), columnLower.end(), columnLower.begin(),
                    ::tolower);
+
+    bool nameBasedPII = false;
+    bool nameBasedPHI = false;
 
     if (columnLower.find("email") != std::string::npos ||
         columnLower.find("phone") != std::string::npos ||
@@ -729,21 +981,220 @@ void ColumnCatalogCollector::classifyColumn(ColumnMetadata &column) {
         columnLower.find("social") != std::string::npos ||
         columnLower.find("passport") != std::string::npos ||
         columnLower.find("driver") != std::string::npos ||
-        columnLower.find("credit") != std::string::npos) {
-      column.contains_pii = true;
+        columnLower.find("credit") != std::string::npos ||
+        columnLower.find("card") != std::string::npos ||
+        columnLower.find("address") != std::string::npos ||
+        columnLower.find("zip") != std::string::npos ||
+        columnLower.find("postal") != std::string::npos) {
+      nameBasedPII = true;
     }
 
     if (columnLower.find("patient") != std::string::npos ||
         columnLower.find("medical") != std::string::npos ||
         columnLower.find("diagnosis") != std::string::npos ||
         columnLower.find("treatment") != std::string::npos ||
-        columnLower.find("health") != std::string::npos) {
-      column.contains_phi = true;
+        columnLower.find("health") != std::string::npos ||
+        columnLower.find("prescription") != std::string::npos ||
+        columnLower.find("symptom") != std::string::npos) {
+      nameBasedPHI = true;
     }
+
+    std::string sampleValue = "";
+    bool contentBasedPII = false;
+    bool contentBasedPHI = false;
+
+    if (column.db_engine == "PostgreSQL") {
+      try {
+        pqxx::connection conn(connectionString);
+        if (conn.is_open()) {
+          pqxx::work txn(conn);
+          std::string query = "SELECT " + txn.quote_name(column.column_name) +
+                              " FROM " + txn.quote_name(column.schema_name) +
+                              "." + txn.quote_name(column.table_name) +
+                              " WHERE " + txn.quote_name(column.column_name) +
+                              " IS NOT NULL LIMIT 100";
+          auto result = txn.exec(query);
+          if (!result.empty()) {
+            int piiMatches = 0;
+            int phiMatches = 0;
+            int totalSamples = std::min(100, (int)result.size());
+
+            for (int i = 0; i < totalSamples; ++i) {
+              if (!result[i][0].is_null()) {
+                std::string value = result[i][0].as<std::string>();
+                if (detectPIIByContent(value, column.data_type)) {
+                  piiMatches++;
+                  if (sampleValue.empty())
+                    sampleValue = value;
+                }
+                if (detectPHIByContent(value, column.data_type)) {
+                  phiMatches++;
+                }
+              }
+            }
+
+            double piiRatio = (double)piiMatches / totalSamples;
+            double phiRatio = (double)phiMatches / totalSamples;
+
+            contentBasedPII = piiRatio > 0.1;
+            contentBasedPHI = phiRatio > 0.1;
+
+            if (contentBasedPII || nameBasedPII) {
+              column.contains_pii = true;
+              column.pii_detection_method =
+                  contentBasedPII ? "CONTENT_ANALYSIS" : "NAME_BASED";
+              column.pii_confidence_score =
+                  calculatePIIConfidence(column.column_name, column.data_type,
+                                         sampleValue, contentBasedPII);
+              column.pii_category =
+                  detectPIICategory(sampleValue, column.data_type);
+            }
+
+            if (contentBasedPHI || nameBasedPHI) {
+              column.contains_phi = true;
+              column.phi_detection_method =
+                  contentBasedPHI ? "CONTENT_ANALYSIS" : "NAME_BASED";
+              column.phi_confidence_score = contentBasedPHI ? 0.85 : 0.60;
+            }
+          }
+        }
+      } catch (const std::exception &e) {
+        Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                        "Error sampling column data for PII detection: " +
+                            std::string(e.what()));
+      }
+    }
+
+    if (!column.contains_pii && nameBasedPII) {
+      column.contains_pii = true;
+      column.pii_detection_method = "NAME_BASED";
+      column.pii_confidence_score = 0.70;
+    }
+
+    if (!column.contains_phi && nameBasedPHI) {
+      column.contains_phi = true;
+      column.phi_detection_method = "NAME_BASED";
+      column.phi_confidence_score = 0.65;
+    }
+
   } catch (const std::exception &e) {
     Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
-                    "Error classifying column: " + std::string(e.what()));
+                    "Error in advanced PII detection: " +
+                        std::string(e.what()));
   }
+}
+
+bool ColumnCatalogCollector::detectPIIByContent(const std::string &value,
+                                                const std::string &dataType) {
+  if (value.empty())
+    return false;
+
+  std::regex emailRegex(R"([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})");
+  std::regex phoneRegex(
+      R"((\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4})");
+  std::regex ssnRegex(R"(\b\d{3}-?\d{2}-?\d{4}\b)");
+  std::regex creditCardRegex(R"(\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b)");
+  std::regex zipCodeRegex(R"(\b\d{5}(-\d{4})?\b)");
+  std::regex ipAddressRegex(R"(\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b)");
+
+  if (std::regex_search(value, emailRegex))
+    return true;
+  if (std::regex_search(value, phoneRegex))
+    return true;
+  if (std::regex_search(value, ssnRegex))
+    return true;
+  if (std::regex_search(value, creditCardRegex))
+    return true;
+  if (std::regex_search(value, zipCodeRegex))
+    return true;
+  if (std::regex_search(value, ipAddressRegex))
+    return true;
+
+  return false;
+}
+
+bool ColumnCatalogCollector::detectPHIByContent(const std::string &value,
+                                                const std::string &dataType) {
+  if (value.empty())
+    return false;
+
+  std::string valueLower = value;
+  std::transform(valueLower.begin(), valueLower.end(), valueLower.begin(),
+                 ::tolower);
+
+  std::vector<std::string> phiKeywords = {
+      "diagnosis",  "treatment",     "prescription", "symptom",
+      "condition",  "medication",    "dosage",       "allergy",
+      "blood type", "medical record"};
+
+  for (const auto &keyword : phiKeywords) {
+    if (valueLower.find(keyword) != std::string::npos) {
+      return true;
+    }
+  }
+
+  std::regex medicalCodeRegex(R"([A-Z]\d{2}\.?\d*)");
+  if (std::regex_search(value, medicalCodeRegex))
+    return true;
+
+  return false;
+}
+
+std::string
+ColumnCatalogCollector::detectPIICategory(const std::string &sampleValue,
+                                          const std::string &dataType) {
+  if (sampleValue.empty())
+    return "UNKNOWN";
+
+  std::regex emailRegex(R"([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})");
+  std::regex phoneRegex(
+      R"((\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4})");
+  std::regex ssnRegex(R"(\b\d{3}-?\d{2}-?\d{4}\b)");
+  std::regex creditCardRegex(R"(\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b)");
+  std::regex zipCodeRegex(R"(\b\d{5}(-\d{4})?\b)");
+
+  if (std::regex_search(sampleValue, emailRegex))
+    return "EMAIL";
+  if (std::regex_search(sampleValue, phoneRegex))
+    return "PHONE";
+  if (std::regex_search(sampleValue, ssnRegex))
+    return "SSN";
+  if (std::regex_search(sampleValue, creditCardRegex))
+    return "CREDIT_CARD";
+  if (std::regex_search(sampleValue, zipCodeRegex))
+    return "ZIP_CODE";
+
+  return "IDENTIFIER";
+}
+
+double ColumnCatalogCollector::calculatePIIConfidence(
+    const std::string &columnName, const std::string &dataType,
+    const std::string &sampleValue, bool contentMatch) {
+  double confidence = 0.0;
+
+  std::string columnLower = columnName;
+  std::transform(columnLower.begin(), columnLower.end(), columnLower.begin(),
+                 ::tolower);
+
+  if (contentMatch) {
+    confidence += 0.85;
+  } else {
+    if (columnLower.find("email") != std::string::npos ||
+        columnLower.find("phone") != std::string::npos ||
+        columnLower.find("ssn") != std::string::npos) {
+      confidence += 0.75;
+    } else {
+      confidence += 0.60;
+    }
+  }
+
+  if (dataType.find("varchar") != std::string::npos ||
+      dataType.find("text") != std::string::npos ||
+      dataType.find("char") != std::string::npos) {
+    confidence += 0.05;
+  }
+
+  return std::min(1.0, confidence);
 }
 
 void ColumnCatalogCollector::storeColumnMetadata() {
@@ -778,7 +1229,10 @@ void ColumnCatalogCollector::storeColumnMetadata() {
                "distinct_percentage, "
             << "min_value, max_value, avg_value, "
             << "data_category, sensitivity_level, contains_pii, contains_phi, "
-            << "last_seen_at, last_analyzed_at"
+            << "pii_detection_method, pii_confidence_score, pii_category, "
+            << "phi_detection_method, phi_confidence_score, "
+            << "masking_applied, encryption_applied, tokenization_applied, "
+            << "last_pii_scan, last_seen_at, last_analyzed_at"
             << ") VALUES (" << txn.quote(col.schema_name) << ", "
             << txn.quote(col.table_name) << ", " << txn.quote(col.column_name)
             << ", " << txn.quote(col.db_engine) << ", "
@@ -830,7 +1284,27 @@ void ColumnCatalogCollector::storeColumnMetadata() {
                     : txn.quote(col.sensitivity_level))
             << ", " << (col.contains_pii ? "true" : "false") << ", "
             << (col.contains_phi ? "true" : "false") << ", "
-            << "NOW(), NOW()"
+            << (col.pii_detection_method.empty()
+                    ? "NULL"
+                    : txn.quote(col.pii_detection_method))
+            << ", "
+            << (col.pii_confidence_score > 0.0
+                    ? std::to_string(col.pii_confidence_score)
+                    : "NULL")
+            << ", "
+            << (col.pii_category.empty() ? "NULL" : txn.quote(col.pii_category))
+            << ", "
+            << (col.phi_detection_method.empty()
+                    ? "NULL"
+                    : txn.quote(col.phi_detection_method))
+            << ", "
+            << (col.phi_confidence_score > 0.0
+                    ? std::to_string(col.phi_confidence_score)
+                    : "NULL")
+            << ", " << (col.masking_applied ? "true" : "false") << ", "
+            << (col.encryption_applied ? "true" : "false") << ", "
+            << (col.tokenization_applied ? "true" : "false") << ", "
+            << "NOW(), NOW(), NOW()"
             << ") "
             << "ON CONFLICT (schema_name, table_name, column_name, db_engine, "
                "connection_string) "
@@ -853,6 +1327,15 @@ void ColumnCatalogCollector::storeColumnMetadata() {
             << "sensitivity_level = EXCLUDED.sensitivity_level, "
             << "contains_pii = EXCLUDED.contains_pii, "
             << "contains_phi = EXCLUDED.contains_phi, "
+            << "pii_detection_method = EXCLUDED.pii_detection_method, "
+            << "pii_confidence_score = EXCLUDED.pii_confidence_score, "
+            << "pii_category = EXCLUDED.pii_category, "
+            << "phi_detection_method = EXCLUDED.phi_detection_method, "
+            << "phi_confidence_score = EXCLUDED.phi_confidence_score, "
+            << "masking_applied = EXCLUDED.masking_applied, "
+            << "encryption_applied = EXCLUDED.encryption_applied, "
+            << "tokenization_applied = EXCLUDED.tokenization_applied, "
+            << "last_pii_scan = EXCLUDED.last_pii_scan, "
             << "last_seen_at = NOW(), "
             << "updated_at = NOW()";
 

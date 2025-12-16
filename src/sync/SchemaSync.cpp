@@ -76,11 +76,7 @@ SchemaSync::getTableColumnsPostgres(pqxx::connection &pgConn,
           pgType = "VARCHAR";
         }
       } else if (pgType == "character" || pgType == "char") {
-        if (!col.maxLength.empty()) {
-          pgType = "CHAR(" + col.maxLength + ")";
-        } else {
-          pgType = "CHAR(1)";
-        }
+        pgType = "TEXT";
       } else if (pgType == "numeric") {
         if (!col.numericPrecision.empty() && !col.numericScale.empty()) {
           pgType =
@@ -353,6 +349,23 @@ bool SchemaSync::updateColumnTypes(
                                " TYPE " + newCol.pgType;
 
       txn.exec(alterQuery);
+
+      if (!newCol.defaultValue.empty() &&
+          newCol.defaultValue != oldCol.defaultValue) {
+        try {
+          std::string defaultQuery =
+              "ALTER TABLE " + txn.quote_name(lowerSchema) + "." +
+              txn.quote_name(lowerTable) + " ALTER COLUMN " +
+              txn.quote_name(lowerColName) + " SET DEFAULT " +
+              newCol.defaultValue;
+          txn.exec(defaultQuery);
+        } catch (const std::exception &e) {
+          Logger::warning(LogCategory::TRANSFER, "updateColumnTypes",
+                          "Failed to update DEFAULT value for " + schemaName +
+                              "." + tableName + "." + newCol.name + ": " +
+                              std::string(e.what()));
+        }
+      }
 
       if (oldCol.isNullable != newCol.isNullable) {
         if (!newCol.isNullable) {

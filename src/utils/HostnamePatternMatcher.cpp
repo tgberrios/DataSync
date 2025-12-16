@@ -1,5 +1,6 @@
 #include "utils/HostnamePatternMatcher.h"
 #include "utils/string_utils.h"
+#include <cstring>
 
 std::string
 HostnamePatternMatcher::deriveClusterName(const std::string &hostname) {
@@ -47,8 +48,19 @@ bool HostnamePatternMatcher::matchesPattern(const std::string &hostname,
                                             const char *const *patterns,
                                             size_t count) {
   for (size_t i = 0; i < count; ++i) {
-    if (hostname.find(patterns[i]) != std::string::npos)
-      return true;
+    size_t pos = hostname.find(patterns[i]);
+    if (pos != std::string::npos) {
+      if (pos == 0 || hostname[pos - 1] == '-' || hostname[pos - 1] == '_' ||
+          hostname[pos - 1] == '.') {
+        size_t patternLen = strlen(patterns[i]);
+        if (pos + patternLen == hostname.length() ||
+            hostname[pos + patternLen] == '-' ||
+            hostname[pos + patternLen] == '_' ||
+            hostname[pos + patternLen] == '.') {
+          return true;
+        }
+      }
+    }
   }
   return false;
 }

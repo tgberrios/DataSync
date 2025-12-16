@@ -141,14 +141,20 @@ private:
       return;
     }
 
-    std::lock_guard<std::mutex> lock(logMutex);
-
     std::string levelStr = getLevelString(level);
     std::string categoryStr = getCategoryString(category);
     std::string timestamp = getCurrentTimestamp();
 
-    if (dbWriter_ && dbWriter_->isEnabled()) {
-      dbWriter_->writeParsed(levelStr, categoryStr, function, message);
+    DatabaseLogWriter *writer = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(logMutex);
+      if (dbWriter_ && dbWriter_->isEnabled() && dbWriter_->isOpen()) {
+        writer = dbWriter_.get();
+      }
+    }
+
+    if (writer) {
+      writer->writeParsed(levelStr, categoryStr, function, message);
     }
   }
 

@@ -41,6 +41,14 @@ struct ColumnMetadata {
   std::string sensitivity_level;
   bool contains_pii = false;
   bool contains_phi = false;
+  std::string pii_detection_method;
+  double pii_confidence_score = 0.0;
+  std::string pii_category;
+  std::string phi_detection_method;
+  double phi_confidence_score = 0.0;
+  bool masking_applied = false;
+  bool encryption_applied = false;
+  bool tokenization_applied = false;
 
   json column_metadata_json;
 };
@@ -57,6 +65,18 @@ private:
   void analyzeColumnStatistics(ColumnMetadata &column,
                                const std::string &connectionString);
   void classifyColumn(ColumnMetadata &column);
+  void detectPIIAdvanced(ColumnMetadata &column,
+                         const std::string &connectionString);
+  bool detectPIIByContent(const std::string &sampleValue,
+                          const std::string &dataType);
+  bool detectPHIByContent(const std::string &sampleValue,
+                          const std::string &dataType);
+  std::string detectPIICategory(const std::string &sampleValue,
+                                const std::string &dataType);
+  double calculatePIIConfidence(const std::string &columnName,
+                                const std::string &dataType,
+                                const std::string &sampleValue,
+                                bool contentMatch);
   json buildColumnMetadataJSON(const ColumnMetadata &column,
                                const std::string &engine);
   std::string escapeSQL(const std::string &str);

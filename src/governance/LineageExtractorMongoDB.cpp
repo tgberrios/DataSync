@@ -165,11 +165,32 @@ void LineageExtractorMongoDB::disconnect() {
 
 std::string
 LineageExtractorMongoDB::generateEdgeKey(const MongoDBLineageEdge &edge) {
+  auto escapeKeyComponent = [](const std::string &str) -> std::string {
+    std::string escaped = str;
+    size_t pos = 0;
+    while ((pos = escaped.find('|', pos)) != std::string::npos) {
+      escaped.replace(pos, 1, "||");
+      pos += 2;
+    }
+    while ((pos = escaped.find('\n', pos)) != std::string::npos) {
+      escaped.replace(pos, 1, "\\n");
+      pos += 2;
+    }
+    while ((pos = escaped.find('\r', pos)) != std::string::npos) {
+      escaped.replace(pos, 1, "\\r");
+      pos += 2;
+    }
+    return escaped;
+  };
+
   std::stringstream ss;
-  ss << edge.server_name << "|" << edge.database_name << "|"
-     << edge.source_collection << "|" << edge.source_field << "|"
-     << edge.target_collection << "|" << edge.target_field << "|"
-     << edge.relationship_type;
+  ss << escapeKeyComponent(edge.server_name) << "|"
+     << escapeKeyComponent(edge.database_name) << "|"
+     << escapeKeyComponent(edge.source_collection) << "|"
+     << escapeKeyComponent(edge.source_field) << "|"
+     << escapeKeyComponent(edge.target_collection) << "|"
+     << escapeKeyComponent(edge.target_field) << "|"
+     << escapeKeyComponent(edge.relationship_type);
   return ss.str();
 }
 

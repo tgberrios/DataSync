@@ -2,8 +2,11 @@
 #include "catalog/catalog_lock.h"
 #include "core/Config.h"
 #include "core/logger.h"
+#include "engines/mariadb_engine.h"
 #include "engines/mongodb_engine.h"
+#include "engines/mssql_engine.h"
 #include "engines/oracle_engine.h"
+#include "utils/connection_utils.h"
 #include "utils/string_utils.h"
 #include <algorithm>
 #include <sql.h>
@@ -362,9 +365,23 @@ int64_t CatalogManager::getTableSize(const std::string &schema,
           return result[0][0].as<int64_t>();
         }
       } catch (const std::exception &e) {
-        Logger::error(LogCategory::DATABASE, "CatalogManager",
-                      "Error getting PostgreSQL table size: " +
-                          std::string(e.what()));
+        std::string errorMsg = e.what();
+        if (errorMsg.find("does not exist") != std::string::npos ||
+            errorMsg.find("relation") != std::string::npos) {
+          Logger::warning(LogCategory::DATABASE, "CatalogManager",
+                          "Table " + schema + "." + table +
+                              " does not exist in PostgreSQL source");
+        } else if (errorMsg.find("connection") != std::string::npos ||
+                   errorMsg.find("timeout") != std::string::npos) {
+          Logger::error(LogCategory::DATABASE, "CatalogManager",
+                        "Connection error getting PostgreSQL table size for " +
+                            schema + "." + table + ": " +
+                            std::string(e.what()));
+        } else {
+          Logger::error(LogCategory::DATABASE, "CatalogManager",
+                        "Error getting PostgreSQL table size for " + schema +
+                            "." + table + ": " + std::string(e.what()));
+        }
         return 0;
       }
     }

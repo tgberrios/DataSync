@@ -13,7 +13,7 @@ private:
   std::string connectionString_;
   bool statementPrepared_;
   bool enabled_;
-  std::mutex mutex_;
+  mutable std::mutex mutex_;
 
 public:
   explicit DatabaseLogWriter(const std::string &connectionString);
@@ -30,6 +30,7 @@ public:
                    const std::string &function, const std::string &message);
 
 private:
+  void prepareStatementUnlocked();
   void prepareStatement();
 };
 

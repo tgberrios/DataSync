@@ -4,6 +4,7 @@
 #include "catalog/catalog_manager.h"
 #include "engines/mongodb_engine.h"
 #include "sync/DatabaseToPostgresSync.h"
+#include "sync/ICDCHandler.h"
 #include "sync/TableProcessorThreadPool.h"
 #include <algorithm>
 #include <bson/bson.h>
@@ -18,7 +19,7 @@
 using json = nlohmann::json;
 using namespace ParallelProcessing;
 
-class MongoDBToPostgres : public DatabaseToPostgresSync {
+class MongoDBToPostgres : public DatabaseToPostgresSync, public ICDCHandler {
 public:
   static constexpr int MAX_SAMPLES = 100;
   static constexpr int LOG_INTERVAL = 10000;
@@ -58,6 +59,13 @@ private:
   void updateLastSyncTime(pqxx::connection &pgConn,
                           const std::string &schema_name,
                           const std::string &table_name);
+  void processTableCDC(const DatabaseToPostgresSync::TableInfo &table,
+                       pqxx::connection &pgConn) override;
+
+  bool supportsCDC() const override { return true; }
+  std::string getCDCMechanism() const override {
+    return "Change Streams (Native)";
+  }
 };
 
 #endif

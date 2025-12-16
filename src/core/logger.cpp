@@ -1,6 +1,8 @@
 #include "core/logger.h"
 #include "core/Config.h"
+#include "core/database_config.h"
 #include <algorithm>
+#include <pqxx/pqxx>
 
 // Static member initialization for Logger class. dbWriter_ holds the database
 // log writer instance, logMutex provides thread safety for logging operations.
@@ -49,6 +51,11 @@ void Logger::loadDebugConfig() {
   std::lock_guard<std::mutex> lock(configMutex);
 
   try {
+    if (!DatabaseConfig::isInitialized()) {
+      setDefaultConfig();
+      return;
+    }
+
     std::string connStr = DatabaseConfig::getPostgresConnectionString();
     if (connStr.empty()) {
       setDefaultConfig();
@@ -216,6 +223,10 @@ void Logger::initialize() {
   std::lock_guard<std::mutex> lock(logMutex);
 
   try {
+    if (!DatabaseConfig::isInitialized()) {
+      return;
+    }
+
     std::string connStr = DatabaseConfig::getPostgresConnectionString();
     if (!connStr.empty()) {
       dbWriter_ = std::make_unique<DatabaseLogWriter>(connStr);

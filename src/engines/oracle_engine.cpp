@@ -415,7 +415,7 @@ std::vector<CatalogTableInfo> OracleEngine::discoverTables() {
   for (char c : upperSchema) {
     if (c == '\'') {
       escapedSchema += "''";
-    } else if (c >= 32 && c <= 126 && c != ';' && c != '-' && c != '\\') {
+    } else if (c >= 32 && c <= 126 && c != ';' && c != '\\') {
       escapedSchema += c;
     }
   }
@@ -475,7 +475,7 @@ OracleEngine::detectPrimaryKey(const std::string &schema,
   for (char c : upperSchema) {
     if (c == '\'') {
       escapedSchema += "''";
-    } else if (c >= 32 && c <= 126 && c != ';' && c != '-' && c != '\\') {
+    } else if (c >= 32 && c <= 126 && c != ';' && c != '\\') {
       escapedSchema += c;
     }
   }
@@ -489,7 +489,7 @@ OracleEngine::detectPrimaryKey(const std::string &schema,
   for (char c : upperTable) {
     if (c == '\'') {
       escapedTable += "''";
-    } else if (c >= 32 && c <= 126 && c != ';' && c != '-' && c != '\\') {
+    } else if (c >= 32 && c <= 126 && c != ';' && c != '\\') {
       escapedTable += c;
     }
   }
@@ -545,7 +545,7 @@ std::string OracleEngine::detectTimeColumn(const std::string &schema,
   for (char c : upperSchema) {
     if (c == '\'') {
       escapedSchema += "''";
-    } else if (c >= 32 && c <= 126 && c != ';' && c != '-' && c != '\\') {
+    } else if (c >= 32 && c <= 126 && c != ';' && c != '\\') {
       escapedSchema += c;
     }
   }
@@ -559,7 +559,7 @@ std::string OracleEngine::detectTimeColumn(const std::string &schema,
   for (char c : upperTable) {
     if (c == '\'') {
       escapedTable += "''";
-    } else if (c >= 32 && c <= 126 && c != ';' && c != '-' && c != '\\') {
+    } else if (c >= 32 && c <= 126 && c != ';' && c != '\\') {
       escapedTable += c;
     }
   }
@@ -641,7 +641,8 @@ OracleEngine::getColumnCounts(const std::string &schema,
   }
 
   std::string query =
-      "SELECT COUNT(*) FROM \"" + escapedSchema + "\".\"" + escapedTable + "\"";
+      "SELECT COUNT(*) FROM all_tab_columns WHERE UPPER(owner) = '" +
+      escapedSchema + "' AND UPPER(table_name) = '" + escapedTable + "'";
 
   auto results = executeQuery(conn.get(), query);
   if (!results.empty() && !results[0].empty()) {
@@ -652,7 +653,7 @@ OracleEngine::getColumnCounts(const std::string &schema,
           sourceCount = std::stoi(countStr);
         } catch (const std::exception &e) {
           Logger::warning(LogCategory::DATABASE, "OracleEngine",
-                          "Failed to parse source count: " +
+                          "Failed to parse source column count: " +
                               std::string(e.what()));
           sourceCount = 0;
         }
@@ -661,11 +662,11 @@ OracleEngine::getColumnCounts(const std::string &schema,
       }
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "OracleEngine",
-                    "Failed to parse source row count: " +
+                    "Failed to parse source column count: " +
                         std::string(e.what()));
     } catch (...) {
       Logger::error(LogCategory::DATABASE, "OracleEngine",
-                    "Failed to parse source row count: unknown error");
+                    "Failed to parse source column count: unknown error");
     }
   }
 
@@ -679,17 +680,18 @@ OracleEngine::getColumnCounts(const std::string &schema,
     std::transform(lowerTable.begin(), lowerTable.end(), lowerTable.begin(),
                    ::tolower);
 
-    std::string pgQuery =
-        "SELECT COUNT(*) FROM \"" + lowerSchema + "\".\"" + lowerTable + "\"";
-
-    auto pgResults = txn.exec(pgQuery);
+    auto pgResults =
+        txn.exec_params("SELECT COUNT(*) FROM information_schema.columns "
+                        "WHERE table_schema = $1 AND table_name = $2",
+                        lowerSchema, lowerTable);
     if (!pgResults.empty()) {
       targetCount = pgResults[0][0].as<int>();
     }
     txn.commit();
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "OracleEngine",
-                  "Failed to get target row count: " + std::string(e.what()));
+                  "Failed to get target column count: " +
+                      std::string(e.what()));
   }
 
   return {sourceCount, targetCount};
@@ -723,7 +725,7 @@ OracleEngine::getTableColumns(const std::string &schema,
   for (char c : upperSchema) {
     if (c == '\'') {
       escapedSchema += "''";
-    } else if (c >= 32 && c <= 126 && c != ';' && c != '-' && c != '\\') {
+    } else if (c >= 32 && c <= 126 && c != ';' && c != '\\') {
       escapedSchema += c;
     }
   }
@@ -737,7 +739,7 @@ OracleEngine::getTableColumns(const std::string &schema,
   for (char c : upperTable) {
     if (c == '\'') {
       escapedTable += "''";
-    } else if (c >= 32 && c <= 126 && c != ';' && c != '-' && c != '\\') {
+    } else if (c >= 32 && c <= 126 && c != ';' && c != '\\') {
       escapedTable += c;
     }
   }

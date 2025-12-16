@@ -30,10 +30,10 @@ struct SyncConfig {
                                   std::to_string(MIN_CHUNK_SIZE) + " and " +
                                   std::to_string(MAX_CHUNK_SIZE));
     }
-    CHUNK_SIZE = newSize;
+    CHUNK_SIZE.store(newSize);
   }
 
-  static size_t getChunkSize() { return CHUNK_SIZE; }
+  static size_t getChunkSize() { return CHUNK_SIZE.load(); }
 
   static void setSyncInterval(size_t newInterval) {
     if (newInterval < MIN_SYNC_INTERVAL || newInterval > MAX_SYNC_INTERVAL) {
@@ -41,10 +41,10 @@ struct SyncConfig {
                                   std::to_string(MIN_SYNC_INTERVAL) + " and " +
                                   std::to_string(MAX_SYNC_INTERVAL));
     }
-    SYNC_INTERVAL_SECONDS = newInterval;
+    SYNC_INTERVAL_SECONDS.store(newInterval);
   }
 
-  static size_t getSyncInterval() { return SYNC_INTERVAL_SECONDS; }
+  static size_t getSyncInterval() { return SYNC_INTERVAL_SECONDS.load(); }
 
   static void setMaxWorkers(size_t v) {
     if (v < MIN_MAX_WORKERS || v > MAX_MAX_WORKERS) {
@@ -52,10 +52,10 @@ struct SyncConfig {
                                   std::to_string(MIN_MAX_WORKERS) + " and " +
                                   std::to_string(MAX_MAX_WORKERS));
     }
-    MAX_WORKERS = v;
+    MAX_WORKERS.store(v);
   }
 
-  static size_t getMaxWorkers() { return MAX_WORKERS; }
+  static size_t getMaxWorkers() { return MAX_WORKERS.load(); }
 
   static void setMaxTablesPerCycle(size_t v) {
     if (v < MIN_MAX_TABLES_PER_CYCLE || v > MAX_MAX_TABLES_PER_CYCLE) {
@@ -64,10 +64,10 @@ struct SyncConfig {
                                   " and " +
                                   std::to_string(MAX_MAX_TABLES_PER_CYCLE));
     }
-    MAX_TABLES_PER_CYCLE = v;
+    MAX_TABLES_PER_CYCLE.store(v);
   }
 
-  static size_t getMaxTablesPerCycle() { return MAX_TABLES_PER_CYCLE; }
+  static size_t getMaxTablesPerCycle() { return MAX_TABLES_PER_CYCLE.load(); }
 };
 
 #endif

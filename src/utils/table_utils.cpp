@@ -32,9 +32,11 @@ bool TableUtils::tableExistsInPostgres(pqxx::connection &conn,
         txn.exec_params("SELECT COUNT(*) FROM information_schema.tables "
                         "WHERE table_schema = $1 AND table_name = $2",
                         lowerSchema, lowerTable);
+
+    bool exists = !result.empty() && result[0][0].as<int>() > 0;
     txn.commit();
 
-    return !result.empty() && result[0][0].as<int>() > 0;
+    return exists;
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "TableUtils",
                   "Error checking table existence: " + std::string(e.what()));

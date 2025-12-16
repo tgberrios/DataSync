@@ -122,13 +122,36 @@ LineageExtractorMSSQL::executeQuery(SQLHDBC conn, const std::string &query) {
 }
 
 std::string LineageExtractorMSSQL::generateEdgeKey(const LineageEdge &edge) {
+  auto escapeKeyComponent = [](const std::string &str) -> std::string {
+    std::string escaped = str;
+    size_t pos = 0;
+    while ((pos = escaped.find('|', pos)) != std::string::npos) {
+      escaped.replace(pos, 1, "||");
+      pos += 2;
+    }
+    while ((pos = escaped.find('\n', pos)) != std::string::npos) {
+      escaped.replace(pos, 1, "\\n");
+      pos += 2;
+    }
+    while ((pos = escaped.find('\r', pos)) != std::string::npos) {
+      escaped.replace(pos, 1, "\\r");
+      pos += 2;
+    }
+    return escaped;
+  };
+
   std::stringstream ss;
-  ss << edge.server_name << "|" << edge.database_name << "|" << edge.schema_name
-     << "|" << edge.object_name << "|" << edge.object_type << "|"
-     << (edge.column_name.empty() ? "" : edge.column_name) << "|"
-     << edge.target_object_name << "|" << edge.target_object_type << "|"
-     << (edge.target_column_name.empty() ? "" : edge.target_column_name) << "|"
-     << edge.relationship_type;
+  ss << escapeKeyComponent(edge.server_name) << "|"
+     << escapeKeyComponent(edge.database_name) << "|"
+     << escapeKeyComponent(edge.schema_name) << "|"
+     << escapeKeyComponent(edge.object_name) << "|"
+     << escapeKeyComponent(edge.object_type) << "|"
+     << escapeKeyComponent(edge.column_name.empty() ? "" : edge.column_name)
+     << "|" << escapeKeyComponent(edge.target_object_name) << "|"
+     << escapeKeyComponent(edge.target_object_type) << "|"
+     << escapeKeyComponent(
+            edge.target_column_name.empty() ? "" : edge.target_column_name)
+     << "|" << escapeKeyComponent(edge.relationship_type);
   return ss.str();
 }
 

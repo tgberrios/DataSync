@@ -91,13 +91,36 @@ LineageExtractorMariaDB::executeQuery(MYSQL *conn, const std::string &query) {
 
 std::string
 LineageExtractorMariaDB::generateEdgeKey(const MariaDBLineageEdge &edge) {
+  auto escapeKeyComponent = [](const std::string &str) -> std::string {
+    std::string escaped = str;
+    size_t pos = 0;
+    while ((pos = escaped.find('|', pos)) != std::string::npos) {
+      escaped.replace(pos, 1, "||");
+      pos += 2;
+    }
+    while ((pos = escaped.find('\n', pos)) != std::string::npos) {
+      escaped.replace(pos, 1, "\\n");
+      pos += 2;
+    }
+    while ((pos = escaped.find('\r', pos)) != std::string::npos) {
+      escaped.replace(pos, 1, "\\r");
+      pos += 2;
+    }
+    return escaped;
+  };
+
   std::stringstream ss;
-  ss << edge.server_name << "|" << edge.database_name << "|" << edge.schema_name
-     << "|" << edge.object_name << "|" << edge.object_type << "|"
-     << (edge.column_name.empty() ? "" : edge.column_name) << "|"
-     << edge.target_object_name << "|" << edge.target_object_type << "|"
-     << (edge.target_column_name.empty() ? "" : edge.target_column_name) << "|"
-     << edge.relationship_type;
+  ss << escapeKeyComponent(edge.server_name) << "|"
+     << escapeKeyComponent(edge.database_name) << "|"
+     << escapeKeyComponent(edge.schema_name) << "|"
+     << escapeKeyComponent(edge.object_name) << "|"
+     << escapeKeyComponent(edge.object_type) << "|"
+     << escapeKeyComponent(edge.column_name.empty() ? "" : edge.column_name)
+     << "|" << escapeKeyComponent(edge.target_object_name) << "|"
+     << escapeKeyComponent(edge.target_object_type) << "|"
+     << escapeKeyComponent(
+            edge.target_column_name.empty() ? "" : edge.target_column_name)
+     << "|" << escapeKeyComponent(edge.relationship_type);
   return ss.str();
 }
 
@@ -258,8 +281,110 @@ void LineageExtractorMariaDB::extractForeignKeyDependencies() {
 }
 
 void LineageExtractorMariaDB::extractTableDependencies() {
-  Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
-               "Table dependencies extraction not implemented for MariaDB");
+  try {
+    auto params = ConnectionStringParser::parse(connectionString_);
+    if (!params) {
+      return;
+    }
+
+    MySQLConnection conn(*params);
+    if (!conn.isValid()) {
+      return;
+    }
+
+    MYSQL *mysqlConn = conn.get();
+    std::string dbEscaped = escapeSQL(mysqlConn, databaseName_);
+
+    std::string query = "SELECT "
+                        "ROUTINE_SCHEMA, "
+                        "ROUTINE_NAME, "
+                        "ROUTINE_DEFINITION "
+                        "FROM INFORMATION_SCHEMA.ROUTINES "
+                        "WHERE ROUTINE_SCHEMA = '" +
+                        dbEscaped +
+                        "' "
+                        "AND ROUTINE_TYPE IN ('PROCEDURE', 'FUNCTION')";
+
+    auto results = executeQuery(mysqlConn, query);
+
+    std::regex tableRegex(
+        R"(\bFROM\s+[`"]?(\w+)[`"]?\.?[`"]?(\w+)[`"]?|\bJOIN\s+[`"]?(\w+)[`"]?\.?[`"]?(\w+)[`"]?|\bINTO\s+[`"]?(\w+)[`"]?\.?[`"]?(\w+)[`"]?|\bUPDATE\s+[`"]?(\w+)[`"]?\.?[`"]?(\w+)[`"]?)",
+        std::regex_constants::icase);
+
+    int dependenciesFound = 0;
+    for (const auto &row : results) {
+      if (row.size() >= 3) {
+        std::string routineSchema = row[0];
+        std::string routineName = row[1];
+        std::string routineDefinition = row[2];
+
+        std::set<std::pair<std::string, std::string>> referencedTables;
+
+        std::sregex_iterator iter(routineDefinition.begin(),
+                                  routineDefinition.end(), tableRegex);
+        std::sregex_iterator end;
+        for (; iter != end; ++iter) {
+          std::smatch match = *iter;
+          std::string schema;
+          std::string table;
+
+          for (size_t i = 1; i < match.size(); i += 2) {
+            if (match[i].matched && !match[i].str().empty()) {
+              schema = match[i].str();
+              if (i + 1 < match.size() && match[i + 1].matched &&
+                  !match[i + 1].str().empty()) {
+                table = match[i + 1].str();
+              }
+            } else if (i + 1 < match.size() && match[i + 1].matched &&
+                       !match[i + 1].str().empty()) {
+              table = match[i + 1].str();
+              schema = databaseName_;
+            }
+
+            if (!table.empty()) {
+              if (schema.empty() || schema == databaseName_) {
+                referencedTables.insert({databaseName_, table});
+              } else {
+                referencedTables.insert({schema, table});
+              }
+              break;
+            }
+          }
+        }
+
+        for (const auto &refTable : referencedTables) {
+          MariaDBLineageEdge edge;
+          edge.server_name = serverName_;
+          edge.database_name = routineSchema;
+          edge.schema_name = routineSchema;
+          edge.object_name = routineName;
+          edge.object_type = "ROUTINE";
+          edge.target_object_name = refTable.second;
+          edge.target_object_type = "TABLE";
+          edge.relationship_type = "ROUTINE_REFERENCES_TABLE";
+          edge.definition_text = "Routine references table";
+          edge.dependency_level = 2;
+          edge.discovery_method = "INFORMATION_SCHEMA.ROUTINES";
+          edge.confidence_score = 0.8;
+          edge.edge_key = generateEdgeKey(edge);
+
+          {
+            std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
+            lineageEdges_.push_back(edge);
+          }
+          dependenciesFound++;
+        }
+      }
+    }
+
+    Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
+                 "Extracted " + std::to_string(dependenciesFound) +
+                     " table dependencies from routines");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
+                  "Error extracting table dependencies: " +
+                      std::string(e.what()));
+  }
 }
 
 void LineageExtractorMariaDB::extractViewDependencies() {
@@ -291,10 +416,9 @@ void LineageExtractorMariaDB::extractViewDependencies() {
                  "Found " + std::to_string(results.size()) +
                      " views to analyze");
 
-    std::regex tableRegex(R"(\bFROM\s+[`"]?(\w+)[`"]?\.?[`"]?(\w+)[`"]?)",
-                          std::regex_constants::icase);
-    std::regex joinRegex(R"(\bJOIN\s+[`"]?(\w+)[`"]?\.?[`"]?(\w+)[`"]?)",
-                         std::regex_constants::icase);
+    std::regex tableRegex(
+        R"(\bFROM\s+(?:`?(\w+)`?\.)?`?(\w+)`?|\bJOIN\s+(?:`?(\w+)`?\.)?`?(\w+)`?|\bINTO\s+(?:`?(\w+)`?\.)?`?(\w+)`?|\bUPDATE\s+(?:`?(\w+)`?\.)?`?(\w+)`?)",
+        std::regex_constants::icase);
 
     int viewEdgesAdded = 0;
     for (const auto &row : results) {
@@ -310,25 +434,30 @@ void LineageExtractorMariaDB::extractViewDependencies() {
         std::sregex_iterator end;
         for (; iter != end; ++iter) {
           std::smatch match = *iter;
-          std::string schema = match[1].str();
-          std::string table = match[2].str();
-          if (schema == databaseName_ || schema.empty()) {
-            referencedTables.insert({databaseName_, table});
-          } else {
-            referencedTables.insert({schema, table});
-          }
-        }
+          std::string schema;
+          std::string table;
 
-        std::sregex_iterator joinIter(viewDefinition.begin(),
-                                      viewDefinition.end(), joinRegex);
-        for (; joinIter != end; ++joinIter) {
-          std::smatch match = *joinIter;
-          std::string schema = match[1].str();
-          std::string table = match[2].str();
-          if (schema == databaseName_ || schema.empty()) {
-            referencedTables.insert({databaseName_, table});
-          } else {
-            referencedTables.insert({schema, table});
+          for (size_t i = 1; i < match.size(); i += 2) {
+            if (match[i].matched && !match[i].str().empty()) {
+              schema = match[i].str();
+              if (i + 1 < match.size() && match[i + 1].matched &&
+                  !match[i + 1].str().empty()) {
+                table = match[i + 1].str();
+              }
+            } else if (i + 1 < match.size() && match[i + 1].matched &&
+                       !match[i + 1].str().empty()) {
+              table = match[i + 1].str();
+              schema = databaseName_;
+            }
+
+            if (!table.empty()) {
+              if (schema.empty() || schema == databaseName_) {
+                referencedTables.insert({databaseName_, table});
+              } else {
+                referencedTables.insert({schema, table});
+              }
+              break;
+            }
           }
         }
 
@@ -445,6 +574,36 @@ void LineageExtractorMariaDB::storeLineage() {
   try {
     std::string connStr = DatabaseConfig::getPostgresConnectionString();
     pqxx::connection conn(connStr);
+
+    pqxx::work createTxn(conn);
+    std::string createTableSQL =
+        "CREATE TABLE IF NOT EXISTS metadata.mdb_lineage ("
+        "id SERIAL PRIMARY KEY,"
+        "edge_key VARCHAR(500) UNIQUE NOT NULL,"
+        "server_name VARCHAR(200) NOT NULL,"
+        "database_name VARCHAR(100) NOT NULL,"
+        "schema_name VARCHAR(100) NOT NULL,"
+        "object_name VARCHAR(100) NOT NULL,"
+        "object_type VARCHAR(50) NOT NULL,"
+        "column_name VARCHAR(100),"
+        "target_object_name VARCHAR(100),"
+        "target_object_type VARCHAR(50),"
+        "target_column_name VARCHAR(100),"
+        "relationship_type VARCHAR(50) NOT NULL,"
+        "definition_text TEXT,"
+        "dependency_level INTEGER DEFAULT 1,"
+        "discovery_method VARCHAR(50),"
+        "discovered_by VARCHAR(100),"
+        "confidence_score DECIMAL(3,2) DEFAULT 1.0,"
+        "first_seen_at TIMESTAMP DEFAULT NOW(),"
+        "last_seen_at TIMESTAMP DEFAULT NOW(),"
+        "created_at TIMESTAMP DEFAULT NOW(),"
+        "updated_at TIMESTAMP DEFAULT NOW()"
+        ");";
+    createTxn.exec(createTableSQL);
+    createTxn.exec("ALTER TABLE metadata.mdb_lineage ADD COLUMN IF NOT EXISTS "
+                   "dependency_level INTEGER DEFAULT 1;");
+    createTxn.commit();
 
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
                  "Connected to PostgreSQL, starting to store " +

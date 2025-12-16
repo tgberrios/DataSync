@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <fcntl.h>
 #include <fstream>
 #include <iomanip>
 #include <mongoc/mongoc.h>
@@ -14,8 +15,28 @@
 #include <sql.h>
 #include <sqlext.h>
 #include <sstream>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <unordered_set>
+
+static std::string extractOracleSchema(const std::string &connectionString) {
+  std::istringstream ss(connectionString);
+  std::string token;
+  while (std::getline(ss, token, ';')) {
+    auto pos = token.find('=');
+    if (pos == std::string::npos)
+      continue;
+    std::string key = token.substr(0, pos);
+    std::string value = token.substr(pos + 1);
+    key.erase(0, key.find_first_not_of(" \t\r\n"));
+    key.erase(key.find_last_not_of(" \t\r\n") + 1);
+    value.erase(0, value.find_first_not_of(" \t\r\n"));
+    value.erase(value.find_last_not_of(" \t\r\n") + 1);
+    if (key == "user" || key == "USER")
+      return value;
+  }
+  return "";
+}
 
 CustomJobExecutor::CustomJobExecutor(std::string metadataConnectionString)
     : metadataConnectionString_(std::move(metadataConnectionString)),
@@ -316,9 +337,106 @@ std::vector<json>
 CustomJobExecutor::executeQueryOracle(const std::string &connectionString,
                                       const std::string &query) {
   std::vector<json> results;
-  Logger::warning(
-      LogCategory::TRANSFER, "executeQueryOracle",
-      "Oracle query execution not yet fully implemented for custom jobs");
+  try {
+    auto conn = std::make_unique<OCIConnection>(connectionString);
+    if (!conn->isValid()) {
+      throw std::runtime_error("Failed to connect to Oracle");
+    }
+
+    OCIStmt *stmt = nullptr;
+    OCIError *err = conn->getErr();
+    OCISvcCtx *svc = conn->getSvc();
+    OCIEnv *env = conn->getEnv();
+
+    struct StmtGuard {
+      OCIStmt *stmt_;
+      StmtGuard(OCIStmt *s) : stmt_(s) {}
+      ~StmtGuard() {
+        if (stmt_) {
+          OCIHandleFree(stmt_, OCI_HTYPE_STMT);
+        }
+      }
+    };
+
+    sword status = OCIHandleAlloc((dvoid *)env, (dvoid **)&stmt, OCI_HTYPE_STMT,
+                                  0, nullptr);
+    if (status != OCI_SUCCESS) {
+      throw std::runtime_error("OCIHandleAlloc(STMT) failed");
+    }
+
+    StmtGuard guard(stmt);
+
+    status = OCIStmtPrepare(stmt, err, (OraText *)query.c_str(), query.length(),
+                            OCI_NTV_SYNTAX, OCI_DEFAULT);
+    if (status != OCI_SUCCESS) {
+      throw std::runtime_error("OCIStmtPrepare failed");
+    }
+
+    status =
+        OCIStmtExecute(svc, stmt, err, 0, 0, nullptr, nullptr, OCI_DEFAULT);
+    if (status != OCI_SUCCESS && status != OCI_SUCCESS_WITH_INFO) {
+      throw std::runtime_error("OCIStmtExecute failed");
+    }
+
+    ub4 numCols = 0;
+    OCIAttrGet(stmt, OCI_HTYPE_STMT, &numCols, nullptr, OCI_ATTR_PARAM_COUNT,
+               err);
+
+    if (numCols == 0) {
+      return results;
+    }
+
+    std::vector<OCIDefine *> defines(numCols);
+    std::vector<std::vector<char>> buffers(numCols);
+    std::vector<ub2> lengths(numCols, 0);
+    std::vector<sb2> inds(numCols, -1);
+
+    for (ub4 i = 0; i < numCols; ++i) {
+      buffers[i].resize(4000, 0);
+      status =
+          OCIDefineByPos(stmt, &defines[i], err, i + 1, buffers[i].data(), 4000,
+                         SQLT_STR, &inds[i], &lengths[i], nullptr, OCI_DEFAULT);
+      if (status != OCI_SUCCESS) {
+        throw std::runtime_error("OCIDefineByPos failed for column " +
+                                 std::to_string(i + 1));
+      }
+    }
+
+    std::vector<std::string> columnNames;
+    for (ub4 i = 0; i < numCols; ++i) {
+      columnNames.push_back("col" + std::to_string(i + 1));
+    }
+
+    while (OCIStmtFetch(stmt, err, 1, OCI_FETCH_NEXT, OCI_DEFAULT) ==
+           OCI_SUCCESS) {
+      json rowObj = json::object();
+      for (ub4 i = 0; i < numCols; ++i) {
+        if (inds[i] == -1) {
+          rowObj[columnNames[i]] = nullptr;
+        } else if (lengths[i] > 0 && lengths[i] <= 4000) {
+          std::string value(buffers[i].data(), lengths[i]);
+          try {
+            if (value.find('.') != std::string::npos) {
+              double numValue = std::stod(value);
+              rowObj[columnNames[i]] = numValue;
+            } else {
+              int64_t numValue = std::stoll(value);
+              rowObj[columnNames[i]] = numValue;
+            }
+          } catch (...) {
+            rowObj[columnNames[i]] = value;
+          }
+        } else {
+          rowObj[columnNames[i]] = "";
+        }
+      }
+      results.push_back(rowObj);
+    }
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "executeQueryOracle",
+                  "Error executing Oracle query: " + std::string(e.what()));
+    throw;
+  }
   return results;
 }
 
@@ -326,9 +444,66 @@ std::vector<json>
 CustomJobExecutor::executeQueryMongoDB(const std::string &connectionString,
                                        const std::string &query) {
   std::vector<json> results;
-  Logger::warning(
-      LogCategory::TRANSFER, "executeQueryMongoDB",
-      "MongoDB query execution not yet implemented for custom jobs");
+  try {
+    MongoDBEngine engine(connectionString);
+    if (!engine.isValid()) {
+      throw std::runtime_error("Failed to connect to MongoDB");
+    }
+
+    bson_error_t error;
+    bson_t *bsonQuery = bson_new_from_json((const uint8_t *)query.c_str(),
+                                           query.length(), &error);
+    if (!bsonQuery) {
+      throw std::runtime_error("Failed to parse MongoDB query as JSON: " +
+                               std::string(error.message));
+    }
+
+    std::string dbName = engine.getDatabaseName();
+    if (dbName.empty()) {
+      dbName = "admin";
+    }
+
+    mongoc_collection_t *coll = mongoc_client_get_collection(
+        engine.getClient(), dbName.c_str(), "test");
+    if (!coll) {
+      bson_destroy(bsonQuery);
+      throw std::runtime_error("Failed to get MongoDB collection");
+    }
+
+    mongoc_cursor_t *cursor =
+        mongoc_collection_find_with_opts(coll, bsonQuery, nullptr, nullptr);
+
+    const bson_t *doc;
+    while (mongoc_cursor_next(cursor, &doc)) {
+      char *jsonStr = bson_as_canonical_extended_json(doc, nullptr);
+      if (jsonStr) {
+        try {
+          json docJson = json::parse(jsonStr);
+          results.push_back(docJson);
+        } catch (const json::parse_error &e) {
+          Logger::warning(LogCategory::TRANSFER, "executeQueryMongoDB",
+                          "Failed to parse document JSON: " +
+                              std::string(e.what()));
+        }
+        bson_free(jsonStr);
+      }
+    }
+
+    bson_error_t cursorError;
+    if (mongoc_cursor_error(cursor, &cursorError)) {
+      Logger::error(LogCategory::TRANSFER, "executeQueryMongoDB",
+                    "MongoDB cursor error: " +
+                        std::string(cursorError.message));
+    }
+
+    mongoc_cursor_destroy(cursor);
+    mongoc_collection_destroy(coll);
+    bson_destroy(bsonQuery);
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "executeQueryMongoDB",
+                  "Error executing MongoDB query: " + std::string(e.what()));
+    throw;
+  }
   return results;
 }
 
@@ -681,38 +856,624 @@ void CustomJobExecutor::insertDataToMariaDB(const CustomJob &job,
 
 void CustomJobExecutor::createMSSQLTable(
     const CustomJob &job, const std::vector<std::string> &columns) {
-  Logger::warning(LogCategory::TRANSFER, "createMSSQLTable",
-                  "MSSQL table creation not yet fully implemented");
+  try {
+    SQLHENV env = SQL_NULL_HENV;
+    SQLHDBC dbc = SQL_NULL_HDBC;
+    SQLRETURN ret;
+
+    ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env);
+    if (!SQL_SUCCEEDED(ret)) {
+      throw std::runtime_error("Failed to allocate ODBC environment");
+    }
+
+    ret =
+        SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION, (SQLPOINTER)SQL_OV_ODBC3, 0);
+    if (!SQL_SUCCEEDED(ret)) {
+      SQLFreeHandle(SQL_HANDLE_ENV, env);
+      throw std::runtime_error("Failed to set ODBC version");
+    }
+
+    ret = SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc);
+    if (!SQL_SUCCEEDED(ret)) {
+      SQLFreeHandle(SQL_HANDLE_ENV, env);
+      throw std::runtime_error("Failed to allocate ODBC connection");
+    }
+
+    std::vector<SQLCHAR> connStr(job.target_connection_string.begin(),
+                                 job.target_connection_string.end());
+    connStr.push_back('\0');
+    SQLCHAR outConnStr[1024];
+    SQLSMALLINT outConnStrLen;
+
+    ret = SQLDriverConnect(dbc, nullptr, connStr.data(), SQL_NTS, outConnStr,
+                           sizeof(outConnStr), &outConnStrLen,
+                           SQL_DRIVER_NOPROMPT);
+    if (!SQL_SUCCEEDED(ret)) {
+      SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+      SQLFreeHandle(SQL_HANDLE_ENV, env);
+      throw std::runtime_error("Failed to connect to MSSQL");
+    }
+
+    SQLHSTMT stmt = SQL_NULL_HSTMT;
+    ret = SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt);
+    if (!SQL_SUCCEEDED(ret)) {
+      SQLDisconnect(dbc);
+      SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+      SQLFreeHandle(SQL_HANDLE_ENV, env);
+      throw std::runtime_error("Failed to allocate ODBC statement");
+    }
+
+    std::string createSchemaQuery =
+        "IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = '" +
+        job.target_schema + "') EXEC('CREATE SCHEMA [" + job.target_schema +
+        "]')";
+    SQLExecDirect(stmt, (SQLCHAR *)createSchemaQuery.c_str(), SQL_NTS);
+    SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+
+    ret = SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt);
+    if (!SQL_SUCCEEDED(ret)) {
+      SQLDisconnect(dbc);
+      SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+      SQLFreeHandle(SQL_HANDLE_ENV, env);
+      throw std::runtime_error("Failed to allocate ODBC statement");
+    }
+
+    std::ostringstream createTable;
+    createTable << "IF NOT EXISTS (SELECT * FROM sys.tables t INNER JOIN "
+                   "sys.schemas s ON t.schema_id = s.schema_id WHERE s.name = '"
+                << job.target_schema << "' AND t.name = '" << job.target_table
+                << "') "
+                << "CREATE TABLE [" << job.target_schema << "].["
+                << job.target_table << "] (";
+
+    for (size_t i = 0; i < columns.size(); i++) {
+      if (i > 0)
+        createTable << ", ";
+      createTable << "[" << columns[i] << "] NVARCHAR(MAX)";
+    }
+
+    createTable << ", [_job_sync_at] DATETIME DEFAULT GETDATE())";
+
+    ret = SQLExecDirect(stmt, (SQLCHAR *)createTable.str().c_str(), SQL_NTS);
+    if (!SQL_SUCCEEDED(ret)) {
+      SQLCHAR sqlState[6];
+      SQLCHAR errorMsg[SQL_MAX_MESSAGE_LENGTH];
+      SQLINTEGER nativeError;
+      SQLSMALLINT msgLen;
+      std::string errorDetails = "Failed to create MSSQL table";
+      if (SQLGetDiagRec(SQL_HANDLE_STMT, stmt, 1, sqlState, &nativeError,
+                        errorMsg, SQL_MAX_MESSAGE_LENGTH,
+                        &msgLen) == SQL_SUCCESS) {
+        errorDetails += ": " + std::string((char *)errorMsg);
+      }
+      SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+      SQLDisconnect(dbc);
+      SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+      SQLFreeHandle(SQL_HANDLE_ENV, env);
+      throw std::runtime_error(errorDetails);
+    }
+
+    SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+    SQLDisconnect(dbc);
+    SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+    SQLFreeHandle(SQL_HANDLE_ENV, env);
+
+    Logger::info(LogCategory::TRANSFER, "createMSSQLTable",
+                 "Created/verified table " + job.target_schema + "." +
+                     job.target_table);
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "createMSSQLTable",
+                  "Error creating MSSQL table: " + std::string(e.what()));
+    throw;
+  }
 }
 
 void CustomJobExecutor::insertDataToMSSQL(const CustomJob &job,
                                           const std::vector<json> &data) {
-  Logger::warning(LogCategory::TRANSFER, "insertDataToMSSQL",
-                  "MSSQL data insertion not yet fully implemented");
+  try {
+    SQLHENV env = SQL_NULL_HENV;
+    SQLHDBC dbc = SQL_NULL_HDBC;
+    SQLRETURN ret;
+
+    ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env);
+    if (!SQL_SUCCEEDED(ret)) {
+      throw std::runtime_error("Failed to allocate ODBC environment");
+    }
+
+    ret =
+        SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION, (SQLPOINTER)SQL_OV_ODBC3, 0);
+    if (!SQL_SUCCEEDED(ret)) {
+      SQLFreeHandle(SQL_HANDLE_ENV, env);
+      throw std::runtime_error("Failed to set ODBC version");
+    }
+
+    ret = SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc);
+    if (!SQL_SUCCEEDED(ret)) {
+      SQLFreeHandle(SQL_HANDLE_ENV, env);
+      throw std::runtime_error("Failed to allocate ODBC connection");
+    }
+
+    std::vector<SQLCHAR> connStr(job.target_connection_string.begin(),
+                                 job.target_connection_string.end());
+    connStr.push_back('\0');
+    SQLCHAR outConnStr[1024];
+    SQLSMALLINT outConnStrLen;
+
+    ret = SQLDriverConnect(dbc, nullptr, connStr.data(), SQL_NTS, outConnStr,
+                           sizeof(outConnStr), &outConnStrLen,
+                           SQL_DRIVER_NOPROMPT);
+    if (!SQL_SUCCEEDED(ret)) {
+      SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+      SQLFreeHandle(SQL_HANDLE_ENV, env);
+      throw std::runtime_error("Failed to connect to MSSQL");
+    }
+
+    std::string truncateQuery =
+        "TRUNCATE TABLE [" + job.target_schema + "].[" + job.target_table + "]";
+    SQLHSTMT truncateStmt = SQL_NULL_HSTMT;
+    ret = SQLAllocHandle(SQL_HANDLE_STMT, dbc, &truncateStmt);
+    if (SQL_SUCCEEDED(ret)) {
+      SQLExecDirect(truncateStmt, (SQLCHAR *)truncateQuery.c_str(), SQL_NTS);
+      SQLFreeHandle(SQL_HANDLE_STMT, truncateStmt);
+    }
+
+    std::vector<std::string> detectedColumns = detectColumns(data);
+    if (detectedColumns.empty()) {
+      SQLDisconnect(dbc);
+      SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+      SQLFreeHandle(SQL_HANDLE_ENV, env);
+      return;
+    }
+
+    size_t batchSize = 100;
+    size_t inserted = 0;
+
+    for (size_t i = 0; i < data.size(); i += batchSize) {
+      std::ostringstream insertQuery;
+      insertQuery << "INSERT INTO [" << job.target_schema << "].["
+                  << job.target_table << "] (";
+
+      for (size_t j = 0; j < detectedColumns.size(); j++) {
+        if (j > 0)
+          insertQuery << ", ";
+        insertQuery << "[" << detectedColumns[j] << "]";
+      }
+      insertQuery << ", [_job_sync_at]) VALUES ";
+
+      size_t endIdx = std::min(i + batchSize, data.size());
+      for (size_t j = i; j < endIdx; j++) {
+        if (j > i)
+          insertQuery << ", ";
+
+        insertQuery << "(";
+        const json &item = data[j];
+        for (size_t k = 0; k < detectedColumns.size(); k++) {
+          if (k > 0)
+            insertQuery << ", ";
+
+          if (item.contains(detectedColumns[k])) {
+            const json &value = item[detectedColumns[k]];
+            if (value.is_string()) {
+              std::string str = value.get<std::string>();
+              std::string escaped;
+              for (char c : str) {
+                if (c == '\'')
+                  escaped += "''";
+                else if (c == '\\')
+                  escaped += "\\\\";
+                else
+                  escaped += c;
+              }
+              insertQuery << "N'" << escaped << "'";
+            } else if (value.is_number_integer()) {
+              insertQuery << value.get<int64_t>();
+            } else if (value.is_number_float()) {
+              insertQuery << value.get<double>();
+            } else if (value.is_boolean()) {
+              insertQuery << (value.get<bool>() ? "1" : "0");
+            } else if (value.is_object() || value.is_array()) {
+              std::string jsonStr = value.dump();
+              std::string escaped;
+              for (char c : jsonStr) {
+                if (c == '\'')
+                  escaped += "''";
+                else
+                  escaped += c;
+              }
+              insertQuery << "N'" << escaped << "'";
+            } else {
+              insertQuery << "NULL";
+            }
+          } else {
+            insertQuery << "NULL";
+          }
+        }
+        insertQuery << ", GETDATE())";
+      }
+
+      SQLHSTMT stmt = SQL_NULL_HSTMT;
+      ret = SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt);
+      if (SQL_SUCCEEDED(ret)) {
+        ret =
+            SQLExecDirect(stmt, (SQLCHAR *)insertQuery.str().c_str(), SQL_NTS);
+        if (!SQL_SUCCEEDED(ret)) {
+          SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+          SQLDisconnect(dbc);
+          SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+          SQLFreeHandle(SQL_HANDLE_ENV, env);
+          throw std::runtime_error("Failed to insert into MSSQL");
+        }
+        SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+        inserted += (endIdx - i);
+      }
+    }
+
+    SQLDisconnect(dbc);
+    SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+    SQLFreeHandle(SQL_HANDLE_ENV, env);
+
+    Logger::info(LogCategory::TRANSFER, "insertDataToMSSQL",
+                 "Inserted " + std::to_string(inserted) + " rows into " +
+                     job.target_schema + "." + job.target_table);
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "insertDataToMSSQL",
+                  "Error inserting data to MSSQL: " + std::string(e.what()));
+    throw;
+  }
 }
 
 void CustomJobExecutor::createOracleTable(
     const CustomJob &job, const std::vector<std::string> &columns) {
-  Logger::warning(LogCategory::TRANSFER, "createOracleTable",
-                  "Oracle table creation not yet fully implemented");
+  try {
+    auto conn = std::make_unique<OCIConnection>(job.target_connection_string);
+    if (!conn->isValid()) {
+      throw std::runtime_error("Failed to connect to Oracle");
+    }
+
+    std::string oracleSchema =
+        extractOracleSchema(job.target_connection_string);
+    if (oracleSchema.empty()) {
+      throw std::runtime_error(
+          "Failed to extract schema name from Oracle connection string");
+    }
+    std::transform(oracleSchema.begin(), oracleSchema.end(),
+                   oracleSchema.begin(), ::toupper);
+
+    OCIEnv *env = conn->getEnv();
+    OCIError *err = conn->getErr();
+    OCISvcCtx *svc = conn->getSvc();
+
+    std::ostringstream createTable;
+    createTable << "BEGIN "
+                << "EXECUTE IMMEDIATE 'CREATE TABLE \"" << oracleSchema
+                << "\".\"" << job.target_table << "\" (";
+
+    for (size_t i = 0; i < columns.size(); i++) {
+      if (i > 0)
+        createTable << ", ";
+      std::string colName = columns[i];
+      std::transform(colName.begin(), colName.end(), colName.begin(),
+                     ::toupper);
+      createTable << "\"" << colName << "\" VARCHAR2(4000)";
+    }
+
+    createTable << ", \"_JOB_SYNC_AT\" TIMESTAMP DEFAULT SYSTIMESTAMP)'; "
+                << "EXCEPTION WHEN OTHERS THEN IF SQLCODE != -955 THEN RAISE; "
+                << "END IF; "
+                << "END;";
+
+    OCIStmt *stmt = nullptr;
+    sword status =
+        OCIHandleAlloc(env, (void **)&stmt, OCI_HTYPE_STMT, 0, nullptr);
+    if (status != OCI_SUCCESS) {
+      throw std::runtime_error("OCIHandleAlloc(STMT) failed");
+    }
+
+    std::string query = createTable.str();
+    status = OCIStmtPrepare(stmt, err, (OraText *)query.c_str(), query.length(),
+                            OCI_NTV_SYNTAX, OCI_DEFAULT);
+    if (status != OCI_SUCCESS) {
+      OCIHandleFree(stmt, OCI_HTYPE_STMT);
+      throw std::runtime_error("OCIStmtPrepare failed");
+    }
+
+    status =
+        OCIStmtExecute(svc, stmt, err, 1, 0, nullptr, nullptr, OCI_DEFAULT);
+    if (status != OCI_SUCCESS && status != OCI_SUCCESS_WITH_INFO) {
+      char errbuf[512];
+      sb4 errcode = 0;
+      OCIErrorGet(err, 1, nullptr, &errcode, (OraText *)errbuf, sizeof(errbuf),
+                  OCI_HTYPE_ERROR);
+      OCIHandleFree(stmt, OCI_HTYPE_STMT);
+      throw std::runtime_error("OCIStmtExecute failed: " + std::string(errbuf));
+    }
+
+    OCIHandleFree(stmt, OCI_HTYPE_STMT);
+
+    Logger::info(LogCategory::TRANSFER, "createOracleTable",
+                 "Created/verified table " + oracleSchema + "." +
+                     job.target_table);
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "createOracleTable",
+                  "Error creating Oracle table: " + std::string(e.what()));
+    throw;
+  }
 }
 
 void CustomJobExecutor::insertDataToOracle(const CustomJob &job,
                                            const std::vector<json> &data) {
-  Logger::warning(LogCategory::TRANSFER, "insertDataToOracle",
-                  "Oracle data insertion not yet fully implemented");
+  try {
+    auto conn = std::make_unique<OCIConnection>(job.target_connection_string);
+    if (!conn->isValid()) {
+      throw std::runtime_error("Failed to connect to Oracle");
+    }
+
+    std::string oracleSchema =
+        extractOracleSchema(job.target_connection_string);
+    if (oracleSchema.empty()) {
+      throw std::runtime_error(
+          "Failed to extract schema name from Oracle connection string");
+    }
+    std::transform(oracleSchema.begin(), oracleSchema.end(),
+                   oracleSchema.begin(), ::toupper);
+
+    OCIEnv *env = conn->getEnv();
+    OCIError *err = conn->getErr();
+    OCISvcCtx *svc = conn->getSvc();
+
+    std::string truncateQuery =
+        "TRUNCATE TABLE \"" + oracleSchema + "\".\"" + job.target_table + "\"";
+    OCIStmt *truncateStmt = nullptr;
+    sword status =
+        OCIHandleAlloc(env, (void **)&truncateStmt, OCI_HTYPE_STMT, 0, nullptr);
+    if (status == OCI_SUCCESS) {
+      status =
+          OCIStmtPrepare(truncateStmt, err, (OraText *)truncateQuery.c_str(),
+                         truncateQuery.length(), OCI_NTV_SYNTAX, OCI_DEFAULT);
+      if (status == OCI_SUCCESS) {
+        status = OCIStmtExecute(svc, truncateStmt, err, 1, 0, nullptr, nullptr,
+                                OCI_DEFAULT);
+        if (status != OCI_SUCCESS && status != OCI_SUCCESS_WITH_INFO) {
+          char errbuf[512];
+          sb4 errcode = 0;
+          OCIErrorGet(err, 1, nullptr, &errcode, (OraText *)errbuf,
+                      sizeof(errbuf), OCI_HTYPE_ERROR);
+          if (errcode != 942) {
+            Logger::warning(LogCategory::TRANSFER, "insertDataToOracle",
+                            "Failed to truncate Oracle table: " +
+                                std::string(errbuf) + " (continuing anyway)");
+          }
+        }
+      }
+      OCIHandleFree(truncateStmt, OCI_HTYPE_STMT);
+    }
+
+    std::vector<std::string> detectedColumns = detectColumns(data);
+    if (detectedColumns.empty()) {
+      return;
+    }
+
+    size_t batchSize = 100;
+    size_t inserted = 0;
+
+    for (size_t i = 0; i < data.size(); i += batchSize) {
+      std::ostringstream insertQuery;
+      insertQuery << "INSERT INTO \"" << oracleSchema << "\".\""
+                  << job.target_table << "\" (";
+
+      for (size_t j = 0; j < detectedColumns.size(); j++) {
+        if (j > 0)
+          insertQuery << ", ";
+        std::string colName = detectedColumns[j];
+        std::transform(colName.begin(), colName.end(), colName.begin(),
+                       ::toupper);
+        insertQuery << "\"" << colName << "\"";
+      }
+      insertQuery << ", \"_JOB_SYNC_AT\") VALUES ";
+
+      size_t endIdx = std::min(i + batchSize, data.size());
+      for (size_t j = i; j < endIdx; j++) {
+        if (j > i)
+          insertQuery << ", ";
+
+        insertQuery << "(";
+        const json &item = data[j];
+        for (size_t k = 0; k < detectedColumns.size(); k++) {
+          if (k > 0)
+            insertQuery << ", ";
+
+          if (item.contains(detectedColumns[k])) {
+            const json &value = item[detectedColumns[k]];
+            if (value.is_string()) {
+              std::string str = value.get<std::string>();
+              std::string escaped;
+              for (char c : str) {
+                if (c == '\'')
+                  escaped += "''";
+                else
+                  escaped += c;
+              }
+              insertQuery << "'" << escaped << "'";
+            } else if (value.is_number_integer()) {
+              insertQuery << value.get<int64_t>();
+            } else if (value.is_number_float()) {
+              insertQuery << value.get<double>();
+            } else if (value.is_boolean()) {
+              insertQuery << (value.get<bool>() ? "1" : "0");
+            } else if (value.is_object() || value.is_array()) {
+              std::string jsonStr = value.dump();
+              std::string escaped;
+              for (char c : jsonStr) {
+                if (c == '\'')
+                  escaped += "''";
+                else
+                  escaped += c;
+              }
+              insertQuery << "'" << escaped << "'";
+            } else {
+              insertQuery << "NULL";
+            }
+          } else {
+            insertQuery << "NULL";
+          }
+        }
+        insertQuery << ", SYSTIMESTAMP)";
+      }
+
+      OCIStmt *stmt = nullptr;
+      status = OCIHandleAlloc(env, (void **)&stmt, OCI_HTYPE_STMT, 0, nullptr);
+      if (status != OCI_SUCCESS) {
+        throw std::runtime_error("OCIHandleAlloc(STMT) failed");
+      }
+
+      std::string query = insertQuery.str();
+      status = OCIStmtPrepare(stmt, err, (OraText *)query.c_str(),
+                              query.length(), OCI_NTV_SYNTAX, OCI_DEFAULT);
+      if (status != OCI_SUCCESS) {
+        OCIHandleFree(stmt, OCI_HTYPE_STMT);
+        throw std::runtime_error("OCIStmtPrepare failed");
+      }
+
+      status =
+          OCIStmtExecute(svc, stmt, err, 1, 0, nullptr, nullptr, OCI_DEFAULT);
+      if (status != OCI_SUCCESS && status != OCI_SUCCESS_WITH_INFO) {
+        char errbuf[512];
+        sb4 errcode = 0;
+        OCIErrorGet(err, 1, nullptr, &errcode, (OraText *)errbuf,
+                    sizeof(errbuf), OCI_HTYPE_ERROR);
+        OCIHandleFree(stmt, OCI_HTYPE_STMT);
+        throw std::runtime_error("OCIStmtExecute failed: " +
+                                 std::string(errbuf));
+      }
+
+      OCIHandleFree(stmt, OCI_HTYPE_STMT);
+      inserted += (endIdx - i);
+    }
+
+    Logger::info(LogCategory::TRANSFER, "insertDataToOracle",
+                 "Inserted " + std::to_string(inserted) + " rows into " +
+                     oracleSchema + "." + job.target_table);
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "insertDataToOracle",
+                  "Error inserting data to Oracle: " + std::string(e.what()));
+    throw;
+  }
 }
 
 void CustomJobExecutor::createMongoDBCollection(
     const CustomJob &job, const std::vector<std::string> &columns) {
-  Logger::warning(LogCategory::TRANSFER, "createMongoDBCollection",
-                  "MongoDB collection creation not yet fully implemented");
+  try {
+    MongoDBEngine engine(job.target_connection_string);
+    if (!engine.isValid()) {
+      throw std::runtime_error("Failed to connect to MongoDB");
+    }
+
+    mongoc_database_t *db = mongoc_client_get_database(
+        engine.getClient(), job.target_schema.c_str());
+    if (!db) {
+      throw std::runtime_error("Failed to get MongoDB database");
+    }
+
+    bson_t *command = BCON_NEW("create", BCON_UTF8(job.target_table.c_str()));
+    bson_error_t error;
+    bool ret = mongoc_database_write_command_with_opts(db, command, nullptr,
+                                                       nullptr, &error);
+    bson_destroy(command);
+    mongoc_database_destroy(db);
+
+    if (!ret && error.code != 48) {
+      throw std::runtime_error("Failed to create MongoDB collection: " +
+                               std::string(error.message));
+    }
+
+    Logger::info(LogCategory::TRANSFER, "createMongoDBCollection",
+                 "Created/verified collection " + job.target_schema + "." +
+                     job.target_table);
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "createMongoDBCollection",
+                  "Error creating MongoDB collection: " +
+                      std::string(e.what()));
+    throw;
+  }
 }
 
 void CustomJobExecutor::insertDataToMongoDB(const CustomJob &job,
                                             const std::vector<json> &data) {
-  Logger::warning(LogCategory::TRANSFER, "insertDataToMongoDB",
-                  "MongoDB data insertion not yet fully implemented");
+  try {
+    MongoDBEngine engine(job.target_connection_string);
+    if (!engine.isValid()) {
+      throw std::runtime_error("Failed to connect to MongoDB");
+    }
+
+    mongoc_collection_t *coll = mongoc_client_get_collection(
+        engine.getClient(), job.target_schema.c_str(),
+        job.target_table.c_str());
+    if (!coll) {
+      throw std::runtime_error("Failed to get MongoDB collection");
+    }
+
+    bson_error_t error;
+    size_t inserted = 0;
+    size_t batchSize = 1000;
+
+    for (size_t i = 0; i < data.size(); i += batchSize) {
+      std::vector<const bson_t *> docs;
+      std::vector<bson_t *> docPtrs;
+
+      size_t endIdx = std::min(i + batchSize, data.size());
+      for (size_t j = i; j < endIdx; j++) {
+        const json &item = data[j];
+        std::string jsonStr = item.dump();
+        bson_t *doc = bson_new_from_json((const uint8_t *)jsonStr.c_str(),
+                                         jsonStr.length(), &error);
+        if (!doc) {
+          Logger::warning(LogCategory::TRANSFER, "insertDataToMongoDB",
+                          "Failed to parse JSON document: " +
+                              std::string(error.message));
+          continue;
+        }
+
+        bson_t *docWithTimestamp = bson_new();
+        bson_copy_to(doc, docWithTimestamp);
+        bson_append_date_time(
+            docWithTimestamp, "_job_sync_at", -1,
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch())
+                .count());
+        bson_destroy(doc);
+        docPtrs.push_back(docWithTimestamp);
+        docs.push_back(docWithTimestamp);
+      }
+
+      if (!docs.empty()) {
+        bool ret = mongoc_collection_insert_many(coll, docs.data(), docs.size(),
+                                                 nullptr, nullptr, &error);
+        if (!ret) {
+          for (auto *doc : docPtrs) {
+            bson_destroy(doc);
+          }
+          mongoc_collection_destroy(coll);
+          throw std::runtime_error("Failed to insert into MongoDB: " +
+                                   std::string(error.message));
+        }
+        inserted += docs.size();
+      }
+
+      for (auto *doc : docPtrs) {
+        bson_destroy(doc);
+      }
+    }
+
+    mongoc_collection_destroy(coll);
+
+    Logger::info(LogCategory::TRANSFER, "insertDataToMongoDB",
+                 "Inserted " + std::to_string(inserted) + " documents into " +
+                     job.target_schema + "." + job.target_table);
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "insertDataToMongoDB",
+                  "Error inserting data to MongoDB: " + std::string(e.what()));
+    throw;
+  }
 }
 
 std::vector<json>
@@ -750,11 +1511,31 @@ CustomJobExecutor::executePythonScript(const std::string &script) {
     scriptFile << script << "\n";
     scriptFile.close();
 
-    std::string command =
-        "python3 " + tempScriptPath + " > " + tempOutputPath + " 2>&1";
-    int ret = system(command.c_str());
+    pid_t pid = fork();
+    if (pid == -1) {
+      throw std::runtime_error("Failed to fork process for Python script");
+    }
 
-    if (ret != 0) {
+    if (pid == 0) {
+      int outputFd =
+          open(tempOutputPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+      if (outputFd == -1) {
+        _exit(1);
+      }
+      dup2(outputFd, STDOUT_FILENO);
+      dup2(outputFd, STDERR_FILENO);
+      close(outputFd);
+
+      char *argv[] = {(char *)"python3", (char *)tempScriptPath.c_str(),
+                      nullptr};
+      execvp("python3", argv);
+      _exit(1);
+    }
+
+    int status;
+    waitpid(pid, &status, 0);
+
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
       std::ifstream errorFile(tempOutputPath);
       std::string errorOutput((std::istreambuf_iterator<char>(errorFile)),
                               std::istreambuf_iterator<char>());
@@ -778,13 +1559,23 @@ CustomJobExecutor::executePythonScript(const std::string &script) {
       return results;
     }
 
+    std::string trimmedOutput = jsonOutput;
+    trimmedOutput.erase(0, trimmedOutput.find_first_not_of(" \t\n\r"));
+    trimmedOutput.erase(trimmedOutput.find_last_not_of(" \t\n\r") + 1);
+
+    if (trimmedOutput.empty() ||
+        (trimmedOutput[0] != '[' && trimmedOutput[0] != '{')) {
+      throw std::runtime_error("Python script output is not valid JSON: " +
+                               jsonOutput.substr(0, 100));
+    }
+
     json parsedJson;
     try {
-      parsedJson = json::parse(jsonOutput);
+      parsedJson = json::parse(trimmedOutput);
     } catch (const json::parse_error &e) {
       throw std::runtime_error("Failed to parse Python script JSON output: " +
                                std::string(e.what()) +
-                               "\nOutput: " + jsonOutput);
+                               "\nOutput: " + jsonOutput.substr(0, 200));
     }
 
     if (parsedJson.is_array()) {

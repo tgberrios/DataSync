@@ -6,12 +6,6 @@
 #include <thread>
 #include <unordered_set>
 
-// Constructor for MySQLConnection. Initializes a MySQL connection using the
-// provided connection parameters. Parses the port from the params, defaulting
-// to DEFAULT_MYSQL_PORT if parsing fails or port is empty. Attempts to
-// establish a connection to the MySQL/MariaDB server. If connection fails, logs
-// an error and sets conn_ to nullptr. The connection must be checked with
-// isValid() before use.
 MySQLConnection::MySQLConnection(const ConnectionParams &params) {
   conn_ = mysql_init(nullptr);
   if (!conn_) {
@@ -39,27 +33,16 @@ MySQLConnection::MySQLConnection(const ConnectionParams &params) {
   }
 }
 
-// Destructor for MySQLConnection. Closes the MySQL connection if it is open.
-// Safe to call even if the connection was never established or is already
-// closed.
 MySQLConnection::~MySQLConnection() {
   if (conn_)
     mysql_close(conn_);
 }
 
-// Move constructor for MySQLConnection. Transfers ownership of the MySQL
-// connection handle from the source object. The source object's connection
-// handle is set to nullptr to prevent double-free. This allows efficient
-// transfer of connection objects without copying.
 MySQLConnection::MySQLConnection(MySQLConnection &&other) noexcept
     : conn_(other.conn_) {
   other.conn_ = nullptr;
 }
 
-// Move assignment operator for MySQLConnection. Transfers ownership of the
-// MySQL connection handle from the source object. If this object already has an
-// open connection, it is closed before the transfer. The source object's
-// connection handle is set to nullptr. Returns a reference to this object.
 MySQLConnection &MySQLConnection::operator=(MySQLConnection &&other) noexcept {
   if (this != &other) {
     if (conn_)
@@ -70,19 +53,9 @@ MySQLConnection &MySQLConnection::operator=(MySQLConnection &&other) noexcept {
   return *this;
 }
 
-// Constructor for MariaDBEngine. Stores the connection string for later use
-// when creating database connections. The connection string should be in a
-// format parseable by ConnectionStringParser (e.g.,
-// "mysql://user:pass@host:port/db").
 MariaDBEngine::MariaDBEngine(std::string connectionString)
     : connectionString_(std::move(connectionString)) {}
 
-// Creates a new MySQL connection with retry logic. Parses the connection string
-// and attempts to establish a connection up to MAX_RETRIES times with
-// exponential backoff (100ms, 200ms, 400ms). On successful connection, sets
-// connection timeouts and returns a unique_ptr to the connection. If all
-// attempts fail, returns nullptr. This function is thread-safe and can be
-// called multiple times to create independent connections.
 std::unique_ptr<MySQLConnection> MariaDBEngine::createConnection() {
   auto params = ConnectionStringParser::parse(connectionString_);
   if (!params) {
@@ -122,12 +95,6 @@ std::unique_ptr<MySQLConnection> MariaDBEngine::createConnection() {
   return nullptr;
 }
 
-// Sets various timeout parameters on a MySQL connection to prevent long-running
-// queries from hanging. Configures wait_timeout, interactive_timeout,
-// net_read_timeout, net_write_timeout, innodb_lock_wait_timeout, and
-// lock_wait_timeout to MARIADB_TIMEOUT_SECONDS. If setting timeouts fails, logs
-// a warning but does not fail the connection. This function should be called
-// immediately after establishing a connection.
 void MariaDBEngine::setConnectionTimeouts(MYSQL *conn) {
   const int timeout = DatabaseDefaults::MARIADB_TIMEOUT_SECONDS;
   std::string query =
@@ -145,13 +112,6 @@ void MariaDBEngine::setConnectionTimeouts(MYSQL *conn) {
   }
 }
 
-// Executes a SQL query on the provided MySQL connection and returns the results
-// as a vector of rows, where each row is a vector of strings. Handles NULL
-// values by converting them to the string "NULL". If the query fails or the
-// connection is invalid, returns an empty vector and logs an error. This
-// function stores the entire result set in memory, so it should not be used
-// for very large result sets. The caller is responsible for ensuring the
-// connection is valid.
 std::vector<std::vector<std::string>>
 MariaDBEngine::executeQuery(MYSQL *conn, const std::string &query) {
   std::vector<std::vector<std::string>> results;
@@ -195,13 +155,6 @@ MariaDBEngine::executeQuery(MYSQL *conn, const std::string &query) {
   return results;
 }
 
-// Discovers all user tables in the MariaDB database. Queries
-// information_schema.tables to find all BASE TABLE types, excluding system
-// schemas (information_schema, mysql, performance_schema, sys). Returns a
-// vector of CatalogTableInfo objects containing schema name, table name, and
-// the connection string. If connection fails, returns an empty vector. This
-// function is used during catalog synchronization to identify tables that
-// should be synced.
 std::vector<CatalogTableInfo> MariaDBEngine::discoverTables() {
   std::vector<CatalogTableInfo> tables;
   auto conn = createConnection();
@@ -212,7 +165,7 @@ std::vector<CatalogTableInfo> MariaDBEngine::discoverTables() {
       "SELECT table_schema, table_name "
       "FROM information_schema.tables "
       "WHERE table_schema NOT IN ('information_schema', 'mysql', "
-      "'performance_schema', 'sys') "
+      "'performance_schema', 'sys', 'datasync_metadata') "
       "AND table_type = 'BASE TABLE' "
       "ORDER BY table_schema, table_name";
 
@@ -225,13 +178,6 @@ std::vector<CatalogTableInfo> MariaDBEngine::discoverTables() {
   return tables;
 }
 
-// Detects the primary key columns for a given table. Queries
-// information_schema.KEY_COLUMN_USAGE to find all columns that are part of the
-// PRIMARY KEY constraint, ordered by their ordinal position. Escapes the
-// schema and table names using mysql_real_escape_string to prevent SQL
-// injection. Returns a vector of column names in the order they appear in the
-// primary key. If no primary key exists or connection fails, returns an empty
-// vector. If schema or table is empty, the behavior is undefined.
 std::vector<std::string>
 MariaDBEngine::detectPrimaryKey(const std::string &schema,
                                 const std::string &table) {
@@ -293,13 +239,6 @@ MariaDBEngine::detectPrimaryKey(const std::string &schema,
   return pkColumns;
 }
 
-// Detects a time-based column (e.g., updated_at, created_at) in the specified
-// table. Searches for columns matching TIME_COLUMN_CANDIDATES in
-// information_schema.columns, ordered by preference using MySQL's FIELD()
-// function. Escapes schema and table names to prevent SQL injection. Returns
-// the first matching column name, or an empty string if no time column is
-// found or connection fails. This column is used for incremental sync
-// strategies. If schema or table is empty, the behavior is undefined.
 std::string MariaDBEngine::detectTimeColumn(const std::string &schema,
                                             const std::string &table) {
   if (schema.empty() || table.empty()) {
@@ -373,14 +312,6 @@ std::string MariaDBEngine::detectTimeColumn(const std::string &schema,
   return "";
 }
 
-// Gets the column count for a table in both the source MariaDB database and
-// the target PostgreSQL database. Queries information_schema.columns in both
-// databases and returns a pair where first is the source count and second is
-// the target count. This is used to detect schema mismatches between source
-// and target. Schema and table names are converted to lowercase for the
-// PostgreSQL query. If connection fails or query fails, returns {0, 0} for
-// source and {sourceCount, 0} for target respectively. If schema or table is
-// empty, the behavior is undefined.
 std::pair<int, int>
 MariaDBEngine::getColumnCounts(const std::string &schema,
                                const std::string &table,
@@ -566,12 +497,14 @@ MariaDBEngine::getTableColumns(const std::string &schema,
       pgType = "DATE";
     } else if (col.dataType == "time") {
       pgType = "TIME";
-    } else if (col.dataType == "char" || col.dataType == "varchar") {
+    } else if (col.dataType == "char") {
+      pgType = "TEXT";
+    } else if (col.dataType == "varchar") {
       if (!col.maxLength.empty() && col.maxLength != "NULL") {
         try {
           size_t length = std::stoul(col.maxLength);
           if (length >= 1 && length <= 65535) {
-            pgType = col.dataType + "(" + col.maxLength + ")";
+            pgType = "VARCHAR(" + col.maxLength + ")";
           } else {
             pgType = "VARCHAR";
           }

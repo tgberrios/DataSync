@@ -20,10 +20,7 @@ std::string DatabaseConfig::postgres_user_ = "postgres";
 std::string DatabaseConfig::postgres_password_ = "";
 std::string DatabaseConfig::postgres_port_ = "5432";
 bool DatabaseConfig::initialized_ = false;
-
-namespace {
-constexpr const char *DEFAULT_PASSWORD_PLACEHOLDER = "";
-}
+std::mutex DatabaseConfig::configMutex_;
 
 namespace {
 bool validateAndSetPort(const std::string &portStr, std::string &targetPort) {
@@ -47,6 +44,36 @@ bool validateAndSetPort(const std::string &portStr, std::string &targetPort) {
 }
 } // namespace
 
+std::string DatabaseConfig::escapeConnectionParam(const std::string &param) {
+  if (param.empty()) {
+    return param;
+  }
+
+  bool needsQuoting = false;
+  for (char c : param) {
+    if (c == ' ' || c == '\'' || c == '\\' || c == '=') {
+      needsQuoting = true;
+      break;
+    }
+  }
+
+  if (!needsQuoting) {
+    return param;
+  }
+
+  std::string escaped;
+  escaped.reserve(param.length() + 2);
+  escaped += '\'';
+  for (char c : param) {
+    if (c == '\'' || c == '\\') {
+      escaped += '\\';
+    }
+    escaped += c;
+  }
+  escaped += '\'';
+  return escaped;
+}
+
 // Loads PostgreSQL database configuration from a JSON file. The function
 // expects a JSON structure with a "database" object containing a "postgres"
 // object with keys: host, port, database, user, and password. If the file
@@ -55,13 +82,14 @@ bool validateAndSetPort(const std::string &portStr, std::string &targetPort) {
 // not specified. After successful loading, the initialized_ flag is set to
 // true.
 void DatabaseConfig::loadFromFile(const std::string &configPath) {
+  std::lock_guard<std::mutex> lock(configMutex_);
   try {
     std::ifstream configFile(configPath);
     if (!configFile.is_open()) {
       Logger::warning(LogCategory::CONFIG, "DatabaseConfig",
                       "Could not open config file '" + configPath +
                           "', using defaults or environment variables");
-      loadFromEnv();
+      loadFromEnvUnlocked();
       return;
     }
 
@@ -106,17 +134,11 @@ void DatabaseConfig::loadFromFile(const std::string &configPath) {
     Logger::error(LogCategory::CONFIG, "DatabaseConfig",
                   "Error loading config from file: " + std::string(e.what()) +
                       ", falling back to environment variables");
-    loadFromEnv();
+    loadFromEnvUnlocked();
   }
 }
 
-// Loads PostgreSQL database configuration from environment variables. The
-// function checks for the following environment variables: POSTGRES_HOST,
-// POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, and POSTGRES_PASSWORD. If any
-// variable is not set, the corresponding default value is retained. A warning
-// is logged if POSTGRES_PASSWORD is not set, as database connections may fail
-// without it. After loading, the initialized_ flag is set to true.
-void DatabaseConfig::loadFromEnv() {
+void DatabaseConfig::loadFromEnvUnlocked() {
   const char *host = std::getenv("POSTGRES_HOST");
   const char *port = std::getenv("POSTGRES_PORT");
   const char *db = std::getenv("POSTGRES_DB");
@@ -148,4 +170,9 @@ void DatabaseConfig::loadFromEnv() {
   }
 
   initialized_ = true;
+}
+
+void DatabaseConfig::loadFromEnv() {
+  std::lock_guard<std::mutex> lock(configMutex_);
+  loadFromEnvUnlocked();
 }

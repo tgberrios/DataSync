@@ -16,10 +16,18 @@ private:
   std::queue<T> queue;
   std::condition_variable cv;
   std::atomic<bool> shutdown{false};
+  size_t maxSize_{10000};
 
 public:
+  explicit ThreadSafeQueue(size_t maxSize = 10000) : maxSize_(maxSize) {}
+
   void push(T item) {
     std::lock_guard<std::mutex> lock(mtx);
+    if (queue.size() >= maxSize_) {
+      Logger::warning(LogCategory::TRANSFER, "ThreadSafeQueue",
+                      "Queue is full, dropping item");
+      return;
+    }
     queue.push(std::move(item));
     cv.notify_one();
   }

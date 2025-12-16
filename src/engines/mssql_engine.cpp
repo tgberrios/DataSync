@@ -6,11 +6,6 @@
 #include <thread>
 #include <unordered_set>
 
-// Constructor for ODBCConnection. Initializes an ODBC connection to a SQL
-// Server database using the provided connection string. Allocates environment
-// and connection handles, sets ODBC version to 3, and attempts to connect.
-// If any step fails, logs an error, cleans up allocated handles, and sets
-// valid_ to false. The connection must be checked with isValid() before use.
 ODBCConnection::ODBCConnection(const std::string &connectionString) {
   SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env_);
   if (!SQL_SUCCEEDED(ret)) {
@@ -60,9 +55,6 @@ ODBCConnection::ODBCConnection(const std::string &connectionString) {
   valid_ = true;
 }
 
-// Destructor for ODBCConnection. Disconnects from the database and frees all
-// allocated ODBC handles (connection and environment). Safe to call even if
-// the connection was never established or is already closed.
 ODBCConnection::~ODBCConnection() {
   if (dbc_ != SQL_NULL_HANDLE) {
     SQLDisconnect(dbc_);
@@ -73,11 +65,6 @@ ODBCConnection::~ODBCConnection() {
   }
 }
 
-// Move constructor for ODBCConnection. Transfers ownership of ODBC handles
-// (environment and connection) from the source object. The source object's
-// handles are set to SQL_NULL_HANDLE and valid_ is set to false to prevent
-// double-free. This allows efficient transfer of connection objects without
-// copying.
 ODBCConnection::ODBCConnection(ODBCConnection &&other) noexcept
     : env_(other.env_), dbc_(other.dbc_), valid_(other.valid_) {
   other.env_ = SQL_NULL_HANDLE;
@@ -106,18 +93,9 @@ ODBCConnection &ODBCConnection::operator=(ODBCConnection &&other) noexcept {
   return *this;
 }
 
-// Constructor for MSSQLEngine. Stores the connection string for later use when
-// creating database connections. The connection string should be in ODBC
-// format (e.g., "DRIVER={ODBC Driver 17 for SQL
-// Server};SERVER=...;DATABASE=...;UID=...;PWD=...").
 MSSQLEngine::MSSQLEngine(std::string connectionString)
     : connectionString_(std::move(connectionString)) {}
 
-// Creates a new ODBC connection with retry logic. Attempts to establish a
-// connection up to MAX_RETRIES times with exponential backoff (100ms, 200ms,
-// 400ms). On successful connection, returns a unique_ptr to the connection.
-// If all attempts fail, returns nullptr. This function is thread-safe and can
-// be called multiple times to create independent connections.
 std::unique_ptr<ODBCConnection> MSSQLEngine::createConnection() {
   const int MAX_RETRIES = 3;
   const int INITIAL_BACKOFF_MS = 100;
@@ -149,13 +127,6 @@ std::unique_ptr<ODBCConnection> MSSQLEngine::createConnection() {
   return nullptr;
 }
 
-// Executes a SQL query on the provided ODBC connection and returns the
-// results as a vector of rows, where each row is a vector of strings. Handles
-// NULL values by converting them to the string "NULL". If the query fails or
-// the connection handle is invalid, returns an empty vector and logs an
-// error. This function stores the entire result set in memory, so it should
-// not be used for very large result sets. The caller is responsible for
-// ensuring the connection handle is valid.
 std::vector<std::vector<std::string>>
 MSSQLEngine::executeQuery(SQLHDBC dbc, const std::string &query) {
   std::vector<std::vector<std::string>> results;
@@ -244,30 +215,21 @@ MSSQLEngine::executeQuery(SQLHDBC dbc, const std::string &query) {
   return results;
 }
 
-// Extracts the database name from a connection string. Parses the connection
-// string and returns the database name, or "master" if parsing fails or no
-// Discovers all user tables in the SQL Server database. Queries sys.tables and
-// sys.schemas to find all user tables, excluding system schemas
-// (INFORMATION_SCHEMA, sys, guest) and system tables (spt_%, MS%, sp_%, fn_%,
-// xp_%, dt_%). Returns a vector of CatalogTableInfo objects containing schema
-// name, table name, and the connection string. If connection fails, returns
-// an empty vector. This function is used during catalog synchronization to
-// identify tables that should be synced.
 std::vector<CatalogTableInfo> MSSQLEngine::discoverTables() {
   std::vector<CatalogTableInfo> tables;
   auto conn = createConnection();
   if (!conn)
     return tables;
 
-  std::string query =
-      "SELECT s.name AS table_schema, t.name AS table_name "
-      "FROM sys.tables t "
-      "INNER JOIN sys.schemas s ON t.schema_id = s.schema_id "
-      "WHERE s.name NOT IN ('INFORMATION_SCHEMA', 'sys', 'guest') "
-      "AND t.name NOT LIKE 'spt_%' AND t.name NOT LIKE 'MS%' "
-      "AND t.name NOT LIKE 'sp_%' AND t.name NOT LIKE 'fn_%' "
-      "AND t.name NOT LIKE 'xp_%' AND t.name NOT LIKE 'dt_%' "
-      "ORDER BY s.name, t.name";
+  std::string query = "SELECT s.name AS table_schema, t.name AS table_name "
+                      "FROM sys.tables t "
+                      "INNER JOIN sys.schemas s ON t.schema_id = s.schema_id "
+                      "WHERE s.name NOT IN ('INFORMATION_SCHEMA', 'sys', "
+                      "'guest', 'datasync_metadata') "
+                      "AND t.name NOT LIKE 'spt_%' AND t.name NOT LIKE 'MS%' "
+                      "AND t.name NOT LIKE 'sp_%' AND t.name NOT LIKE 'fn_%' "
+                      "AND t.name NOT LIKE 'xp_%' AND t.name NOT LIKE 'dt_%' "
+                      "ORDER BY s.name, t.name";
 
   auto results = executeQuery(conn->getDbc(), query);
   for (const auto &row : results) {
@@ -277,14 +239,6 @@ std::vector<CatalogTableInfo> MSSQLEngine::discoverTables() {
   return tables;
 }
 
-// Detects the primary key columns for a given table. Queries sys.columns,
-// sys.tables, sys.schemas, sys.index_columns, and sys.indexes to find all
-// columns that are part of the PRIMARY KEY constraint, ordered by their key
-// ordinal position. Sanitizes schema and table names by removing potentially
-// dangerous characters (single quotes, semicolons, hyphens) to prevent SQL
-// injection. Returns a vector of column names in the order they appear in the
-// primary key. If no primary key exists or connection fails, returns an empty
-// vector. If schema or table is empty, the behavior is undefined.
 std::vector<std::string>
 MSSQLEngine::detectPrimaryKey(const std::string &schema,
                               const std::string &table) {
@@ -305,27 +259,29 @@ MSSQLEngine::detectPrimaryKey(const std::string &schema,
 
   std::string safeSchema;
   for (char c : schema) {
-    if (c >= 32 && c <= 126 && c != '\'' && c != ';' && c != '-' && c != '\\' &&
-        c != '/') {
+    if (c == '\'') {
+      safeSchema += "''";
+    } else if (c >= 32 && c <= 126 && c != ';' && c != '\\' && c != '/') {
       safeSchema += c;
     }
   }
   if (safeSchema.empty()) {
     Logger::error(LogCategory::DATABASE, "MSSQLEngine",
-                  "detectTimeColumn: sanitized schema is empty");
+                  "detectPrimaryKey: sanitized schema is empty");
     return {};
   }
 
   std::string safeTable;
   for (char c : table) {
-    if (c >= 32 && c <= 126 && c != '\'' && c != ';' && c != '-' && c != '\\' &&
-        c != '/') {
+    if (c == '\'') {
+      safeTable += "''";
+    } else if (c >= 32 && c <= 126 && c != ';' && c != '\\' && c != '/') {
       safeTable += c;
     }
   }
   if (safeTable.empty()) {
     Logger::error(LogCategory::DATABASE, "MSSQLEngine",
-                  "detectTimeColumn: sanitized table is empty");
+                  "detectPrimaryKey: sanitized table is empty");
     return {};
   }
 
@@ -351,13 +307,6 @@ MSSQLEngine::detectPrimaryKey(const std::string &schema,
   return pkColumns;
 }
 
-// Detects a time-based column (e.g., updated_at, created_at) in the specified
-// table. Searches for columns matching TIME_COLUMN_CANDIDATES in sys.columns,
-// ordered by preference using a CASE statement. Sanitizes schema and table
-// names to prevent SQL injection. Returns the first matching column name, or
-// an empty string if no time column is found or connection fails. This column
-// is used for incremental sync strategies. If schema or table is empty, the
-// behavior is undefined.
 std::string MSSQLEngine::detectTimeColumn(const std::string &schema,
                                           const std::string &table) {
   if (schema.empty() || table.empty()) {
@@ -376,8 +325,9 @@ std::string MSSQLEngine::detectTimeColumn(const std::string &schema,
 
   std::string safeSchema;
   for (char c : schema) {
-    if (c >= 32 && c <= 126 && c != '\'' && c != ';' && c != '-' && c != '\\' &&
-        c != '/') {
+    if (c == '\'') {
+      safeSchema += "''";
+    } else if (c >= 32 && c <= 126 && c != ';' && c != '\\' && c != '/') {
       safeSchema += c;
     }
   }
@@ -389,8 +339,9 @@ std::string MSSQLEngine::detectTimeColumn(const std::string &schema,
 
   std::string safeTable;
   for (char c : table) {
-    if (c >= 32 && c <= 126 && c != '\'' && c != ';' && c != '-' && c != '\\' &&
-        c != '/') {
+    if (c == '\'') {
+      safeTable += "''";
+    } else if (c >= 32 && c <= 126 && c != ';' && c != '\\' && c != '/') {
       safeTable += c;
     }
   }
@@ -432,15 +383,6 @@ std::string MSSQLEngine::detectTimeColumn(const std::string &schema,
   return "";
 }
 
-// Gets the column count for a table in both the source SQL Server database and
-// the target PostgreSQL database. Queries sys.columns in SQL Server and
-// information_schema.columns in PostgreSQL, and returns a pair where first is
-// the source count and second is the target count. This is used to detect
-// schema mismatches between source and target. Schema and table names are
-// sanitized for SQL Server queries and converted to lowercase for PostgreSQL
-// queries. If connection fails or query fails, returns {0, 0} for source and
-// {sourceCount, 0} for target respectively. If schema or table is empty, the
-// behavior is undefined.
 std::pair<int, int>
 MSSQLEngine::getColumnCounts(const std::string &schema,
                              const std::string &table,
@@ -461,27 +403,29 @@ MSSQLEngine::getColumnCounts(const std::string &schema,
 
   std::string safeSchema;
   for (char c : schema) {
-    if (c >= 32 && c <= 126 && c != '\'' && c != ';' && c != '-' && c != '\\' &&
-        c != '/') {
+    if (c == '\'') {
+      safeSchema += "''";
+    } else if (c >= 32 && c <= 126 && c != ';' && c != '\\' && c != '/') {
       safeSchema += c;
     }
   }
   if (safeSchema.empty()) {
     Logger::error(LogCategory::DATABASE, "MSSQLEngine",
-                  "detectTimeColumn: sanitized schema is empty");
+                  "getColumnCounts: sanitized schema is empty");
     return {0, 0};
   }
 
   std::string safeTable;
   for (char c : table) {
-    if (c >= 32 && c <= 126 && c != '\'' && c != ';' && c != '-' && c != '\\' &&
-        c != '/') {
+    if (c == '\'') {
+      safeTable += "''";
+    } else if (c >= 32 && c <= 126 && c != ';' && c != '\\' && c != '/') {
       safeTable += c;
     }
   }
   if (safeTable.empty()) {
     Logger::error(LogCategory::DATABASE, "MSSQLEngine",
-                  "detectTimeColumn: sanitized table is empty");
+                  "getColumnCounts: sanitized table is empty");
     return {0, 0};
   }
 
@@ -558,8 +502,9 @@ std::vector<ColumnInfo> MSSQLEngine::getTableColumns(const std::string &schema,
 
   std::string safeSchema;
   for (char c : schema) {
-    if (c >= 32 && c <= 126 && c != '\'' && c != ';' && c != '-' && c != '\\' &&
-        c != '/') {
+    if (c == '\'') {
+      safeSchema += "''";
+    } else if (c >= 32 && c <= 126 && c != ';' && c != '\\' && c != '/') {
       safeSchema += c;
     }
   }
@@ -571,8 +516,9 @@ std::vector<ColumnInfo> MSSQLEngine::getTableColumns(const std::string &schema,
 
   std::string safeTable;
   for (char c : table) {
-    if (c >= 32 && c <= 126 && c != '\'' && c != ';' && c != '-' && c != '\\' &&
-        c != '/') {
+    if (c == '\'') {
+      safeTable += "''";
+    } else if (c >= 32 && c <= 126 && c != ';' && c != '\\' && c != '/') {
       safeTable += c;
     }
   }
@@ -644,11 +590,7 @@ std::vector<ColumnInfo> MSSQLEngine::getTableColumns(const std::string &schema,
         pgType = "VARCHAR";
       }
     } else if (col.dataType == "char" || col.dataType == "nchar") {
-      if (!col.maxLength.empty() && col.maxLength != "NULL") {
-        pgType = "CHAR(" + col.maxLength + ")";
-      } else {
-        pgType = "CHAR(1)";
-      }
+      pgType = "TEXT";
     } else if (MSSQLToPostgres::dataTypeMap.count(col.dataType)) {
       pgType = MSSQLToPostgres::dataTypeMap[col.dataType];
     }

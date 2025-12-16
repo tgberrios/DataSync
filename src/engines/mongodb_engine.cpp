@@ -6,6 +6,7 @@
 #include <mutex>
 #include <pqxx/pqxx>
 #include <sstream>
+#include <unordered_set>
 
 MongoDBEngine::MongoDBEngine(std::string connectionString)
     : connectionString_(std::move(connectionString)), client_(nullptr),
@@ -76,7 +77,6 @@ bool MongoDBEngine::parseConnectionString(const std::string &connectionString) {
     } catch (const std::exception &e) {
       Logger::error(LogCategory::DATABASE, "MongoDBEngine",
                     "Failed to parse port: " + std::string(e.what()));
-      port_ = 27017;
       port_ = 27017;
     } catch (...) {
       Logger::error(LogCategory::DATABASE, "MongoDBEngine",
@@ -215,20 +215,42 @@ MongoDBEngine::getColumnCounts(const std::string &schema,
     mongoc_collection_t *collection =
         mongoc_client_get_collection(client_, schema.c_str(), table.c_str());
     if (collection) {
-      long long count = getCollectionCount(schema, table);
-      sourceCount = static_cast<int>(count);
+      bson_t *query = bson_new();
+      bson_t *opts = BCON_NEW("limit", BCON_INT32(1));
+      mongoc_cursor_t *cursor =
+          mongoc_collection_find_with_opts(collection, query, opts, nullptr);
+      bson_destroy(query);
+      bson_destroy(opts);
+
+      if (cursor) {
+        const bson_t *doc;
+        if (mongoc_cursor_next(cursor, &doc)) {
+          bson_iter_t iter;
+          if (bson_iter_init(&iter, doc)) {
+            std::unordered_set<std::string> columnSet;
+            while (bson_iter_next(&iter)) {
+              const char *key = bson_iter_key(&iter);
+              if (key) {
+                columnSet.insert(std::string(key));
+              }
+            }
+            sourceCount = static_cast<int>(columnSet.size());
+          }
+        }
+        mongoc_cursor_destroy(cursor);
+      }
       mongoc_collection_destroy(collection);
     }
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "MongoDBEngine",
-                  "Error getting collection count: " + std::string(e.what()));
+                  "Error getting column count: " + std::string(e.what()));
   }
 
   try {
     pqxx::connection conn(targetConnStr);
     pqxx::work txn(conn);
     auto result =
-        txn.exec_params("SELECT COUNT(*) FROM information_schema.tables "
+        txn.exec_params("SELECT COUNT(*) FROM information_schema.columns "
                         "WHERE table_schema = $1 AND table_name = $2",
                         schema, table);
     if (!result.empty() && !result[0][0].is_null()) {
@@ -237,7 +259,8 @@ MongoDBEngine::getColumnCounts(const std::string &schema,
     txn.commit();
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "MongoDBEngine",
-                  "Error getting target table count: " + std::string(e.what()));
+                  "Error getting target column count: " +
+                      std::string(e.what()));
   }
 
   return {sourceCount, targetCount};

@@ -3,7 +3,6 @@
 
 #include "core/Config.h"
 #include "core/logger.h"
-#include <pqxx/pqxx>
 #include <string>
 #include <vector>
 
@@ -15,7 +14,7 @@ struct TransferMetrics {
   long long records_transferred = 0;
   long long bytes_transferred = 0;
   double memory_used_mb = 0.0;
-  int io_operations_total = 0;
+  int io_operations_per_second = 0;
 
   // Metadatos
   std::string transfer_type;

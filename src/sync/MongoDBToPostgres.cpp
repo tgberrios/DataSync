@@ -5,11 +5,13 @@
 #include "sync/SchemaSync.h"
 #include "third_party/json.hpp"
 #include <algorithm>
+#include <chrono>
 #include <ctime>
 #include <iomanip>
 #include <pqxx/pqxx>
 #include <set>
 #include <sstream>
+#include <thread>
 #include <unordered_map>
 
 std::unordered_map<std::string, std::string> MongoDBToPostgres::dataTypeMap = {
@@ -77,7 +79,8 @@ MongoDBToPostgres::parseTimestamp(const std::string &timestamp) {
 }
 
 bool MongoDBToPostgres::shouldSyncCollection(const TableInfo &tableInfo) {
-  if (tableInfo.status != "FULL_LOAD" && tableInfo.status != "full_load") {
+  if (tableInfo.status != "FULL_LOAD" && tableInfo.status != "full_load" &&
+      tableInfo.status != "IN_PROGRESS") {
     return false;
   }
 
@@ -191,10 +194,6 @@ MongoDBToPostgres::discoverCollectionFields(const std::string &connectionString,
       sampleCount++;
     }
 
-    guard.coll_ = nullptr;
-    guard.cursor_ = nullptr;
-    guard.query_ = nullptr;
-
     fields.assign(fieldSet.begin(), fieldSet.end());
     fields.push_back("_document");
 
@@ -296,13 +295,6 @@ void MongoDBToPostgres::convertBSONToPostgresRow(
     return;
   }
 
-  std::string documentJson;
-  char *jsonStr = bson_as_canonical_extended_json(doc, nullptr);
-  if (jsonStr) {
-    documentJson = jsonStr;
-    bson_free(jsonStr);
-  }
-
   while (bson_iter_next(&iter)) {
     const char *key = bson_iter_key(&iter);
     auto it = fieldIndexMap.find(key);
@@ -356,7 +348,13 @@ void MongoDBToPostgres::convertBSONToPostgresRow(
 
   auto docIt = fieldIndexMap.find("_document");
   if (docIt != fieldIndexMap.end()) {
-    row[docIt->second] = documentJson;
+    char *jsonStr = bson_as_canonical_extended_json(doc, nullptr);
+    if (jsonStr) {
+      row[docIt->second] = jsonStr;
+      bson_free(jsonStr);
+    } else {
+      row[docIt->second] = "";
+    }
   }
 }
 
@@ -428,10 +426,6 @@ MongoDBToPostgres::fetchCollectionData(const TableInfo &tableInfo) {
       }
     }
 
-    guard.coll_ = nullptr;
-    guard.cursor_ = nullptr;
-    guard.query_ = nullptr;
-
     Logger::info(LogCategory::TRANSFER, "fetchCollectionData",
                  "Fetched " + std::to_string(results.size()) +
                      " total documents");
@@ -447,7 +441,6 @@ MongoDBToPostgres::fetchCollectionData(const TableInfo &tableInfo) {
 void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
   try {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
-    pqxx::work txn(conn);
 
     std::string schemaName = tableInfo.schema_name;
     std::transform(schemaName.begin(), schemaName.end(), schemaName.begin(),
@@ -457,21 +450,55 @@ void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
     std::transform(tableName.begin(), tableName.end(), tableName.begin(),
                    ::tolower);
 
-    std::string fullTableName =
-        txn.quote_name(schemaName) + "." + txn.quote_name(tableName);
+    {
+      pqxx::work schemaTxn(conn);
+      schemaTxn.exec("CREATE SCHEMA IF NOT EXISTS " +
+                     schemaTxn.quote_name(schemaName));
+      schemaTxn.commit();
+    }
 
-    Logger::info(LogCategory::TRANSFER, "truncateAndLoadCollection",
-                 "TRUNCATE and loading " + fullTableName);
-
+    bool tableExists = false;
     try {
-      txn.exec("TRUNCATE TABLE " + fullTableName);
-      txn.commit();
-      Logger::info(LogCategory::TRANSFER, "truncateAndLoadCollection",
-                   "TRUNCATE completed for " + fullTableName);
+      pqxx::work checkTxn(conn);
+      std::string checkQuery =
+          "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+          "WHERE table_schema = " +
+          checkTxn.quote(schemaName) +
+          " AND table_name = " + checkTxn.quote(tableName) + ")";
+      auto checkResult = checkTxn.exec(checkQuery);
+      if (!checkResult.empty()) {
+        tableExists = checkResult[0][0].as<bool>();
+      }
+      checkTxn.commit();
     } catch (const std::exception &e) {
-      Logger::error(LogCategory::TRANSFER, "truncateAndLoadCollection",
-                    "Error during TRUNCATE: " + std::string(e.what()));
-      throw;
+      Logger::warning(LogCategory::TRANSFER, "truncateAndLoadCollection",
+                      "Error checking table existence: " +
+                          std::string(e.what()));
+    }
+
+    pqxx::work nameTxn(conn);
+    std::string fullTableName =
+        nameTxn.quote_name(schemaName) + "." + nameTxn.quote_name(tableName);
+    nameTxn.commit();
+
+    if (tableExists) {
+      Logger::info(LogCategory::TRANSFER, "truncateAndLoadCollection",
+                   "Table exists, TRUNCATE and loading " + fullTableName);
+      try {
+        pqxx::work truncateTxn(conn);
+        truncateTxn.exec("TRUNCATE TABLE " + fullTableName);
+        truncateTxn.commit();
+        Logger::info(LogCategory::TRANSFER, "truncateAndLoadCollection",
+                     "TRUNCATE completed for " + fullTableName);
+      } catch (const std::exception &e) {
+        Logger::error(LogCategory::TRANSFER, "truncateAndLoadCollection",
+                      "Error during TRUNCATE: " + std::string(e.what()));
+        throw;
+      }
+    } else {
+      Logger::info(LogCategory::TRANSFER, "truncateAndLoadCollection",
+                   "Table does not exist yet, will be created by SchemaSync: " +
+                       fullTableName);
     }
 
     std::vector<std::vector<std::string>> data = fetchCollectionData(tableInfo);
@@ -666,11 +693,24 @@ void MongoDBToPostgres::truncateAndLoadCollection(const TableInfo &tableInfo) {
     updateLastSyncTime(conn, tableInfo.schema_name, tableInfo.table_name);
 
     pqxx::work statusTxn(conn);
+    std::string pkStrategy = getPKStrategyFromCatalog(
+        conn, tableInfo.schema_name, tableInfo.table_name);
+
     statusTxn.exec(
         "UPDATE metadata.catalog SET status = 'LISTENING_CHANGES' "
         "WHERE schema_name = " +
         statusTxn.quote(tableInfo.schema_name) +
         " AND table_name = " + statusTxn.quote(tableInfo.table_name));
+
+    if (pkStrategy == "CDC") {
+      statusTxn.exec(
+          "UPDATE metadata.catalog SET sync_metadata = "
+          "COALESCE(sync_metadata, '{}'::jsonb) || "
+          "jsonb_build_object('last_change_id', 0) WHERE schema_name=" +
+          statusTxn.quote(tableInfo.schema_name) + " AND table_name=" +
+          statusTxn.quote(tableInfo.table_name) + " AND db_engine='MongoDB'");
+    }
+
     statusTxn.commit();
 
     Logger::info(LogCategory::TRANSFER, "truncateAndLoadCollection",
@@ -722,6 +762,50 @@ void MongoDBToPostgres::transferDataMongoDBToPostgresParallel() {
     for (const auto &tableInfo : collectionsToSync) {
       try {
         std::string originalStatus = tableInfo.status;
+
+        std::string lowerSchema = tableInfo.schema_name;
+        std::transform(lowerSchema.begin(), lowerSchema.end(),
+                       lowerSchema.begin(), ::tolower);
+        std::string lowerTable = tableInfo.table_name;
+        std::transform(lowerTable.begin(), lowerTable.end(), lowerTable.begin(),
+                       ::tolower);
+
+        bool tableExists = false;
+        try {
+          pqxx::work checkTxn(conn);
+          std::string checkQuery =
+              "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+              "WHERE table_schema = " +
+              checkTxn.quote(lowerSchema) +
+              " AND table_name = " + checkTxn.quote(lowerTable) + ")";
+          auto checkResult = checkTxn.exec(checkQuery);
+          if (!checkResult.empty()) {
+            tableExists = checkResult[0][0].as<bool>();
+          }
+          checkTxn.commit();
+        } catch (const std::exception &e) {
+          Logger::warning(
+              LogCategory::TRANSFER, "transferDataMongoDBToPostgresParallel",
+              "Error checking table existence: " + std::string(e.what()));
+        }
+
+        std::string targetStatus = tableInfo.status;
+        if (originalStatus == "IN_PROGRESS" && !tableExists) {
+          Logger::info(
+              LogCategory::TRANSFER, "transferDataMongoDBToPostgresParallel",
+              "Table " + tableInfo.schema_name + "." + tableInfo.table_name +
+                  " is IN_PROGRESS but table doesn't exist - resetting to "
+                  "FULL_LOAD");
+          targetStatus = "FULL_LOAD";
+          pqxx::work resetTxn(conn);
+          resetTxn.exec(
+              "UPDATE metadata.catalog SET status = 'FULL_LOAD' "
+              "WHERE schema_name = " +
+              resetTxn.quote(tableInfo.schema_name) +
+              " AND table_name = " + resetTxn.quote(tableInfo.table_name));
+          resetTxn.commit();
+        }
+
         pqxx::work statusTxn(conn);
         statusTxn.exec(
             "UPDATE metadata.catalog SET status = 'IN_PROGRESS' "
@@ -731,9 +815,63 @@ void MongoDBToPostgres::transferDataMongoDBToPostgresParallel() {
         statusTxn.commit();
 
         try {
+          // Verify collection exists before attempting to sync
+          MongoDBEngine engine(tableInfo.connection_string);
+          if (!engine.isValid()) {
+            Logger::error(
+                LogCategory::TRANSFER, "transferDataMongoDBToPostgresParallel",
+                "Failed to connect to MongoDB for " + tableInfo.schema_name +
+                    "." + tableInfo.table_name);
+            pqxx::work errorTxn(conn);
+            errorTxn.exec(
+                "UPDATE metadata.catalog SET status = 'ERROR' "
+                "WHERE schema_name = " +
+                errorTxn.quote(tableInfo.schema_name) +
+                " AND table_name = " + errorTxn.quote(tableInfo.table_name));
+            errorTxn.commit();
+            continue;
+          }
+
+          mongoc_collection_t *coll = mongoc_client_get_collection(
+              engine.getClient(), tableInfo.schema_name.c_str(),
+              tableInfo.table_name.c_str());
+          if (!coll) {
+            Logger::error(
+                LogCategory::TRANSFER, "transferDataMongoDBToPostgresParallel",
+                "Collection does not exist: " + tableInfo.schema_name + "." +
+                    tableInfo.table_name);
+            pqxx::work errorTxn(conn);
+            errorTxn.exec(
+                "UPDATE metadata.catalog SET status = 'ERROR' "
+                "WHERE schema_name = " +
+                errorTxn.quote(tableInfo.schema_name) +
+                " AND table_name = " + errorTxn.quote(tableInfo.table_name));
+            errorTxn.commit();
+            continue;
+          }
+          mongoc_collection_destroy(coll);
+
           std::vector<std::string> fields = discoverCollectionFields(
               tableInfo.connection_string, tableInfo.schema_name,
               tableInfo.table_name);
+
+          // If only _id field was discovered, collection might be empty or
+          // inaccessible
+          if (fields.size() <= 1) {
+            Logger::warning(LogCategory::TRANSFER,
+                            "transferDataMongoDBToPostgresParallel",
+                            "Collection appears empty or inaccessible: " +
+                                tableInfo.schema_name + "." +
+                                tableInfo.table_name + " - skipping");
+            pqxx::work errorTxn(conn);
+            errorTxn.exec(
+                "UPDATE metadata.catalog SET status = 'ERROR' "
+                "WHERE schema_name = " +
+                errorTxn.quote(tableInfo.schema_name) +
+                " AND table_name = " + errorTxn.quote(tableInfo.table_name));
+            errorTxn.commit();
+            continue;
+          }
 
           std::vector<ColumnInfo> sourceColumns;
           for (const auto &field : fields) {
@@ -755,19 +893,146 @@ void MongoDBToPostgres::transferDataMongoDBToPostgresParallel() {
           }
 
           if (!sourceColumns.empty()) {
-            SchemaSync::syncSchema(conn, tableInfo.schema_name,
-                                   tableInfo.table_name, sourceColumns,
-                                   "MongoDB");
+            std::string lowerSchema = tableInfo.schema_name;
+            std::transform(lowerSchema.begin(), lowerSchema.end(),
+                           lowerSchema.begin(), ::tolower);
+            std::string lowerTable = tableInfo.table_name;
+            std::transform(lowerTable.begin(), lowerTable.end(),
+                           lowerTable.begin(), ::tolower);
+
+            bool tableExists = false;
+            try {
+              pqxx::work checkTxn(conn);
+              std::string checkQuery =
+                  "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+                  "WHERE table_schema = " +
+                  checkTxn.quote(lowerSchema) +
+                  " AND table_name = " + checkTxn.quote(lowerTable) + ")";
+              auto checkResult = checkTxn.exec(checkQuery);
+              if (!checkResult.empty()) {
+                tableExists = checkResult[0][0].as<bool>();
+              }
+              checkTxn.commit();
+            } catch (const std::exception &e) {
+              Logger::warning(LogCategory::TRANSFER,
+                              "transferDataMongoDBToPostgresParallel",
+                              "Error checking table existence: " +
+                                  std::string(e.what()));
+            }
+
+            if (!tableExists) {
+              Logger::info(LogCategory::TRANSFER,
+                           "transferDataMongoDBToPostgresParallel",
+                           "Table does not exist, creating it for " +
+                               tableInfo.schema_name + "." +
+                               tableInfo.table_name + " with " +
+                               std::to_string(sourceColumns.size()) +
+                               " columns");
+
+              try {
+                pqxx::work createTxn(conn);
+                createTxn.exec("CREATE SCHEMA IF NOT EXISTS " +
+                               createTxn.quote_name(lowerSchema));
+
+                std::ostringstream createTable;
+                createTable << "CREATE TABLE IF NOT EXISTS "
+                            << createTxn.quote_name(lowerSchema) << "."
+                            << createTxn.quote_name(lowerTable) << " (";
+
+                for (size_t i = 0; i < sourceColumns.size(); i++) {
+                  if (i > 0)
+                    createTable << ", ";
+                  const auto &col = sourceColumns[i];
+                  createTable << createTxn.quote_name(col.name) << " "
+                              << col.pgType;
+                  if (col.isPrimaryKey) {
+                    createTable << " PRIMARY KEY";
+                  }
+                  if (!col.isNullable) {
+                    createTable << " NOT NULL";
+                  }
+                }
+
+                createTable << ", _created_at TIMESTAMP DEFAULT NOW()";
+                createTable << ", _updated_at TIMESTAMP DEFAULT NOW()";
+                createTable << ")";
+
+                createTxn.exec(createTable.str());
+                createTxn.commit();
+
+                Logger::info(
+                    LogCategory::TRANSFER,
+                    "transferDataMongoDBToPostgresParallel",
+                    "Table created successfully: " + tableInfo.schema_name +
+                        "." + tableInfo.table_name);
+              } catch (const std::exception &e) {
+                Logger::error(LogCategory::TRANSFER,
+                              "transferDataMongoDBToPostgresParallel",
+                              "Error creating table: " + std::string(e.what()));
+                throw;
+              }
+            } else {
+              Logger::info(
+                  LogCategory::TRANSFER,
+                  "transferDataMongoDBToPostgresParallel",
+                  "Table exists, syncing schema for " + tableInfo.schema_name +
+                      "." + tableInfo.table_name + " with " +
+                      std::to_string(sourceColumns.size()) + " columns");
+              SchemaSync::syncSchema(conn, tableInfo.schema_name,
+                                     tableInfo.table_name, sourceColumns,
+                                     "MongoDB");
+            }
+          } else {
+            Logger::warning(
+                LogCategory::TRANSFER, "transferDataMongoDBToPostgresParallel",
+                "No columns found for " + tableInfo.schema_name + "." +
+                    tableInfo.table_name + " - skipping schema sync");
+            throw std::runtime_error("No columns found for schema sync");
           }
         } catch (const std::exception &e) {
-          Logger::warning(
-              LogCategory::TRANSFER, "transferDataMongoDBToPostgresParallel",
-              "Error syncing schema for " + tableInfo.schema_name + "." +
-                  tableInfo.table_name + ": " + std::string(e.what()) +
-                  " - continuing with sync");
+          Logger::warning(LogCategory::TRANSFER,
+                          "transferDataMongoDBToPostgresParallel",
+                          "Error syncing schema for " + tableInfo.schema_name +
+                              "." + tableInfo.table_name + ": " +
+                              std::string(e.what()) + " - marking as ERROR");
+          try {
+            pqxx::work errorTxn(conn);
+            errorTxn.exec(
+                "UPDATE metadata.catalog SET status = 'ERROR' "
+                "WHERE schema_name = " +
+                errorTxn.quote(tableInfo.schema_name) +
+                " AND table_name = " + errorTxn.quote(tableInfo.table_name));
+            errorTxn.commit();
+          } catch (...) {
+            // Ignore errors updating status
+          }
+          continue;
         }
 
-        truncateAndLoadCollection(tableInfo);
+        std::string pkStrategy = getPKStrategyFromCatalog(
+            conn, tableInfo.schema_name, tableInfo.table_name);
+
+        Logger::info(
+            LogCategory::TRANSFER, "transferDataMongoDBToPostgresParallel",
+            "Processing " + tableInfo.schema_name + "." + tableInfo.table_name +
+                " - strategy=" + pkStrategy + ", status=" + targetStatus +
+                ", tableExists=" + (tableExists ? "true" : "false"));
+
+        if (pkStrategy == "CDC" && targetStatus != "FULL_LOAD") {
+          Logger::info(
+              LogCategory::TRANSFER, "transferDataMongoDBToPostgresParallel",
+              "CDC strategy detected for " + tableInfo.schema_name + "." +
+                  tableInfo.table_name + " - processing changes only");
+          processTableCDC(tableInfo, conn);
+        } else {
+          if (pkStrategy == "CDC" && targetStatus == "FULL_LOAD") {
+            Logger::info(
+                LogCategory::TRANSFER, "transferDataMongoDBToPostgresParallel",
+                "CDC table in FULL_LOAD - performing initial load for " +
+                    tableInfo.schema_name + "." + tableInfo.table_name);
+          }
+          truncateAndLoadCollection(tableInfo);
+        }
       } catch (const std::exception &e) {
         Logger::error(LogCategory::TRANSFER,
                       "transferDataMongoDBToPostgresParallel",
@@ -831,5 +1096,329 @@ void MongoDBToPostgres::setupTableTargetMongoDBToPostgres() {
   } catch (const std::exception &e) {
     Logger::error(LogCategory::TRANSFER, "setupTableTargetMongoDBToPostgres",
                   "Error setting up tables: " + std::string(e.what()));
+  }
+}
+
+void MongoDBToPostgres::processTableCDC(const TableInfo &table,
+                                        pqxx::connection &pgConn) {
+  try {
+    Logger::info(LogCategory::TRANSFER, "processTableCDC",
+                 "Starting CDC processing for MongoDB collection " +
+                     table.schema_name + "." + table.table_name);
+
+    MongoDBEngine engine(table.connection_string);
+    if (!engine.isValid()) {
+      Logger::error(LogCategory::TRANSFER, "processTableCDC",
+                    "Failed to connect to MongoDB");
+      return;
+    }
+
+    mongoc_collection_t *coll = mongoc_client_get_collection(
+        engine.getClient(), table.schema_name.c_str(),
+        table.table_name.c_str());
+    if (!coll) {
+      Logger::error(LogCategory::TRANSFER, "processTableCDC",
+                    "Failed to get collection " + table.schema_name + "." +
+                        table.table_name);
+      return;
+    }
+
+    std::string lowerSchemaName = table.schema_name;
+    std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
+                   lowerSchemaName.begin(), ::tolower);
+    std::string lowerTableName = table.table_name;
+    std::transform(lowerTableName.begin(), lowerTableName.end(),
+                   lowerTableName.begin(), ::tolower);
+
+    {
+      pqxx::work schemaTxn(pgConn);
+      schemaTxn.exec("CREATE SCHEMA IF NOT EXISTS " +
+                     schemaTxn.quote_name(lowerSchemaName));
+      schemaTxn.commit();
+    }
+
+    std::vector<std::string> fields = discoverCollectionFields(
+        table.connection_string, table.schema_name, table.table_name);
+
+    if (fields.empty()) {
+      Logger::error(LogCategory::TRANSFER, "processTableCDC",
+                    "No fields discovered for collection");
+      mongoc_collection_destroy(coll);
+      return;
+    }
+
+    bson_t *match = bson_new();
+    bson_t *operationType = bson_new();
+    bson_t *inArray = bson_new();
+    bson_append_utf8(inArray, "0", -1, "insert", -1);
+    bson_append_utf8(inArray, "1", -1, "update", -1);
+    bson_append_utf8(inArray, "2", -1, "replace", -1);
+    bson_append_utf8(inArray, "3", -1, "delete", -1);
+    bson_append_array(operationType, "$in", -1, inArray);
+    bson_append_document(match, "operationType", -1, operationType);
+    bson_t *pipeline = bson_new();
+    bson_append_document(pipeline, "$match", -1, match);
+    bson_destroy(match);
+    bson_destroy(operationType);
+    bson_destroy(inArray);
+
+    mongoc_change_stream_t *stream =
+        mongoc_collection_watch(coll, pipeline, nullptr);
+    bson_destroy(pipeline);
+
+    if (!stream) {
+      Logger::error(LogCategory::TRANSFER, "processTableCDC",
+                    "Failed to create change stream");
+      mongoc_collection_destroy(coll);
+      return;
+    }
+
+    const bson_t *changeDoc;
+    size_t processedCount = 0;
+    const size_t BATCH_SIZE = 100;
+    size_t maxChanges = 10000;
+    auto startTime = std::chrono::steady_clock::now();
+    auto maxDuration = std::chrono::seconds(300);
+
+    try {
+      pqxx::work configTxn(pgConn);
+      auto configResult =
+          configTxn.exec("SELECT value FROM metadata.config WHERE key = "
+                         "'mongodb_cdc_max_changes'");
+      if (!configResult.empty() && !configResult[0][0].is_null()) {
+        maxChanges = std::stoul(configResult[0][0].as<std::string>());
+      }
+      auto durationResult =
+          configTxn.exec("SELECT value FROM metadata.config WHERE key = "
+                         "'mongodb_cdc_max_duration_seconds'");
+      if (!durationResult.empty() && !durationResult[0][0].is_null()) {
+        maxDuration = std::chrono::seconds(
+            std::stoul(durationResult[0][0].as<std::string>()));
+      }
+      configTxn.commit();
+    } catch (...) {
+    }
+
+    while (processedCount < maxChanges) {
+      auto elapsed = std::chrono::steady_clock::now() - startTime;
+      if (elapsed > maxDuration) {
+        Logger::info(
+            LogCategory::TRANSFER, "processTableCDC",
+            "Max duration reached, saving progress and continuing later");
+        break;
+      }
+
+      if (!mongoc_change_stream_next(stream, &changeDoc)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        continue;
+      }
+      bson_iter_t iter;
+      if (!bson_iter_init(&iter, changeDoc)) {
+        continue;
+      }
+
+      std::string operationType;
+      bson_t *fullDocument = nullptr;
+      bson_t *documentKey = nullptr;
+
+      while (bson_iter_next(&iter)) {
+        const char *key = bson_iter_key(&iter);
+        if (strcmp(key, "operationType") == 0 && BSON_ITER_HOLDS_UTF8(&iter)) {
+          operationType = bson_iter_utf8(&iter, nullptr);
+        } else if (strcmp(key, "fullDocument") == 0 &&
+                   BSON_ITER_HOLDS_DOCUMENT(&iter)) {
+          const uint8_t *docData;
+          uint32_t docLen;
+          bson_iter_document(&iter, &docLen, &docData);
+          fullDocument = bson_new_from_data(docData, docLen);
+        } else if (strcmp(key, "documentKey") == 0 &&
+                   BSON_ITER_HOLDS_DOCUMENT(&iter)) {
+          const uint8_t *keyData;
+          uint32_t keyLen;
+          bson_iter_document(&iter, &keyLen, &keyData);
+          documentKey = bson_new_from_data(keyData, keyLen);
+        }
+      }
+
+      if (operationType.empty()) {
+        if (fullDocument)
+          bson_destroy(fullDocument);
+        if (documentKey)
+          bson_destroy(documentKey);
+        continue;
+      }
+
+      try {
+        pqxx::work txn(pgConn);
+        std::string fullTableName = txn.quote_name(lowerSchemaName) + "." +
+                                    txn.quote_name(lowerTableName);
+
+        if (operationType == "insert" || operationType == "replace" ||
+            operationType == "update") {
+          bson_t *docToProcess = fullDocument;
+          if (!docToProcess && documentKey) {
+            bson_t *query = bson_copy(documentKey);
+            mongoc_cursor_t *cursor =
+                mongoc_collection_find_with_opts(coll, query, nullptr, nullptr);
+            bson_destroy(query);
+
+            const bson_t *foundDoc;
+            if (mongoc_cursor_next(cursor, &foundDoc)) {
+              docToProcess = bson_copy(foundDoc);
+            }
+            mongoc_cursor_destroy(cursor);
+          }
+
+          if (docToProcess) {
+            std::unordered_map<std::string, int> fieldIndexMap;
+            for (size_t i = 0; i < fields.size(); i++) {
+              fieldIndexMap[fields[i]] = i;
+            }
+
+            std::vector<std::string> row;
+            convertBSONToPostgresRow(docToProcess, fields, row, fieldIndexMap);
+
+            if (docToProcess != fullDocument) {
+              bson_destroy(docToProcess);
+            }
+
+            std::ostringstream upsertQuery;
+            upsertQuery << "INSERT INTO " << fullTableName << " (";
+
+            for (size_t i = 0; i < fields.size(); i++) {
+              if (i > 0)
+                upsertQuery << ", ";
+              upsertQuery << txn.quote_name(fields[i]);
+            }
+
+            upsertQuery << ") VALUES (";
+
+            for (size_t i = 0; i < row.size() && i < fields.size(); i++) {
+              if (i > 0)
+                upsertQuery << ", ";
+              if (fields[i] == "_document") {
+                nlohmann::json wrapper;
+                wrapper["value"] = row[i];
+                upsertQuery << txn.quote(wrapper.dump()) << "::jsonb";
+              } else {
+                upsertQuery << txn.quote(cleanValueForPostgres(row[i], "TEXT"));
+              }
+            }
+
+            upsertQuery << ") ON CONFLICT (_id) DO UPDATE SET ";
+
+            for (size_t i = 0; i < fields.size(); i++) {
+              if (fields[i] == "_id")
+                continue;
+              if (i > 1 || (i == 1 && fields[0] != "_id"))
+                upsertQuery << ", ";
+              upsertQuery << txn.quote_name(fields[i]) << " = EXCLUDED."
+                          << txn.quote_name(fields[i]);
+            }
+
+            txn.exec(upsertQuery.str());
+            txn.commit();
+            processedCount++;
+          }
+        } else if (operationType == "delete" && documentKey) {
+          bson_iter_t idIter;
+          if (bson_iter_init(&idIter, documentKey) &&
+              bson_iter_find(&idIter, "_id")) {
+            std::string idValue;
+            if (BSON_ITER_HOLDS_UTF8(&idIter)) {
+              idValue = bson_iter_utf8(&idIter, nullptr);
+            } else if (BSON_ITER_HOLDS_OID(&idIter)) {
+              const bson_oid_t *oid = bson_iter_oid(&idIter);
+              char oidStr[25];
+              bson_oid_to_string(oid, oidStr);
+              idValue = oidStr;
+            } else if (BSON_ITER_HOLDS_INT32(&idIter)) {
+              idValue = std::to_string(bson_iter_int32(&idIter));
+            } else if (BSON_ITER_HOLDS_INT64(&idIter)) {
+              idValue = std::to_string(bson_iter_int64(&idIter));
+            }
+
+            if (!idValue.empty()) {
+              std::string deleteQuery = "DELETE FROM " + fullTableName +
+                                        " WHERE _id = " + txn.quote(idValue);
+              txn.exec(deleteQuery);
+              txn.commit();
+              processedCount++;
+            }
+          }
+          bson_destroy(documentKey);
+        }
+
+        if (fullDocument && fullDocument != documentKey) {
+          bson_destroy(fullDocument);
+        }
+
+        if (processedCount % BATCH_SIZE == 0) {
+          pqxx::work updateTxn(pgConn);
+          updateTxn.exec(
+              "UPDATE metadata.catalog SET sync_metadata = "
+              "COALESCE(sync_metadata, '{}'::jsonb) || "
+              "jsonb_build_object('last_change_id', " +
+              std::to_string(processedCount) +
+              ", 'last_cdc_batch_time', NOW()) WHERE schema_name=" +
+              updateTxn.quote(table.schema_name) + " AND table_name=" +
+              updateTxn.quote(table.table_name) + " AND db_engine='MongoDB'");
+          updateTxn.commit();
+
+          Logger::info(LogCategory::TRANSFER, "processTableCDC",
+                       "Processed " + std::to_string(processedCount) +
+                           " changes for " + table.schema_name + "." +
+                           table.table_name);
+        }
+
+      } catch (const std::exception &e) {
+        Logger::error(LogCategory::TRANSFER, "processTableCDC",
+                      "Error processing change: " + std::string(e.what()));
+        if (fullDocument)
+          bson_destroy(fullDocument);
+        if (documentKey)
+          bson_destroy(documentKey);
+      }
+    }
+
+    {
+      pqxx::work finalUpdateTxn(pgConn);
+      if (processedCount > 0) {
+        finalUpdateTxn.exec(
+            "UPDATE metadata.catalog SET sync_metadata = "
+            "COALESCE(sync_metadata, '{}'::jsonb) || "
+            "jsonb_build_object('last_change_id', " +
+            std::to_string(processedCount) +
+            ", 'last_cdc_batch_time', NOW()) WHERE schema_name=" +
+            finalUpdateTxn.quote(table.schema_name) +
+            " AND table_name=" + finalUpdateTxn.quote(table.table_name) +
+            " AND db_engine='MongoDB'");
+      }
+      if (processedCount < maxChanges) {
+        finalUpdateTxn.exec(
+            "UPDATE metadata.catalog SET status = 'LISTENING_CHANGES' "
+            "WHERE schema_name=" +
+            finalUpdateTxn.quote(table.schema_name) +
+            " AND table_name=" + finalUpdateTxn.quote(table.table_name) +
+            " AND db_engine='MongoDB'");
+      } else {
+        Logger::info(LogCategory::TRANSFER, "processTableCDC",
+                     "Reached max changes limit, will continue in next cycle");
+      }
+      finalUpdateTxn.commit();
+    }
+
+    mongoc_change_stream_destroy(stream);
+    mongoc_collection_destroy(coll);
+
+    Logger::info(LogCategory::TRANSFER, "processTableCDC",
+                 "Completed CDC processing for " + table.schema_name + "." +
+                     table.table_name + " - processed " +
+                     std::to_string(processedCount) +
+                     " changes, status updated to LISTENING_CHANGES");
+
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "processTableCDC",
+                  "Error in CDC processing: " + std::string(e.what()));
   }
 }

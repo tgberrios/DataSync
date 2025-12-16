@@ -5,6 +5,7 @@
 #include "engines/database_engine.h"
 #include "engines/oracle_engine.h"
 #include "sync/DatabaseToPostgresSync.h"
+#include "sync/ICDCHandler.h"
 #include "sync/TableProcessorThreadPool.h"
 #include <algorithm>
 #include <cctype>
@@ -20,7 +21,7 @@
 
 using namespace ParallelProcessing;
 
-class OracleToPostgres : public DatabaseToPostgresSync {
+class OracleToPostgres : public DatabaseToPostgresSync, public ICDCHandler {
 public:
   OracleToPostgres() = default;
   ~OracleToPostgres() { shutdownParallelProcessing(); }
@@ -40,18 +41,17 @@ public:
   void transferDataOracleToPostgresParallel();
 
   void processTableParallel(const TableInfo &table, pqxx::connection &pgConn);
+  void processTableCDC(const DatabaseToPostgresSync::TableInfo &table,
+                       pqxx::connection &pgConn) override;
+
+  bool supportsCDC() const override { return true; }
+  std::string getCDCMechanism() const override {
+    return "Change Log Table (ds_change_log)";
+  }
 
 private:
   std::vector<std::vector<std::string>>
   executeQueryOracle(OCIConnection *conn, const std::string &query);
-
-  void updateLastOffset(pqxx::connection &pgConn,
-                        const std::string &schema_name,
-                        const std::string &table_name, long long offset);
-
-  long long getLastOffset(pqxx::connection &pgConn,
-                          const std::string &schema_name,
-                          const std::string &table_name);
 
   void updateStatus(pqxx::connection &pgConn, const std::string &schema_name,
                     const std::string &table_name, const std::string &status,

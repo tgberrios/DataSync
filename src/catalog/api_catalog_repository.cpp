@@ -92,6 +92,7 @@ std::vector<APICatalogEntry> APICatalogRepository::getActiveAPIs() {
 
 APICatalogEntry APICatalogRepository::getAPIEntry(const std::string &apiName) {
   APICatalogEntry entry;
+  entry.api_name = "";
   try {
     auto conn = getConnection();
     pqxx::work txn(conn);
@@ -196,7 +197,15 @@ APICatalogEntry APICatalogRepository::rowToEntry(const pqxx::row &row) {
   entry.http_method = row[4].as<std::string>();
   entry.auth_type = row[5].as<std::string>();
   if (!row[6].is_null()) {
-    entry.auth_config = json::parse(row[6].as<std::string>());
+    try {
+      entry.auth_config = json::parse(row[6].as<std::string>());
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::DATABASE, "APICatalogRepository",
+                    "Error parsing auth_config JSON: " + std::string(e.what()));
+      entry.auth_config = json{};
+    }
+  } else {
+    entry.auth_config = json{};
   }
   entry.target_db_engine = row[7].as<std::string>();
   entry.target_connection_string = row[8].as<std::string>();
@@ -204,10 +213,28 @@ APICatalogEntry APICatalogRepository::rowToEntry(const pqxx::row &row) {
   entry.target_table = row[10].as<std::string>();
   entry.request_body = row[11].is_null() ? "" : row[11].as<std::string>();
   if (!row[12].is_null()) {
-    entry.request_headers = json::parse(row[12].as<std::string>());
+    try {
+      entry.request_headers = json::parse(row[12].as<std::string>());
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::DATABASE, "APICatalogRepository",
+                    "Error parsing request_headers JSON: " +
+                        std::string(e.what()));
+      entry.request_headers = json{};
+    }
+  } else {
+    entry.request_headers = json{};
   }
   if (!row[13].is_null()) {
-    entry.query_params = json::parse(row[13].as<std::string>());
+    try {
+      entry.query_params = json::parse(row[13].as<std::string>());
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::DATABASE, "APICatalogRepository",
+                    "Error parsing query_params JSON: " +
+                        std::string(e.what()));
+      entry.query_params = json{};
+    }
+  } else {
+    entry.query_params = json{};
   }
   entry.status = row[14].as<std::string>();
   entry.active = row[15].as<bool>();
@@ -215,10 +242,27 @@ APICatalogEntry APICatalogRepository::rowToEntry(const pqxx::row &row) {
   entry.last_sync_time = row[17].is_null() ? "" : row[17].as<std::string>();
   entry.last_sync_status = row[18].is_null() ? "" : row[18].as<std::string>();
   if (!row[19].is_null()) {
-    entry.mapping_config = json::parse(row[19].as<std::string>());
+    try {
+      entry.mapping_config = json::parse(row[19].as<std::string>());
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::DATABASE, "APICatalogRepository",
+                    "Error parsing mapping_config JSON: " +
+                        std::string(e.what()));
+      entry.mapping_config = json{};
+    }
+  } else {
+    entry.mapping_config = json{};
   }
   if (!row[20].is_null()) {
-    entry.metadata = json::parse(row[20].as<std::string>());
+    try {
+      entry.metadata = json::parse(row[20].as<std::string>());
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::DATABASE, "APICatalogRepository",
+                    "Error parsing metadata JSON: " + std::string(e.what()));
+      entry.metadata = json{};
+    }
+  } else {
+    entry.metadata = json{};
   }
   return entry;
 }

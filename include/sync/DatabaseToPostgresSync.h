@@ -38,9 +38,9 @@ protected:
   std::mutex tableStatesMutex_;
 
   std::vector<std::thread> parallelThreads;
-  ThreadSafeQueue<DataChunk> rawDataQueue;
-  ThreadSafeQueue<PreparedBatch> preparedBatchQueue;
-  ThreadSafeQueue<ProcessedResult> resultQueue;
+  ThreadSafeQueue<DataChunk> rawDataQueue{MAX_QUEUE_SIZE};
+  ThreadSafeQueue<PreparedBatch> preparedBatchQueue{MAX_QUEUE_SIZE};
+  ThreadSafeQueue<ProcessedResult> resultQueue{MAX_QUEUE_SIZE};
 
   static constexpr size_t MAX_QUEUE_SIZE = 10;
   static constexpr size_t MAX_BATCH_PREPARERS = 4;
@@ -82,12 +82,6 @@ public:
   void shutdownParallelProcessing();
 
   std::vector<std::string> parseJSONArray(const std::string &jsonArray);
-  std::vector<std::string> parseLastPK(const std::string &lastPK);
-
-  void updateLastProcessedPK(pqxx::connection &pgConn,
-                             const std::string &schema_name,
-                             const std::string &table_name,
-                             const std::string &lastPK);
 
   std::string getPKStrategyFromCatalog(pqxx::connection &pgConn,
                                        const std::string &schema_name,
@@ -97,15 +91,6 @@ public:
   getPKColumnsFromCatalog(pqxx::connection &pgConn,
                           const std::string &schema_name,
                           const std::string &table_name);
-
-  std::string getLastProcessedPKFromCatalog(pqxx::connection &pgConn,
-                                            const std::string &schema_name,
-                                            const std::string &table_name);
-
-  std::string
-  getLastPKFromResults(const std::vector<std::vector<std::string>> &results,
-                       const std::vector<std::string> &pkColumns,
-                       const std::vector<std::string> &columnNames);
 
   size_t deleteRecordsByPrimaryKey(
       pqxx::connection &pgConn, const std::string &lowerSchemaName,

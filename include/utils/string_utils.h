@@ -68,32 +68,6 @@ inline bool containsIgnoreCase(std::string_view haystack,
   return it != haystack.end();
 }
 
-inline std::string sanitizeForSQL(const std::string &input) {
-  std::string cleaned = input;
-
-  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), ';'),
-                cleaned.end());
-  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '\''),
-                cleaned.end());
-  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '"'),
-                cleaned.end());
-  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '\n'),
-                cleaned.end());
-  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '\r'),
-                cleaned.end());
-  cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), '\t'),
-                cleaned.end());
-
-  cleaned = trim(cleaned);
-
-  if (cleaned.empty()) {
-    throw std::invalid_argument(
-        "Input is empty or contains only invalid characters: " + input);
-  }
-
-  return toLower(cleaned);
-}
-
 inline bool isValidDatabaseIdentifier(const std::string &identifier) {
   if (identifier.empty() || identifier.length() > 128) {
     return false;
@@ -113,7 +87,50 @@ inline bool isValidDatabaseIdentifier(const std::string &identifier) {
   return true;
 }
 
+inline std::string sanitizeForSQL(const std::string &input) {
+  std::string cleaned = trim(input);
+
+  if (cleaned.empty()) {
+    throw std::invalid_argument("Input is empty or contains only whitespace: " +
+                                input);
+  }
+
+  if (!isValidDatabaseIdentifier(cleaned)) {
+    std::string validChars;
+    for (char c : cleaned) {
+      if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+          (c >= '0' && c <= '9') || c == '_' || c == '$' || c == '#') {
+        validChars += c;
+      }
+    }
+    cleaned = validChars;
+    cleaned = trim(cleaned);
+
+    if (cleaned.empty() || (cleaned[0] >= '0' && cleaned[0] <= '9')) {
+      throw std::invalid_argument(
+          "Input contains invalid characters or starts with a digit: " + input);
+    }
+  }
+
+  if (cleaned.length() > 128) {
+    cleaned = cleaned.substr(0, 128);
+  }
+
+  return toLower(cleaned);
+}
+
 inline std::string escapeMSSQLIdentifier(const std::string &identifier) {
+  if (identifier.empty()) {
+    throw std::invalid_argument("Identifier cannot be empty");
+  }
+
+  if (identifier.find('[') != std::string::npos ||
+      identifier.find(']') != std::string::npos) {
+    throw std::invalid_argument(
+        "Identifier contains bracket characters (already escaped?): " +
+        identifier);
+  }
+
   if (!isValidDatabaseIdentifier(identifier)) {
     throw std::invalid_argument("Invalid database identifier: " + identifier);
   }

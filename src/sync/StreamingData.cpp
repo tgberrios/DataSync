@@ -19,7 +19,11 @@ StreamingData::StreamingData()
 
 // Destructor automatically shuts down the system, ensuring all threads are
 // properly joined and resources are cleaned up.
-StreamingData::~StreamingData() { shutdown(); }
+StreamingData::~StreamingData() {
+  if (!shutdownCalled.load()) {
+    shutdown();
+  }
+}
 
 // Initializes the DataSync system components. Currently performs minimal
 // initialization, logging that database connections will be created as needed.
@@ -52,8 +56,9 @@ void StreamingData::initialize() {
 // maintenance) and transfer threads (MariaDB, MSSQL). Waits for all threads to
 // complete before returning. Handles exceptions when joining threads. This
 // method blocks until all threads finish execution. Should be called after
-// initialize().
-void StreamingData::run() {
+// initialize(). The shutdownCheck function is called periodically to check if
+// shutdown was requested externally (e.g., from a signal handler).
+void StreamingData::run(std::function<bool()> shutdownCheck) {
   Logger::info(LogCategory::MONITORING,
                "Starting multi-threaded DataSync system");
 
@@ -86,8 +91,14 @@ void StreamingData::run() {
   std::vector<std::exception_ptr> threadExceptions;
   std::mutex exceptionMutex;
 
-  // Wait for threads with periodic checks for shutdown
   while (running.load()) {
+    if (shutdownCheck && shutdownCheck()) {
+      Logger::info(LogCategory::MONITORING, "run",
+                   "Shutdown requested externally, initiating shutdown");
+      shutdown();
+      break;
+    }
+
     bool allFinished = true;
     for (auto &thread : threads) {
       if (thread.joinable()) {
@@ -105,21 +116,25 @@ void StreamingData::run() {
   for (auto &thread : threads) {
     if (thread.joinable()) {
       try {
-        // Try to join with a timeout check
         auto start = std::chrono::steady_clock::now();
-        bool joined = false;
-        while (thread.joinable() && (std::chrono::steady_clock::now() - start) <
-                                        std::chrono::seconds(2)) {
+        const auto threadTimeout = std::chrono::seconds(5);
+        while (thread.joinable() &&
+               (std::chrono::steady_clock::now() - start) < threadTimeout) {
           std::this_thread::sleep_for(std::chrono::milliseconds(100));
-          // Check if thread finished
           if (!thread.joinable()) {
             break;
           }
         }
         if (thread.joinable()) {
           Logger::warning(LogCategory::MONITORING, "run",
-                          "Thread did not finish in time, detaching");
-          thread.detach();
+                          "Thread did not finish in time, forcing join");
+          try {
+            thread.join();
+          } catch (...) {
+            Logger::error(LogCategory::MONITORING, "run",
+                          "Error joining thread, detaching");
+            thread.detach();
+          }
         }
       } catch (const std::exception &e) {
         Logger::error(LogCategory::MONITORING, "run",
@@ -151,16 +166,20 @@ void StreamingData::run() {
 // Handles exceptions when joining threads. Idempotent - can be called
 // multiple times safely. Should be called before destroying the object.
 void StreamingData::shutdown() {
+  bool expected = false;
+  if (!shutdownCalled.compare_exchange_strong(expected, true)) {
+    return;
+  }
   Logger::info(LogCategory::MONITORING, "Shutting down DataSync system");
   running = false;
 
   Logger::info(LogCategory::MONITORING,
-               "Waiting for all threads to finish (max 10 seconds)");
+               "Waiting for all threads to finish (max 30 seconds)");
   std::vector<std::exception_ptr> threadExceptions;
   std::mutex exceptionMutex;
 
   auto startTime = std::chrono::steady_clock::now();
-  const auto maxWaitTime = std::chrono::seconds(10);
+  const auto maxWaitTime = std::chrono::seconds(30);
 
   for (auto &thread : threads) {
     if (thread.joinable()) {
@@ -175,19 +194,26 @@ void StreamingData::shutdown() {
           continue;
         }
 
-        // Try to join, but don't wait forever
         auto threadStart = std::chrono::steady_clock::now();
+        const auto threadTimeout = std::chrono::seconds(5);
         while (thread.joinable() && (std::chrono::steady_clock::now() -
-                                     threadStart) < std::chrono::seconds(2)) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                                     threadStart) < threadTimeout) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+          if (!thread.joinable()) {
+            break;
+          }
         }
 
         if (thread.joinable()) {
           Logger::warning(LogCategory::MONITORING, "shutdown",
-                          "Thread did not finish in time, detaching");
-          thread.detach();
-        } else {
-          thread.join();
+                          "Thread did not finish in time, forcing join");
+          try {
+            thread.join();
+          } catch (...) {
+            Logger::error(LogCategory::MONITORING, "shutdown",
+                          "Error joining thread, detaching");
+            thread.detach();
+          }
         }
       } catch (const std::exception &e) {
         Logger::error(LogCategory::MONITORING, "shutdown",
@@ -914,57 +940,69 @@ void StreamingData::customJobsSchedulerThread() {
         std::string minute, hour, day, month, dow;
         cronStream >> minute >> hour >> day >> month >> dow;
 
-        bool shouldRun = true;
-        if (minute != "*") {
-          try {
-            int cronMinute = std::stoi(minute);
-            if (cronMinute != currentMinute) {
-              shouldRun = false;
-            }
-          } catch (...) {
-            shouldRun = false;
+        auto matchesCronField = [](const std::string &field,
+                                   int currentValue) -> bool {
+          if (field == "*") {
+            return true;
           }
-        }
-        if (shouldRun && hour != "*") {
-          try {
-            int cronHour = std::stoi(hour);
-            if (cronHour != currentHour) {
-              shouldRun = false;
+
+          size_t dashPos = field.find('-');
+          size_t commaPos = field.find(',');
+          size_t slashPos = field.find('/');
+
+          if (dashPos != std::string::npos) {
+            try {
+              int start = std::stoi(field.substr(0, dashPos));
+              int end = std::stoi(field.substr(dashPos + 1));
+              return currentValue >= start && currentValue <= end;
+            } catch (...) {
+              return false;
             }
-          } catch (...) {
-            shouldRun = false;
           }
-        }
-        if (shouldRun && day != "*") {
-          try {
-            int cronDay = std::stoi(day);
-            if (cronDay != currentDay) {
-              shouldRun = false;
+
+          if (commaPos != std::string::npos) {
+            std::istringstream listStream(field);
+            std::string item;
+            while (std::getline(listStream, item, ',')) {
+              try {
+                if (std::stoi(item) == currentValue) {
+                  return true;
+                }
+              } catch (...) {
+                continue;
+              }
             }
-          } catch (...) {
-            shouldRun = false;
+            return false;
           }
-        }
-        if (shouldRun && month != "*") {
-          try {
-            int cronMonth = std::stoi(month);
-            if (cronMonth != currentMonth) {
-              shouldRun = false;
+
+          if (slashPos != std::string::npos) {
+            try {
+              std::string base = field.substr(0, slashPos);
+              int step = std::stoi(field.substr(slashPos + 1));
+              if (base == "*") {
+                return (currentValue % step) == 0;
+              } else {
+                int start = std::stoi(base);
+                return ((currentValue - start) % step) == 0 &&
+                       currentValue >= start;
+              }
+            } catch (...) {
+              return false;
             }
-          } catch (...) {
-            shouldRun = false;
           }
-        }
-        if (shouldRun && dow != "*") {
+
           try {
-            int cronDow = std::stoi(dow);
-            if (cronDow != currentDow) {
-              shouldRun = false;
-            }
+            return std::stoi(field) == currentValue;
           } catch (...) {
-            shouldRun = false;
+            return false;
           }
-        }
+        };
+
+        bool shouldRun = matchesCronField(minute, currentMinute) &&
+                         matchesCronField(hour, currentHour) &&
+                         matchesCronField(day, currentDay) &&
+                         matchesCronField(month, currentMonth) &&
+                         matchesCronField(dow, currentDow);
 
         if (shouldRun) {
           Logger::info(LogCategory::MONITORING, "customJobsSchedulerThread",
@@ -1035,6 +1073,9 @@ void StreamingData::qualityThread() {
             std::chrono::seconds(SyncConfig::getSyncInterval() * 2));
         continue;
       }
+
+      pgConn->set_session_var("statement_timeout", "30000");
+      pgConn->set_session_var("lock_timeout", "10000");
 
       validateTablesForEngine(*pgConn, "MariaDB");
       validateTablesForEngine(*pgConn, "MSSQL");
@@ -1202,9 +1243,6 @@ void StreamingData::monitoringThread() {
 
       pgConn = std::make_unique<pqxx::connection>(connStr);
 
-      pgConn->set_session_var("statement_timeout", "30000");
-      pgConn->set_session_var("lock_timeout", "10000");
-
       if (!pgConn->is_open()) {
         Logger::error(
             LogCategory::MONITORING, "monitoringThread",
@@ -1215,6 +1253,9 @@ void StreamingData::monitoringThread() {
             std::chrono::seconds(SyncConfig::getSyncInterval()));
         continue;
       }
+
+      pgConn->set_session_var("statement_timeout", "30000");
+      pgConn->set_session_var("lock_timeout", "10000");
 
       try {
         Logger::info(LogCategory::MONITORING,
@@ -1264,6 +1305,12 @@ void StreamingData::monitoringThread() {
 void StreamingData::validateTablesForEngine(pqxx::connection &pgConn,
                                             const std::string &dbEngine) {
   try {
+    if (!pgConn.is_open()) {
+      Logger::error(LogCategory::MONITORING, "validateTablesForEngine",
+                    "Connection is not open for " + dbEngine + " validation");
+      return;
+    }
+
     Logger::info(LogCategory::MONITORING,
                  "Starting " + dbEngine + " table validation");
     pqxx::work txn(pgConn);

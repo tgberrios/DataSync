@@ -59,6 +59,78 @@ struct TableMetadata {
   std::string table_comment;
   std::string data_lineage;
   std::string compliance_requirements;
+
+  // Data ownership and stewardship
+  std::string data_owner;
+  std::string data_steward;
+  std::string data_custodian;
+  std::string owner_email;
+  std::string steward_email;
+  std::string business_glossary_term;
+  std::string data_dictionary_description;
+  bool approval_required = false;
+  std::string last_approved_by;
+  std::string last_approved_at;
+
+  // Security and access control
+  bool encryption_at_rest = false;
+  bool encryption_in_transit = false;
+  bool masking_policy_applied = false;
+  std::string masking_policy_name;
+  bool row_level_security_enabled = false;
+  bool column_level_security_enabled = false;
+  std::string access_control_policy;
+
+  // Compliance and privacy
+  bool consent_required = false;
+  std::string consent_type;
+  std::string legal_basis;
+  std::string data_subject_rights;
+  bool cross_border_transfer = false;
+  std::string cross_border_countries;
+  std::string data_processing_agreement;
+  std::string privacy_impact_assessment;
+  bool breach_notification_required = false;
+  std::string last_breach_check;
+
+  // Enhanced PII/PHI detection
+  std::string pii_detection_method;
+  double pii_confidence_score = 0.0;
+  std::string pii_categories;
+  std::string phi_detection_method;
+  double phi_confidence_score = 0.0;
+  int sensitive_data_count = 0;
+  std::string last_pii_scan;
+
+  // Retention and lifecycle
+  bool retention_enforced = false;
+  std::string archival_policy;
+  std::string archival_location;
+  std::string last_archived_at;
+  bool legal_hold = false;
+  std::string legal_hold_reason;
+  std::string legal_hold_until;
+  std::string data_expiration_date;
+  bool auto_delete_enabled = false;
+
+  // Lineage and transformations
+  std::string etl_pipeline_name;
+  std::string etl_pipeline_id;
+  std::string transformation_rules;
+  std::string source_systems;
+  std::string downstream_systems;
+  std::string bi_tools_used;
+  std::string api_endpoints;
+
+  // Quality and monitoring
+  double quality_sla_score = 0.0;
+  bool quality_checks_automated = false;
+  bool anomaly_detection_enabled = false;
+  std::string last_anomaly_detected;
+  int data_freshness_threshold_hours = 24;
+  std::string last_freshness_check;
+  bool schema_evolution_tracking = false;
+  std::string last_schema_change;
 };
 
 class DataGovernance {
@@ -124,6 +196,13 @@ private:
   double calculateTimelinessScore(const TableMetadata &metadata);
   double calculateUniquenessScore(const TableMetadata &metadata);
   double calculateIntegrityScore(const TableMetadata &metadata);
+
+  void calculatePIIMetrics(pqxx::connection &conn,
+                           const std::string &schema_name,
+                           const std::string &table_name,
+                           TableMetadata &metadata);
+
+  std::string escapeSQL(const std::string &str);
 };
 
 #endif // DATAGOVERNANCE_H

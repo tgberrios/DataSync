@@ -29,7 +29,8 @@ class APIToDatabaseSync {
                              const std::vector<std::string> &columnTypes);
 
   void insertDataToPostgreSQL(const APICatalogEntry &entry,
-                              const std::vector<json> &data);
+                              const std::vector<json> &data,
+                              const std::vector<std::string> &columns);
 
   void createMariaDBTable(const APICatalogEntry &entry,
                           const std::vector<std::string> &columns,

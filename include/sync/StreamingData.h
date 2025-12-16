@@ -17,6 +17,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -30,12 +31,13 @@ public:
   ~StreamingData();
 
   void initialize();
-  void run();
+  void run(std::function<bool()> shutdownCheck = nullptr);
   void shutdown();
   void executeJob(const std::string &jobName);
 
 private:
   std::atomic<bool> running{true};
+  std::atomic<bool> shutdownCalled{false};
   std::vector<std::thread> threads;
 
   MariaDBToPostgres mariaToPg;

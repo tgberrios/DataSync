@@ -1,6 +1,7 @@
 #include "catalog/custom_jobs_repository.h"
 #include "core/logger.h"
 #include <algorithm>
+#include <stdexcept>
 
 CustomJobsRepository::CustomJobsRepository(std::string connectionString)
     : connectionString_(std::move(connectionString)) {}
@@ -148,6 +149,7 @@ std::vector<CustomJob> CustomJobsRepository::getScheduledJobs() {
 
 CustomJob CustomJobsRepository::getJob(const std::string &jobName) {
   CustomJob job;
+  job.job_name = "";
   try {
     auto conn = getConnection();
     pqxx::work txn(conn);
@@ -172,6 +174,14 @@ CustomJob CustomJobsRepository::getJob(const std::string &jobName) {
 }
 
 void CustomJobsRepository::insertOrUpdateJob(const CustomJob &job) {
+  if (job.job_name.empty() || job.source_db_engine.empty() ||
+      job.source_connection_string.empty() || job.query_sql.empty() ||
+      job.target_db_engine.empty() || job.target_connection_string.empty() ||
+      job.target_schema.empty() || job.target_table.empty()) {
+    Logger::error(LogCategory::DATABASE, "insertOrUpdateJob",
+                  "Invalid input: required fields must not be empty");
+    throw std::invalid_argument("Required job fields must not be empty");
+  }
   try {
     auto conn = getConnection();
     pqxx::work txn(conn);
@@ -298,10 +308,27 @@ CustomJob CustomJobsRepository::rowToJob(const pqxx::row &row) {
   job.active = row[11].as<bool>();
   job.enabled = row[12].as<bool>();
   if (!row[13].is_null()) {
-    job.transform_config = json::parse(row[13].as<std::string>());
+    try {
+      job.transform_config = json::parse(row[13].as<std::string>());
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::DATABASE, "CustomJobsRepository",
+                    "Error parsing transform_config JSON: " +
+                        std::string(e.what()));
+      job.transform_config = json{};
+    }
+  } else {
+    job.transform_config = json{};
   }
   if (!row[14].is_null()) {
-    job.metadata = json::parse(row[14].as<std::string>());
+    try {
+      job.metadata = json::parse(row[14].as<std::string>());
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::DATABASE, "CustomJobsRepository",
+                    "Error parsing metadata JSON: " + std::string(e.what()));
+      job.metadata = json{};
+    }
+  } else {
+    job.metadata = json{};
   }
   job.created_at = row[15].is_null() ? "" : row[15].as<std::string>();
   job.updated_at = row[16].is_null() ? "" : row[16].as<std::string>();

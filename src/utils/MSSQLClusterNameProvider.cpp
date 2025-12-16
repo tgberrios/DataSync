@@ -13,12 +13,15 @@ std::string fetchMSSQLName(SQLHSTMT stmt, const char *query) {
   }
 
   if (SQLFetch(stmt) != SQL_SUCCESS) {
+    SQLCloseCursor(stmt);
     return "";
   }
 
   char buffer[DatabaseDefaults::BUFFER_SIZE];
   SQLLEN len;
   SQLRETURN ret = SQLGetData(stmt, 1, SQL_C_CHAR, buffer, sizeof(buffer), &len);
+
+  SQLCloseCursor(stmt);
 
   if (!SQL_SUCCEEDED(ret) || len == SQL_NULL_DATA || len < 0) {
     return "";

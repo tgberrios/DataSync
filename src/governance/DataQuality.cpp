@@ -162,52 +162,70 @@ bool DataQuality::checkDataTypes(pqxx::connection &conn,
       std::string column = row[0].as<std::string>();
       std::string type = row[1].as<std::string>();
 
-      // Check for type-specific issues with improved performance
       std::string cleanSchema =
           StringUtils::sanitizeForSQL(metrics.schema_name);
 
-      // Use sampling for large tables to improve performance
-      std::string typeQuery;
       try {
-        // First check table size to determine sampling strategy
-        auto sizeResult = txn.exec("SELECT COUNT(*) FROM \"" + cleanSchema +
-                                   "\".\"" + metrics.table_name + "\"");
-        size_t tableSize = sizeResult[0][0].as<size_t>();
+        std::string typeCheckQuery = R"(
+          SELECT 
+            a.atttypid,
+            format_type(a.atttypid, a.atttypmod) as actual_type,
+            t.typname as type_name
+          FROM pg_attribute a
+          JOIN pg_class c ON a.attrelid = c.oid
+          JOIN pg_namespace n ON c.relnamespace = n.oid
+          JOIN pg_type t ON a.atttypid = t.oid
+          WHERE n.nspname = )" + txn.quote(cleanSchema) +
+                                     R"(
+            AND c.relname = )" + txn.quote(metrics.table_name) +
+                                     R"(
+            AND a.attname = )" + txn.quote(column) +
+                                     R"(
+            AND a.attnum > 0
+            AND NOT a.attisdropped
+        )";
 
-        if (tableSize > 1000000) {
-          // Use sampling for large tables
-          typeQuery = "SELECT COUNT(*) FROM \"" + cleanSchema + "\".\"" +
-                      metrics.table_name + "\" TABLESAMPLE SYSTEM(5) WHERE \"" +
-                      column + "\" IS NOT NULL AND " + "NOT pg_typeof(\"" +
-                      column + "\")::text = " + txn.quote(type);
-        } else {
-          // Use full table for smaller tables
-          typeQuery = "SELECT COUNT(*) FROM \"" + cleanSchema + "\".\"" +
-                      metrics.table_name + "\" WHERE \"" + column +
-                      "\" IS NOT NULL AND " + "NOT pg_typeof(\"" + column +
-                      "\")::text = " + txn.quote(type);
-        }
+        auto typeResult = txn.exec(typeCheckQuery);
+        if (!typeResult.empty()) {
+          std::string actualType = typeResult[0][1].as<std::string>();
+          std::string typeName = typeResult[0][2].as<std::string>();
 
-        auto type_check = txn.exec(typeQuery);
-        size_t invalid_count = type_check[0][0].as<size_t>();
+          bool typeMatches = false;
+          std::string lowerActual = actualType;
+          std::transform(lowerActual.begin(), lowerActual.end(),
+                         lowerActual.begin(), ::tolower);
+          std::string lowerExpected = type;
+          std::transform(lowerExpected.begin(), lowerExpected.end(),
+                         lowerExpected.begin(), ::tolower);
 
-        // Adjust count for sampled data
-        if (tableSize > 1000000) {
-          if (invalid_count > SIZE_MAX / 20) {
-            invalid_count = SIZE_MAX;
-          } else {
-            invalid_count = static_cast<size_t>(invalid_count * 20);
+          if (lowerActual.find(lowerExpected) != std::string::npos ||
+              lowerExpected.find(lowerActual) != std::string::npos ||
+              (typeName == "int4" &&
+               (lowerExpected == "integer" ||
+                lowerExpected.find("int") != std::string::npos)) ||
+              (typeName == "varchar" &&
+               lowerExpected.find("character varying") != std::string::npos) ||
+              (typeName == "bpchar" &&
+               lowerExpected.find("character") != std::string::npos) ||
+              (typeName == "bool" &&
+               lowerExpected.find("boolean") != std::string::npos)) {
+            typeMatches = true;
           }
-        }
 
-        if (invalid_count > 0) {
-          type_mismatches[column] = {{"expected_type", type},
-                                     {"invalid_count", invalid_count}};
-          metrics.invalid_type_count += invalid_count;
+          if (!typeMatches) {
+            type_mismatches[column] = {{"expected_type", type},
+                                       {"actual_type", actualType},
+                                       {"type_name", typeName},
+                                       {"invalid_count", 1}};
+            metrics.invalid_type_count += 1;
+          }
         }
       } catch (const pqxx::sql_error &e) {
         type_mismatches[column] = {{"expected_type", type},
                                    {"error", e.what()}};
+      } catch (const std::exception &e) {
+        type_mismatches[column] = {{"expected_type", type},
+                                   {"error", std::string(e.what())}};
       }
     }
 
@@ -247,8 +265,9 @@ bool DataQuality::checkNullCounts(pqxx::connection &conn,
     }
 
     // Get total rows efficiently
-    auto totalResult = txn.exec("SELECT COUNT(*) FROM \"" + cleanSchema +
-                                "\".\"" + metrics.table_name + "\"");
+    auto totalResult =
+        txn.exec("SELECT COUNT(*) FROM " + txn.quote_name(cleanSchema) + "." +
+                 txn.quote_name(metrics.table_name));
     metrics.total_rows =
         totalResult[0][0].is_null() ? 0 : totalResult[0][0].as<size_t>();
 
@@ -264,31 +283,70 @@ bool DataQuality::checkNullCounts(pqxx::connection &conn,
                  " AND table_name = " + txn.quote(metrics.table_name));
 
     if (columnsResult.size() > 0) {
-      // Build single query with FILTER clauses for all columns
-      std::string nullQuery = "SELECT ";
-      bool first = true;
-      for (const auto &colRow : columnsResult) {
-        std::string columnName = colRow[0].as<std::string>();
-        if (!first)
-          nullQuery += ", ";
-        nullQuery += "COUNT(*) FILTER (WHERE \"" + columnName + "\" IS NULL)";
-        first = false;
-      }
-      nullQuery +=
-          " FROM \"" + cleanSchema + "\".\"" + metrics.table_name + "\"";
+      const size_t BATCH_SIZE = 50;
+      size_t totalColumns = columnsResult.size();
 
-      try {
-        auto nullResult = txn.exec(nullQuery);
-        if (!nullResult.empty()) {
-          for (size_t i = 0; i < nullResult[0].size(); ++i) {
-            if (!nullResult[0][i].is_null()) {
-              metrics.null_count += nullResult[0][i].as<size_t>();
+      if (totalColumns <= BATCH_SIZE) {
+        std::string nullQuery = "SELECT ";
+        bool first = true;
+        for (const auto &colRow : columnsResult) {
+          std::string columnName = colRow[0].as<std::string>();
+          if (!first)
+            nullQuery += ", ";
+          nullQuery += "COUNT(*) FILTER (WHERE " + txn.quote_name(columnName) +
+                       " IS NULL)";
+          first = false;
+        }
+        nullQuery += " FROM " + txn.quote_name(cleanSchema) + "." +
+                     txn.quote_name(metrics.table_name);
+
+        try {
+          auto nullResult = txn.exec(nullQuery);
+          if (!nullResult.empty()) {
+            for (size_t i = 0; i < nullResult[0].size(); ++i) {
+              if (!nullResult[0][i].is_null()) {
+                metrics.null_count += nullResult[0][i].as<size_t>();
+              }
             }
           }
+        } catch (const std::exception &e) {
+          Logger::error(LogCategory::QUALITY, "checkNullCounts",
+                        "Error checking column nulls: " +
+                            std::string(e.what()));
         }
-      } catch (const std::exception &e) {
-        Logger::error(LogCategory::QUALITY, "checkNullCounts",
-                      "Error checking column nulls: " + std::string(e.what()));
+      } else {
+        for (size_t batchStart = 0; batchStart < totalColumns;
+             batchStart += BATCH_SIZE) {
+          std::string nullQuery = "SELECT ";
+          bool first = true;
+          size_t batchEnd = std::min(batchStart + BATCH_SIZE, totalColumns);
+
+          for (size_t i = batchStart; i < batchEnd; ++i) {
+            std::string columnName = columnsResult[i][0].as<std::string>();
+            if (!first)
+              nullQuery += ", ";
+            nullQuery += "COUNT(*) FILTER (WHERE " +
+                         txn.quote_name(columnName) + " IS NULL)";
+            first = false;
+          }
+          nullQuery += " FROM " + txn.quote_name(cleanSchema) + "." +
+                       txn.quote_name(metrics.table_name);
+
+          try {
+            auto nullResult = txn.exec(nullQuery);
+            if (!nullResult.empty()) {
+              for (size_t i = 0; i < nullResult[0].size(); ++i) {
+                if (!nullResult[0][i].is_null()) {
+                  metrics.null_count += nullResult[0][i].as<size_t>();
+                }
+              }
+            }
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::QUALITY, "checkNullCounts",
+                          "Error checking column nulls in batch: " +
+                              std::string(e.what()));
+          }
+        }
       }
     }
 

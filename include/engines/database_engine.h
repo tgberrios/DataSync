@@ -28,7 +28,7 @@ public:
 
 inline std::string
 determinePKStrategy(const std::vector<std::string> &pkColumns) {
-  return pkColumns.empty() ? "OFFSET" : "PK";
+  return "CDC";
 }
 
 inline std::string columnsToJSON(const std::vector<std::string> &columns) {

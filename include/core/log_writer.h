@@ -3,9 +3,6 @@
 
 #include <string>
 
-enum class LogLevel;
-enum class LogCategory;
-
 class ILogWriter {
 public:
   virtual ~ILogWriter() = default;

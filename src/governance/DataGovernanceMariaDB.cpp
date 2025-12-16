@@ -313,22 +313,9 @@ void DataGovernanceMariaDB::queryIndexStats() {
         std::string tableName = row[1];
         std::string indexName = row[2];
 
-        bool found = false;
         {
           std::lock_guard<std::mutex> lock(governanceDataMutex_);
-          for (auto &data : governanceData_) {
-            if (data.schema_name == schemaName &&
-                data.table_name == tableName && data.index_name.empty()) {
-              data.index_name = indexName;
-              data.index_columns = row[3];
-              data.index_non_unique = (row[4] == "1");
-              data.index_type = row[5];
-              found = true;
-              break;
-            }
-          }
-
-          if (!found && !indexName.empty() && indexName != "PRIMARY") {
+          if (!indexName.empty() && indexName != "PRIMARY") {
             MariaDBGovernanceData indexData;
             indexData.server_name = serverName;
             indexData.database_name = databaseName;
@@ -339,6 +326,7 @@ void DataGovernanceMariaDB::queryIndexStats() {
             indexData.index_non_unique = (row[4] == "1");
             indexData.index_type = row[5];
 
+            bool tableDataFound = false;
             for (const auto &tableData : governanceData_) {
               if (tableData.schema_name == schemaName &&
                   tableData.table_name == tableName &&
@@ -362,8 +350,15 @@ void DataGovernanceMariaDB::queryIndexStats() {
                 indexData.user_super_count = tableData.user_super_count;
                 indexData.user_locked_count = tableData.user_locked_count;
                 indexData.user_expired_count = tableData.user_expired_count;
+                tableDataFound = true;
                 break;
               }
+            }
+
+            if (!tableDataFound) {
+              Logger::warning(LogCategory::GOVERNANCE, "DataGovernanceMariaDB",
+                              "Table data not found for index " + schemaName +
+                                  "." + tableName + "." + indexName);
             }
 
             governanceData_.push_back(indexData);

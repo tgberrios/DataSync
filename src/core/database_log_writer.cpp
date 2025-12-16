@@ -11,15 +11,12 @@ static std::string sanitizeUTF8(const std::string &input) {
   for (size_t i = 0; i < input.size(); ++i) {
     unsigned char c = static_cast<unsigned char>(input[i]);
 
-    // Keep ASCII printable characters (0x20-0x7E) and common whitespace
     if ((c >= 0x20 && c <= 0x7E) || c == '\n' || c == '\r' || c == '\t') {
       result += c;
       continue;
     }
 
-    // Handle UTF-8 multi-byte sequences
     if ((c & 0xE0) == 0xC0) {
-      // 2-byte sequence: 110xxxxx 10xxxxxx
       if (i + 1 < input.size() &&
           (static_cast<unsigned char>(input[i + 1]) & 0xC0) == 0x80) {
         result += c;
@@ -28,7 +25,6 @@ static std::string sanitizeUTF8(const std::string &input) {
         continue;
       }
     } else if ((c & 0xF0) == 0xE0) {
-      // 3-byte sequence: 1110xxxx 10xxxxxx 10xxxxxx
       if (i + 2 < input.size() &&
           (static_cast<unsigned char>(input[i + 1]) & 0xC0) == 0x80 &&
           (static_cast<unsigned char>(input[i + 2]) & 0xC0) == 0x80) {
@@ -39,7 +35,6 @@ static std::string sanitizeUTF8(const std::string &input) {
         continue;
       }
     } else if ((c & 0xF8) == 0xF0) {
-      // 4-byte sequence: 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
       if (i + 3 < input.size() &&
           (static_cast<unsigned char>(input[i + 1]) & 0xC0) == 0x80 &&
           (static_cast<unsigned char>(input[i + 2]) & 0xC0) == 0x80 &&
@@ -52,12 +47,12 @@ static std::string sanitizeUTF8(const std::string &input) {
         continue;
       }
     } else if ((c & 0xC0) == 0x80) {
-      // Continuation byte without a start byte - skip it
       continue;
     }
 
-    // Invalid byte sequence - replace with '?' or skip
-    // Skip invalid bytes to prevent encoding errors
+    if (c == 0x00) {
+      continue;
+    }
   }
 
   return result;
@@ -74,7 +69,8 @@ DatabaseLogWriter::DatabaseLogWriter(const std::string &connectionString)
       enabled_(true) {
   try {
     conn_ = std::make_unique<pqxx::connection>(connectionString_);
-    prepareStatement();
+    std::lock_guard<std::mutex> lock(mutex_);
+    prepareStatementUnlocked();
   } catch (const std::exception &e) {
     enabled_ = false;
     std::cerr << "DatabaseLogWriter: Failed to establish connection: "
@@ -82,17 +78,7 @@ DatabaseLogWriter::DatabaseLogWriter(const std::string &connectionString)
   }
 }
 
-// Prepares the SQL statement for inserting log entries into the metadata.logs
-// table. The prepared statement improves performance by avoiding SQL parsing
-// overhead on each log write. The statement inserts timestamp (NOW()), log
-// level, category, function name, and message. If the connection is not open
-// or preparation fails, the writer is disabled. This function is called
-// automatically during construction and may be called again if the statement
-// preparation fails during a write operation. Note: Only a single instance of
-// DatabaseLogWriter exists globally (dbWriter_ in Logger class), so there is
-// no risk of connection saturation. The same connection is reused for all log
-// writes throughout the application lifetime.
-void DatabaseLogWriter::prepareStatement() {
+void DatabaseLogWriter::prepareStatementUnlocked() {
   if (!conn_ || !conn_->is_open())
     return;
 
@@ -111,6 +97,11 @@ void DatabaseLogWriter::prepareStatement() {
     std::cerr << "DatabaseLogWriter: Failed to prepare statement: " << e.what()
               << std::endl;
   }
+}
+
+void DatabaseLogWriter::prepareStatement() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  prepareStatementUnlocked();
 }
 
 // Writes a formatted log message to the database. This method is part of the
@@ -149,7 +140,7 @@ bool DatabaseLogWriter::writeParsed(const std::string &levelStr,
 
   try {
     if (!statementPrepared_) {
-      prepareStatement();
+      prepareStatementUnlocked();
       if (!statementPrepared_)
         return false;
     }
@@ -193,7 +184,7 @@ void DatabaseLogWriter::close() {
 }
 
 bool DatabaseLogWriter::isEnabled() const {
-  std::lock_guard<std::mutex> lock(const_cast<std::mutex &>(mutex_));
+  std::lock_guard<std::mutex> lock(mutex_);
   return enabled_;
 }
 
@@ -203,6 +194,6 @@ void DatabaseLogWriter::disable() {
 }
 
 bool DatabaseLogWriter::isOpen() const {
-  std::lock_guard<std::mutex> lock(const_cast<std::mutex &>(mutex_));
+  std::lock_guard<std::mutex> lock(mutex_);
   return conn_ && conn_->is_open() && enabled_;
 }

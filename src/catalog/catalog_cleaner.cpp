@@ -3,6 +3,7 @@
 #include "core/logger.h"
 #include "engines/mongodb_engine.h"
 #include "engines/oracle_engine.h"
+#include "engines/postgres_engine.h"
 #include "utils/table_utils.h"
 #include <algorithm>
 #include <set>
@@ -11,41 +12,44 @@ CatalogCleaner::CatalogCleaner(std::string metadataConnStr)
     : metadataConnStr_(std::move(metadataConnStr)),
       repo_(std::make_unique<MetadataRepository>(metadataConnStr_)) {}
 
-// This function cleans non-existent PostgreSQL tables from the catalog that
-// no longer exist in the source database. It queries the catalog for all
-// PostgreSQL tables, checks each one's existence using tableExistsInPostgres,
-// and removes entries from both the catalog and the target database for tables
-// that no longer exist. This helps maintain catalog consistency when source
-// tables are dropped.
 void CatalogCleaner::cleanNonExistentPostgresTables() {
   try {
-    pqxx::connection conn(metadataConnStr_);
-    pqxx::work txn(conn);
+    auto connStrings = repo_->getConnectionStrings("PostgreSQL");
+    size_t totalDeleted = 0;
 
-    auto results =
-        txn.exec("SELECT schema_name, table_name FROM metadata.catalog "
-                 "WHERE db_engine = 'PostgreSQL'");
-
-    size_t totalTables = results.size();
-    size_t deletedCount = 0;
     Logger::info(LogCategory::DATABASE, "CatalogCleaner",
-                 "Checking " + std::to_string(totalTables) +
-                     " PostgreSQL tables for existence");
+                 "Checking " + std::to_string(connStrings.size()) +
+                     " PostgreSQL connection(s) for non-existent tables");
 
-    for (const auto &row : results) {
-      std::string schema = row[0].as<std::string>();
-      std::string table = row[1].as<std::string>();
+    for (const auto &connStr : connStrings) {
+      try {
+        PostgreSQLEngine engine(connStr);
+        auto existingTables = engine.discoverTables();
 
-      if (!TableUtils::tableExistsInPostgres(conn, schema, table)) {
-        repo_->deleteTable(schema, table, "PostgreSQL", "", true);
-        deletedCount++;
+        std::set<std::pair<std::string, std::string>> existingSet;
+        for (const auto &table : existingTables) {
+          existingSet.insert({table.schema, table.table});
+        }
+
+        auto catalogEntries = repo_->getCatalogEntries("PostgreSQL", connStr);
+        for (const auto &entry : catalogEntries) {
+          if (existingSet.find({entry.schema, entry.table}) ==
+              existingSet.end()) {
+            repo_->deleteTable(entry.schema, entry.table, "PostgreSQL", connStr,
+                               true);
+            totalDeleted++;
+          }
+        }
+      } catch (const std::exception &e) {
+        Logger::error(LogCategory::DATABASE, "CatalogCleaner",
+                      "Error checking PostgreSQL connection: " +
+                          std::string(e.what()));
       }
     }
-    txn.commit();
 
     Logger::info(
         LogCategory::DATABASE, "CatalogCleaner",
-        "PostgreSQL cleanup completed: " + std::to_string(deletedCount) +
+        "PostgreSQL cleanup completed: " + std::to_string(totalDeleted) +
             " non-existent tables removed");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "CatalogCleaner",

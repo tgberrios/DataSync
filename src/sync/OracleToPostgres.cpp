@@ -1,12 +1,16 @@
 #include "sync/OracleToPostgres.h"
+#include "core/Config.h"
 #include "core/database_config.h"
 #include "core/logger.h"
 #include "engines/database_engine.h"
 #include "sync/SchemaSync.h"
+#include "third_party/json.hpp"
 #include <algorithm>
 #include <cctype>
 #include <pqxx/pqxx>
 #include <sstream>
+
+using json = nlohmann::json;
 
 std::unordered_map<std::string, std::string> OracleToPostgres::dataTypeMap = {
     {"NUMBER", "NUMERIC"},
@@ -184,8 +188,9 @@ OracleToPostgres::executeQueryOracle(OCIConnection *conn,
     }
   }
 
-  while (OCIStmtFetch(stmt, err, 1, OCI_FETCH_NEXT, OCI_DEFAULT) ==
-         OCI_SUCCESS) {
+  sword fetchStatus;
+  while ((fetchStatus = OCIStmtFetch(stmt, err, 1, OCI_FETCH_NEXT,
+                                     OCI_DEFAULT)) == OCI_SUCCESS) {
     std::vector<std::string> row;
     row.reserve(numCols);
     for (ub4 i = 0; i < numCols; ++i) {
@@ -198,6 +203,15 @@ OracleToPostgres::executeQueryOracle(OCIConnection *conn,
       }
     }
     results.push_back(row);
+  }
+
+  if (fetchStatus != OCI_NO_DATA) {
+    char errbuf[512];
+    sb4 errcode = 0;
+    OCIErrorGet(err, 1, nullptr, &errcode, (OraText *)errbuf, sizeof(errbuf),
+                OCI_HTYPE_ERROR);
+    Logger::error(LogCategory::TRANSFER, "executeQueryOracle",
+                  "OCIStmtFetch error: " + std::string(errbuf));
   }
 
   guard.stmt_ = nullptr;
@@ -245,67 +259,6 @@ OracleToPostgres::getActiveTables(pqxx::connection &pgConn) {
   }
 
   return data;
-}
-
-void OracleToPostgres::updateLastOffset(pqxx::connection &pgConn,
-                                        const std::string &schema_name,
-                                        const std::string &table_name,
-                                        long long offset) {
-  try {
-    std::lock_guard<std::mutex> lock(metadataUpdateMutex);
-
-    pqxx::work txn(pgConn);
-    std::string updateQuery = "UPDATE metadata.catalog SET sync_metadata = "
-                              "COALESCE(sync_metadata, '{}'::jsonb) || "
-                              "jsonb_build_object('last_offset', " +
-                              std::to_string(offset) +
-                              ") "
-                              "WHERE schema_name=" +
-                              txn.quote(schema_name) +
-                              " AND table_name=" + txn.quote(table_name);
-
-    txn.exec(updateQuery);
-    txn.commit();
-
-    Logger::info(LogCategory::TRANSFER, "updateLastOffset",
-                 "Updated last_offset to " + std::to_string(offset) + " for " +
-                     schema_name + "." + table_name);
-  } catch (const std::exception &e) {
-    Logger::error(LogCategory::TRANSFER, "updateLastOffset",
-                  "Error updating last_offset: " + std::string(e.what()));
-  }
-}
-
-long long OracleToPostgres::getLastOffset(pqxx::connection &pgConn,
-                                          const std::string &schema_name,
-                                          const std::string &table_name) {
-  try {
-    pqxx::work txn(pgConn);
-    std::string query =
-        "SELECT sync_metadata->>'last_offset' FROM metadata.catalog "
-        "WHERE schema_name=" +
-        txn.quote(schema_name) + " AND table_name=" + txn.quote(table_name);
-
-    auto result = txn.exec(query);
-    txn.commit();
-
-    if (!result.empty() && !result[0][0].is_null()) {
-      std::string offsetStr = result[0][0].as<std::string>();
-      if (!offsetStr.empty() && offsetStr.length() <= 20) {
-        try {
-          return std::stoll(offsetStr);
-        } catch (const std::exception &e) {
-          Logger::error(LogCategory::TRANSFER, "getLastOffset",
-                        "Failed to parse offset value '" + offsetStr +
-                            "': " + std::string(e.what()));
-        }
-      }
-    }
-  } catch (const std::exception &e) {
-    Logger::error(LogCategory::TRANSFER, "getLastOffset",
-                  "Error getting last_offset: " + std::string(e.what()));
-  }
-  return 0;
 }
 
 void OracleToPostgres::updateStatus(pqxx::connection &pgConn,
@@ -395,22 +348,15 @@ std::string OracleToPostgres::escapeOracleValue(const std::string &value) {
   std::transform(upperValue.begin(), upperValue.end(), upperValue.begin(),
                  ::toupper);
 
-  // Reject obvious SQL injection attempts
   if (upperValue.find("--") != std::string::npos ||
       upperValue.find("/*") != std::string::npos ||
       upperValue.find("*/") != std::string::npos ||
-      upperValue.find(";") != std::string::npos ||
-      upperValue.find("DROP") != std::string::npos ||
-      upperValue.find("DELETE") != std::string::npos ||
-      upperValue.find("UPDATE") != std::string::npos ||
-      upperValue.find("INSERT") != std::string::npos ||
-      upperValue.find("EXEC") != std::string::npos ||
-      upperValue.find("EXECUTE") != std::string::npos) {
+      upperValue.find(";") != std::string::npos) {
     Logger::warning(LogCategory::TRANSFER, "escapeOracleValue",
                     "Potentially dangerous value detected, rejecting: " +
                         value);
     throw std::invalid_argument(
-        "Invalid value contains SQL keywords or special characters");
+        "Invalid value contains SQL comment characters");
   }
 
   // Escape single quotes (Oracle standard: ' -> '')
@@ -524,6 +470,193 @@ void OracleToPostgres::setupTableTargetOracleToPostgres() {
 
       std::vector<std::string> primaryKeys = getPrimaryKeyColumns(
           oracleConn.get(), table.schema_name, table.table_name);
+
+      std::string createSchemaQuery =
+          "BEGIN "
+          "EXECUTE IMMEDIATE 'CREATE USER datasync_metadata IDENTIFIED BY "
+          "datasync_metadata DEFAULT TABLESPACE USERS'; "
+          "EXCEPTION WHEN OTHERS THEN NULL; "
+          "END;";
+      executeQueryOracle(oracleConn.get(), createSchemaQuery);
+
+      std::string grantQuery =
+          "BEGIN "
+          "EXECUTE IMMEDIATE 'GRANT CONNECT, RESOURCE TO datasync_metadata'; "
+          "EXCEPTION WHEN OTHERS THEN NULL; "
+          "END;";
+      executeQueryOracle(oracleConn.get(), grantQuery);
+
+      std::string createTableQuery =
+          "BEGIN "
+          "EXECUTE IMMEDIATE 'CREATE TABLE datasync_metadata.ds_change_log ("
+          "change_id NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, "
+          "change_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+          "operation CHAR(1) NOT NULL, "
+          "schema_name VARCHAR2(255) NOT NULL, "
+          "table_name VARCHAR2(255) NOT NULL, "
+          "pk_values CLOB NOT NULL, "
+          "row_data CLOB NULL)'; "
+          "EXCEPTION WHEN OTHERS THEN NULL; "
+          "END;";
+      executeQueryOracle(oracleConn.get(), createTableQuery);
+
+      std::string createIndex1Query =
+          "BEGIN "
+          "EXECUTE IMMEDIATE 'CREATE INDEX idx_ds_change_log_table_time ON "
+          "datasync_metadata.ds_change_log (schema_name, table_name, "
+          "change_time)'; "
+          "EXCEPTION WHEN OTHERS THEN NULL; "
+          "END;";
+      executeQueryOracle(oracleConn.get(), createIndex1Query);
+
+      std::string createIndex2Query =
+          "BEGIN "
+          "EXECUTE IMMEDIATE 'CREATE INDEX idx_ds_change_log_table_change ON "
+          "datasync_metadata.ds_change_log (schema_name, table_name, "
+          "change_id)'; "
+          "EXCEPTION WHEN OTHERS THEN NULL; "
+          "END;";
+      executeQueryOracle(oracleConn.get(), createIndex2Query);
+
+      if (!primaryKeys.empty()) {
+        std::string allColumnsQuery =
+            "SELECT column_name FROM all_tab_columns WHERE UPPER(owner) = '" +
+            escapeOracleValue(upperSchema) + "' AND UPPER(table_name) = '" +
+            escapeOracleValue(upperTable) + "' ORDER BY column_id";
+        auto allColumns = executeQueryOracle(oracleConn.get(), allColumnsQuery);
+
+        if (!allColumns.empty()) {
+          std::string jsonObjectNew = "'{' || ";
+          std::string jsonObjectOld = "'{' || ";
+          for (size_t i = 0; i < primaryKeys.size(); ++i) {
+            if (i > 0) {
+              jsonObjectNew += "',' || ";
+              jsonObjectOld += "',' || ";
+            }
+            std::string upperPk = primaryKeys[i];
+            std::transform(upperPk.begin(), upperPk.end(), upperPk.begin(),
+                           ::toupper);
+            jsonObjectNew +=
+                "'\"" + primaryKeys[i] +
+                "\":\"' || "
+                "REPLACE(REPLACE(REPLACE(TO_CHAR(:NEW." +
+                upperPk +
+                "), '\\', '\\\\'), '\"', '\\\"'), CHR(10), '\\n') || "
+                "'\"'";
+            jsonObjectOld +=
+                "'\"" + primaryKeys[i] +
+                "\":\"' || "
+                "REPLACE(REPLACE(REPLACE(TO_CHAR(:OLD." +
+                upperPk +
+                "), '\\', '\\\\'), '\"', '\\\"'), CHR(10), '\\n') || "
+                "'\"'";
+          }
+          jsonObjectNew += " || '}'";
+          jsonObjectOld += " || '}'";
+
+          std::string rowDataNew = "'{' || ";
+          std::string rowDataOld = "'{' || ";
+          for (size_t i = 0; i < allColumns.size(); ++i) {
+            if (i > 0) {
+              rowDataNew += "',' || ";
+              rowDataOld += "',' || ";
+            }
+            std::string colName = allColumns[i][0];
+            std::string upperCol = colName;
+            std::transform(upperCol.begin(), upperCol.end(), upperCol.begin(),
+                           ::toupper);
+            rowDataNew += "'\"" + colName +
+                          "\":\"' || "
+                          "REPLACE(REPLACE(REPLACE(TO_CHAR(:NEW." +
+                          upperCol +
+                          "), '\\', '\\\\'), '\"', '\\\"'), CHR(10), '\\n') || "
+                          "'\"'";
+            rowDataOld += "'\"" + colName +
+                          "\":\"' || "
+                          "REPLACE(REPLACE(REPLACE(TO_CHAR(:OLD." +
+                          upperCol +
+                          "), '\\', '\\\\'), '\"', '\\\"'), CHR(10), '\\n') || "
+                          "'\"'";
+          }
+          rowDataNew += " || '}'";
+          rowDataOld += " || '}'";
+
+          std::string triggerInsert =
+              "ds_tr_" + upperSchema + "_" + upperTable + "_ai";
+          std::string triggerUpdate =
+              "ds_tr_" + upperSchema + "_" + upperTable + "_au";
+          std::string triggerDelete =
+              "ds_tr_" + upperSchema + "_" + upperTable + "_ad";
+
+          std::string dropInsert = "DROP TRIGGER " + triggerInsert;
+          std::string dropUpdate = "DROP TRIGGER " + triggerUpdate;
+          std::string dropDelete = "DROP TRIGGER " + triggerDelete;
+
+          try {
+            executeQueryOracle(oracleConn.get(), dropInsert);
+          } catch (...) {
+          }
+          try {
+            executeQueryOracle(oracleConn.get(), dropUpdate);
+          } catch (...) {
+          }
+          try {
+            executeQueryOracle(oracleConn.get(), dropDelete);
+          } catch (...) {
+          }
+
+          std::string createInsertTrigger =
+              "CREATE OR REPLACE TRIGGER " + upperSchema + "." + triggerInsert +
+              " AFTER INSERT ON " + upperSchema + "." + upperTable +
+              " FOR EACH ROW "
+              "BEGIN "
+              "INSERT INTO datasync_metadata.ds_change_log "
+              "(operation, schema_name, table_name, pk_values, row_data) "
+              "VALUES ('I', '" +
+              escapeOracleValue(table.schema_name) + "', '" +
+              escapeOracleValue(table.table_name) + "', " + jsonObjectNew +
+              ", " + rowDataNew +
+              "); "
+              "END;";
+
+          std::string createUpdateTrigger =
+              "CREATE OR REPLACE TRIGGER " + upperSchema + "." + triggerUpdate +
+              " AFTER UPDATE ON " + upperSchema + "." + upperTable +
+              " FOR EACH ROW "
+              "BEGIN "
+              "INSERT INTO datasync_metadata.ds_change_log "
+              "(operation, schema_name, table_name, pk_values, row_data) "
+              "VALUES ('U', '" +
+              escapeOracleValue(table.schema_name) + "', '" +
+              escapeOracleValue(table.table_name) + "', " + jsonObjectNew +
+              ", " + rowDataNew +
+              "); "
+              "END;";
+
+          std::string createDeleteTrigger =
+              "CREATE OR REPLACE TRIGGER " + upperSchema + "." + triggerDelete +
+              " AFTER DELETE ON " + upperSchema + "." + upperTable +
+              " FOR EACH ROW "
+              "BEGIN "
+              "INSERT INTO datasync_metadata.ds_change_log "
+              "(operation, schema_name, table_name, pk_values, row_data) "
+              "VALUES ('D', '" +
+              escapeOracleValue(table.schema_name) + "', '" +
+              escapeOracleValue(table.table_name) + "', " + jsonObjectOld +
+              ", " + rowDataOld +
+              "); "
+              "END;";
+
+          executeQueryOracle(oracleConn.get(), createInsertTrigger);
+          executeQueryOracle(oracleConn.get(), createUpdateTrigger);
+          executeQueryOracle(oracleConn.get(), createDeleteTrigger);
+
+          Logger::info(LogCategory::TRANSFER,
+                       "setupTableTargetOracleToPostgres",
+                       "Created CDC triggers for " + table.schema_name + "." +
+                           table.table_name);
+        }
+      }
 
       std::string createQuery = "CREATE TABLE IF NOT EXISTS \"" + lowerSchema +
                                 "\".\"" + lowerTable + "\" (";
@@ -803,18 +936,28 @@ void OracleToPostgres::transferDataOracleToPostgres() {
         continue;
       }
 
-      // Get PK strategy and columns
-      std::vector<std::string> pkColumns =
-          getPKColumnsFromCatalog(pgConn, schema_name, table_name);
       std::string pkStrategy =
           getPKStrategyFromCatalog(pgConn, schema_name, table_name);
-      std::string lastProcessedPK =
-          getLastProcessedPKFromCatalog(pgConn, schema_name, table_name);
-      long long lastOffset = getLastOffset(pgConn, schema_name, table_name);
 
-      // Process in chunks (same as MariaDB/MSSQL)
+      Logger::info(LogCategory::TRANSFER, "transferDataOracleToPostgres",
+                   "Starting data transfer for " + schema_name + "." +
+                       table_name + " - strategy=" + pkStrategy +
+                       ", status=" + table.status);
+
+      if (pkStrategy == "CDC" && table.status != "FULL_LOAD") {
+        Logger::info(LogCategory::TRANSFER, "transferDataOracleToPostgres",
+                     "CDC strategy detected - using processTableCDC for " +
+                         schema_name + "." + table_name);
+        processTableCDC(table, pgConn);
+        return;
+      }
+
+      std::vector<std::string> pkColumns =
+          getPKColumnsFromCatalog(pgConn, schema_name, table_name);
+
       bool hasMoreData = sourceCount > targetCount;
       size_t chunkNumber = 0;
+      size_t lastProcessedOffset = 0;
       size_t rawChunkSize = SyncConfig::getChunkSize();
       const size_t CHUNK_SIZE =
           (rawChunkSize == 0 || rawChunkSize > 10000) ? 1000 : rawChunkSize;
@@ -824,32 +967,17 @@ void OracleToPostgres::transferDataOracleToPostgres() {
         std::string selectQuery =
             "SELECT * FROM " + upperSchema + "." + upperTable;
 
-        // Build query based on PK strategy (same as MariaDB/MSSQL)
-        if (pkStrategy == "PK" && !pkColumns.empty()) {
+        if (!pkColumns.empty()) {
           std::string upperPkCol = pkColumns[0];
           std::transform(upperPkCol.begin(), upperPkCol.end(),
                          upperPkCol.begin(), ::toupper);
-          if (!lastProcessedPK.empty()) {
-            std::vector<std::string> lastPKValues =
-                parseLastPK(lastProcessedPK);
-            if (!lastPKValues.empty() && pkColumns.size() == 1) {
-              std::string escapedPK = escapeOracleValue(lastPKValues[0]);
-              selectQuery += " WHERE " + upperPkCol + " > '" + escapedPK + "'";
-            }
-          }
           selectQuery += " ORDER BY " + upperPkCol;
-          selectQuery += " OFFSET 0 ROWS FETCH NEXT " +
-                         std::to_string(CHUNK_SIZE) + " ROWS ONLY";
-        } else if (pkStrategy == "OFFSET") {
-          selectQuery += " ORDER BY ROWID";
-          selectQuery += " OFFSET " + std::to_string(lastOffset) +
-                         " ROWS FETCH NEXT " + std::to_string(CHUNK_SIZE) +
-                         " ROWS ONLY";
         } else {
           selectQuery += " ORDER BY ROWID";
-          selectQuery += " OFFSET 0 ROWS FETCH NEXT " +
-                         std::to_string(CHUNK_SIZE) + " ROWS ONLY";
         }
+        selectQuery += " OFFSET " + std::to_string(lastProcessedOffset) +
+                       " ROWS FETCH NEXT " + std::to_string(CHUNK_SIZE) +
+                       " ROWS ONLY";
 
         auto results = executeQueryOracle(oracleConn.get(), selectQuery);
         if (results.empty()) {
@@ -902,20 +1030,9 @@ void OracleToPostgres::transferDataOracleToPostgres() {
             throw;
           }
 
-          // Update last_processed_pk or last_offset after each chunk
-          if (pkStrategy == "PK" && !pkColumns.empty() && !results.empty()) {
-            std::string lastPK =
-                getLastPKFromResults(results, pkColumns, columnNames);
-            if (!lastPK.empty()) {
-              updateLastProcessedPK(pgConn, schema_name, table_name, lastPK);
-              lastProcessedPK = lastPK; // Update for next iteration
-            }
-          } else if (pkStrategy == "OFFSET") {
-            lastOffset += results.size();
-            updateLastOffset(pgConn, schema_name, table_name, lastOffset);
-          }
+          targetCount += results.size();
+          lastProcessedOffset += results.size();
 
-          // Check if we're done
           if (results.size() < CHUNK_SIZE || targetCount >= sourceCount) {
             hasMoreData = false;
           }
@@ -928,11 +1045,7 @@ void OracleToPostgres::transferDataOracleToPostgres() {
         }
       }
 
-      // Final status update
-      if (table.status == "FULL_LOAD" && targetCount >= sourceCount) {
-        updateStatus(pgConn, schema_name, table_name, "LISTENING_CHANGES",
-                     targetCount);
-      } else {
+      if (targetCount >= sourceCount) {
         updateStatus(pgConn, schema_name, table_name, "LISTENING_CHANGES",
                      targetCount);
       }
@@ -951,4 +1064,319 @@ void OracleToPostgres::transferDataOracleToPostgresParallel() {
 void OracleToPostgres::processTableParallel(const TableInfo &table,
                                             pqxx::connection &pgConn) {
   transferDataOracleToPostgres();
+}
+
+void OracleToPostgres::processTableCDC(const TableInfo &table,
+                                       pqxx::connection &pgConn) {
+  try {
+    const size_t CHUNK_SIZE = SyncConfig::getChunkSize();
+    long long lastChangeId = 0;
+
+    try {
+      pqxx::work txn(pgConn);
+      std::string query =
+          "SELECT sync_metadata->>'last_change_id' FROM metadata.catalog "
+          "WHERE schema_name=" +
+          txn.quote(table.schema_name) +
+          " AND table_name=" + txn.quote(table.table_name) +
+          " AND db_engine='Oracle'";
+      auto res = txn.exec(query);
+      txn.commit();
+
+      if (!res.empty() && !res[0][0].is_null()) {
+        std::string value = res[0][0].as<std::string>();
+        if (!value.empty() && value.size() <= 20) {
+          try {
+            lastChangeId = std::stoll(value);
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::TRANSFER, "processTableCDC",
+                          "Failed to parse last_change_id for " +
+                              table.schema_name + "." + table.table_name +
+                              ": " + std::string(e.what()));
+            lastChangeId = 0;
+          }
+        }
+      }
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER, "processTableCDC",
+                    "Error getting last_change_id for " + table.schema_name +
+                        "." + table.table_name + ": " + std::string(e.what()));
+      lastChangeId = 0;
+    }
+
+    std::vector<std::string> pkColumns =
+        getPKColumnsFromCatalog(pgConn, table.schema_name, table.table_name);
+    if (pkColumns.empty()) {
+      Logger::warning(LogCategory::TRANSFER, "processTableCDC",
+                      "No PK columns found for " + table.schema_name + "." +
+                          table.table_name +
+                          " in catalog; skipping CDC processing");
+      return;
+    }
+
+    auto oracleConn = getOracleConnection(table.connection_string);
+    if (!oracleConn || !oracleConn->isValid()) {
+      Logger::error(LogCategory::TRANSFER, "processTableCDC",
+                    "Failed to get Oracle connection for " + table.schema_name +
+                        "." + table.table_name);
+      return;
+    }
+
+    std::string upperSchema = table.schema_name;
+    std::transform(upperSchema.begin(), upperSchema.end(), upperSchema.begin(),
+                   ::toupper);
+    std::string upperTable = table.table_name;
+    std::transform(upperTable.begin(), upperTable.end(), upperTable.begin(),
+                   ::toupper);
+
+    std::string columnQuery =
+        "SELECT column_name FROM all_tab_columns WHERE UPPER(owner) = '" +
+        escapeOracleValue(upperSchema) + "' AND UPPER(table_name) = '" +
+        escapeOracleValue(upperTable) + "' ORDER BY column_id";
+    auto columnResults = executeQueryOracle(oracleConn.get(), columnQuery);
+
+    std::vector<std::string> columnNames;
+    for (const auto &row : columnResults) {
+      if (!row.empty()) {
+        std::string colName = row[0];
+        std::transform(colName.begin(), colName.end(), colName.begin(),
+                       ::tolower);
+        columnNames.push_back(colName);
+      }
+    }
+
+    if (columnNames.empty()) {
+      Logger::error(LogCategory::TRANSFER, "processTableCDC",
+                    "No column names found for " + table.schema_name + "." +
+                        table.table_name);
+      return;
+    }
+
+    std::vector<std::string> columnTypes;
+    columnTypes.reserve(columnNames.size());
+    for (const auto &colName : columnNames) {
+      columnTypes.push_back("TEXT");
+    }
+
+    bool hasMore = true;
+    size_t batchNumber = 0;
+
+    while (hasMore) {
+      batchNumber++;
+      std::string query = "SELECT change_id, operation, pk_values, row_data "
+                          "FROM datasync_metadata.ds_change_log WHERE "
+                          "schema_name='" +
+                          escapeOracleValue(table.schema_name) +
+                          "' AND table_name='" +
+                          escapeOracleValue(table.table_name) +
+                          "' AND change_id > " + std::to_string(lastChangeId) +
+                          " ORDER BY change_id OFFSET 0 ROWS "
+                          "FETCH NEXT " +
+                          std::to_string(CHUNK_SIZE) + " ROWS ONLY";
+
+      std::vector<std::vector<std::string>> rows =
+          executeQueryOracle(oracleConn.get(), query);
+
+      if (rows.empty()) {
+        hasMore = false;
+        break;
+      }
+
+      long long maxChangeId = lastChangeId;
+      std::vector<std::vector<std::string>> deletedPKs;
+      std::vector<std::vector<std::string>> recordsToUpsert;
+
+      for (const auto &row : rows) {
+        if (row.size() < 3) {
+          continue;
+        }
+
+        std::string changeIdStr = row[0];
+        std::string op = row[1];
+        std::string pkJson = row[2];
+
+        try {
+          if (!changeIdStr.empty()) {
+            long long cid = std::stoll(changeIdStr);
+            if (cid > maxChangeId) {
+              maxChangeId = cid;
+            }
+          }
+        } catch (const std::exception &e) {
+          Logger::error(LogCategory::TRANSFER, "processTableCDC",
+                        "Failed to parse change_id for " + table.schema_name +
+                            "." + table.table_name + ": " +
+                            std::string(e.what()));
+        }
+
+        try {
+          std::vector<std::string> pkValues;
+          json pkObject = json::parse(pkJson);
+          for (const auto &pkCol : pkColumns) {
+            if (pkObject.contains(pkCol) && !pkObject[pkCol].is_null()) {
+              if (pkObject[pkCol].is_string()) {
+                pkValues.push_back(pkObject[pkCol].get<std::string>());
+              } else {
+                pkValues.push_back(pkObject[pkCol].dump());
+              }
+            } else {
+              pkValues.push_back("NULL");
+            }
+          }
+
+          if (pkValues.size() != pkColumns.size()) {
+            continue;
+          }
+
+          if (op == "D") {
+            deletedPKs.push_back(pkValues);
+          } else if (op == "I" || op == "U") {
+            bool useRowData = false;
+            std::vector<std::string> record;
+
+            if (row.size() >= 4 && !row[3].empty() && row[3] != "NULL") {
+              try {
+                json rowData = json::parse(row[3]);
+                record.reserve(columnNames.size());
+                bool allColumnsFound = true;
+
+                for (const auto &colName : columnNames) {
+                  if (rowData.contains(colName) &&
+                      !rowData[colName].is_null()) {
+                    if (rowData[colName].is_string()) {
+                      record.push_back(rowData[colName].get<std::string>());
+                    } else {
+                      record.push_back(rowData[colName].dump());
+                    }
+                  } else {
+                    record.push_back("");
+                    allColumnsFound = false;
+                  }
+                }
+
+                if (allColumnsFound && record.size() == columnNames.size()) {
+                  recordsToUpsert.push_back(record);
+                  useRowData = true;
+                }
+              } catch (const std::exception &e) {
+                Logger::warning(LogCategory::TRANSFER, "processTableCDC",
+                                "Failed to parse row_data for " +
+                                    table.schema_name + "." + table.table_name +
+                                    ": " + std::string(e.what()) +
+                                    ", falling back to SELECT");
+              }
+            }
+
+            if (!useRowData) {
+              std::string whereClause = "";
+              for (size_t i = 0; i < pkColumns.size(); ++i) {
+                if (i > 0) {
+                  whereClause += " AND ";
+                }
+                std::string pkValue = pkValues[i];
+                std::string upperPk = pkColumns[i];
+                std::transform(upperPk.begin(), upperPk.end(), upperPk.begin(),
+                               ::toupper);
+                if (pkValue == "NULL") {
+                  whereClause += upperPk + " IS NULL";
+                } else {
+                  whereClause +=
+                      upperPk + " = '" + escapeOracleValue(pkValue) + "'";
+                }
+              }
+
+              std::string selectQuery = "SELECT * FROM " + upperSchema + "." +
+                                        upperTable + " WHERE " + whereClause +
+                                        " AND ROWNUM <= 1";
+
+              std::vector<std::vector<std::string>> recordResult =
+                  executeQueryOracle(oracleConn.get(), selectQuery);
+
+              if (!recordResult.empty() &&
+                  recordResult[0].size() == columnNames.size()) {
+                recordsToUpsert.push_back(recordResult[0]);
+              } else {
+                Logger::warning(LogCategory::TRANSFER, "processTableCDC",
+                                "Record not found in source for " +
+                                    table.schema_name + "." + table.table_name +
+                                    " operation " + op + " with PK: " + pkJson);
+              }
+            }
+          }
+        } catch (const std::exception &e) {
+          Logger::error(LogCategory::TRANSFER, "processTableCDC",
+                        "Failed to process change for " + table.schema_name +
+                            "." + table.table_name + ": " +
+                            std::string(e.what()));
+        }
+      }
+
+      size_t deletedCount = 0;
+      if (!deletedPKs.empty()) {
+        std::string lowerSchemaName = table.schema_name;
+        std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
+                       lowerSchemaName.begin(), ::tolower);
+        deletedCount = deleteRecordsByPrimaryKey(
+            pgConn, lowerSchemaName, table.table_name, deletedPKs, pkColumns);
+      }
+
+      size_t upsertedCount = 0;
+      if (!recordsToUpsert.empty()) {
+        std::string lowerSchemaName = table.schema_name;
+        std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
+                       lowerSchemaName.begin(), ::tolower);
+        try {
+          performBulkUpsert(pgConn, recordsToUpsert, columnNames, columnTypes,
+                            lowerSchemaName, table.table_name,
+                            table.schema_name);
+          upsertedCount = recordsToUpsert.size();
+        } catch (const std::exception &e) {
+          Logger::error(LogCategory::TRANSFER, "processTableCDC",
+                        "Failed to upsert records for " + table.schema_name +
+                            "." + table.table_name + ": " +
+                            std::string(e.what()));
+        }
+      }
+
+      if (maxChangeId > lastChangeId) {
+        try {
+          std::lock_guard<std::mutex> lock(metadataUpdateMutex);
+          pqxx::work txn(pgConn);
+          std::string updateQuery =
+              "UPDATE metadata.catalog SET sync_metadata = "
+              "COALESCE(sync_metadata, '{}'::jsonb) || "
+              "jsonb_build_object('last_change_id', " +
+              std::to_string(maxChangeId) +
+              ") WHERE schema_name=" + txn.quote(table.schema_name) +
+              " AND table_name=" + txn.quote(table.table_name) +
+              " AND db_engine='Oracle'";
+          txn.exec(updateQuery);
+          txn.commit();
+          lastChangeId = maxChangeId;
+        } catch (const std::exception &e) {
+          Logger::error(LogCategory::TRANSFER, "processTableCDC",
+                        "Error updating last_change_id for " +
+                            table.schema_name + "." + table.table_name + ": " +
+                            std::string(e.what()));
+        }
+      }
+
+      Logger::info(
+          LogCategory::TRANSFER, "processTableCDC",
+          "Processed CDC batch " + std::to_string(batchNumber) + " for " +
+              table.schema_name + "." + table.table_name + " with " +
+              std::to_string(rows.size()) +
+              " changes: " + std::to_string(upsertedCount) + " upserts, " +
+              std::to_string(deletedCount) +
+              " deletes; last_change_id=" + std::to_string(lastChangeId));
+
+      if (rows.size() < CHUNK_SIZE) {
+        hasMore = false;
+      }
+    }
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "processTableCDC",
+                  "Error in CDC processing for " + table.schema_name + "." +
+                      table.table_name + ": " + std::string(e.what()));
+  }
 }

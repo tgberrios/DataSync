@@ -4,6 +4,15 @@ project(DataSync)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O0 -Wall -Wextra -fsanitize=address -fsanitize=undefined")
+  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address -fsanitize=undefined")
+  message(STATUS "Building in DEBUG mode with AddressSanitizer")
+else()
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2")
+  message(STATUS "Building in RELEASE mode")
+endif()
+
 include_directories(
     ./include
     ./include/catalog
@@ -54,6 +63,9 @@ add_executable(DataSync
     src/governance/LineageExtractorMongoDB.cpp
     src/governance/LineageExtractorOracle.cpp
     src/governance/ColumnCatalogCollector.cpp
+    src/governance/ComplianceManager.cpp
+    src/governance/AccessControlManager.cpp
+    src/governance/DataRetentionManager.cpp
     src/metrics/MetricsCollector.cpp
     src/utils/connection_utils.cpp
     src/utils/cluster_name_resolver.cpp

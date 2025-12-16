@@ -185,13 +185,35 @@ LineageExtractorOracle::executeQuery(OCIConnection *conn,
 
 std::string
 LineageExtractorOracle::generateEdgeKey(const OracleLineageEdge &edge) {
+  auto escapeKeyComponent = [](const std::string &str) -> std::string {
+    std::string escaped = str;
+    size_t pos = 0;
+    while ((pos = escaped.find('|', pos)) != std::string::npos) {
+      escaped.replace(pos, 1, "||");
+      pos += 2;
+    }
+    while ((pos = escaped.find('\n', pos)) != std::string::npos) {
+      escaped.replace(pos, 1, "\\n");
+      pos += 2;
+    }
+    while ((pos = escaped.find('\r', pos)) != std::string::npos) {
+      escaped.replace(pos, 1, "\\r");
+      pos += 2;
+    }
+    return escaped;
+  };
+
   std::stringstream ss;
-  ss << edge.server_name << "|" << edge.schema_name << "|" << edge.object_name
-     << "|" << edge.object_type << "|"
-     << (edge.column_name.empty() ? "" : edge.column_name) << "|"
-     << edge.target_object_name << "|" << edge.target_object_type << "|"
-     << (edge.target_column_name.empty() ? "" : edge.target_column_name) << "|"
-     << edge.relationship_type;
+  ss << escapeKeyComponent(edge.server_name) << "|"
+     << escapeKeyComponent(edge.schema_name) << "|"
+     << escapeKeyComponent(edge.object_name) << "|"
+     << escapeKeyComponent(edge.object_type) << "|"
+     << escapeKeyComponent(edge.column_name.empty() ? "" : edge.column_name)
+     << "|" << escapeKeyComponent(edge.target_object_name) << "|"
+     << escapeKeyComponent(edge.target_object_type) << "|"
+     << escapeKeyComponent(
+            edge.target_column_name.empty() ? "" : edge.target_column_name)
+     << "|" << escapeKeyComponent(edge.relationship_type);
   return ss.str();
 }
 
@@ -219,6 +241,14 @@ void LineageExtractorOracle::extractLineage() {
     extractForeignKeyDependencies();
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorOracle",
                  "After FK extraction: " + std::to_string([this]() {
+                   std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
+                   return lineageEdges_.size();
+                 }()) +
+                     " edges");
+
+    extractTableDependencies();
+    Logger::info(LogCategory::GOVERNANCE, "LineageExtractorOracle",
+                 "After table extraction: " + std::to_string([this]() {
                    std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
                    return lineageEdges_.size();
                  }()) +
@@ -340,8 +370,179 @@ void LineageExtractorOracle::extractForeignKeyDependencies() {
 }
 
 void LineageExtractorOracle::extractTableDependencies() {
-  Logger::info(LogCategory::GOVERNANCE, "LineageExtractorOracle",
-               "Table dependencies extraction not implemented for Oracle");
+  try {
+    auto conn = std::make_unique<OCIConnection>(connectionString_);
+    if (!conn || !conn->isValid()) {
+      return;
+    }
+
+    std::string query = R"(
+      SELECT 
+        OWNER,
+        NAME,
+        TYPE,
+        TEXT
+      FROM ALL_SOURCE
+      WHERE TYPE IN ('PROCEDURE', 'FUNCTION', 'PACKAGE', 'PACKAGE BODY')
+        AND OWNER = :1
+    )";
+
+    std::string escapedSchema = escapeSQL(schemaName_);
+    std::string finalQuery = query;
+    size_t pos = finalQuery.find(":1");
+    if (pos != std::string::npos) {
+      finalQuery.replace(pos, 2, "'" + escapedSchema + "'");
+    }
+
+    auto results = executeQuery(conn.get(), finalQuery);
+
+    std::regex tableRegex(
+        R"(\bFROM\s+(?:(\w+)\.)?(\w+)\b|\bJOIN\s+(?:(\w+)\.)?(\w+)\b|\bINTO\s+(?:(\w+)\.)?(\w+)\b|\bUPDATE\s+(?:(\w+)\.)?(\w+)\b)",
+        std::regex_constants::icase);
+
+    int dependenciesFound = 0;
+    std::string currentOwner = "";
+    std::string currentName = "";
+    std::string currentType = "";
+    std::string currentText = "";
+
+    for (const auto &row : results) {
+      if (row.size() >= 4) {
+        if (row[0] != currentOwner || row[1] != currentName) {
+          if (!currentText.empty() && !currentName.empty()) {
+            std::set<std::pair<std::string, std::string>> referencedTables;
+
+            std::sregex_iterator iter(currentText.begin(), currentText.end(),
+                                      tableRegex);
+            std::sregex_iterator end;
+            for (; iter != end; ++iter) {
+              std::smatch match = *iter;
+              std::string schema;
+              std::string table;
+
+              for (size_t i = 1; i < match.size(); i += 2) {
+                if (match[i].matched && !match[i].str().empty()) {
+                  schema = match[i].str();
+                  if (i + 1 < match.size() && match[i + 1].matched &&
+                      !match[i + 1].str().empty()) {
+                    table = match[i + 1].str();
+                  }
+                } else if (i + 1 < match.size() && match[i + 1].matched &&
+                           !match[i + 1].str().empty()) {
+                  table = match[i + 1].str();
+                  schema = schemaName_;
+                }
+
+                if (!table.empty()) {
+                  if (schema.empty() || schema == schemaName_) {
+                    referencedTables.insert({schemaName_, table});
+                  } else {
+                    referencedTables.insert({schema, table});
+                  }
+                  break;
+                }
+              }
+            }
+
+            for (const auto &refTable : referencedTables) {
+              OracleLineageEdge edge;
+              edge.server_name = serverName_;
+              edge.schema_name = currentOwner;
+              edge.object_name = currentName;
+              edge.object_type = currentType;
+              edge.target_object_name = refTable.second;
+              edge.target_object_type = "TABLE";
+              edge.relationship_type = "ROUTINE_REFERENCES_TABLE";
+              edge.definition_text = "Routine references table";
+              edge.dependency_level = 2;
+              edge.discovery_method = "ALL_SOURCE";
+              edge.confidence_score = 0.8;
+              edge.edge_key = generateEdgeKey(edge);
+
+              {
+                std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
+                lineageEdges_.push_back(edge);
+              }
+              dependenciesFound++;
+            }
+          }
+
+          currentOwner = row[0];
+          currentName = row[1];
+          currentType = row[2];
+          currentText = row[3];
+        } else {
+          currentText += " " + row[3];
+        }
+      }
+    }
+
+    if (!currentText.empty() && !currentName.empty()) {
+      std::set<std::pair<std::string, std::string>> referencedTables;
+
+      std::sregex_iterator iter(currentText.begin(), currentText.end(),
+                                tableRegex);
+      std::sregex_iterator end;
+      for (; iter != end; ++iter) {
+        std::smatch match = *iter;
+        std::string schema;
+        std::string table;
+
+        for (size_t i = 1; i < match.size(); i += 2) {
+          if (match[i].matched && !match[i].str().empty()) {
+            schema = match[i].str();
+            if (i + 1 < match.size() && match[i + 1].matched &&
+                !match[i + 1].str().empty()) {
+              table = match[i + 1].str();
+            }
+          } else if (i + 1 < match.size() && match[i + 1].matched &&
+                     !match[i + 1].str().empty()) {
+            table = match[i + 1].str();
+            schema = schemaName_;
+          }
+
+          if (!table.empty()) {
+            if (schema.empty() || schema == schemaName_) {
+              referencedTables.insert({schemaName_, table});
+            } else {
+              referencedTables.insert({schema, table});
+            }
+            break;
+          }
+        }
+      }
+
+      for (const auto &refTable : referencedTables) {
+        OracleLineageEdge edge;
+        edge.server_name = serverName_;
+        edge.schema_name = currentOwner;
+        edge.object_name = currentName;
+        edge.object_type = currentType;
+        edge.target_object_name = refTable.second;
+        edge.target_object_type = "TABLE";
+        edge.relationship_type = "ROUTINE_REFERENCES_TABLE";
+        edge.definition_text = "Routine references table";
+        edge.dependency_level = 2;
+        edge.discovery_method = "ALL_SOURCE";
+        edge.confidence_score = 0.8;
+        edge.edge_key = generateEdgeKey(edge);
+
+        {
+          std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
+          lineageEdges_.push_back(edge);
+        }
+        dependenciesFound++;
+      }
+    }
+
+    Logger::info(LogCategory::GOVERNANCE, "LineageExtractorOracle",
+                 "Extracted " + std::to_string(dependenciesFound) +
+                     " table dependencies from routines");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::GOVERNANCE, "LineageExtractorOracle",
+                  "Error extracting table dependencies: " +
+                      std::string(e.what()));
+  }
 }
 
 void LineageExtractorOracle::extractViewDependencies() {

@@ -56,13 +56,13 @@ ConnectionStringParser::parse(std::string_view connStr) {
     else if (lowerKey == "db" || lowerKey == "database")
       params.db = value;
     else if (lowerKey == "port") {
-      params.port = value;
       if (!value.empty()) {
         try {
           unsigned long portNum = std::stoul(value);
           if (portNum == 0 || portNum > 65535) {
             return std::nullopt;
           }
+          params.port = value;
         } catch (...) {
           return std::nullopt;
         }
