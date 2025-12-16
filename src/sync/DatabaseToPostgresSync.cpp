@@ -227,6 +227,66 @@ size_t DatabaseToPostgresSync::deleteRecordsByPrimaryKey(
   return deletedCount;
 }
 
+size_t DatabaseToPostgresSync::deleteRecordsByHash(
+    pqxx::connection &pgConn, const std::string &lowerSchemaName,
+    const std::string &table_name,
+    const std::vector<std::vector<std::string>> &deletedRecords,
+    const std::vector<std::string> &columnNames) {
+
+  if (deletedRecords.empty() || columnNames.empty()) {
+    return 0;
+  }
+
+  size_t deletedCount = 0;
+
+  try {
+    std::string lowerTableName = table_name;
+    std::transform(lowerTableName.begin(), lowerTableName.end(),
+                   lowerTableName.begin(), ::tolower);
+    pqxx::work txn(pgConn);
+
+    for (const auto &record : deletedRecords) {
+      if (record.size() < columnNames.size() + 1) {
+        continue;
+      }
+
+      std::string deleteQuery = "DELETE FROM " +
+                                txn.quote_name(lowerSchemaName) + "." +
+                                txn.quote_name(lowerTableName) + " WHERE (";
+
+      for (size_t j = 1; j < record.size() && (j - 1) < columnNames.size();
+           ++j) {
+        if (j > 1)
+          deleteQuery += " AND ";
+        std::string value = record[j];
+        if (value == "NULL" || value.empty()) {
+          deleteQuery += txn.quote_name(columnNames[j - 1]) + " IS NULL";
+        } else {
+          deleteQuery +=
+              txn.quote_name(columnNames[j - 1]) + " = " + txn.quote(value);
+        }
+      }
+      deleteQuery += ")";
+
+      try {
+        auto result = txn.exec(deleteQuery);
+        deletedCount += result.affected_rows();
+      } catch (const std::exception &e) {
+        Logger::warning(LogCategory::TRANSFER, "deleteRecordsByHash",
+                        "Error deleting record: " + std::string(e.what()));
+      }
+    }
+
+    txn.commit();
+
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "deleteRecordsByHash",
+                  "Error deleting records by hash: " + std::string(e.what()));
+  }
+
+  return deletedCount;
+}
+
 // Retrieves primary key column names from PostgreSQL's information_schema for
 // a specific table. Queries table_constraints and key_column_usage to find
 // PRIMARY KEY constraints. Returns columns ordered by ordinal_position for
@@ -1029,6 +1089,263 @@ void DatabaseToPostgresSync::performBulkUpsert(
 
   } catch (const std::exception &e) {
     Logger::error(LogCategory::TRANSFER, "performBulkUpsert",
+                  "Error in bulk upsert: " + std::string(e.what()));
+    throw;
+  }
+}
+
+void DatabaseToPostgresSync::performBulkUpsertNoPK(
+    pqxx::connection &pgConn,
+    const std::vector<std::vector<std::string>> &results,
+    const std::vector<std::string> &columnNames,
+    const std::vector<std::string> &columnTypes,
+    const std::string &lowerSchemaName, const std::string &tableName,
+    const std::string &sourceSchemaName) {
+  try {
+    if (results.empty() || columnNames.empty() || columnTypes.empty()) {
+      Logger::warning(LogCategory::TRANSFER, "performBulkUpsertNoPK",
+                      "Empty results, columns, or types - nothing to upsert");
+      return;
+    }
+
+    if (columnNames.size() != columnTypes.size()) {
+      Logger::error(LogCategory::TRANSFER, "performBulkUpsertNoPK",
+                    "Mismatch between column names and types count");
+      throw std::invalid_argument("Column names and types count mismatch");
+    }
+
+    std::string lowerTableName = tableName;
+    std::transform(lowerTableName.begin(), lowerTableName.end(),
+                   lowerTableName.begin(), ::tolower);
+
+    pqxx::work prepTxn(pgConn);
+    std::string upsertQuery = "INSERT INTO " +
+                              prepTxn.quote_name(lowerSchemaName) + "." +
+                              prepTxn.quote_name(lowerTableName) + " (";
+    for (size_t i = 0; i < columnNames.size(); ++i) {
+      if (i > 0)
+        upsertQuery += ", ";
+      std::string col = columnNames[i];
+      std::transform(col.begin(), col.end(), col.begin(), ::tolower);
+      upsertQuery += prepTxn.quote_name(col);
+    }
+    upsertQuery += ") VALUES ";
+
+    std::string conflictClause = " ON CONFLICT (";
+    for (size_t i = 0; i < columnNames.size(); ++i) {
+      if (i > 0)
+        conflictClause += ", ";
+      std::string col = columnNames[i];
+      std::transform(col.begin(), col.end(), col.begin(), ::tolower);
+      conflictClause += prepTxn.quote_name(col);
+    }
+    conflictClause += ") DO UPDATE SET ";
+    for (size_t i = 0; i < columnNames.size(); ++i) {
+      if (i > 0)
+        conflictClause += ", ";
+      std::string col = columnNames[i];
+      std::transform(col.begin(), col.end(), col.begin(), ::tolower);
+      conflictClause +=
+          prepTxn.quote_name(col) + " = EXCLUDED." + prepTxn.quote_name(col);
+    }
+    prepTxn.commit();
+
+    pqxx::work txn(pgConn);
+    txn.exec("SET statement_timeout = '" +
+             std::to_string(STATEMENT_TIMEOUT_SECONDS) + "s'");
+
+    size_t rawBatchSize = SyncConfig::getChunkSize();
+    const size_t BATCH_SIZE =
+        (rawBatchSize == 0 || rawBatchSize > MAX_BATCH_SIZE)
+            ? DEFAULT_BATCH_SIZE
+            : rawBatchSize;
+    size_t totalProcessed = 0;
+
+    auto buildRowValues = [&](const std::vector<std::string> &row,
+                              pqxx::work &workTxn) -> std::string {
+      std::string rowValues = "(";
+      for (size_t j = 0; j < row.size() && j < columnNames.size(); ++j) {
+        if (j > 0)
+          rowValues += ", ";
+        if (row[j].empty()) {
+          rowValues += "NULL";
+        } else {
+          std::string cleanValue =
+              cleanValueForPostgres(row[j], columnTypes[j]);
+          if (cleanValue == "NULL") {
+            rowValues += "NULL";
+          } else {
+            rowValues += workTxn.quote(cleanValue);
+          }
+        }
+      }
+      rowValues += ")";
+      return rowValues;
+    };
+
+    for (size_t batchStart = 0; batchStart < results.size();
+         batchStart += BATCH_SIZE) {
+      size_t batchEnd = std::min(batchStart + BATCH_SIZE, results.size());
+
+      std::string batchQuery = upsertQuery;
+      std::vector<std::string> values;
+      size_t querySize = upsertQuery.length() + conflictClause.length();
+
+      for (size_t i = batchStart; i < batchEnd; ++i) {
+        const auto &row = results[i];
+        if (row.size() != columnNames.size()) {
+          Logger::warning(LogCategory::TRANSFER, "performBulkUpsertNoPK",
+                          "Row size mismatch: " + std::to_string(row.size()) +
+                              " vs " + std::to_string(columnNames.size()));
+          continue;
+        }
+
+        std::string rowValues = buildRowValues(row, txn);
+
+        if (querySize + rowValues.length() + 10 > MAX_QUERY_SIZE &&
+            !values.empty()) {
+          break;
+        }
+
+        values.push_back(rowValues);
+        querySize += rowValues.length() + 2;
+      }
+
+      if (!values.empty()) {
+        batchQuery += values[0];
+        for (size_t i = 1; i < values.size(); ++i) {
+          batchQuery += ", " + values[i];
+        }
+        batchQuery += conflictClause;
+
+        try {
+          txn.exec(batchQuery);
+          totalProcessed += values.size();
+        } catch (const std::exception &e) {
+          std::string errorMsg = e.what();
+
+          if (errorMsg.find("violates not-null constraint") !=
+              std::string::npos) {
+            Logger::warning(
+                LogCategory::TRANSFER, "performBulkUpsertNoPK",
+                "NOT NULL constraint violation detected for " +
+                    lowerSchemaName + "." + tableName +
+                    " - attempting to alter columns to allow NULLs");
+
+            try {
+              txn.abort();
+            } catch (...) {
+            }
+
+            std::set<std::string> columnsToAlter;
+            size_t searchPos = 0;
+            while (true) {
+              size_t startPos = errorMsg.find("column \"", searchPos);
+              if (startPos == std::string::npos)
+                break;
+              startPos += 8;
+              size_t endPos = errorMsg.find("\"", startPos);
+              if (endPos != std::string::npos) {
+                std::string columnName =
+                    errorMsg.substr(startPos, endPos - startPos);
+                std::transform(columnName.begin(), columnName.end(),
+                               columnName.begin(), ::tolower);
+                columnsToAlter.insert(columnName);
+              }
+              searchPos = endPos + 1;
+            }
+
+            if (!columnsToAlter.empty()) {
+              try {
+                pqxx::work alterTxn(pgConn);
+                for (const auto &columnName : columnsToAlter) {
+                  alterTxn.exec("ALTER TABLE \"" + lowerSchemaName + "\".\"" +
+                                tableName + "\" ALTER COLUMN \"" + columnName +
+                                "\" DROP NOT NULL");
+                  Logger::info(LogCategory::TRANSFER, "performBulkUpsertNoPK",
+                               "Altered column " + columnName +
+                                   " to allow NULLs for " + lowerSchemaName +
+                                   "." + tableName);
+                }
+                alterTxn.commit();
+
+                pqxx::work retryTxn(pgConn);
+                retryTxn.exec("SET statement_timeout = '" +
+                              std::to_string(STATEMENT_TIMEOUT_SECONDS) + "s'");
+                retryTxn.exec(batchQuery);
+                retryTxn.commit();
+                totalProcessed += values.size();
+                continue;
+              } catch (const std::exception &alterError) {
+                Logger::error(LogCategory::TRANSFER, "performBulkUpsertNoPK",
+                              "Failed to alter columns: " +
+                                  std::string(alterError.what()));
+              }
+            }
+          }
+
+          if (errorMsg.find("ON CONFLICT DO UPDATE command cannot affect row a "
+                            "second time") != std::string::npos) {
+            Logger::warning(
+                LogCategory::TRANSFER, "performBulkUpsertNoPK",
+                "Duplicate rows in batch for " + lowerSchemaName + "." +
+                    tableName + " - processing individually (up to " +
+                    std::to_string(MAX_INDIVIDUAL_PROCESSING) + " rows)");
+
+            try {
+              txn.abort();
+            } catch (...) {
+            }
+
+            size_t individualCount = 0;
+            for (size_t i = 0; i < values.size() &&
+                               individualCount < MAX_INDIVIDUAL_PROCESSING;
+                 ++i) {
+              try {
+                pqxx::work individualTxn(pgConn);
+                individualTxn.exec("SET statement_timeout = '" +
+                                   std::to_string(STATEMENT_TIMEOUT_SECONDS) +
+                                   "s'");
+                std::string individualQuery =
+                    upsertQuery + values[i] + conflictClause;
+                individualTxn.exec(individualQuery);
+                individualTxn.commit();
+                individualCount++;
+                totalProcessed++;
+              } catch (const std::exception &individualError) {
+                Logger::warning(LogCategory::TRANSFER, "performBulkUpsertNoPK",
+                                "Failed to process individual row: " +
+                                    std::string(individualError.what()));
+              }
+            }
+
+            if (individualCount < values.size()) {
+              Logger::error(
+                  LogCategory::TRANSFER, "performBulkUpsertNoPK",
+                  "CRITICAL ERROR: Bulk upsert failed for chunk in table " +
+                      lowerSchemaName + "." + tableName +
+                      ": Too many duplicate rows. Processed " +
+                      std::to_string(individualCount) + " of " +
+                      std::to_string(values.size()) + " rows individually.");
+            }
+            continue;
+          }
+
+          Logger::error(LogCategory::TRANSFER, "performBulkUpsertNoPK",
+                        "Error in bulk upsert: " + std::string(e.what()));
+          throw;
+        }
+      }
+    }
+
+    txn.commit();
+
+    Logger::info(LogCategory::TRANSFER, "performBulkUpsertNoPK",
+                 "Upserted " + std::to_string(totalProcessed) + " rows into " +
+                     lowerSchemaName + "." + tableName);
+
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "performBulkUpsertNoPK",
                   "Error in bulk upsert: " + std::string(e.what()));
     throw;
   }

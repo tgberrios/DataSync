@@ -341,6 +341,58 @@ public:
                                               std::to_string(tables.size()) +
                                               " MariaDB tables in PostgreSQL");
 
+      MYSQL *setupConn = nullptr;
+      for (const auto &table : tables) {
+        if (table.db_engine == "MariaDB") {
+          setupConn = getMariaDBConnection(table.connection_string);
+          if (setupConn) {
+            break;
+          }
+        }
+      }
+
+      if (!setupConn) {
+        Logger::error(LogCategory::TRANSFER,
+                      "setupTableTargetMariaDBToPostgres",
+                      "Failed to get MariaDB connection for setup");
+        return;
+      }
+
+      std::string query = "CREATE DATABASE IF NOT EXISTS datasync_metadata";
+      if (mysql_query(setupConn, query.c_str())) {
+        Logger::error(LogCategory::TRANSFER,
+                      "setupTableTargetMariaDBToPostgres",
+                      "Failed to create datasync_metadata database: " +
+                          std::string(mysql_error(setupConn)));
+      } else {
+        Logger::info(LogCategory::TRANSFER, "setupTableTargetMariaDBToPostgres",
+                     "Ensured datasync_metadata database exists");
+      }
+
+      query = "CREATE TABLE IF NOT EXISTS datasync_metadata.ds_change_log ("
+              "change_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,"
+              "change_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+              "operation CHAR(1) NOT NULL,"
+              "schema_name VARCHAR(255) NOT NULL,"
+              "table_name VARCHAR(255) NOT NULL,"
+              "pk_values JSON NOT NULL,"
+              "row_data JSON NOT NULL,"
+              "INDEX idx_ds_change_log_table_time (schema_name, table_name, "
+              "change_time),"
+              "INDEX idx_ds_change_log_table_change (schema_name, "
+              "table_name, change_id)) "
+              "ENGINE=InnoDB";
+
+      if (mysql_query(setupConn, query.c_str())) {
+        Logger::error(LogCategory::TRANSFER,
+                      "setupTableTargetMariaDBToPostgres",
+                      "Failed to create datasync_metadata.ds_change_log: " +
+                          std::string(mysql_error(setupConn)));
+      } else {
+        Logger::info(LogCategory::TRANSFER, "setupTableTargetMariaDBToPostgres",
+                     "Ensured datasync_metadata.ds_change_log table exists");
+      }
+
       for (const auto &table : tables) {
         if (table.db_engine != "MariaDB")
           continue;
@@ -352,43 +404,6 @@ public:
                         "Failed to get MariaDB connection for table " +
                             table.schema_name + "." + table.table_name);
           continue;
-        }
-
-        std::string query = "CREATE DATABASE IF NOT EXISTS datasync_metadata";
-        if (mysql_query(mariadbConn, query.c_str())) {
-          Logger::error(LogCategory::TRANSFER,
-                        "setupTableTargetMariaDBToPostgres",
-                        "Failed to create datasync_metadata database: " +
-                            std::string(mysql_error(mariadbConn)));
-        } else {
-          Logger::info(LogCategory::TRANSFER,
-                       "setupTableTargetMariaDBToPostgres",
-                       "Ensured datasync_metadata database exists");
-        }
-
-        query = "CREATE TABLE IF NOT EXISTS datasync_metadata.ds_change_log ("
-                "change_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,"
-                "change_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,"
-                "operation CHAR(1) NOT NULL,"
-                "schema_name VARCHAR(255) NOT NULL,"
-                "table_name VARCHAR(255) NOT NULL,"
-                "pk_values JSON NOT NULL,"
-                "row_data JSON NULL,"
-                "INDEX idx_ds_change_log_table_time (schema_name, table_name, "
-                "change_time),"
-                "INDEX idx_ds_change_log_table_change (schema_name, "
-                "table_name, change_id)) "
-                "ENGINE=InnoDB";
-
-        if (mysql_query(mariadbConn, query.c_str())) {
-          Logger::error(LogCategory::TRANSFER,
-                        "setupTableTargetMariaDBToPostgres",
-                        "Failed to create datasync_metadata.ds_change_log: " +
-                            std::string(mysql_error(mariadbConn)));
-        } else {
-          Logger::info(LogCategory::TRANSFER,
-                       "setupTableTargetMariaDBToPostgres",
-                       "Ensured datasync_metadata.ds_change_log table exists");
         }
 
         std::string triggerSchema = table.schema_name;
@@ -403,9 +418,23 @@ public:
         std::vector<std::vector<std::string>> allColumns =
             executeQueryMariaDB(mariadbConn, query);
 
-        if (!pkColumns.empty() && !allColumns.empty()) {
-          std::string jsonObjectNew = "JSON_OBJECT(";
-          std::string jsonObjectOld = "JSON_OBJECT(";
+        if (allColumns.empty()) {
+          Logger::warning(LogCategory::TRANSFER,
+                          "setupTableTargetMariaDBToPostgres",
+                          "No columns found for " + triggerSchema + "." +
+                              triggerTable + " - skipping trigger creation");
+          continue;
+        }
+
+        bool hasPK = !pkColumns.empty();
+        std::string jsonObjectNew;
+        std::string jsonObjectOld;
+        std::string rowDataNew;
+        std::string rowDataOld;
+
+        if (hasPK) {
+          jsonObjectNew = "JSON_OBJECT(";
+          jsonObjectOld = "JSON_OBJECT(";
           for (size_t i = 0; i < pkColumns.size(); ++i) {
             if (i > 0) {
               jsonObjectNew += ", ";
@@ -418,122 +447,141 @@ public:
           }
           jsonObjectNew += ")";
           jsonObjectOld += ")";
-
-          std::string rowDataNew = "JSON_OBJECT(";
-          std::string rowDataOld = "JSON_OBJECT(";
+        } else {
+          std::string concatFields = "CONCAT_WS('|', ";
           for (size_t i = 0; i < allColumns.size(); ++i) {
             if (i > 0) {
-              rowDataNew += ", ";
-              rowDataOld += ", ";
+              concatFields += ", ";
             }
             std::string colName = allColumns[i][0];
-            rowDataNew += "'" + colName + "', NEW.`" + colName + "`";
-            rowDataOld += "'" + colName + "', OLD.`" + colName + "`";
+            concatFields += "COALESCE(CAST(NEW.`" + colName + "` AS CHAR), '')";
           }
-          rowDataNew += ")";
-          rowDataOld += ")";
+          concatFields += ")";
+          jsonObjectNew = "JSON_OBJECT('_hash', MD5(" + concatFields + "))";
 
-          std::string triggerInsert =
-              "ds_tr_" + triggerSchema + "_" + triggerTable + "_ai";
-          std::string triggerUpdate =
-              "ds_tr_" + triggerSchema + "_" + triggerTable + "_au";
-          std::string triggerDelete =
-              "ds_tr_" + triggerSchema + "_" + triggerTable + "_ad";
-
-          std::string dropInsert = "DROP TRIGGER IF EXISTS `" + triggerSchema +
-                                   "`.`" + triggerInsert + "`";
-          std::string dropUpdate = "DROP TRIGGER IF EXISTS `" + triggerSchema +
-                                   "`.`" + triggerUpdate + "`";
-          std::string dropDelete = "DROP TRIGGER IF EXISTS `" + triggerSchema +
-                                   "`.`" + triggerDelete + "`";
-
-          if (mysql_query(mariadbConn, dropInsert.c_str())) {
-            Logger::error(LogCategory::TRANSFER,
-                          "setupTableTargetMariaDBToPostgres",
-                          "Failed to drop insert trigger for " + triggerSchema +
-                              "." + triggerTable + ": " +
-                              std::string(mysql_error(mariadbConn)));
+          concatFields = "CONCAT_WS('|', ";
+          for (size_t i = 0; i < allColumns.size(); ++i) {
+            if (i > 0) {
+              concatFields += ", ";
+            }
+            std::string colName = allColumns[i][0];
+            concatFields += "COALESCE(CAST(OLD.`" + colName + "` AS CHAR), '')";
           }
-          if (mysql_query(mariadbConn, dropUpdate.c_str())) {
-            Logger::error(LogCategory::TRANSFER,
-                          "setupTableTargetMariaDBToPostgres",
-                          "Failed to drop update trigger for " + triggerSchema +
-                              "." + triggerTable + ": " +
-                              std::string(mysql_error(mariadbConn)));
+          concatFields += ")";
+          jsonObjectOld = "JSON_OBJECT('_hash', MD5(" + concatFields + "))";
+        }
+
+        rowDataNew = "JSON_OBJECT(";
+        rowDataOld = "JSON_OBJECT(";
+        for (size_t i = 0; i < allColumns.size(); ++i) {
+          if (i > 0) {
+            rowDataNew += ", ";
+            rowDataOld += ", ";
           }
-          if (mysql_query(mariadbConn, dropDelete.c_str())) {
-            Logger::error(LogCategory::TRANSFER,
-                          "setupTableTargetMariaDBToPostgres",
-                          "Failed to drop delete trigger for " + triggerSchema +
-                              "." + triggerTable + ": " +
-                              std::string(mysql_error(mariadbConn)));
-          }
+          std::string colName = allColumns[i][0];
+          rowDataNew += "'" + colName + "', NEW.`" + colName + "`";
+          rowDataOld += "'" + colName + "', OLD.`" + colName + "`";
+        }
+        rowDataNew += ")";
+        rowDataOld += ")";
 
-          std::string createInsertTrigger =
-              "CREATE TRIGGER `" + triggerSchema + "`.`" + triggerInsert +
-              "` AFTER INSERT ON `" + triggerSchema + "`.`" + triggerTable +
-              "` FOR EACH ROW INSERT INTO datasync_metadata.ds_change_log "
-              "(operation, schema_name, table_name, pk_values, row_data) "
-              "VALUES ('I', '" +
-              triggerSchema + "', '" + triggerTable + "', " + jsonObjectNew +
-              ", " + rowDataNew + ")";
+        std::string triggerInsert =
+            "ds_tr_" + triggerSchema + "_" + triggerTable + "_ai";
+        std::string triggerUpdate =
+            "ds_tr_" + triggerSchema + "_" + triggerTable + "_au";
+        std::string triggerDelete =
+            "ds_tr_" + triggerSchema + "_" + triggerTable + "_ad";
 
-          std::string createUpdateTrigger =
-              "CREATE TRIGGER `" + triggerSchema + "`.`" + triggerUpdate +
-              "` AFTER UPDATE ON `" + triggerSchema + "`.`" + triggerTable +
-              "` FOR EACH ROW INSERT INTO datasync_metadata.ds_change_log "
-              "(operation, schema_name, table_name, pk_values, row_data) "
-              "VALUES ('U', '" +
-              triggerSchema + "', '" + triggerTable + "', " + jsonObjectNew +
-              ", " + rowDataNew + ")";
+        std::string dropInsert = "DROP TRIGGER IF EXISTS `" + triggerSchema +
+                                 "`.`" + triggerInsert + "`";
+        std::string dropUpdate = "DROP TRIGGER IF EXISTS `" + triggerSchema +
+                                 "`.`" + triggerUpdate + "`";
+        std::string dropDelete = "DROP TRIGGER IF EXISTS `" + triggerSchema +
+                                 "`.`" + triggerDelete + "`";
 
-          std::string createDeleteTrigger =
-              "CREATE TRIGGER `" + triggerSchema + "`.`" + triggerDelete +
-              "` AFTER DELETE ON `" + triggerSchema + "`.`" + triggerTable +
-              "` FOR EACH ROW INSERT INTO datasync_metadata.ds_change_log "
-              "(operation, schema_name, table_name, pk_values, row_data) "
-              "VALUES ('D', '" +
-              triggerSchema + "', '" + triggerTable + "', " + jsonObjectOld +
-              ", " + rowDataOld + ")";
+        if (mysql_query(mariadbConn, dropInsert.c_str())) {
+          Logger::error(
+              LogCategory::TRANSFER, "setupTableTargetMariaDBToPostgres",
+              "Failed to drop insert trigger for " + triggerSchema + "." +
+                  triggerTable + ": " + std::string(mysql_error(mariadbConn)));
+        }
+        if (mysql_query(mariadbConn, dropUpdate.c_str())) {
+          Logger::error(
+              LogCategory::TRANSFER, "setupTableTargetMariaDBToPostgres",
+              "Failed to drop update trigger for " + triggerSchema + "." +
+                  triggerTable + ": " + std::string(mysql_error(mariadbConn)));
+        }
+        if (mysql_query(mariadbConn, dropDelete.c_str())) {
+          Logger::error(
+              LogCategory::TRANSFER, "setupTableTargetMariaDBToPostgres",
+              "Failed to drop delete trigger for " + triggerSchema + "." +
+                  triggerTable + ": " + std::string(mysql_error(mariadbConn)));
+        }
 
-          if (mysql_query(mariadbConn, createInsertTrigger.c_str())) {
-            Logger::error(LogCategory::TRANSFER,
-                          "setupTableTargetMariaDBToPostgres",
-                          "Failed to create insert trigger for " +
-                              triggerSchema + "." + triggerTable + ": " +
-                              std::string(mysql_error(mariadbConn)));
-          } else {
-            Logger::info(LogCategory::TRANSFER,
-                         "setupTableTargetMariaDBToPostgres",
-                         "Created insert trigger for " + triggerSchema + "." +
-                             triggerTable);
-          }
+        std::string createInsertTrigger =
+            "CREATE TRIGGER `" + triggerSchema + "`.`" + triggerInsert +
+            "` AFTER INSERT ON `" + triggerSchema + "`.`" + triggerTable +
+            "` FOR EACH ROW INSERT INTO datasync_metadata.ds_change_log "
+            "(operation, schema_name, table_name, pk_values, row_data) "
+            "VALUES ('I', '" +
+            triggerSchema + "', '" + triggerTable + "', " + jsonObjectNew +
+            ", " + rowDataNew + ")";
 
-          if (mysql_query(mariadbConn, createUpdateTrigger.c_str())) {
-            Logger::error(LogCategory::TRANSFER,
-                          "setupTableTargetMariaDBToPostgres",
-                          "Failed to create update trigger for " +
-                              triggerSchema + "." + triggerTable + ": " +
-                              std::string(mysql_error(mariadbConn)));
-          } else {
-            Logger::info(LogCategory::TRANSFER,
-                         "setupTableTargetMariaDBToPostgres",
-                         "Created update trigger for " + triggerSchema + "." +
-                             triggerTable);
-          }
+        std::string createUpdateTrigger =
+            "CREATE TRIGGER `" + triggerSchema + "`.`" + triggerUpdate +
+            "` AFTER UPDATE ON `" + triggerSchema + "`.`" + triggerTable +
+            "` FOR EACH ROW INSERT INTO datasync_metadata.ds_change_log "
+            "(operation, schema_name, table_name, pk_values, row_data) "
+            "VALUES ('U', '" +
+            triggerSchema + "', '" + triggerTable + "', " + jsonObjectNew +
+            ", " + rowDataNew + ")";
 
-          if (mysql_query(mariadbConn, createDeleteTrigger.c_str())) {
-            Logger::error(LogCategory::TRANSFER,
-                          "setupTableTargetMariaDBToPostgres",
-                          "Failed to create delete trigger for " +
-                              triggerSchema + "." + triggerTable + ": " +
-                              std::string(mysql_error(mariadbConn)));
-          } else {
-            Logger::info(LogCategory::TRANSFER,
-                         "setupTableTargetMariaDBToPostgres",
-                         "Created delete trigger for " + triggerSchema + "." +
-                             triggerTable);
-          }
+        std::string createDeleteTrigger =
+            "CREATE TRIGGER `" + triggerSchema + "`.`" + triggerDelete +
+            "` AFTER DELETE ON `" + triggerSchema + "`.`" + triggerTable +
+            "` FOR EACH ROW INSERT INTO datasync_metadata.ds_change_log "
+            "(operation, schema_name, table_name, pk_values, row_data) "
+            "VALUES ('D', '" +
+            triggerSchema + "', '" + triggerTable + "', " + jsonObjectOld +
+            ", " + rowDataOld + ")";
+
+        if (mysql_query(mariadbConn, createInsertTrigger.c_str())) {
+          Logger::error(
+              LogCategory::TRANSFER, "setupTableTargetMariaDBToPostgres",
+              "Failed to create insert trigger for " + triggerSchema + "." +
+                  triggerTable + ": " + std::string(mysql_error(mariadbConn)));
+        } else {
+          Logger::info(LogCategory::TRANSFER,
+                       "setupTableTargetMariaDBToPostgres",
+                       "Created insert trigger for " + triggerSchema + "." +
+                           triggerTable +
+                           (hasPK ? " (with PK)" : " (no PK, using hash)"));
+        }
+
+        if (mysql_query(mariadbConn, createUpdateTrigger.c_str())) {
+          Logger::error(
+              LogCategory::TRANSFER, "setupTableTargetMariaDBToPostgres",
+              "Failed to create update trigger for " + triggerSchema + "." +
+                  triggerTable + ": " + std::string(mysql_error(mariadbConn)));
+        } else {
+          Logger::info(LogCategory::TRANSFER,
+                       "setupTableTargetMariaDBToPostgres",
+                       "Created update trigger for " + triggerSchema + "." +
+                           triggerTable +
+                           (hasPK ? " (with PK)" : " (no PK, using hash)"));
+        }
+
+        if (mysql_query(mariadbConn, createDeleteTrigger.c_str())) {
+          Logger::error(
+              LogCategory::TRANSFER, "setupTableTargetMariaDBToPostgres",
+              "Failed to create delete trigger for " + triggerSchema + "." +
+                  triggerTable + ": " + std::string(mysql_error(mariadbConn)));
+        } else {
+          Logger::info(LogCategory::TRANSFER,
+                       "setupTableTargetMariaDBToPostgres",
+                       "Created delete trigger for " + triggerSchema + "." +
+                           triggerTable +
+                           (hasPK ? " (with PK)" : " (no PK, using hash)"));
         }
 
         query = "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, "

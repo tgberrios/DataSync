@@ -352,6 +352,43 @@ public:
         return;
       }
 
+      SQLHDBC setupDbc = getMSSQLConnection(tables[0].connection_string);
+      if (!setupDbc) {
+        Logger::error(LogCategory::TRANSFER, "setupTableTargetMSSQLToPostgres",
+                      "Failed to get MSSQL connection for setup");
+        return;
+      }
+
+      std::string createSchemaQuery =
+          "IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = "
+          "'datasync_metadata') BEGIN EXEC('CREATE SCHEMA "
+          "datasync_metadata') "
+          "END;";
+      executeQueryMSSQL(setupDbc, createSchemaQuery);
+
+      std::string createTableQuery =
+          "IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = "
+          "OBJECT_ID(N'datasync_metadata.ds_change_log') AND type in "
+          "(N'U')) BEGIN CREATE TABLE datasync_metadata.ds_change_log ("
+          "change_id BIGINT IDENTITY(1,1) PRIMARY KEY, "
+          "change_time DATETIME NOT NULL DEFAULT GETDATE(), "
+          "operation CHAR(1) NOT NULL, "
+          "schema_name NVARCHAR(255) NOT NULL, "
+          "table_name NVARCHAR(255) NOT NULL, "
+          "pk_values NVARCHAR(MAX) NOT NULL, "
+          "row_data NVARCHAR(MAX) NULL); "
+          "CREATE INDEX idx_ds_change_log_table_time ON "
+          "datasync_metadata.ds_change_log (schema_name, table_name, "
+          "change_time); "
+          "CREATE INDEX idx_ds_change_log_table_change ON "
+          "datasync_metadata.ds_change_log (schema_name, table_name, "
+          "change_id); END;";
+      executeQueryMSSQL(setupDbc, createTableQuery);
+
+      Logger::info(LogCategory::TRANSFER, "setupTableTargetMSSQLToPostgres",
+                   "Ensured datasync_metadata schema and ds_change_log table "
+                   "exist");
+
       // Sort tables by priority: FULL_LOAD, RESET, LISTENING_CHANGES
       std::sort(tables.begin(), tables.end(),
                 [](const TableInfo &a, const TableInfo &b) {
@@ -584,31 +621,6 @@ public:
             executeQueryMSSQL(dbc, allColumnsQuery);
 
         if (!pkColumns.empty() && !allColumns.empty()) {
-          std::string createSchemaQuery =
-              "IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = "
-              "'datasync_metadata') BEGIN EXEC('CREATE SCHEMA "
-              "datasync_metadata') "
-              "END;";
-          executeQueryMSSQL(dbc, createSchemaQuery);
-
-          std::string createTableQuery =
-              "IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = "
-              "OBJECT_ID(N'datasync_metadata.ds_change_log') AND type in "
-              "(N'U')) BEGIN CREATE TABLE datasync_metadata.ds_change_log ("
-              "change_id BIGINT IDENTITY(1,1) PRIMARY KEY, "
-              "change_time DATETIME NOT NULL DEFAULT GETDATE(), "
-              "operation CHAR(1) NOT NULL, "
-              "schema_name NVARCHAR(255) NOT NULL, "
-              "table_name NVARCHAR(255) NOT NULL, "
-              "pk_values NVARCHAR(MAX) NOT NULL, "
-              "row_data NVARCHAR(MAX) NULL); "
-              "CREATE INDEX idx_ds_change_log_table_time ON "
-              "datasync_metadata.ds_change_log (schema_name, table_name, "
-              "change_time); "
-              "CREATE INDEX idx_ds_change_log_table_change ON "
-              "datasync_metadata.ds_change_log (schema_name, table_name, "
-              "change_id); END;";
-          executeQueryMSSQL(dbc, createTableQuery);
 
           std::string triggerInsert =
               "ds_tr_" + table.schema_name + "_" + table.table_name + "_ai";

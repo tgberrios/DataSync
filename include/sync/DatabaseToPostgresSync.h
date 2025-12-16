@@ -98,6 +98,12 @@ public:
       const std::vector<std::vector<std::string>> &deletedPKs,
       const std::vector<std::string> &pkColumns);
 
+  size_t deleteRecordsByHash(
+      pqxx::connection &pgConn, const std::string &lowerSchemaName,
+      const std::string &table_name,
+      const std::vector<std::vector<std::string>> &deletedRecords,
+      const std::vector<std::string> &columnNames);
+
   std::vector<std::string>
   getPrimaryKeyColumnsFromPostgres(pqxx::connection &pgConn,
                                    const std::string &schemaName,
@@ -132,6 +138,15 @@ public:
                          const std::string &lowerSchemaName,
                          const std::string &tableName,
                          const std::string &sourceSchemaName);
+
+  void
+  performBulkUpsertNoPK(pqxx::connection &pgConn,
+                        const std::vector<std::vector<std::string>> &results,
+                        const std::vector<std::string> &columnNames,
+                        const std::vector<std::string> &columnTypes,
+                        const std::string &lowerSchemaName,
+                        const std::string &tableName,
+                        const std::string &sourceSchemaName);
 
   void batchInserterThread(pqxx::connection &pgConn);
 };
