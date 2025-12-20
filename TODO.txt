@@ -37,3 +37,42 @@ y el de mssql de azure
     otro proyecto igual mejorando en lo que carece!
 
     ANADIR FORMA DE HACER FIRST SETUP DIGAMOS DE LA DB eso seria con un backup de la db de solo la estructura pero tambien, con la data de config
+
+
+
+
+    Mejoras implementadas
+Animaciones
+Fade-in al cargar nodos
+Slide down/up al expandir/colapsar
+Transiciones en hover y clics
+Animaciones escalonadas por nivel
+Diseño visual
+Iconos SVG por nivel (Schema, Table, Column)
+Gradientes en schemas
+Bordes de colores por nivel
+Sombras sutiles
+Scrollbar personalizado
+Interactividad
+Botones de expansión con gradientes
+Hover con desplazamiento y sombra
+Feedback visual en clics
+Estados visuales claros (expandido/colapsado)
+UX/UI
+Tipografía mejorada (sans-serif)
+Espaciado consistente
+Badges con colores semánticos
+Contadores de elementos
+Detalles expandibles con grid responsive
+Empty state con emoji
+Navegación
+Estructura jerárquica clara
+Líneas de conexión estilo consola
+Indicadores visuales por nivel
+Transiciones suaves
+Accesibilidad
+Contraste adecuado
+Áreas de clic amplias
+Feedback visual inmediato
+Estados claros
+La Tree View es ahora la vista por defecto y está optimizada para una navegación intuitiva.

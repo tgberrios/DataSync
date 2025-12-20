@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import styled from 'styled-components';
+import styled, { keyframes } from 'styled-components';
 import {
   Container,
   Header,
@@ -18,29 +18,74 @@ import { catalogLocksApi } from '../services/api';
 import { extractApiError } from '../utils/errorHandler';
 import { theme } from '../theme/theme';
 
+const fadeIn = keyframes`
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+`;
+
+const slideUp = keyframes`
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+`;
+
+const pulse = keyframes`
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+`;
+
 const MetricsGrid = styled(Grid)`
   margin-bottom: ${theme.spacing.xxl};
-  animation: slideUp 0.25s ease-out;
+  animation: ${slideUp} 0.3s ease-out;
   animation-delay: 0.1s;
   animation-fill-mode: both;
 `;
 
 const MetricCard = styled(Value)`
-  padding: ${theme.spacing.md};
-  min-height: 80px;
+  padding: ${theme.spacing.lg};
+  min-height: 100px;
+  background: linear-gradient(135deg, ${theme.colors.background.main} 0%, ${theme.colors.background.secondary} 100%);
+  border: 1px solid ${theme.colors.border.light};
+  border-radius: ${theme.borderRadius.lg};
+  box-shadow: ${theme.shadows.md};
+  transition: all ${theme.transitions.normal};
+  
+  &:hover {
+    transform: translateY(-4px);
+    box-shadow: ${theme.shadows.lg};
+    border-color: ${theme.colors.primary.main};
+  }
 `;
 
 const MetricLabel = styled.div`
-  font-size: 0.85em;
+  font-size: 0.9em;
   color: ${theme.colors.text.secondary};
-  margin-bottom: ${theme.spacing.xs};
-  font-weight: 500;
+  margin-bottom: ${theme.spacing.sm};
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 `;
 
 const MetricValue = styled.div`
-  font-size: 1.5em;
-  font-weight: bold;
-  color: ${theme.colors.text.primary};
+  font-size: 2em;
+  font-weight: 700;
+  color: ${theme.colors.primary.main};
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 `;
 
 const ActionBar = styled.div`
@@ -49,35 +94,61 @@ const ActionBar = styled.div`
   align-items: center;
   margin-bottom: ${theme.spacing.lg};
   gap: ${theme.spacing.sm};
-  animation: slideUp 0.25s ease-out;
+  padding: ${theme.spacing.md};
+  background: linear-gradient(135deg, ${theme.colors.background.secondary} 0%, ${theme.colors.background.tertiary} 100%);
+  border-radius: ${theme.borderRadius.md};
+  border: 1px solid ${theme.colors.border.light};
+  box-shadow: ${theme.shadows.sm};
+  animation: ${slideUp} 0.3s ease-out;
   animation-delay: 0.15s;
   animation-fill-mode: both;
 `;
 
 const DangerButton = styled(Button)`
-  background-color: ${theme.colors.status.error.bg};
+  background: linear-gradient(135deg, ${theme.colors.status.error.bg} 0%, ${theme.colors.status.error.text}15 100%);
   color: ${theme.colors.status.error.text};
   border-color: ${theme.colors.status.error.text};
+  font-weight: 600;
+  padding: 10px 20px;
+  border-radius: ${theme.borderRadius.md};
+  transition: all ${theme.transitions.normal};
+  box-shadow: ${theme.shadows.sm};
   
   &:hover:not(:disabled) {
-    background-color: #ffcdd2;
+    background: linear-gradient(135deg, #ffcdd2 0%, ${theme.colors.status.error.bg} 100%);
     border-color: ${theme.colors.status.error.text};
+    transform: translateY(-2px);
+    box-shadow: ${theme.shadows.md};
+  }
+  
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 `;
 
 const StyledTableRow = styled(TableRow)<{ $expired?: boolean; $warning?: boolean }>`
-  background-color: ${props => {
-    if (props.$expired) return theme.colors.status.error.bg;
-    if (props.$warning) return theme.colors.status.warning.bg;
+  background: ${props => {
+    if (props.$expired) return `linear-gradient(135deg, ${theme.colors.status.error.bg} 0%, ${theme.colors.status.error.text}08 100%)`;
+    if (props.$warning) return `linear-gradient(135deg, ${theme.colors.status.warning.bg} 0%, ${theme.colors.status.warning.text}08 100%)`;
     return theme.colors.background.main;
   }};
+  border-left: 3px solid ${props => {
+    if (props.$expired) return theme.colors.status.error.text;
+    if (props.$warning) return theme.colors.status.warning.text;
+    return 'transparent';
+  }};
+  transition: all ${theme.transitions.normal};
+  animation: ${fadeIn} 0.3s ease-out;
   
   &:hover {
     background: ${props => {
-      if (props.$expired) return '#ffcdd2';
-      if (props.$warning) return '#ffe0b2';
+      if (props.$expired) return `linear-gradient(135deg, #ffcdd2 0%, ${theme.colors.status.error.bg} 100%)`;
+      if (props.$warning) return `linear-gradient(135deg, #ffe0b2 0%, ${theme.colors.status.warning.bg} 100%)`;
       return theme.colors.background.secondary;
     }} !important;
+    transform: translateX(4px);
+    box-shadow: ${theme.shadows.sm};
   }
 `;
 
@@ -108,38 +179,76 @@ const SortableTh = styled(Th)<{ $sortable?: boolean; $active?: boolean; $directi
 `;
 
 const Badge = styled.span<{ $status?: string }>`
-  padding: 4px 10px;
+  padding: 6px 12px;
   border-radius: ${theme.borderRadius.md};
-  font-size: 0.75em;
-  font-weight: 500;
-  display: inline-block;
+  font-size: 0.8em;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   transition: all ${theme.transitions.normal};
+  border: 1px solid transparent;
+  box-shadow: ${theme.shadows.sm};
   
   ${props => {
     switch (props.$status) {
-      case 'active': return `background-color: ${theme.colors.status.success.bg}; color: ${theme.colors.status.success.text};`;
-      case 'expired': return `background-color: ${theme.colors.status.error.bg}; color: ${theme.colors.status.error.text};`;
-      case 'warning': return `background-color: ${theme.colors.status.warning.bg}; color: ${theme.colors.status.warning.text};`;
-      default: return `background-color: ${theme.colors.background.secondary}; color: ${theme.colors.text.secondary};`;
+      case 'active': return `
+        background: linear-gradient(135deg, ${theme.colors.status.success.bg} 0%, ${theme.colors.status.success.text}15 100%);
+        color: ${theme.colors.status.success.text};
+        border-color: ${theme.colors.status.success.text}30;
+      `;
+      case 'expired': return `
+        background: linear-gradient(135deg, ${theme.colors.status.error.bg} 0%, ${theme.colors.status.error.text}15 100%);
+        color: ${theme.colors.status.error.text};
+        border-color: ${theme.colors.status.error.text}30;
+        animation: ${pulse} 2s ease-in-out infinite;
+      `;
+      case 'warning': return `
+        background: linear-gradient(135deg, ${theme.colors.status.warning.bg} 0%, ${theme.colors.status.warning.text}15 100%);
+        color: ${theme.colors.status.warning.text};
+        border-color: ${theme.colors.status.warning.text}30;
+      `;
+      default: return `
+        background: ${theme.colors.background.secondary};
+        color: ${theme.colors.text.secondary};
+      `;
     }
   }}
   
   &:hover {
-    transform: scale(1.05);
-    box-shadow: ${theme.shadows.sm};
+    transform: translateY(-2px) scale(1.05);
+    box-shadow: ${theme.shadows.md};
+  }
+  
+  &::before {
+    content: "${props => {
+      switch (props.$status) {
+        case 'active': return '✓';
+        case 'expired': return '✗';
+        case 'warning': return '⚠';
+        default: return '';
+      }
+    }}";
+    font-weight: bold;
   }
 `;
 
 const UnlockButton = styled(Button)`
-  padding: 6px 12px;
-  font-size: 0.8em;
-  background-color: ${theme.colors.status.error.bg};
+  padding: 8px 16px;
+  font-size: 0.85em;
+  font-weight: 600;
+  background: linear-gradient(135deg, ${theme.colors.status.error.bg} 0%, ${theme.colors.status.error.text}15 100%);
   color: ${theme.colors.status.error.text};
   border-color: ${theme.colors.status.error.text};
+  border-radius: ${theme.borderRadius.md};
+  transition: all ${theme.transitions.normal};
+  box-shadow: ${theme.shadows.sm};
   
   &:hover:not(:disabled) {
-    background-color: #ffcdd2;
+    background: linear-gradient(135deg, #ffcdd2 0%, ${theme.colors.status.error.bg} 100%);
     border-color: ${theme.colors.status.error.text};
+    transform: translateY(-2px);
+    box-shadow: ${theme.shadows.md};
   }
 `;
 
@@ -149,6 +258,12 @@ const TableActions = styled.div`
   align-items: center;
   margin-bottom: ${theme.spacing.md};
   gap: ${theme.spacing.sm};
+  padding: ${theme.spacing.md};
+  background: linear-gradient(135deg, ${theme.colors.background.secondary} 0%, ${theme.colors.background.tertiary} 100%);
+  border-radius: ${theme.borderRadius.md};
+  border: 1px solid ${theme.colors.border.light};
+  box-shadow: ${theme.shadows.sm};
+  animation: ${fadeIn} 0.3s ease-out;
 `;
 
 const ExportButton = styled(Button)`
@@ -161,12 +276,24 @@ const ExportButton = styled(Button)`
 
 
 const SuccessMessage = styled.div`
-  background-color: ${theme.colors.status.success.bg};
+  background: linear-gradient(135deg, ${theme.colors.status.success.bg} 0%, ${theme.colors.status.success.text}15 100%);
   color: ${theme.colors.status.success.text};
   padding: ${theme.spacing.md};
   border-radius: ${theme.borderRadius.md};
   margin-bottom: ${theme.spacing.lg};
-  border: 1px solid ${theme.colors.status.success.text};
+  border: 2px solid ${theme.colors.status.success.text}30;
+  box-shadow: ${theme.shadows.md};
+  animation: ${slideUp} 0.3s ease-out;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  
+  &::before {
+    content: '✓';
+    font-size: 1.2em;
+    font-weight: bold;
+  }
 `;
 
 /**
@@ -475,13 +602,20 @@ const CatalogLocks = () => {
                 </Td>
               </TableRow>
             ) : (
-              sortedLocks.map((lock) => {
+              sortedLocks.map((lock, index) => {
                 const status = getLockStatus(lock.expires_at);
                 const isExpired = status.status === 'expired';
                 const isWarning = status.status === 'warning';
                 
                 return (
-                  <StyledTableRow key={lock.lock_name} $expired={isExpired} $warning={isWarning}>
+                  <StyledTableRow 
+                    key={lock.lock_name} 
+                    $expired={isExpired} 
+                    $warning={isWarning}
+                    style={{
+                      animationDelay: `${index * 0.05}s`
+                    }}
+                  >
                     <Td>
                       <strong style={{ 
                         color: isExpired ? theme.colors.status.error.text : theme.colors.text.primary 

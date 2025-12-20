@@ -17,7 +17,6 @@ import {
   Th,
   Td,
   TableRow,
-  SearchContainer,
   Input,
 } from './shared/BaseComponents';
 import { usePagination } from '../hooks/usePagination';
@@ -26,6 +25,7 @@ import { columnCatalogApi } from '../services/api';
 import { extractApiError } from '../utils/errorHandler';
 import { sanitizeSearch } from '../utils/validation';
 import { theme } from '../theme/theme';
+import ColumnCatalogTreeView from './ColumnCatalogTreeView';
 
 const MetricsGrid = styled(Grid)`
   margin-bottom: ${theme.spacing.xxl};
@@ -283,6 +283,9 @@ const ColumnCatalog = () => {
   const [tables, setTables] = useState<string[]>([]);
   const [sortField, setSortField] = useState<string>("");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const [viewMode, setViewMode] = useState<"table" | "tree">("tree");
+  const [allColumns, setAllColumns] = useState<any[]>([]);
+  const [loadingTree, setLoadingTree] = useState(false);
   const isMountedRef = useRef(true);
 
   const fetchData = useCallback(async () => {
@@ -340,19 +343,66 @@ const ColumnCatalog = () => {
     filters.search
   ]);
 
+  const fetchAllColumns = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    try {
+      setLoadingTree(true);
+      setError(null);
+      const sanitizedSearch = sanitizeSearch(filters.search as string, 100);
+      const columnsData = await columnCatalogApi.getColumns({
+        page: 1,
+        limit: 10000,
+        schema_name: filters.schema_name as string,
+        table_name: filters.table_name as string,
+        db_engine: filters.db_engine as string,
+        data_type: filters.data_type as string,
+        sensitivity_level: filters.sensitivity_level as string,
+        contains_pii: filters.contains_pii as string,
+        contains_phi: filters.contains_phi as string,
+        search: sanitizedSearch
+      });
+      if (isMountedRef.current) {
+        setAllColumns(columnsData.data || []);
+      }
+    } catch (err) {
+      if (isMountedRef.current) {
+        setError(extractApiError(err));
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setLoadingTree(false);
+      }
+    }
+  }, [
+    filters.schema_name,
+    filters.table_name,
+    filters.db_engine,
+    filters.data_type,
+    filters.sensitivity_level,
+    filters.contains_pii,
+    filters.contains_phi,
+    filters.search
+  ]);
+
   useEffect(() => {
     isMountedRef.current = true;
     fetchData();
+    if (viewMode === "tree") {
+      fetchAllColumns();
+    }
     const interval = setInterval(() => {
       if (isMountedRef.current) {
         fetchData();
+        if (viewMode === "tree") {
+          fetchAllColumns();
+        }
       }
     }, 30000);
     return () => {
       isMountedRef.current = false;
       clearInterval(interval);
     };
-  }, [fetchData]);
+  }, [fetchData, fetchAllColumns, viewMode]);
 
   useEffect(() => {
     const fetchTables = async () => {
@@ -686,14 +736,48 @@ const ColumnCatalog = () => {
 
       <TableActions>
         <div style={{ fontSize: "0.9em", color: theme.colors.text.secondary }}>
-          Showing {sortedColumns.length} of {pagination.total} columns
+          {viewMode === "table" 
+            ? `Showing ${sortedColumns.length} of ${pagination.total} columns`
+            : `Total: ${allColumns.length} columns`
+          }
         </div>
-        <ExportButton $variant="secondary" onClick={handleExportCSV}>
-          Export CSV
-        </ExportButton>
+        <div style={{ display: "flex", gap: theme.spacing.sm, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: "4px", background: theme.colors.background.secondary, padding: "4px", borderRadius: theme.borderRadius.sm }}>
+            <Button
+              $variant={viewMode === "table" ? "primary" : "secondary"}
+              onClick={() => setViewMode("table")}
+              style={{ padding: "6px 12px", fontSize: "0.85em" }}
+            >
+              Schema View
+            </Button>
+            <Button
+              $variant={viewMode === "tree" ? "primary" : "secondary"}
+              onClick={() => {
+                setViewMode("tree");
+                fetchAllColumns();
+              }}
+              style={{ padding: "6px 12px", fontSize: "0.85em" }}
+            >
+              Tree View
+            </Button>
+          </div>
+          <ExportButton $variant="secondary" onClick={handleExportCSV}>
+            Export CSV
+          </ExportButton>
+        </div>
       </TableActions>
 
-      <TableContainer>
+      {viewMode === "tree" ? (
+        loadingTree ? (
+          <LoadingOverlay>Loading tree view...</LoadingOverlay>
+        ) : (
+          <ColumnCatalogTreeView 
+            columns={allColumns}
+            onColumnClick={(column) => toggleColumn(column.id)}
+          />
+        )
+      ) : (
+        <TableContainer>
         <Table $minWidth="1400px">
           <thead>
             <tr>
@@ -963,8 +1047,9 @@ const ColumnCatalog = () => {
           </tbody>
         </Table>
       </TableContainer>
+      )}
 
-      {pagination.totalPages > 1 && (
+      {viewMode === "table" && pagination.totalPages > 1 && (
         <Pagination>
           <PageButton
             onClick={() => setPage(Math.max(1, page - 1))}

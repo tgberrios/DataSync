@@ -276,6 +276,31 @@ export const dashboardApi = {
       throw error;
     }
   },
+  getSystemLogs: async (limit: number = 60) => {
+    try {
+      const response = await api.get<{
+        logs: Array<{
+          timestamp: string;
+          cpuUsage: number;
+          memoryPercentage: number;
+          network: number;
+          throughput: number;
+        }>;
+      }>(`/dashboard/system-logs?limit=${limit}`);
+      return response.data.logs;
+    } catch (error) {
+      console.error("Error fetching system logs:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        console.error("Server error details:", error.response.data);
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
 };
 
 export interface ConfigEntry {
@@ -607,6 +632,39 @@ export const catalogApi = {
       return response.data;
     } catch (error) {
       console.error("Error fetching schemas:", error);
+      throw error;
+    }
+  },
+
+  // Obtener todos los engines únicos
+  getEngines: async () => {
+    try {
+      const response = await api.get<string[]>("/catalog/engines");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching engines:", error);
+      throw error;
+    }
+  },
+
+  // Obtener todos los status únicos
+  getStatuses: async () => {
+    try {
+      const response = await api.get<string[]>("/catalog/statuses");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching statuses:", error);
+      throw error;
+    }
+  },
+
+  // Obtener todas las strategies únicas
+  getStrategies: async () => {
+    try {
+      const response = await api.get<string[]>("/catalog/strategies");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching strategies:", error);
       throw error;
     }
   },

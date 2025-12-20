@@ -556,8 +556,11 @@ app.get("/api/catalog", requireAuth, async (req, res) => {
       ],
       ""
     );
+    const activeParam = req.query.active;
     const active =
-      req.query.active !== undefined ? validateBoolean(req.query.active) : "";
+      activeParam !== undefined && activeParam !== ""
+        ? validateBoolean(activeParam)
+        : null;
     const search = sanitizeSearch(req.query.search, 100);
     const offset = (page - 1) * limit;
 
@@ -577,10 +580,10 @@ app.get("/api/catalog", requireAuth, async (req, res) => {
       queryParams.push(status);
     }
 
-    if (active !== "") {
+    if (active !== null && active !== undefined) {
       paramCount++;
       whereConditions.push(`active = $${paramCount}`);
-      queryParams.push(active === "true");
+      queryParams.push(active === true || active === "true");
     }
 
     if (search) {
@@ -601,13 +604,71 @@ app.get("/api/catalog", requireAuth, async (req, res) => {
         ? `WHERE ${whereConditions.join(" AND ")}`
         : "";
 
-    const countQuery = `SELECT COUNT(*) FROM metadata.catalog ${whereClause}`;
-    const countResult = await pool.query(countQuery, queryParams);
-    const total = parseInt(countResult.rows[0].count);
+    console.log("=== CATALOG API DEBUG START ===");
+    console.log("Request query params:", req.query);
 
-    paramCount++;
-    const dataQuery = `SELECT * FROM metadata.catalog ${whereClause}
-      ORDER BY 
+    const totalCheckQuery = `SELECT COUNT(*) as total FROM metadata.catalog`;
+    let totalCheckResult;
+    try {
+      totalCheckResult = await pool.query(totalCheckQuery);
+      const totalInTable = parseInt(totalCheckResult.rows[0].total);
+      console.log("Total records in table (no filters):", totalInTable);
+
+      if (totalInTable === 0) {
+        console.log("⚠️ WARNING: Table metadata.catalog is EMPTY!");
+        console.log("Sample query to check table structure:");
+        console.log(
+          "SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'metadata' AND table_name = 'catalog';"
+        );
+      } else {
+        const sampleQuery = `SELECT * FROM metadata.catalog LIMIT 3`;
+        const sampleResult = await pool.query(sampleQuery);
+        console.log(
+          "Sample records (first 3):",
+          JSON.stringify(sampleResult.rows, null, 2)
+        );
+      }
+    } catch (checkErr) {
+      console.error("❌ Error checking total records:", checkErr);
+    }
+
+    const countQuery = `SELECT COUNT(*) FROM metadata.catalog ${whereClause}`;
+    console.log("Count query:", countQuery);
+    console.log("Count query params:", queryParams);
+
+    let countResult;
+    try {
+      countResult = await pool.query(countQuery, queryParams);
+    } catch (countErr) {
+      console.error("❌ Error in count query:", countErr);
+      throw countErr;
+    }
+
+    const total = parseInt(countResult.rows[0].count);
+    console.log("Total after filters:", total);
+
+    const sortField = String(req.query.sort_field || "").toLowerCase();
+    const sortDirection = String(
+      req.query.sort_direction || "desc"
+    ).toUpperCase();
+    const allowedSortFields = new Set([
+      "schema_name",
+      "table_name",
+      "db_engine",
+      "status",
+      "active",
+      "pk_strategy",
+      "last_sync_column",
+      "cluster_name",
+    ]);
+
+    let orderClause = "";
+    if (sortField && allowedSortFields.has(sortField)) {
+      orderClause = `ORDER BY ${sortField} ${
+        sortDirection === "ASC" ? "ASC" : "DESC"
+      }`;
+    } else {
+      orderClause = `ORDER BY 
         CASE status
           WHEN 'LISTENING_CHANGES' THEN 1
           WHEN 'FULL_LOAD' THEN 2
@@ -618,13 +679,75 @@ app.get("/api/catalog", requireAuth, async (req, res) => {
         END,
         active DESC,
         schema_name,
-        table_name
-      LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
+        table_name`;
+    }
+
+    paramCount++;
+    const limitParam = paramCount;
+    const offsetParam = paramCount + 1;
+
+    const dataQuery = `SELECT * FROM metadata.catalog ${whereClause}
+      ${orderClause}
+      LIMIT $${limitParam} OFFSET $${offsetParam}`;
+
     queryParams.push(limit, offset);
 
-    const result = await pool.query(dataQuery, queryParams);
+    console.log("=== CATALOG API DEBUG ===");
+    console.log("Query:", dataQuery);
+    console.log("Params:", queryParams);
+    console.log(
+      "Param count:",
+      paramCount,
+      "Limit param:",
+      limitParam,
+      "Offset param:",
+      offsetParam
+    );
+    console.log("Page:", page, "Limit:", limit, "Offset:", offset);
+    console.log("Where conditions:", whereConditions);
+    console.log("Where clause:", whereClause);
+    console.log(
+      "Filters - engine:",
+      engine,
+      "status:",
+      status,
+      "active:",
+      active,
+      "search:",
+      search
+    );
+
+    let result;
+    try {
+      result = await pool.query(dataQuery, queryParams);
+    } catch (queryErr) {
+      console.error("Error executing data query:", queryErr);
+      console.error("Query was:", dataQuery);
+      console.error("Params were:", queryParams);
+      throw queryErr;
+    }
 
     const totalPages = Math.ceil(total / limit);
+
+    console.log("Result rows count:", result.rows.length);
+    console.log("Total records:", total);
+    console.log("Total pages:", totalPages);
+    console.log(
+      "First row sample:",
+      result.rows.length > 0
+        ? JSON.stringify(result.rows[0], null, 2)
+        : "No rows"
+    );
+    console.log("Response data:", {
+      dataCount: result.rows.length,
+      pagination: {
+        total,
+        totalPages,
+        currentPage: parseInt(page),
+        limit: parseInt(limit),
+      },
+    });
+    console.log("=== END CATALOG DEBUG ===");
 
     res.json({
       data: result.rows,
@@ -636,7 +759,7 @@ app.get("/api/catalog", requireAuth, async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("Database error:", err);
+    console.error("Database error in catalog endpoint:", err);
     const safeError = sanitizeError(
       err,
       "Error fetching catalog data",
@@ -818,7 +941,7 @@ app.post(
 );
 
 // Obtener todos los schemas únicos
-app.get("/api/catalog/schemas", async (req, res) => {
+app.get("/api/catalog/schemas", requireAuth, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT DISTINCT schema_name FROM metadata.catalog ORDER BY schema_name`
@@ -829,6 +952,60 @@ app.get("/api/catalog/schemas", async (req, res) => {
     const safeError = sanitizeError(
       err,
       "Error fetching catalog data",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
+  }
+});
+
+// Obtener todos los engines únicos
+app.get("/api/catalog/engines", requireAuth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT DISTINCT db_engine FROM metadata.catalog WHERE db_engine IS NOT NULL ORDER BY db_engine`
+    );
+    res.json(result.rows.map((row) => row.db_engine));
+  } catch (err) {
+    console.error("Database error:", err);
+    const safeError = sanitizeError(
+      err,
+      "Error fetching engines",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
+  }
+});
+
+// Obtener todos los status únicos
+app.get("/api/catalog/statuses", requireAuth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT DISTINCT status FROM metadata.catalog WHERE status IS NOT NULL ORDER BY status`
+    );
+    res.json(result.rows.map((row) => row.status));
+  } catch (err) {
+    console.error("Database error:", err);
+    const safeError = sanitizeError(
+      err,
+      "Error fetching statuses",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
+  }
+});
+
+// Obtener todas las strategies únicas
+app.get("/api/catalog/strategies", requireAuth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT DISTINCT pk_strategy FROM metadata.catalog WHERE pk_strategy IS NOT NULL ORDER BY pk_strategy`
+    );
+    res.json(result.rows.map((row) => row.pk_strategy));
+  } catch (err) {
+    console.error("Database error:", err);
+    const safeError = sanitizeError(
+      err,
+      "Error fetching strategies",
       process.env.NODE_ENV === "production"
     );
     res.status(500).json({ error: safeError });
@@ -1095,20 +1272,13 @@ app.get("/api/dashboard/stats", async (req, res) => {
         totalTables: parseInt(totalTablesResult.rows[0]?.total || 0),
       },
       systemResources: {
-        cpuUsage:
-          systemResources.rows[0].cpu_usage +
-          "% (" +
-          systemResources.rows[0].cpu_cores +
-          " cores)",
-        memoryUsed:
-          systemResources.rows[0].memory_used +
-          "/" +
-          systemResources.rows[0].memory_total +
-          " GB (" +
-          systemResources.rows[0].memory_percentage +
-          "%)",
-        rss: systemResources.rows[0].memory_rss + " GB",
-        virtual: systemResources.rows[0].memory_virtual + " GB",
+        cpuUsage: systemResources.rows[0].cpu_usage,
+        cpuCores: systemResources.rows[0].cpu_cores.toString(),
+        memoryUsed: systemResources.rows[0].memory_used,
+        memoryTotal: systemResources.rows[0].memory_total,
+        memoryPercentage: systemResources.rows[0].memory_percentage,
+        rss: systemResources.rows[0].memory_rss,
+        virtual: systemResources.rows[0].memory_virtual,
       },
       dbHealth: {
         activeConnections: dbHealth.rows[0]
@@ -1260,6 +1430,32 @@ app.get("/api/dashboard/stats", async (req, res) => {
       },
     };
 
+    const networkIops = stats.metricsCards.currentIops || 0;
+    const throughputRps = stats.metricsCards.currentThroughput.avgRps || 0;
+
+    try {
+      await pool.query(
+        `INSERT INTO metadata.system_logs (
+          cpu_usage, cpu_cores, memory_used_gb, memory_total_gb, 
+          memory_percentage, memory_rss_gb, memory_virtual_gb,
+          network_iops, throughput_rps
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          parseFloat(cpuUsagePercent),
+          cpuCount,
+          parseFloat(memoryUsedGB),
+          parseFloat(memoryTotalGB),
+          parseFloat(memoryPercentage),
+          parseFloat(rssGB),
+          parseFloat(virtualGB),
+          networkIops,
+          throughputRps,
+        ]
+      );
+    } catch (err) {
+      console.error("Error saving system logs:", err);
+    }
+
     console.log("Sending dashboard stats");
     res.json(stats);
   } catch (err) {
@@ -1267,6 +1463,51 @@ app.get("/api/dashboard/stats", async (req, res) => {
     const safeError = sanitizeError(
       err,
       "Error al obtener estadísticas",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
+  }
+});
+
+app.get("/api/dashboard/system-logs", async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 60;
+
+    const result = await pool.query(
+      `SELECT 
+        timestamp,
+        cpu_usage,
+        memory_percentage,
+        COALESCE(network_iops, 0) as network_iops,
+        COALESCE(throughput_rps, 0) as throughput_rps
+      FROM metadata.system_logs
+      ORDER BY timestamp DESC
+      LIMIT $1`,
+      [limit]
+    );
+
+    const logs = result.rows.reverse().map((row) => {
+      const date = new Date(row.timestamp);
+      const timeLabel = `${date.getHours().toString().padStart(2, "0")}:${date
+        .getMinutes()
+        .toString()
+        .padStart(2, "0")}:${date.getSeconds().toString().padStart(2, "0")}`;
+
+      return {
+        timestamp: timeLabel,
+        cpuUsage: parseFloat(row.cpu_usage) || 0,
+        memoryPercentage: parseFloat(row.memory_percentage) || 0,
+        network: parseFloat(row.network_iops) || 0,
+        throughput: parseFloat(row.throughput_rps) || 0,
+      };
+    });
+
+    res.json({ logs });
+  } catch (err) {
+    console.error("Error getting system logs:", err);
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener logs del sistema",
       process.env.NODE_ENV === "production"
     );
     res.status(500).json({ error: safeError });
