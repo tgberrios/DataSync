@@ -38,5 +38,13 @@ Thumbs.db
 *.bak
 *.backup
 
+# Database dumps and large files
+*.dump.zip
+*.dump.sql
+*_dump.zip
+*_dump.sql
+*-dump.zip
+*-dump.sql
+
 # Configuration files with credentials
 config.json
