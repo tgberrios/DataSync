@@ -442,6 +442,10 @@ const DataLineageMSSQL = () => {
         dataLineageMSSQLApi.getMSSQLServers()
       ]);
       if (isMountedRef.current) {
+        console.log("MSSQL Lineage Data:", lineageData);
+        console.log("MSSQL Metrics Data:", metricsData);
+        console.log("MSSQL Metrics Data Type:", typeof metricsData);
+        console.log("MSSQL Metrics Data Keys:", metricsData ? Object.keys(metricsData) : 'null');
         setLineage(lineageData.data || []);
         setPagination(lineageData.pagination || {
           total: 0,
@@ -471,6 +475,23 @@ const DataLineageMSSQL = () => {
     filters.relationship_type, 
     filters.search
   ]);
+
+  const fetchMetrics = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    try {
+      console.log("MSSQL fetchMetrics: Starting...");
+      const metricsData = await dataLineageMSSQLApi.getMSSQLMetrics().catch(err => {
+        console.error("MSSQL getMSSQLMetrics error:", err);
+        throw err;
+      });
+      console.log("MSSQL fetchMetrics: Received data:", metricsData);
+      if (isMountedRef.current) {
+        setMetrics(metricsData || {});
+      }
+    } catch (err) {
+      console.error("MSSQL fetchMetrics error:", err);
+    }
+  }, []);
 
   const fetchAllEdges = useCallback(async () => {
     if (!isMountedRef.current) return;
@@ -511,6 +532,7 @@ const DataLineageMSSQL = () => {
 
   useEffect(() => {
     isMountedRef.current = true;
+    fetchMetrics();
     if (viewMode === "table") {
       fetchData();
     } else {
@@ -518,6 +540,7 @@ const DataLineageMSSQL = () => {
     }
     const interval = setInterval(() => {
       if (isMountedRef.current) {
+        fetchMetrics();
         if (viewMode === "table") {
           fetchData();
         } else {
@@ -529,7 +552,7 @@ const DataLineageMSSQL = () => {
       isMountedRef.current = false;
       clearInterval(interval);
     };
-  }, [fetchData, fetchAllEdges, viewMode]);
+  }, [fetchData, fetchAllEdges, fetchMetrics, viewMode]);
 
   useEffect(() => {
     if (viewMode === "tree") {
@@ -699,6 +722,10 @@ const DataLineageMSSQL = () => {
     );
   }
 
+  console.log("MSSQL Component Render - Metrics State:", metrics);
+  console.log("MSSQL Component Render - Metrics total_relationships:", metrics.total_relationships);
+  console.log("MSSQL Component Render - Metrics type:", typeof metrics.total_relationships);
+
   return (
     <Container>
       <Header>Data Lineage - MSSQL</Header>
@@ -722,31 +749,87 @@ const DataLineageMSSQL = () => {
         </MetricCard>
         <MetricCard $index={2}>
           <MetricLabel>
-            <span>■</span>
+            <span>[S]</span>
             Unique Servers
           </MetricLabel>
           <MetricValue>{metrics.unique_servers || 0}</MetricValue>
         </MetricCard>
         <MetricCard $index={3}>
           <MetricLabel>
+            <span>[I]</span>
+            Unique Instances
+          </MetricLabel>
+          <MetricValue>{metrics.unique_instances || 0}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={4}>
+          <MetricLabel>
+            <span>[DB]</span>
+            Unique Databases
+          </MetricLabel>
+          <MetricValue>{metrics.unique_databases || 0}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={5}>
+          <MetricLabel>
+            <span>[SC]</span>
+            Unique Schemas
+          </MetricLabel>
+          <MetricValue>{metrics.unique_schemas || 0}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={6}>
+          <MetricLabel>
+            <span>&lt;-&gt;</span>
+            Relationship Types
+          </MetricLabel>
+          <MetricValue>{metrics.unique_relationship_types || 0}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={7}>
+          <MetricLabel>
             <span>✓</span>
             High Confidence
           </MetricLabel>
           <MetricValue>{metrics.high_confidence || 0}</MetricValue>
         </MetricCard>
-        <MetricCard $index={4}>
+        <MetricCard $index={8}>
+          <MetricLabel>
+            <span>[!]</span>
+            Low Confidence
+          </MetricLabel>
+          <MetricValue>{metrics.low_confidence || 0}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={9}>
           <MetricLabel>
             <span>%</span>
             Avg Confidence
           </MetricLabel>
           <MetricValue>{metrics.avg_confidence ? `${(Number(metrics.avg_confidence) * 100).toFixed(1)}%` : 'N/A'}</MetricValue>
         </MetricCard>
-        <MetricCard $index={5}>
+        <MetricCard $index={10}>
           <MetricLabel>
-            <span>⚡</span>
+            <span>[!]</span>
             Total Executions
           </MetricLabel>
           <MetricValue>{formatNumber(metrics.total_executions)}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={11}>
+          <MetricLabel>
+            <span>[T]</span>
+            Avg Duration
+          </MetricLabel>
+          <MetricValue>{formatTime(metrics.avg_duration_ms)}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={12}>
+          <MetricLabel>
+            <span>[+]</span>
+            Discovered (24h)
+          </MetricLabel>
+          <MetricValue>{metrics.discovered_last_24h || 0}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={13}>
+          <MetricLabel>
+            <span>[*]</span>
+            Discovery Methods
+          </MetricLabel>
+          <MetricValue>{metrics.unique_discovery_methods || 0}</MetricValue>
         </MetricCard>
       </MetricsGrid>
 

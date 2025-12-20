@@ -22,7 +22,6 @@ struct CatalogEntry {
   std::string dbEngine;
   std::string connectionString;
   std::string status;
-  std::string lastSyncColumn;
   std::string pkColumns;
   std::string pkStrategy;
   bool hasPK;
@@ -39,7 +38,6 @@ public:
   getCatalogEntries(const std::string &dbEngine,
                     const std::string &connectionString) = 0;
   virtual void insertOrUpdateTable(const CatalogTableInfo &tableInfo,
-                                   const std::string &timeColumn,
                                    const std::vector<std::string> &pkColumns,
                                    bool hasPK, int64_t tableSize,
                                    const std::string &dbEngine) = 0;
@@ -73,7 +71,6 @@ public:
   getCatalogEntries(const std::string &dbEngine,
                     const std::string &connectionString) override;
   void insertOrUpdateTable(const CatalogTableInfo &tableInfo,
-                           const std::string &timeColumn,
                            const std::vector<std::string> &pkColumns,
                            bool hasPK, int64_t tableSize,
                            const std::string &dbEngine) override;

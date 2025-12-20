@@ -38,7 +38,9 @@ public:
   void setupTableTargetMongoDBToPostgres();
 
 private:
-  bool shouldSyncCollection(const TableInfo &tableInfo);
+  bool shouldSyncCollection(pqxx::connection &pgConn,
+                            const std::string &schema_name,
+                            const std::string &table_name);
   void truncateAndLoadCollection(const TableInfo &tableInfo);
   std::vector<std::vector<std::string>>
   fetchCollectionData(const TableInfo &tableInfo);

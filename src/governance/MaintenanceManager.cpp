@@ -15,6 +15,7 @@
 #include <sql.h>
 #include <sqlext.h>
 #include <sstream>
+#include <thread>
 
 MaintenanceManager::MaintenanceManager(
     const std::string &metadataConnectionString)
@@ -812,74 +813,107 @@ void MaintenanceManager::executeMaintenance() {
   Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
                "Starting maintenance execution");
 
-  try {
-    auto tasks = getPendingTasks();
-    int executed = 0;
+  int totalExecuted = 0;
+  const int batchSize = 5;
+  int consecutiveEmptyBatches = 0;
+  const int maxEmptyBatches = 3;
 
-    for (const auto &task : tasks) {
-      if (!task.auto_execute || !task.enabled) {
+  try {
+    while (true) {
+      auto tasks = getPendingTasks(batchSize);
+
+      if (tasks.empty()) {
+        consecutiveEmptyBatches++;
+        if (consecutiveEmptyBatches >= maxEmptyBatches) {
+          Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
+                       "No more pending tasks after " +
+                           std::to_string(maxEmptyBatches) +
+                           " consecutive empty checks. Stopping execution.");
+          break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
         continue;
       }
 
-      try {
-        updateTaskStatus(task.id, "RUNNING");
-        auto startTime = std::chrono::high_resolution_clock::now();
+      consecutiveEmptyBatches = 0;
+      int batchExecuted = 0;
 
-        MaintenanceMetrics before = collectMetricsBefore(task);
-
-        if (task.db_engine == "PostgreSQL") {
-          executePostgreSQLMaintenance(task);
-        } else if (task.db_engine == "MariaDB") {
-          executeMariaDBMaintenance(task);
-        } else if (task.db_engine == "MSSQL") {
-          executeMSSQLMaintenance(task);
+      for (const auto &task : tasks) {
+        if (!task.auto_execute || !task.enabled) {
+          continue;
         }
 
-        auto endTime = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::seconds>(
-            endTime - startTime);
+        try {
+          updateTaskStatus(task.id, "RUNNING");
+          auto startTime = std::chrono::high_resolution_clock::now();
 
-        MaintenanceMetrics after = collectMetricsAfter(task);
-        MaintenanceTask updatedTask = task;
-        calculateImpact(updatedTask, before, after);
+          MaintenanceMetrics before = collectMetricsBefore(task);
 
-        std::string resultMsg = "Maintenance completed successfully. ";
-        if (updatedTask.space_reclaimed_mb > 0) {
-          resultMsg += "Space reclaimed: " +
-                       std::to_string(updatedTask.space_reclaimed_mb) + " MB. ";
+          if (task.db_engine == "PostgreSQL") {
+            executePostgreSQLMaintenance(task);
+          } else if (task.db_engine == "MariaDB") {
+            executeMariaDBMaintenance(task);
+          } else if (task.db_engine == "MSSQL") {
+            executeMSSQLMaintenance(task);
+          }
+
+          auto endTime = std::chrono::high_resolution_clock::now();
+          auto duration = std::chrono::duration_cast<std::chrono::seconds>(
+              endTime - startTime);
+
+          MaintenanceMetrics after = collectMetricsAfter(task);
+          MaintenanceTask updatedTask = task;
+          calculateImpact(updatedTask, before, after);
+
+          std::string resultMsg = "Maintenance completed successfully. ";
+          if (updatedTask.space_reclaimed_mb > 0) {
+            resultMsg += "Space reclaimed: " +
+                         std::to_string(updatedTask.space_reclaimed_mb) +
+                         " MB. ";
+          }
+          if (updatedTask.performance_improvement_pct > 0) {
+            resultMsg +=
+                "Performance improvement: " +
+                std::to_string(updatedTask.performance_improvement_pct) + "%. ";
+          }
+
+          updateTaskStatus(task.id, "COMPLETED", resultMsg);
+          storeExecutionMetrics(updatedTask, before, after);
+          batchExecuted++;
+          totalExecuted++;
+        } catch (const std::exception &e) {
+          std::string errorMsg = std::string(e.what());
+          bool wasCleanedUp =
+              errorMsg.find("does not exist") != std::string::npos ||
+              errorMsg.find("doesn't exist") != std::string::npos ||
+              errorMsg.find("Invalid object") != std::string::npos;
+
+          if (!wasCleanedUp) {
+            updateTaskStatus(task.id, "FAILED", "", errorMsg);
+            Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
+                          "Error executing maintenance task " +
+                              std::to_string(task.id) + ": " + errorMsg);
+          } else {
+            Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
+                         "Maintenance task " + std::to_string(task.id) +
+                             " was cleaned up because object does not exist");
+          }
         }
-        if (updatedTask.performance_improvement_pct > 0) {
-          resultMsg += "Performance improvement: " +
-                       std::to_string(updatedTask.performance_improvement_pct) +
-                       "%. ";
-        }
+      }
 
-        updateTaskStatus(task.id, "COMPLETED", resultMsg);
-        storeExecutionMetrics(updatedTask, before, after);
-        executed++;
-      } catch (const std::exception &e) {
-        std::string errorMsg = std::string(e.what());
-        bool wasCleanedUp =
-            errorMsg.find("does not exist") != std::string::npos ||
-            errorMsg.find("doesn't exist") != std::string::npos ||
-            errorMsg.find("Invalid object") != std::string::npos;
+      Logger::info(
+          LogCategory::GOVERNANCE, "MaintenanceManager",
+          "Executed batch of " + std::to_string(batchExecuted) +
+              " tasks. Total executed: " + std::to_string(totalExecuted));
 
-        if (!wasCleanedUp) {
-          updateTaskStatus(task.id, "FAILED", "", errorMsg);
-          Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
-                        "Error executing maintenance task " +
-                            std::to_string(task.id) + ": " + errorMsg);
-        } else {
-          Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
-                       "Maintenance task " + std::to_string(task.id) +
-                           " was cleaned up because object does not exist");
-        }
+      if (tasks.size() < batchSize) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
       }
     }
 
     Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
-                 "Maintenance execution completed. Executed " +
-                     std::to_string(executed) + " tasks");
+                 "Maintenance execution completed. Total executed: " +
+                     std::to_string(totalExecuted) + " tasks");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
                   "Error in maintenance execution: " + std::string(e.what()));
@@ -1149,7 +1183,7 @@ bool MaintenanceManager::validateMSSQLObject(const MaintenanceTask &task) {
     }
 
     SQLINTEGER count = 0;
-    SQLINTEGER countLen = 0;
+    SQLLEN countLen = 0;
     ret = SQLFetch(stmt);
     if (ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) {
       SQLGetData(stmt, 1, SQL_C_LONG, &count, sizeof(count), &countLen);
@@ -1509,8 +1543,16 @@ void MaintenanceManager::storeExecutionMetrics(
   }
 }
 
-std::vector<MaintenanceTask> MaintenanceManager::getPendingTasks() {
+std::vector<MaintenanceTask> MaintenanceManager::getPendingTasks(int limit) {
   std::vector<MaintenanceTask> tasks;
+
+  if (limit < 1 || limit > 100) {
+    Logger::warning(LogCategory::GOVERNANCE, "MaintenanceManager",
+                    "Invalid limit value: " + std::to_string(limit) +
+                        ". Using default limit of 5");
+    limit = 5;
+  }
+
   try {
     pqxx::connection conn(metadataConnectionString_);
     pqxx::work txn(conn);
@@ -1528,8 +1570,7 @@ std::vector<MaintenanceTask> MaintenanceManager::getPendingTasks() {
           OR last_maintenance_date IS NULL
         )
       ORDER BY priority DESC, next_maintenance_date ASC
-      LIMIT 10
-    )";
+      LIMIT )" + std::to_string(limit);
 
     auto results = txn.exec(query);
     txn.commit();

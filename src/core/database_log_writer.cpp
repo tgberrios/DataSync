@@ -137,16 +137,6 @@ void DatabaseLogWriter::prepareStatement() {
   prepareStatementUnlocked();
 }
 
-// Writes a formatted log message to the database. This method is part of the
-// ILogWriter interface but is not implemented for DatabaseLogWriter, as it
-// requires parsed components (level, category, function, message) rather than
-// a pre-formatted string. Always returns false. This method is never called in
-// practice - all logging goes through writeParsed() instead. It is kept only to
-// satisfy the ILogWriter interface contract.
-bool DatabaseLogWriter::write(const std::string &formattedMessage) {
-  return false;
-}
-
 // Writes a log entry to the database using parsed components. This method
 // inserts the log entry into metadata.logs table using the prepared statement.
 // The operation is thread-safe and will automatically re-prepare the statement

@@ -106,8 +106,7 @@ void MetricsCollector::createMetricsTable() {
 // record counts (n_live_tup) and table sizes (pg_total_relation_size).
 // Validates all data before processing, skipping rows with null or invalid
 // values. Maps catalog status to transfer_type (FULL_LOAD, INCREMENTAL, SYNC,
-// UNKNOWN) and status (SUCCESS, FAILED, PENDING, UNKNOWN). Estimates started_at
-// as 1 hour before completed_at if last_sync_time is available. Stores all
+// UNKNOWN) and status (SUCCESS, FAILED, PENDING, UNKNOWN). Stores all
 // metrics in the internal metrics vector for later processing and saving.
 void MetricsCollector::collectTransferMetrics() {
   try {
@@ -130,8 +129,6 @@ void MetricsCollector::collectTransferMetrics() {
         "lower(c.table_name) as table_name,"
         "c.db_engine,"
         "c.status,"
-        "c.last_sync_time,"
-        "c.last_sync_column,"
         "COALESCE(pg.n_live_tup, 0) as current_records,"
         "COALESCE(pg_total_relation_size(pc.oid), 0) as table_size_bytes "
         "FROM metadata.catalog c "
@@ -150,7 +147,7 @@ void MetricsCollector::collectTransferMetrics() {
     metrics.reserve(result.size());
 
     for (const auto &row : result) {
-      if (row.size() < 8) {
+      if (row.size() < 6) {
         continue;
       }
 
@@ -171,8 +168,8 @@ void MetricsCollector::collectTransferMetrics() {
       }
 
       std::string status = row[3].is_null() ? "" : row[3].as<std::string>();
-      long long currentRecords = row[6].is_null() ? 0 : row[6].as<long long>();
-      long long tableSizeBytes = row[7].is_null() ? 0 : row[7].as<long long>();
+      long long currentRecords = row[4].is_null() ? 0 : row[4].as<long long>();
+      long long tableSizeBytes = row[5].is_null() ? 0 : row[5].as<long long>();
 
       // Validate numeric values
       if (currentRecords < 0) {
@@ -223,19 +220,8 @@ void MetricsCollector::collectTransferMetrics() {
         metric.error_message = "Unknown status: " + status;
       }
 
-      if (!row[4].is_null()) {
-        std::string completedTime = row[4].as<std::string>();
-        if (!completedTime.empty()) {
-          metric.completed_at = completedTime;
-          metric.started_at = getEstimatedStartTime(metric.completed_at);
-        } else {
-          metric.started_at = TimeUtils::getCurrentTimestamp();
-          metric.completed_at = "";
-        }
-      } else {
-        metric.started_at = TimeUtils::getCurrentTimestamp();
-        metric.completed_at = "";
-      }
+      metric.started_at = TimeUtils::getCurrentTimestamp();
+      metric.completed_at = "";
 
       metrics.push_back(metric);
     }
@@ -348,9 +334,8 @@ void MetricsCollector::collectPerformanceMetrics() {
 // metrics in the metrics vector by matching schema_name, table_name, and
 // db_engine. Determines transfer_type based on catalog status (full_load,
 // incremental, or sync). Determines status based on active flag and presence of
-// last_sync_time (SUCCESS if active and has sync time, PENDING if no sync time,
-// FAILED if inactive). This function refines the metrics collected in
-// collectTransferMetrics with more accurate metadata.
+// active status (SUCCESS if active, FAILED if inactive). This function refines
+// the metrics collected in collectTransferMetrics with more accurate metadata.
 void MetricsCollector::collectMetadataMetrics() {
   try {
     if (metrics.empty()) {
@@ -375,9 +360,7 @@ void MetricsCollector::collectMetadataMetrics() {
                                 "lower(table_name) as table_name,"
                                 "db_engine,"
                                 "status,"
-                                "active,"
-                                "last_sync_time,"
-                                "last_sync_column "
+                                "active "
                                 "FROM metadata.catalog "
                                 "WHERE db_engine IS NOT NULL;";
 
@@ -387,7 +370,7 @@ void MetricsCollector::collectMetadataMetrics() {
     // Build hash map for O(1) lookup instead of O(n²)
     std::unordered_map<std::string, pqxx::row> metaMap;
     for (const auto &row : result) {
-      if (row.size() < 6) {
+      if (row.size() < 5) {
         continue;
       }
       if (row[0].is_null() || row[1].is_null() || row[2].is_null()) {
@@ -405,7 +388,7 @@ void MetricsCollector::collectMetadataMetrics() {
       auto it = metaMap.find(key);
       if (it != metaMap.end()) {
         const auto &row = it->second;
-        if (row.size() >= 6) {
+        if (row.size() >= 5) {
           std::string status = row[3].is_null() ? "" : row[3].as<std::string>();
           if (status == "full_load") {
             metric.transfer_type = "FULL_LOAD";
@@ -420,12 +403,8 @@ void MetricsCollector::collectMetadataMetrics() {
           if (!active) {
             metric.status = "FAILED";
             metric.error_message = "Table marked as inactive";
-          } else if (row[5].is_null()) {
-            if (metric.status.empty() || metric.status == "UNKNOWN") {
-              metric.status = "PENDING";
-            }
           } else {
-            if (metric.status != "FAILED") {
+            if (metric.status.empty() || metric.status == "UNKNOWN") {
               metric.status = "SUCCESS";
             }
           }
@@ -440,12 +419,13 @@ void MetricsCollector::collectMetadataMetrics() {
   }
 }
 
-// Collects timestamp metrics by querying metadata.catalog for last_sync_time
-// values. Uses a hash map for O(1) lookup performance. Updates existing metrics
-// in the metrics vector by matching schema_name, table_name, and db_engine.
-// Sets both completed_at and started_at to the last_sync_time value if
-// available. This function ensures timestamp accuracy by using actual sync
-// times from the catalog rather than estimates.
+// Collects timestamp metrics by querying metadata.catalog for
+// mongo_last_sync_time values (MongoDB only). Uses a hash map for O(1) lookup
+// performance. Updates existing metrics in the metrics vector by matching
+// schema_name, table_name, and db_engine. Sets both completed_at and started_at
+// to the mongo_last_sync_time value if available. This function ensures
+// timestamp accuracy by using actual sync times from the catalog rather than
+// estimates.
 void MetricsCollector::collectTimestampMetrics() {
   try {
     if (metrics.empty()) {
@@ -470,9 +450,9 @@ void MetricsCollector::collectTimestampMetrics() {
         "lower(schema_name) as schema_name,"
         "lower(table_name) as table_name,"
         "db_engine,"
-        "last_sync_time "
+        "mongo_last_sync_time "
         "FROM metadata.catalog "
-        "WHERE db_engine IS NOT NULL AND last_sync_time IS NOT NULL;";
+        "WHERE db_engine = 'MongoDB' AND mongo_last_sync_time IS NOT NULL;";
 
     auto result = txn.exec(timestampQuery);
     txn.commit();

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import styled, { keyframes } from 'styled-components';
 import {
   Container,
@@ -6,15 +6,10 @@ import {
   ErrorMessage,
   LoadingOverlay,
   Select,
-  Pagination,
-  PageButton,
   FiltersContainer,
-  TableContainer,
-  Table,
-  Th,
-  Td,
-  TableRow,
   Button,
+  Grid,
+  Value,
 } from './shared/BaseComponents';
 import { usePagination } from '../hooks/usePagination';
 import { useTableFilters } from '../hooks/useTableFilters';
@@ -43,6 +38,77 @@ const slideUp = keyframes`
     opacity: 1;
     transform: translateY(0);
   }
+`;
+
+const MetricsGrid = styled(Grid)`
+  margin-bottom: ${theme.spacing.xxl};
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  animation: ${slideUp} 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  animation-delay: 0.1s;
+  animation-fill-mode: both;
+`;
+
+const MetricCard = styled(Value)<{ $index?: number }>`
+  padding: ${theme.spacing.lg};
+  min-height: 100px;
+  background: linear-gradient(135deg, ${theme.colors.background.main} 0%, ${theme.colors.background.secondary} 100%);
+  border: 2px solid ${theme.colors.border.light};
+  border-left: 4px solid ${theme.colors.primary.main};
+  border-radius: ${theme.borderRadius.lg};
+  box-shadow: ${theme.shadows.md};
+  transition: all ${theme.transitions.normal};
+  animation: ${fadeIn} 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  animation-delay: ${props => (props.$index || 0) * 0.1}s;
+  animation-fill-mode: both;
+  position: relative;
+  overflow: hidden;
+  
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+    transition: left 0.5s;
+  }
+  
+  &:hover {
+    transform: translateY(-4px) scale(1.02);
+    box-shadow: ${theme.shadows.xl};
+    border-color: ${theme.colors.primary.main};
+    border-left-color: ${theme.colors.primary.dark};
+    
+    &::before {
+      left: 100%;
+    }
+  }
+`;
+
+const MetricLabel = styled.div`
+  font-size: 0.9em;
+  color: ${theme.colors.text.secondary};
+  margin-bottom: ${theme.spacing.sm};
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+`;
+
+const MetricValue = styled.div`
+  font-size: 2.2em;
+  font-weight: 700;
+  color: ${theme.colors.primary.main};
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  background: linear-gradient(135deg, ${theme.colors.primary.main} 0%, ${theme.colors.primary.light} 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 `;
 
 const TableActions = styled.div`
@@ -88,72 +154,6 @@ const PaginationInfo = styled.div`
   color: ${theme.colors.text.secondary};
   font-size: 0.9em;
   animation: ${fadeIn} 0.25s ease-in;
-`;
-
-const SortableTh = styled(Th)<{ $sortable?: boolean; $active?: boolean; $direction?: "asc" | "desc" }>`
-  cursor: ${props => props.$sortable ? "pointer" : "default"};
-  user-select: none;
-  position: relative;
-  transition: all ${theme.transitions.normal};
-  
-  ${props => props.$sortable && `
-    &:hover {
-      background: linear-gradient(180deg, ${theme.colors.primary.light} 0%, ${theme.colors.primary.main} 100%);
-      color: ${theme.colors.text.white};
-    }
-  `}
-  
-  ${props => props.$active && `
-    background: linear-gradient(180deg, ${theme.colors.primary.main} 0%, ${theme.colors.primary.dark} 100%);
-    color: ${theme.colors.text.white};
-    
-    &::after {
-      content: "${props.$direction === "asc" ? "▲" : "▼"}";
-      position: absolute;
-      right: 8px;
-      font-size: 0.8em;
-    }
-  `}
-`;
-
-const GovernanceDetails = styled.div<{ $isOpen: boolean }>`
-  max-height: ${props => props.$isOpen ? '800px' : '0'};
-  opacity: ${props => props.$isOpen ? '1' : '0'};
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-  border-top: ${props => props.$isOpen ? `1px solid ${theme.colors.border.light}` : 'none'};
-  background-color: ${theme.colors.background.main};
-  overflow: hidden;
-`;
-
-const DetailsGrid = styled.div`
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  padding: ${theme.spacing.md};
-  gap: ${theme.spacing.md};
-`;
-
-const DetailCard = styled.div`
-  background: ${theme.colors.background.main};
-  border: 1px solid ${theme.colors.border.light};
-  border-radius: ${theme.borderRadius.md};
-  padding: ${theme.spacing.sm};
-  transition: all ${theme.transitions.normal};
-  animation: fadeIn 0.2s ease-in;
-  animation-fill-mode: both;
-  
-  &:hover {
-    transform: translateY(-3px);
-    box-shadow: ${theme.shadows.md};
-    border-color: rgba(10, 25, 41, 0.2);
-    background: linear-gradient(135deg, ${theme.colors.background.main} 0%, ${theme.colors.background.tertiary} 100%);
-  }
-  
-  &:nth-child(1) { animation-delay: 0.1s; }
-  &:nth-child(2) { animation-delay: 0.15s; }
-  &:nth-child(3) { animation-delay: 0.2s; }
-  &:nth-child(4) { animation-delay: 0.25s; }
-  &:nth-child(5) { animation-delay: 0.15s; }
-  &:nth-child(6) { animation-delay: 0.35s; }
 `;
 
 const DetailLabel = styled.div`
@@ -307,12 +307,99 @@ const TooltipContent = styled.div`
   }
 `;
 
-const CriticalStatusBox = styled.div`
-  margin: ${theme.spacing.md};
-  padding: ${theme.spacing.md};
-  backgroundColor: ${theme.colors.status.error.bg};
-  border: 1px solid ${theme.colors.status.error.text};
-  borderRadius: ${theme.borderRadius.sm};
+const MainLayout = styled.div<{ $hasDetails?: boolean }>`
+  display: grid;
+  grid-template-columns: ${props => props.$hasDetails ? '1fr 500px' : '1fr'};
+  gap: ${theme.spacing.lg};
+  margin-top: ${theme.spacing.lg};
+`;
+
+const DetailsPanel = styled.div`
+  background: ${theme.colors.background.main};
+  border: 1px solid ${theme.colors.border.light};
+  border-radius: ${theme.borderRadius.lg};
+  padding: ${theme.spacing.lg};
+  overflow-y: auto;
+  box-shadow: ${theme.shadows.md};
+  position: sticky;
+  top: ${theme.spacing.md};
+  max-height: calc(100vh - 200px);
+  
+  &::-webkit-scrollbar {
+    width: 8px;
+  }
+  
+  &::-webkit-scrollbar-track {
+    background: ${theme.colors.background.secondary};
+    border-radius: ${theme.borderRadius.sm};
+  }
+  
+  &::-webkit-scrollbar-thumb {
+    background: ${theme.colors.border.medium};
+    border-radius: ${theme.borderRadius.sm};
+    
+    &:hover {
+      background: ${theme.colors.primary.main};
+    }
+  }
+`;
+
+const TabContainer = styled.div`
+  display: flex;
+  gap: ${theme.spacing.xs};
+  margin-bottom: ${theme.spacing.md};
+  border-bottom: 2px solid ${theme.colors.border.light};
+  padding-bottom: ${theme.spacing.sm};
+  flex-wrap: wrap;
+`;
+
+const Tab = styled.button<{ $active: boolean }>`
+  padding: ${theme.spacing.sm} ${theme.spacing.md};
+  border: none;
+  background: ${props => props.$active ? theme.colors.primary.main : 'transparent'};
+  color: ${props => props.$active ? theme.colors.text.white : theme.colors.text.secondary};
+  border-radius: ${theme.borderRadius.md} ${theme.borderRadius.md} 0 0;
+  cursor: pointer;
+  font-weight: ${props => props.$active ? '600' : '500'};
+  font-size: 0.85em;
+  transition: all ${theme.transitions.normal};
+  white-space: nowrap;
+  
+  &:hover {
+    background: ${props => props.$active ? theme.colors.primary.dark : theme.colors.background.secondary};
+    color: ${props => props.$active ? theme.colors.text.white : theme.colors.text.primary};
+  }
+`;
+
+const TabContent = styled.div`
+  animation: ${fadeIn} 0.3s ease-out;
+`;
+
+const DetailsSection = styled.div`
+  margin-bottom: ${theme.spacing.lg};
+  padding-bottom: ${theme.spacing.lg};
+  border-bottom: 1px solid ${theme.colors.border.light};
+  
+  &:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+    padding-bottom: 0;
+  }
+`;
+
+const SectionTitle = styled.h3`
+  font-size: 1em;
+  font-weight: 600;
+  color: ${theme.colors.text.primary};
+  margin: 0 0 ${theme.spacing.md} 0;
+  padding-bottom: ${theme.spacing.xs};
+  border-bottom: 2px solid ${theme.colors.primary.main};
+`;
+
+const DetailsGrid = styled.div`
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: ${theme.spacing.md};
 `;
 
 /**
@@ -320,7 +407,7 @@ const CriticalStatusBox = styled.div`
  * Displays data governance catalog with filtering, sorting, and detailed information
  */
 const Governance = () => {
-  const { page, limit, setPage } = usePagination(1, 10);
+  const { setPage } = usePagination(1, 10);
   const { filters, setFilter, clearFilters } = useTableFilters({
     engine: '',
     category: '',
@@ -329,65 +416,13 @@ const Governance = () => {
     sensitivity: ''
   });
   
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [data, setData] = useState<any[]>([]);
-  const [openItemId, setOpenItemId] = useState<number | null>(null);
-  const [pagination, setPagination] = useState({
-    total: 0,
-    totalPages: 0,
-    currentPage: 1,
-    limit: 10
-  });
-  const [sortField, setSortField] = useState('health_status');
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">('desc');
+  const [selectedItem, setSelectedItem] = useState<any | null>(null);
+  const [activeTab, setActiveTab] = useState<'overview' | 'ownership' | 'security' | 'privacy' | 'retention' | 'legal' | 'quality' | 'integration' | 'documentation'>('overview');
   const [allItems, setAllItems] = useState<any[]>([]);
+  const [metrics, setMetrics] = useState<any>({});
   const [loadingTree, setLoadingTree] = useState(false);
   const isMountedRef = useRef(true);
-
-  const fetchData = useCallback(async () => {
-    if (!isMountedRef.current) return;
-    try {
-      setLoading(true);
-      setError(null);
-      const response = await governanceApi.getGovernanceData({
-        page,
-        limit,
-        engine: filters.engine as string,
-        category: filters.category as string,
-        health: filters.health as string,
-        domain: filters.domain as string,
-        sensitivity: filters.sensitivity as string
-      });
-      if (isMountedRef.current) {
-        setData(response.data || []);
-        setPagination(response.pagination || {
-          total: 0,
-          totalPages: 0,
-          currentPage: 1,
-          limit: 20
-        });
-      }
-    } catch (err) {
-      if (isMountedRef.current) {
-        setError(extractApiError(err));
-      }
-    } finally {
-      if (isMountedRef.current) {
-        setLoading(false);
-      }
-    }
-  }, [
-    page, 
-    limit, 
-    filters.engine, 
-    filters.category, 
-    filters.health, 
-      filters.domain, 
-      filters.sensitivity, 
-      sortField, 
-      sortDirection
-  ]);
 
   const fetchAllItems = useCallback(async () => {
     if (!isMountedRef.current) return;
@@ -425,10 +460,30 @@ const Governance = () => {
 
   useEffect(() => {
     isMountedRef.current = true;
-    fetchAllItems();
+    const loadData = async () => {
+      await fetchAllItems();
+      try {
+        const metricsData = await governanceApi.getGovernanceMetrics();
+        if (isMountedRef.current) {
+          setMetrics(metricsData || {});
+        }
+      } catch (err) {
+        if (isMountedRef.current) {
+          console.error('Error loading metrics:', err);
+        }
+      }
+    };
+    loadData();
     const interval = setInterval(() => {
       if (isMountedRef.current) {
         fetchAllItems();
+        governanceApi.getGovernanceMetrics().then(metricsData => {
+          if (isMountedRef.current) {
+            setMetrics(metricsData || {});
+          }
+        }).catch(err => {
+          console.error('Error loading metrics:', err);
+        });
       }
     }, 30000);
     return () => {
@@ -437,51 +492,48 @@ const Governance = () => {
     };
   }, [fetchAllItems]);
 
-  const toggleItem = useCallback((id: number) => {
-    setOpenItemId(prev => prev === id ? null : id);
+  const handleItemClick = useCallback((item: any) => {
+    setSelectedItem((prev: any) => {
+      if (prev?.id === item.id) {
+        return null;
+      }
+      return item;
+    });
+    setActiveTab('overview');
   }, []);
 
   const formatDate = useCallback((date: string) => {
-    if (!date) return '-';
+    if (!date) return 'N/A';
     return new Date(date).toLocaleString();
   }, []);
 
-  const handleSort = useCallback((field: string) => {
-    if (sortField === field) {
-      setSortDirection(prev => prev === "asc" ? "desc" : "asc");
-    } else {
-      setSortField(field);
-      setSortDirection("asc");
-    }
-    setPage(1);
-  }, [sortField, setPage]);
+  const formatBoolean = useCallback((value: boolean | null | undefined) => {
+    if (value === null || value === undefined) return 'N/A';
+    return value ? 'Yes' : 'No';
+  }, []);
 
-  const sortedData = useMemo(() => {
-    if (!sortField) return data;
-    return [...data].sort((a, b) => {
-      let aVal: any = a[sortField as keyof typeof a];
-      let bVal: any = b[sortField as keyof typeof b];
-      
-      if (aVal === null || aVal === undefined) aVal = "";
-      if (bVal === null || bVal === undefined) bVal = "";
-      
-      if (typeof aVal === "string" && typeof bVal === "string") {
-        return sortDirection === "asc" 
-          ? aVal.localeCompare(bVal)
-          : bVal.localeCompare(aVal);
-      }
-      
-      const aNum = Number(aVal);
-      const bNum = Number(bVal);
-      if (!isNaN(aNum) && !isNaN(bNum)) {
-        return sortDirection === "asc" ? aNum - bNum : bNum - aNum;
-      }
-      
-      return sortDirection === "asc"
-        ? String(aVal).localeCompare(String(bVal))
-        : String(bVal).localeCompare(String(aVal));
-    });
-  }, [data, sortField, sortDirection]);
+  const formatPercentage = useCallback((value: number | null | undefined) => {
+    if (value === null || value === undefined) return 'N/A';
+    return `${Number(value).toFixed(2)}%`;
+  }, []);
+
+  const formatBytes = useCallback((mb: number | null | undefined) => {
+    if (mb === null || mb === undefined) return 'N/A';
+    const size = Number(mb);
+    if (isNaN(size)) return 'N/A';
+    if (size >= 1024) {
+      return `${(size / 1024).toFixed(2)} GB`;
+    }
+    return `${size.toFixed(2)} MB`;
+  }, []);
+
+  const formatNumber = useCallback((value: number | string | null | undefined) => {
+    if (value === null || value === undefined) return 'N/A';
+    const num = Number(value);
+    if (isNaN(num)) return 'N/A';
+    return num.toLocaleString();
+  }, []);
+
 
   const handleExportCSV = useCallback(() => {
     const headers = ["Schema", "Table", "Engine", "Category", "Domain", "Health", "Sensitivity", "Quality Score", "Size (MB)", "Total Rows", "Access Frequency", "Last Analyzed"];
@@ -516,19 +568,6 @@ const Governance = () => {
     document.body.removeChild(link);
   }, [allItems, formatDate]);
 
-  const formatSize = useCallback((mb: number | null | undefined) => {
-    if (mb == null) return '-';
-    const size = Number(mb);
-    if (isNaN(size)) return '-';
-    if (size >= 1024) {
-      return `${(size / 1024).toFixed(2)} GB`;
-    }
-    return `${size.toFixed(2)} MB`;
-  }, []);
-
-  const formatNumber = useCallback((num: number) => {
-    return num?.toLocaleString() || '0';
-  }, []);
 
   const getCategoryDescription = useCallback((category: string) => {
     const descriptions: { [key: string]: string } = {
@@ -574,6 +613,553 @@ const Governance = () => {
     setPage(1);
   }, [setFilter, setPage]);
 
+  const renderOverviewTab = useCallback((item: any) => {
+    return (
+      <TabContent>
+        <DetailsSection>
+          <SectionTitle>Basic Information</SectionTitle>
+          <DetailsGrid>
+            <DetailLabel>Schema:</DetailLabel>
+            <DetailValue>{item.schema_name || 'N/A'}</DetailValue>
+            
+            <DetailLabel>Table:</DetailLabel>
+            <DetailValue>{item.table_name || 'N/A'}</DetailValue>
+            
+            <DetailLabel>Source Engine:</DetailLabel>
+            <DetailValue>{item.inferred_source_engine || 'N/A'}</DetailValue>
+            
+            <DetailLabel>Data Category:</DetailLabel>
+            <DetailValue>
+              {item.data_category ? (
+                <Tooltip>
+                  <Badge $type={item.data_category}>{item.data_category}</Badge>
+                  <TooltipContent className="tooltip-content">
+                    {getCategoryDescription(item.data_category)}
+                  </TooltipContent>
+                </Tooltip>
+              ) : 'N/A'}
+            </DetailValue>
+            
+            <DetailLabel>Business Domain:</DetailLabel>
+            <DetailValue>{item.business_domain || 'N/A'}</DetailValue>
+            
+            <DetailLabel>Sensitivity Level:</DetailLabel>
+            <DetailValue>
+              {item.sensitivity_level ? (
+                <Tooltip>
+                  <Badge $status={item.sensitivity_level}>{item.sensitivity_level}</Badge>
+                  <TooltipContent className="tooltip-content">
+                    {getSensitivityDescription(item.sensitivity_level)}
+                  </TooltipContent>
+                </Tooltip>
+              ) : 'N/A'}
+            </DetailValue>
+            
+            <DetailLabel>Health Status:</DetailLabel>
+            <DetailValue>
+              {item.health_status ? (
+                <Tooltip>
+                  <Badge $status={item.health_status}>{item.health_status}</Badge>
+                  <TooltipContent className="tooltip-content">
+                    {getHealthDescription(item.health_status)}
+                  </TooltipContent>
+                </Tooltip>
+              ) : 'N/A'}
+            </DetailValue>
+          </DetailsGrid>
+        </DetailsSection>
+
+        <DetailsSection>
+          <SectionTitle>Metrics</SectionTitle>
+          <DetailsGrid>
+            <DetailLabel>Total Columns:</DetailLabel>
+            <DetailValue>{item.total_columns?.toLocaleString() || 'N/A'}</DetailValue>
+            
+            <DetailLabel>Total Rows:</DetailLabel>
+            <DetailValue>{item.total_rows?.toLocaleString() || 'N/A'}</DetailValue>
+            
+            <DetailLabel>Table Size:</DetailLabel>
+            <DetailValue>{formatBytes(item.table_size_mb)}</DetailValue>
+            
+            <DetailLabel>Primary Key Columns:</DetailLabel>
+            <DetailValue>{item.primary_key_columns || 'N/A'}</DetailValue>
+            
+            <DetailLabel>Index Count:</DetailLabel>
+            <DetailValue>{item.index_count?.toLocaleString() || 'N/A'}</DetailValue>
+            
+            <DetailLabel>Constraint Count:</DetailLabel>
+            <DetailValue>{item.constraint_count?.toLocaleString() || 'N/A'}</DetailValue>
+            
+            <DetailLabel>Data Quality Score:</DetailLabel>
+            <DetailValue>
+              {item.data_quality_score !== null && item.data_quality_score !== undefined ? (
+                <QualityScore $score={Number(item.data_quality_score)}>
+                  {Number(item.data_quality_score).toFixed(2)}%
+                </QualityScore>
+              ) : 'N/A'}
+            </DetailValue>
+            
+            <DetailLabel>Null Percentage:</DetailLabel>
+            <DetailValue>{formatPercentage(item.null_percentage)}</DetailValue>
+            
+            <DetailLabel>Duplicate Percentage:</DetailLabel>
+            <DetailValue>{formatPercentage(item.duplicate_percentage)}</DetailValue>
+            
+            <DetailLabel>Fragmentation:</DetailLabel>
+            <DetailValue>{formatPercentage(item.fragmentation_percentage)}</DetailValue>
+            
+            <DetailLabel>Access Frequency:</DetailLabel>
+            <DetailValue>{item.access_frequency || 'N/A'}</DetailValue>
+            
+            <DetailLabel>Query Count (Daily):</DetailLabel>
+            <DetailValue>{item.query_count_daily?.toLocaleString() || 'N/A'}</DetailValue>
+          </DetailsGrid>
+        </DetailsSection>
+
+        <DetailsSection>
+          <SectionTitle>Timestamps</SectionTitle>
+          <DetailsGrid>
+            <DetailLabel>First Discovered:</DetailLabel>
+            <DetailValue>{formatDate(item.first_discovered)}</DetailValue>
+            
+            <DetailLabel>Last Analyzed:</DetailLabel>
+            <DetailValue>{formatDate(item.last_analyzed)}</DetailValue>
+            
+            <DetailLabel>Last Accessed:</DetailLabel>
+            <DetailValue>{formatDate(item.last_accessed)}</DetailValue>
+            
+            <DetailLabel>Last Vacuum:</DetailLabel>
+            <DetailValue>{formatDate(item.last_vacuum)}</DetailValue>
+          </DetailsGrid>
+        </DetailsSection>
+      </TabContent>
+    );
+  }, [formatDate, formatBytes, formatPercentage, getCategoryDescription, getSensitivityDescription, getHealthDescription]);
+
+  const renderOwnershipTab = useCallback((item: any) => {
+    return (
+      <TabContent>
+        <DetailsSection>
+          <SectionTitle>Ownership</SectionTitle>
+          <DetailsGrid>
+            <DetailLabel>Data Owner:</DetailLabel>
+            <DetailValue>{item.data_owner || 'N/A'}</DetailValue>
+            
+            <DetailLabel>Owner Email:</DetailLabel>
+            <DetailValue>
+              {item.owner_email ? (
+                <a href={`mailto:${item.owner_email}`} style={{ color: theme.colors.primary.main }}>
+                  {item.owner_email}
+                </a>
+              ) : 'N/A'}
+            </DetailValue>
+            
+            <DetailLabel>Data Steward:</DetailLabel>
+            <DetailValue>{item.data_steward || 'N/A'}</DetailValue>
+            
+            <DetailLabel>Steward Email:</DetailLabel>
+            <DetailValue>
+              {item.steward_email ? (
+                <a href={`mailto:${item.steward_email}`} style={{ color: theme.colors.primary.main }}>
+                  {item.steward_email}
+                </a>
+              ) : 'N/A'}
+            </DetailValue>
+            
+            <DetailLabel>Data Custodian:</DetailLabel>
+            <DetailValue>{item.data_custodian || 'N/A'}</DetailValue>
+          </DetailsGrid>
+        </DetailsSection>
+      </TabContent>
+    );
+  }, []);
+
+  const renderSecurityTab = useCallback((item: any) => {
+    return (
+      <TabContent>
+        <DetailsSection>
+          <SectionTitle>Encryption</SectionTitle>
+          <DetailsGrid>
+            <DetailLabel>Encryption at Rest:</DetailLabel>
+            <DetailValue>
+              <Badge $status={item.encryption_at_rest ? 'HEALTHY' : 'WARNING'}>
+                {formatBoolean(item.encryption_at_rest)}
+              </Badge>
+            </DetailValue>
+            
+            <DetailLabel>Encryption in Transit:</DetailLabel>
+            <DetailValue>
+              <Badge $status={item.encryption_in_transit ? 'HEALTHY' : 'WARNING'}>
+                {formatBoolean(item.encryption_in_transit)}
+              </Badge>
+            </DetailValue>
+          </DetailsGrid>
+        </DetailsSection>
+
+        <DetailsSection>
+          <SectionTitle>Data Masking</SectionTitle>
+          <DetailsGrid>
+            <DetailLabel>Masking Policy Applied:</DetailLabel>
+            <DetailValue>
+              <Badge $status={item.masking_policy_applied ? 'HEALTHY' : 'WARNING'}>
+                {formatBoolean(item.masking_policy_applied)}
+              </Badge>
+            </DetailValue>
+            
+            <DetailLabel>Masking Policy Name:</DetailLabel>
+            <DetailValue>{item.masking_policy_name || 'N/A'}</DetailValue>
+          </DetailsGrid>
+        </DetailsSection>
+
+        <DetailsSection>
+          <SectionTitle>Access Control</SectionTitle>
+          <DetailsGrid>
+            <DetailLabel>Row Level Security:</DetailLabel>
+            <DetailValue>
+              <Badge $status={item.row_level_security_enabled ? 'HEALTHY' : 'WARNING'}>
+                {formatBoolean(item.row_level_security_enabled)}
+              </Badge>
+            </DetailValue>
+            
+            <DetailLabel>Column Level Security:</DetailLabel>
+            <DetailValue>
+              <Badge $status={item.column_level_security_enabled ? 'HEALTHY' : 'WARNING'}>
+                {formatBoolean(item.column_level_security_enabled)}
+              </Badge>
+            </DetailValue>
+            
+            <DetailLabel>Access Control Policy:</DetailLabel>
+            <DetailValue>{item.access_control_policy || 'N/A'}</DetailValue>
+          </DetailsGrid>
+        </DetailsSection>
+      </TabContent>
+    );
+  }, [formatBoolean]);
+
+  const renderPrivacyTab = useCallback((item: any) => {
+    return (
+      <TabContent>
+        <DetailsSection>
+          <SectionTitle>Consent & Legal Basis</SectionTitle>
+          <DetailsGrid>
+            <DetailLabel>Consent Required:</DetailLabel>
+            <DetailValue>
+              <Badge $status={item.consent_required ? 'WARNING' : 'HEALTHY'}>
+                {formatBoolean(item.consent_required)}
+              </Badge>
+            </DetailValue>
+            
+            <DetailLabel>Consent Type:</DetailLabel>
+            <DetailValue>{item.consent_type || 'N/A'}</DetailValue>
+            
+            <DetailLabel>Legal Basis:</DetailLabel>
+            <DetailValue>{item.legal_basis || 'N/A'}</DetailValue>
+            
+            <DetailLabel>Data Subject Rights:</DetailLabel>
+            <DetailValue style={{ whiteSpace: 'pre-wrap' }}>
+              {item.data_subject_rights || 'N/A'}
+            </DetailValue>
+          </DetailsGrid>
+        </DetailsSection>
+
+        <DetailsSection>
+          <SectionTitle>PII/PHI Detection</SectionTitle>
+          <DetailsGrid>
+            <DetailLabel>PII Detection Method:</DetailLabel>
+            <DetailValue>{item.pii_detection_method || 'N/A'}</DetailValue>
+            
+            <DetailLabel>PII Confidence Score:</DetailLabel>
+            <DetailValue>
+              {item.pii_confidence_score !== null && item.pii_confidence_score !== undefined
+                ? `${Number(item.pii_confidence_score).toFixed(2)}%`
+                : 'N/A'}
+            </DetailValue>
+            
+            <DetailLabel>PII Categories:</DetailLabel>
+            <DetailValue style={{ whiteSpace: 'pre-wrap' }}>
+              {item.pii_categories || 'N/A'}
+            </DetailValue>
+            
+            <DetailLabel>PHI Detection Method:</DetailLabel>
+            <DetailValue>{item.phi_detection_method || 'N/A'}</DetailValue>
+            
+            <DetailLabel>PHI Confidence Score:</DetailLabel>
+            <DetailValue>
+              {item.phi_confidence_score !== null && item.phi_confidence_score !== undefined
+                ? `${Number(item.phi_confidence_score).toFixed(2)}%`
+                : 'N/A'}
+            </DetailValue>
+            
+            <DetailLabel>Sensitive Data Count:</DetailLabel>
+            <DetailValue>{item.sensitive_data_count?.toLocaleString() || '0'}</DetailValue>
+            
+            <DetailLabel>Last PII Scan:</DetailLabel>
+            <DetailValue>{formatDate(item.last_pii_scan)}</DetailValue>
+          </DetailsGrid>
+        </DetailsSection>
+
+        <DetailsSection>
+          <SectionTitle>Cross-Border Transfer</SectionTitle>
+          <DetailsGrid>
+            <DetailLabel>Cross-Border Transfer:</DetailLabel>
+            <DetailValue>
+              <Badge $status={item.cross_border_transfer ? 'WARNING' : 'HEALTHY'}>
+                {formatBoolean(item.cross_border_transfer)}
+              </Badge>
+            </DetailValue>
+            
+            <DetailLabel>Cross-Border Countries:</DetailLabel>
+            <DetailValue style={{ whiteSpace: 'pre-wrap' }}>
+              {item.cross_border_countries || 'N/A'}
+            </DetailValue>
+            
+            <DetailLabel>Data Processing Agreement:</DetailLabel>
+            <DetailValue style={{ whiteSpace: 'pre-wrap' }}>
+              {item.data_processing_agreement || 'N/A'}
+            </DetailValue>
+            
+            <DetailLabel>Privacy Impact Assessment:</DetailLabel>
+            <DetailValue style={{ whiteSpace: 'pre-wrap' }}>
+              {item.privacy_impact_assessment || 'N/A'}
+            </DetailValue>
+          </DetailsGrid>
+        </DetailsSection>
+
+        <DetailsSection>
+          <SectionTitle>Breach Management</SectionTitle>
+          <DetailsGrid>
+            <DetailLabel>Breach Notification Required:</DetailLabel>
+            <DetailValue>
+              <Badge $status={item.breach_notification_required ? 'WARNING' : 'HEALTHY'}>
+                {formatBoolean(item.breach_notification_required)}
+              </Badge>
+            </DetailValue>
+            
+            <DetailLabel>Last Breach Check:</DetailLabel>
+            <DetailValue>{formatDate(item.last_breach_check)}</DetailValue>
+          </DetailsGrid>
+        </DetailsSection>
+      </TabContent>
+    );
+  }, [formatBoolean, formatDate]);
+
+  const renderRetentionTab = useCallback((item: any) => {
+    return (
+      <TabContent>
+        <DetailsSection>
+          <SectionTitle>Retention Policy</SectionTitle>
+          <DetailsGrid>
+            <DetailLabel>Retention Enforced:</DetailLabel>
+            <DetailValue>
+              <Badge $status={item.retention_enforced ? 'HEALTHY' : 'WARNING'}>
+                {formatBoolean(item.retention_enforced)}
+              </Badge>
+            </DetailValue>
+            
+            <DetailLabel>Data Expiration Date:</DetailLabel>
+            <DetailValue>{formatDate(item.data_expiration_date)}</DetailValue>
+            
+            <DetailLabel>Auto Delete Enabled:</DetailLabel>
+            <DetailValue>
+              <Badge $status={item.auto_delete_enabled ? 'WARNING' : 'HEALTHY'}>
+                {formatBoolean(item.auto_delete_enabled)}
+              </Badge>
+            </DetailValue>
+          </DetailsGrid>
+        </DetailsSection>
+
+        <DetailsSection>
+          <SectionTitle>Archival</SectionTitle>
+          <DetailsGrid>
+            <DetailLabel>Archival Policy:</DetailLabel>
+            <DetailValue>{item.archival_policy || 'N/A'}</DetailValue>
+            
+            <DetailLabel>Archival Location:</DetailLabel>
+            <DetailValue>{item.archival_location || 'N/A'}</DetailValue>
+            
+            <DetailLabel>Last Archived At:</DetailLabel>
+            <DetailValue>{formatDate(item.last_archived_at)}</DetailValue>
+          </DetailsGrid>
+        </DetailsSection>
+      </TabContent>
+    );
+  }, [formatBoolean, formatDate]);
+
+  const renderLegalTab = useCallback((item: any) => {
+    return (
+      <TabContent>
+        <DetailsSection>
+          <SectionTitle>Legal Hold</SectionTitle>
+          <DetailsGrid>
+            <DetailLabel>Legal Hold:</DetailLabel>
+            <DetailValue>
+              <Badge $status={item.legal_hold ? 'CRITICAL' : 'HEALTHY'}>
+                {formatBoolean(item.legal_hold)}
+              </Badge>
+            </DetailValue>
+            
+            <DetailLabel>Legal Hold Reason:</DetailLabel>
+            <DetailValue style={{ whiteSpace: 'pre-wrap' }}>
+              {item.legal_hold_reason || 'N/A'}
+            </DetailValue>
+            
+            <DetailLabel>Legal Hold Until:</DetailLabel>
+            <DetailValue>{formatDate(item.legal_hold_until)}</DetailValue>
+          </DetailsGrid>
+        </DetailsSection>
+      </TabContent>
+    );
+  }, [formatBoolean, formatDate]);
+
+  const renderQualityTab = useCallback((item: any) => {
+    return (
+      <TabContent>
+        <DetailsSection>
+          <SectionTitle>Quality Metrics</SectionTitle>
+          <DetailsGrid>
+            <DetailLabel>Quality SLA Score:</DetailLabel>
+            <DetailValue>
+              {item.quality_sla_score !== null && item.quality_sla_score !== undefined ? (
+                <QualityScore $score={Number(item.quality_sla_score)}>
+                  {Number(item.quality_sla_score).toFixed(2)}%
+                </QualityScore>
+              ) : 'N/A'}
+            </DetailValue>
+            
+            <DetailLabel>Quality Checks Automated:</DetailLabel>
+            <DetailValue>
+              <Badge $status={item.quality_checks_automated ? 'HEALTHY' : 'WARNING'}>
+                {formatBoolean(item.quality_checks_automated)}
+              </Badge>
+            </DetailValue>
+            
+            <DetailLabel>Anomaly Detection Enabled:</DetailLabel>
+            <DetailValue>
+              <Badge $status={item.anomaly_detection_enabled ? 'HEALTHY' : 'WARNING'}>
+                {formatBoolean(item.anomaly_detection_enabled)}
+              </Badge>
+            </DetailValue>
+            
+            <DetailLabel>Last Anomaly Detected:</DetailLabel>
+            <DetailValue>{formatDate(item.last_anomaly_detected)}</DetailValue>
+          </DetailsGrid>
+        </DetailsSection>
+
+        <DetailsSection>
+          <SectionTitle>Data Freshness</SectionTitle>
+          <DetailsGrid>
+            <DetailLabel>Freshness Threshold (Hours):</DetailLabel>
+            <DetailValue>{item.data_freshness_threshold_hours?.toLocaleString() || 'N/A'}</DetailValue>
+            
+            <DetailLabel>Last Freshness Check:</DetailLabel>
+            <DetailValue>{formatDate(item.last_freshness_check)}</DetailValue>
+          </DetailsGrid>
+        </DetailsSection>
+
+        <DetailsSection>
+          <SectionTitle>Schema Evolution</SectionTitle>
+          <DetailsGrid>
+            <DetailLabel>Schema Evolution Tracking:</DetailLabel>
+            <DetailValue>
+              <Badge $status={item.schema_evolution_tracking ? 'HEALTHY' : 'WARNING'}>
+                {formatBoolean(item.schema_evolution_tracking)}
+              </Badge>
+            </DetailValue>
+            
+            <DetailLabel>Last Schema Change:</DetailLabel>
+            <DetailValue>{formatDate(item.last_schema_change)}</DetailValue>
+          </DetailsGrid>
+        </DetailsSection>
+      </TabContent>
+    );
+  }, [formatBoolean, formatDate]);
+
+  const renderIntegrationTab = useCallback((item: any) => {
+    return (
+      <TabContent>
+        <DetailsSection>
+          <SectionTitle>ETL Pipeline</SectionTitle>
+          <DetailsGrid>
+            <DetailLabel>ETL Pipeline Name:</DetailLabel>
+            <DetailValue>{item.etl_pipeline_name || 'N/A'}</DetailValue>
+            
+            <DetailLabel>ETL Pipeline ID:</DetailLabel>
+            <DetailValue>{item.etl_pipeline_id || 'N/A'}</DetailValue>
+            
+            <DetailLabel>Transformation Rules:</DetailLabel>
+            <DetailValue style={{ whiteSpace: 'pre-wrap' }}>
+              {item.transformation_rules || 'N/A'}
+            </DetailValue>
+          </DetailsGrid>
+        </DetailsSection>
+
+        <DetailsSection>
+          <SectionTitle>Systems</SectionTitle>
+          <DetailsGrid>
+            <DetailLabel>Source Systems:</DetailLabel>
+            <DetailValue style={{ whiteSpace: 'pre-wrap' }}>
+              {item.source_systems || 'N/A'}
+            </DetailValue>
+            
+            <DetailLabel>Downstream Systems:</DetailLabel>
+            <DetailValue style={{ whiteSpace: 'pre-wrap' }}>
+              {item.downstream_systems || 'N/A'}
+            </DetailValue>
+            
+            <DetailLabel>BI Tools Used:</DetailLabel>
+            <DetailValue style={{ whiteSpace: 'pre-wrap' }}>
+              {item.bi_tools_used || 'N/A'}
+            </DetailValue>
+            
+            <DetailLabel>API Endpoints:</DetailLabel>
+            <DetailValue style={{ whiteSpace: 'pre-wrap' }}>
+              {item.api_endpoints || 'N/A'}
+            </DetailValue>
+          </DetailsGrid>
+        </DetailsSection>
+      </TabContent>
+    );
+  }, []);
+
+  const renderDocumentationTab = useCallback((item: any) => {
+    return (
+      <TabContent>
+        <DetailsSection>
+          <SectionTitle>Documentation</SectionTitle>
+          <DetailsGrid>
+            <DetailLabel>Business Glossary Term:</DetailLabel>
+            <DetailValue style={{ whiteSpace: 'pre-wrap' }}>
+              {item.business_glossary_term || 'N/A'}
+            </DetailValue>
+            
+            <DetailLabel>Data Dictionary Description:</DetailLabel>
+            <DetailValue style={{ whiteSpace: 'pre-wrap' }}>
+              {item.data_dictionary_description || 'N/A'}
+            </DetailValue>
+          </DetailsGrid>
+        </DetailsSection>
+
+        <DetailsSection>
+          <SectionTitle>Approval</SectionTitle>
+          <DetailsGrid>
+            <DetailLabel>Approval Required:</DetailLabel>
+            <DetailValue>
+              <Badge $status={item.approval_required ? 'WARNING' : 'HEALTHY'}>
+                {formatBoolean(item.approval_required)}
+              </Badge>
+            </DetailValue>
+            
+            <DetailLabel>Last Approved By:</DetailLabel>
+            <DetailValue>{item.last_approved_by || 'N/A'}</DetailValue>
+            
+            <DetailLabel>Last Approved At:</DetailLabel>
+            <DetailValue>{formatDate(item.last_approved_at)}</DetailValue>
+          </DetailsGrid>
+        </DetailsSection>
+      </TabContent>
+    );
+  }, [formatBoolean, formatDate]);
+
   if (loadingTree && allItems.length === 0) {
     return (
       <Container>
@@ -588,6 +1174,58 @@ const Governance = () => {
       <Header>Data Governance Catalog</Header>
 
       {error && <ErrorMessage>{error}</ErrorMessage>}
+
+      <MetricsGrid $columns="repeat(auto-fit, minmax(180px, 1fr))">
+        <MetricCard $index={0}>
+          <MetricLabel>
+            <span>■</span>
+            Total Tables
+          </MetricLabel>
+          <MetricValue>{formatNumber(metrics.total_tables)}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={1}>
+          <MetricLabel>
+            <span>■</span>
+            Total Size
+          </MetricLabel>
+          <MetricValue>{formatBytes(metrics.total_size_mb)}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={2}>
+          <MetricLabel>
+            <span>■</span>
+            Total Rows
+          </MetricLabel>
+          <MetricValue>{formatNumber(metrics.total_rows)}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={3}>
+          <MetricLabel>
+            <span>✓</span>
+            Healthy
+          </MetricLabel>
+          <MetricValue>{formatNumber(metrics.healthy_count)}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={4}>
+          <MetricLabel>
+            <span>!</span>
+            Warning
+          </MetricLabel>
+          <MetricValue>{formatNumber(metrics.warning_count)}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={5}>
+          <MetricLabel>
+            <span>×</span>
+            Critical
+          </MetricLabel>
+          <MetricValue>{formatNumber(metrics.critical_count)}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={6}>
+          <MetricLabel>
+            <span>■</span>
+            Unique Engines
+          </MetricLabel>
+          <MetricValue>{formatNumber(metrics.unique_engines)}</MetricValue>
+        </MetricCard>
+      </MetricsGrid>
 
       <FiltersContainer>
         <Select 
@@ -696,7 +1334,56 @@ const Governance = () => {
           {loadingTree ? (
             <LoadingOverlay>Loading tree view...</LoadingOverlay>
           ) : (
-            <GovernanceTreeView items={allItems} onItemClick={(item: any) => toggleItem(item.id)} />
+            <MainLayout $hasDetails={!!selectedItem}>
+              <GovernanceTreeView 
+                items={allItems} 
+                onItemClick={handleItemClick} 
+              />
+              
+              {selectedItem && (
+                <DetailsPanel>
+                  <TabContainer>
+                    <Tab $active={activeTab === 'overview'} onClick={() => setActiveTab('overview')}>
+                      Overview
+                    </Tab>
+                    <Tab $active={activeTab === 'ownership'} onClick={() => setActiveTab('ownership')}>
+                      Ownership
+                    </Tab>
+                    <Tab $active={activeTab === 'security'} onClick={() => setActiveTab('security')}>
+                      Security
+                    </Tab>
+                    <Tab $active={activeTab === 'privacy'} onClick={() => setActiveTab('privacy')}>
+                      Privacy/GDPR
+                    </Tab>
+                    <Tab $active={activeTab === 'retention'} onClick={() => setActiveTab('retention')}>
+                      Retention
+                    </Tab>
+                    <Tab $active={activeTab === 'legal'} onClick={() => setActiveTab('legal')}>
+                      Legal Hold
+                    </Tab>
+                    <Tab $active={activeTab === 'quality'} onClick={() => setActiveTab('quality')}>
+                      Data Quality
+                    </Tab>
+                    <Tab $active={activeTab === 'integration'} onClick={() => setActiveTab('integration')}>
+                      Integration
+                    </Tab>
+                    <Tab $active={activeTab === 'documentation'} onClick={() => setActiveTab('documentation')}>
+                      Documentation
+                    </Tab>
+                  </TabContainer>
+                  
+                  {activeTab === 'overview' && renderOverviewTab(selectedItem)}
+                  {activeTab === 'ownership' && renderOwnershipTab(selectedItem)}
+                  {activeTab === 'security' && renderSecurityTab(selectedItem)}
+                  {activeTab === 'privacy' && renderPrivacyTab(selectedItem)}
+                  {activeTab === 'retention' && renderRetentionTab(selectedItem)}
+                  {activeTab === 'legal' && renderLegalTab(selectedItem)}
+                  {activeTab === 'quality' && renderQualityTab(selectedItem)}
+                  {activeTab === 'integration' && renderIntegrationTab(selectedItem)}
+                  {activeTab === 'documentation' && renderDocumentationTab(selectedItem)}
+                </DetailsPanel>
+              )}
+            </MainLayout>
           )}
         </>
       )}

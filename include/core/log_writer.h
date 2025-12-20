@@ -7,7 +7,6 @@ class ILogWriter {
 public:
   virtual ~ILogWriter() = default;
 
-  virtual bool write(const std::string &formattedMessage) = 0;
   virtual void flush() = 0;
   virtual void close() = 0;
   virtual bool isOpen() const = 0;

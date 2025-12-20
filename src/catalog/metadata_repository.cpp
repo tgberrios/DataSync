@@ -1,13 +1,36 @@
 #include "catalog/metadata_repository.h"
 #include "core/logger.h"
 #include "engines/database_engine.h"
+#include "third_party/json.hpp"
 #include "utils/string_utils.h"
+
+using json = nlohmann::json;
 
 // Constructor for MetadataRepository. Initializes the repository with a
 // connection string to the metadata database. This connection string is used
 // for all database operations performed by the repository methods.
 MetadataRepository::MetadataRepository(std::string connectionString)
     : connectionString_(std::move(connectionString)) {}
+
+static std::vector<std::string> parseJSONArray(const std::string &jsonArray) {
+  std::vector<std::string> result;
+  try {
+    if (jsonArray.empty() || jsonArray == "[]") {
+      return result;
+    }
+    auto j = json::parse(jsonArray);
+    if (!j.is_array()) {
+      return result;
+    }
+    for (const auto &element : j) {
+      if (element.is_string()) {
+        result.push_back(element.get<std::string>());
+      }
+    }
+  } catch (const std::exception &e) {
+  }
+  return result;
+}
 
 // Creates and returns a new PostgreSQL database connection using the stored
 // connection string. This is a private helper method used internally by all
@@ -70,7 +93,7 @@ MetadataRepository::getCatalogEntries(const std::string &dbEngine,
     pqxx::work txn(conn);
     auto results = txn.exec_params(
         "SELECT schema_name, table_name, db_engine, connection_string, status, "
-        "last_sync_column, pk_columns, pk_strategy, has_pk, table_size "
+        "pk_columns, pk_strategy, table_size "
         "FROM metadata.catalog "
         "WHERE db_engine = $1 AND connection_string = $2",
         dbEngine, connectionString);
@@ -83,11 +106,11 @@ MetadataRepository::getCatalogEntries(const std::string &dbEngine,
       entry.dbEngine = row[2].as<std::string>();
       entry.connectionString = row[3].as<std::string>();
       entry.status = row[4].as<std::string>();
-      entry.lastSyncColumn = row[5].is_null() ? "" : row[5].as<std::string>();
-      entry.pkColumns = row[6].is_null() ? "" : row[6].as<std::string>();
-      entry.pkStrategy = row[7].is_null() ? "" : row[7].as<std::string>();
-      entry.hasPK = row[8].is_null() ? false : row[8].as<bool>();
-      entry.tableSize = row[9].is_null() ? 0 : row[9].as<int64_t>();
+      entry.pkColumns = row[5].is_null() ? "" : row[5].as<std::string>();
+      entry.pkStrategy = row[6].is_null() ? "" : row[6].as<std::string>();
+      std::vector<std::string> pkCols = parseJSONArray(entry.pkColumns);
+      entry.hasPK = !pkCols.empty();
+      entry.tableSize = row[7].is_null() ? 0 : row[7].as<int64_t>();
       entries.push_back(entry);
     }
   } catch (const std::exception &e) {
@@ -100,13 +123,13 @@ MetadataRepository::getCatalogEntries(const std::string &dbEngine,
 // Inserts a new table entry into the catalog or updates an existing one if it
 // already exists. For new entries, the table is inserted with status
 // 'FULL_LOAD' and active set to false. For existing entries, the function
-// intelligently updates only the fields that have changed (time column, primary
+// intelligently updates only the fields that have changed (primary
 // key columns, primary key strategy, has_pk flag) or just the table size if no
 // other changes are detected. This ensures the catalog stays synchronized with
 // the actual table structure while preserving existing metadata like sync
 // status.
 void MetadataRepository::insertOrUpdateTable(
-    const CatalogTableInfo &tableInfo, const std::string &timeColumn,
+    const CatalogTableInfo &tableInfo,
     const std::vector<std::string> &pkColumns, bool hasPK, int64_t tableSize,
     const std::string &dbEngine) {
   if (tableInfo.schema.empty() || tableInfo.table.empty() || dbEngine.empty() ||
@@ -124,41 +147,35 @@ void MetadataRepository::insertOrUpdateTable(
     std::string pkStrategy = "CDC";
 
     auto existing = txn.exec_params(
-        "SELECT last_sync_column, pk_columns, pk_strategy, has_pk, table_size "
+        "SELECT pk_columns, pk_strategy, table_size "
         "FROM metadata.catalog "
         "WHERE schema_name = $1 AND table_name = $2 AND db_engine = $3",
         tableInfo.schema, tableInfo.table, dbEngine);
 
     if (existing.empty()) {
-      txn.exec_params(
-          "INSERT INTO metadata.catalog "
-          "(schema_name, table_name, cluster_name, db_engine, "
-          "connection_string, last_sync_time, last_sync_column, "
-          "status, active, pk_columns, pk_strategy, "
-          "has_pk, table_size) "
-          "VALUES ($1, $2, '', $3, $4, NULL, $5, $10, false, $6, $7, "
-          "$8, $9)",
-          tableInfo.schema, tableInfo.table, dbEngine,
-          tableInfo.connectionString, timeColumn, pkColumnsJSON, pkStrategy,
-          hasPK, tableSize, std::string(CatalogStatus::FULL_LOAD));
+      txn.exec_params("INSERT INTO metadata.catalog "
+                      "(schema_name, table_name, cluster_name, db_engine, "
+                      "connection_string, "
+                      "status, active, pk_columns, pk_strategy, "
+                      "table_size) "
+                      "VALUES ($1, $2, '', $3, $4, $7, false, $5, $6, "
+                      "$8)",
+                      tableInfo.schema, tableInfo.table, dbEngine,
+                      tableInfo.connectionString, pkColumnsJSON, pkStrategy,
+                      std::string(CatalogStatus::FULL_LOAD), tableSize);
     } else {
-      std::string currentTimeColumn =
-          existing[0][0].is_null() ? "" : existing[0][0].as<std::string>();
       std::string currentPKColumns =
-          existing[0][1].is_null() ? "" : existing[0][1].as<std::string>();
+          existing[0][0].is_null() ? "" : existing[0][0].as<std::string>();
       std::string currentPKStrategy =
-          existing[0][2].is_null() ? "" : existing[0][2].as<std::string>();
-      bool currentHasPK =
-          existing[0][3].is_null() ? false : existing[0][3].as<bool>();
-      if (currentTimeColumn != timeColumn ||
-          currentPKColumns != pkColumnsJSON ||
-          currentPKStrategy != pkStrategy || currentHasPK != hasPK) {
+          existing[0][1].is_null() ? "" : existing[0][1].as<std::string>();
+      if (currentPKColumns != pkColumnsJSON ||
+          currentPKStrategy != pkStrategy) {
         txn.exec_params(
             "UPDATE metadata.catalog SET "
-            "last_sync_column = $1, pk_columns = $2, pk_strategy = $3, "
-            "has_pk = $4, table_size = $5, status = $6 "
-            "WHERE schema_name = $7 AND table_name = $8 AND db_engine = $9",
-            timeColumn, pkColumnsJSON, pkStrategy, hasPK, tableSize,
+            "pk_columns = $1, pk_strategy = $2, "
+            "table_size = $3, status = $4 "
+            "WHERE schema_name = $5 AND table_name = $6 AND db_engine = $7",
+            pkColumnsJSON, pkStrategy, tableSize,
             std::string(CatalogStatus::FULL_LOAD), tableInfo.schema,
             tableInfo.table, dbEngine);
       } else {
@@ -384,8 +401,7 @@ int MetadataRepository::markInactiveTablesAsSkip(bool truncateTarget) {
     for (const auto &entry : tablesToSkip) {
       auto result =
           txn.exec_params("UPDATE metadata.catalog SET "
-                          "status = $1, "
-                          "last_processed_pk = '' "
+                          "status = $1 "
                           "WHERE schema_name = $2 AND table_name = $3 "
                           "AND active = false AND status != $4",
                           std::string(CatalogStatus::SKIP), entry.first,
@@ -430,7 +446,7 @@ int MetadataRepository::resetTable(const std::string &schema,
 
     auto result = txn.exec_params(
         "UPDATE metadata.catalog SET "
-        "status = $4, last_processed_pk = '' "
+        "status = $4 "
         "WHERE schema_name = $1 AND table_name = $2 AND db_engine = $3",
         schema, table, dbEngine, std::string(CatalogStatus::FULL_LOAD));
     txn.commit();

@@ -44,6 +44,10 @@ void CatalogManager::cleanCatalog() {
     cleaner_->cleanOrphanedTables();
     cleaner_->cleanOldLogs(DatabaseDefaults::DEFAULT_LOG_RETENTION_HOURS);
     updateClusterNames();
+    cleaner_->cleanOrphanedGovernanceData();
+    cleaner_->cleanOrphanedQualityData();
+    cleaner_->cleanOrphanedMaintenanceData();
+    cleaner_->cleanOrphanedLineageData();
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "CatalogManager",
                   "Error cleaning catalog: " + std::string(e.what()));
@@ -384,6 +388,159 @@ int64_t CatalogManager::getTableSize(const std::string &schema,
         }
         return 0;
       }
+    } else if (db_engine == "Oracle") {
+      try {
+        OCIConnection conn(connStr);
+        if (!conn.isValid()) {
+          Logger::error(LogCategory::DATABASE, "CatalogManager",
+                        "Failed to connect to Oracle");
+          return 0;
+        }
+
+        std::string upperSchema = schema;
+        std::transform(upperSchema.begin(), upperSchema.end(),
+                       upperSchema.begin(), ::toupper);
+        std::string upperTable = table;
+        std::transform(upperTable.begin(), upperTable.end(), upperTable.begin(),
+                       ::toupper);
+
+        std::string escapedSchema;
+        for (char c : upperSchema) {
+          if (c == '"') {
+            escapedSchema += "\"\"";
+          } else if (c >= 32 && c <= 126) {
+            escapedSchema += c;
+          }
+        }
+        if (escapedSchema.empty()) {
+          Logger::error(LogCategory::DATABASE, "CatalogManager",
+                        "Invalid schema name for Oracle: " + schema);
+          return 0;
+        }
+
+        std::string escapedTable;
+        for (char c : upperTable) {
+          if (c == '"') {
+            escapedTable += "\"\"";
+          } else if (c >= 32 && c <= 126) {
+            escapedTable += c;
+          }
+        }
+        if (escapedTable.empty()) {
+          Logger::error(LogCategory::DATABASE, "CatalogManager",
+                        "Invalid table name for Oracle: " + table);
+          return 0;
+        }
+
+        std::string query = "SELECT COUNT(*) FROM \"" + escapedSchema +
+                            "\".\"" + escapedTable + "\"";
+
+        OCIStmt *stmt = nullptr;
+        OCIError *err = conn.getErr();
+        OCISvcCtx *svc = conn.getSvc();
+        OCIEnv *env = conn.getEnv();
+
+        sword status = OCIHandleAlloc((dvoid *)env, (dvoid **)&stmt,
+                                      OCI_HTYPE_STMT, 0, nullptr);
+        if (status != OCI_SUCCESS) {
+          Logger::error(LogCategory::DATABASE, "CatalogManager",
+                        "OCIHandleAlloc(STMT) failed");
+          return 0;
+        }
+
+        status = OCIStmtPrepare(stmt, err, (OraText *)query.c_str(),
+                                query.length(), OCI_NTV_SYNTAX, OCI_DEFAULT);
+        if (status != OCI_SUCCESS) {
+          Logger::error(LogCategory::DATABASE, "CatalogManager",
+                        "OCIStmtPrepare failed for query: " + query);
+          OCIHandleFree(stmt, OCI_HTYPE_STMT);
+          return 0;
+        }
+
+        status =
+            OCIStmtExecute(svc, stmt, err, 0, 0, nullptr, nullptr, OCI_DEFAULT);
+        if (status != OCI_SUCCESS && status != OCI_SUCCESS_WITH_INFO) {
+          Logger::error(LogCategory::DATABASE, "CatalogManager",
+                        "OCIStmtExecute failed for query: " + query);
+          OCIHandleFree(stmt, OCI_HTYPE_STMT);
+          return 0;
+        }
+
+        constexpr ub4 MAX_COLUMN_SIZE = 256;
+        char buffer[MAX_COLUMN_SIZE];
+        ub2 length;
+        sb2 ind;
+
+        OCIDefine *def = nullptr;
+        status = OCIDefineByPos(stmt, &def, err, 1, buffer, MAX_COLUMN_SIZE,
+                                SQLT_STR, &ind, &length, nullptr, OCI_DEFAULT);
+        if (status != OCI_SUCCESS) {
+          Logger::error(LogCategory::DATABASE, "CatalogManager",
+                        "OCIDefineByPos failed");
+          OCIHandleFree(stmt, OCI_HTYPE_STMT);
+          return 0;
+        }
+
+        status = OCIStmtFetch(stmt, err, 1, OCI_FETCH_NEXT, OCI_DEFAULT);
+        if (status != OCI_SUCCESS && status != OCI_SUCCESS_WITH_INFO) {
+          if (status != OCI_NO_DATA) {
+            Logger::error(LogCategory::DATABASE, "CatalogManager",
+                          "OCIStmtFetch failed");
+          }
+          OCIHandleFree(stmt, OCI_HTYPE_STMT);
+          return 0;
+        }
+
+        OCIHandleFree(stmt, OCI_HTYPE_STMT);
+
+        if (ind == OCI_IND_NULL) {
+          return 0;
+        }
+
+        std::string countStr(buffer, length);
+        if (!countStr.empty() && countStr.length() <= 20) {
+          try {
+            int64_t count = std::stoll(countStr);
+            return count;
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::DATABASE, "CatalogManager",
+                          "Failed to parse Oracle table size: " +
+                              std::string(e.what()));
+            return 0;
+          } catch (...) {
+            Logger::error(LogCategory::DATABASE, "CatalogManager",
+                          "Unknown error parsing Oracle table size");
+            return 0;
+          }
+        }
+      } catch (const std::exception &e) {
+        std::string errorMsg = e.what();
+        if (errorMsg.find("does not exist") != std::string::npos ||
+            errorMsg.find("table or view") != std::string::npos ||
+            errorMsg.find("ORA-00942") != std::string::npos) {
+          Logger::warning(LogCategory::DATABASE, "CatalogManager",
+                          "Table " + schema + "." + table +
+                              " does not exist in Oracle source");
+        } else if (errorMsg.find("connection") != std::string::npos ||
+                   errorMsg.find("timeout") != std::string::npos ||
+                   errorMsg.find("ORA-12154") != std::string::npos ||
+                   errorMsg.find("ORA-12514") != std::string::npos) {
+          Logger::error(LogCategory::DATABASE, "CatalogManager",
+                        "Connection error getting Oracle table size for " +
+                            schema + "." + table + ": " +
+                            std::string(e.what()));
+        } else {
+          Logger::error(LogCategory::DATABASE, "CatalogManager",
+                        "Error getting Oracle table size for " + schema + "." +
+                            table + ": " + std::string(e.what()));
+        }
+        return 0;
+      } catch (...) {
+        Logger::error(LogCategory::DATABASE, "CatalogManager",
+                      "Unknown exception getting Oracle table size for " +
+                          schema + "." + table);
+        return 0;
+      }
     }
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "CatalogManager",
@@ -433,8 +590,6 @@ void CatalogManager::syncCatalog(const std::string &dbEngine) {
           try {
             allTables = mongoEngine->discoverAllDatabasesAndCollections();
             for (const auto &table : allTables) {
-              auto timeColumn =
-                  mongoEngine->detectTimeColumn(table.schema, table.table);
               auto pkColumns =
                   mongoEngine->detectPrimaryKey(table.schema, table.table);
               bool hasPK = !pkColumns.empty();
@@ -446,8 +601,8 @@ void CatalogManager::syncCatalog(const std::string &dbEngine) {
                                       ? tableSizes[key]
                                       : 0;
 
-              repo_->insertOrUpdateTable(table, timeColumn, pkColumns, hasPK,
-                                         tableSize, dbEngine);
+              repo_->insertOrUpdateTable(table, pkColumns, hasPK, tableSize,
+                                         dbEngine);
             }
           } catch (const std::exception &e) {
             Logger::error(LogCategory::DATABASE, "CatalogManager",
@@ -484,7 +639,6 @@ void CatalogManager::syncCatalog(const std::string &dbEngine) {
       }
 
       for (const auto &table : tables) {
-        auto timeColumn = engine->detectTimeColumn(table.schema, table.table);
         auto pkColumns = engine->detectPrimaryKey(table.schema, table.table);
         bool hasPK = !pkColumns.empty();
 
@@ -494,8 +648,8 @@ void CatalogManager::syncCatalog(const std::string &dbEngine) {
         int64_t tableSize =
             (tableSizes.find(key) != tableSizes.end()) ? tableSizes[key] : 0;
 
-        repo_->insertOrUpdateTable(table, timeColumn, pkColumns, hasPK,
-                                   tableSize, dbEngine);
+        repo_->insertOrUpdateTable(table, pkColumns, hasPK, tableSize,
+                                   dbEngine);
       }
     }
     updateClusterNames();

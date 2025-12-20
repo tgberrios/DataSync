@@ -413,6 +413,10 @@ const DataLineageOracle = () => {
         dataLineageOracleApi.getOracleServers()
       ]);
       if (isMountedRef.current) {
+        console.log("Oracle Lineage Data:", lineageData);
+        console.log("Oracle Metrics Data:", metricsData);
+        console.log("Oracle Metrics Data Type:", typeof metricsData);
+        console.log("Oracle Metrics Data Keys:", metricsData ? Object.keys(metricsData) : 'null');
         setLineage(lineageData.data || []);
         setPagination(lineageData.pagination || {
           total: 0,
@@ -440,6 +444,23 @@ const DataLineageOracle = () => {
     filters.relationship_type, 
     filters.search
   ]);
+
+  const fetchMetrics = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    try {
+      console.log("Oracle fetchMetrics: Starting...");
+      const metricsData = await dataLineageOracleApi.getOracleMetrics().catch(err => {
+        console.error("Oracle getOracleMetrics error:", err);
+        throw err;
+      });
+      console.log("Oracle fetchMetrics: Received data:", metricsData);
+      if (isMountedRef.current) {
+        setMetrics(metricsData || {});
+      }
+    } catch (err) {
+      console.error("Oracle fetchMetrics error:", err);
+    }
+  }, []);
 
   const fetchAllEdges = useCallback(async () => {
     if (!isMountedRef.current) return;
@@ -476,6 +497,7 @@ const DataLineageOracle = () => {
 
   useEffect(() => {
     isMountedRef.current = true;
+    fetchMetrics();
     if (viewMode === "table") {
       fetchData();
     } else {
@@ -483,6 +505,7 @@ const DataLineageOracle = () => {
     }
     const interval = setInterval(() => {
       if (isMountedRef.current) {
+        fetchMetrics();
         if (viewMode === "table") {
           fetchData();
         } else {
@@ -494,7 +517,7 @@ const DataLineageOracle = () => {
       isMountedRef.current = false;
       clearInterval(interval);
     };
-  }, [fetchData, fetchAllEdges, viewMode]);
+  }, [fetchData, fetchAllEdges, fetchMetrics, viewMode]);
 
   useEffect(() => {
     if (viewMode === "tree") {
@@ -622,6 +645,10 @@ const DataLineageOracle = () => {
     );
   }
 
+  console.log("Oracle Component Render - Metrics State:", metrics);
+  console.log("Oracle Component Render - Metrics total_relationships:", metrics.total_relationships);
+  console.log("Oracle Component Render - Metrics type:", typeof metrics.total_relationships);
+
   return (
     <Container>
       <Header>Data Lineage - Oracle</Header>
@@ -645,24 +672,66 @@ const DataLineageOracle = () => {
         </MetricCard>
         <MetricCard $index={2}>
           <MetricLabel>
-            <span>■</span>
+            <span>[S]</span>
             Unique Servers
           </MetricLabel>
           <MetricValue>{metrics.unique_servers || 0}</MetricValue>
         </MetricCard>
         <MetricCard $index={3}>
           <MetricLabel>
+            <span>[SC]</span>
+            Unique Schemas
+          </MetricLabel>
+          <MetricValue>{metrics.unique_schemas || 0}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={4}>
+          <MetricLabel>
+            <span>&lt;-&gt;</span>
+            Relationship Types
+          </MetricLabel>
+          <MetricValue>{metrics.unique_relationship_types || 0}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={5}>
+          <MetricLabel>
             <span>✓</span>
             High Confidence
           </MetricLabel>
           <MetricValue>{metrics.high_confidence || 0}</MetricValue>
         </MetricCard>
-        <MetricCard $index={4}>
+        <MetricCard $index={6}>
+          <MetricLabel>
+            <span>[!]</span>
+            Low Confidence
+          </MetricLabel>
+          <MetricValue>{metrics.low_confidence || 0}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={7}>
           <MetricLabel>
             <span>%</span>
             Avg Confidence
           </MetricLabel>
           <MetricValue>{metrics.avg_confidence ? `${(Number(metrics.avg_confidence) * 100).toFixed(1)}%` : 'N/A'}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={8}>
+          <MetricLabel>
+            <span>[#]</span>
+            Avg Dependency Level
+          </MetricLabel>
+          <MetricValue>{metrics.avg_dependency_level ? Number(metrics.avg_dependency_level).toFixed(1) : 'N/A'}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={9}>
+          <MetricLabel>
+            <span>[+]</span>
+            Discovered (24h)
+          </MetricLabel>
+          <MetricValue>{metrics.discovered_last_24h || 0}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={10}>
+          <MetricLabel>
+            <span>[*]</span>
+            Discovery Methods
+          </MetricLabel>
+          <MetricValue>{metrics.unique_discovery_methods || 0}</MetricValue>
         </MetricCard>
       </MetricsGrid>
 

@@ -226,16 +226,16 @@ OracleToPostgres::getActiveTables(pqxx::connection &pgConn) {
     pqxx::work txn(pgConn);
     auto results = txn.exec(
         "SELECT schema_name, table_name, cluster_name, db_engine, "
-        "connection_string, last_sync_time, last_sync_column, "
-        "status, last_processed_pk, pk_strategy, "
-        "pk_columns, has_pk "
+        "connection_string, "
+        "status, pk_strategy, "
+        "pk_columns "
         "FROM metadata.catalog "
         "WHERE active=true AND db_engine='Oracle' AND status != 'NO_DATA' "
         "ORDER BY schema_name, table_name;");
     txn.commit();
 
     for (const auto &row : results) {
-      if (row.size() < 12)
+      if (row.size() < 8)
         continue;
 
       TableInfo t;
@@ -244,13 +244,11 @@ OracleToPostgres::getActiveTables(pqxx::connection &pgConn) {
       t.cluster_name = row[2].is_null() ? "" : row[2].as<std::string>();
       t.db_engine = row[3].is_null() ? "" : row[3].as<std::string>();
       t.connection_string = row[4].is_null() ? "" : row[4].as<std::string>();
-      t.last_sync_time = row[5].is_null() ? "" : row[5].as<std::string>();
-      t.last_sync_column = row[6].is_null() ? "" : row[6].as<std::string>();
-      t.status = row[7].is_null() ? "" : row[7].as<std::string>();
-      t.last_processed_pk = row[8].is_null() ? "" : row[8].as<std::string>();
-      t.pk_strategy = row[9].is_null() ? "" : row[9].as<std::string>();
-      t.pk_columns = row[10].is_null() ? "" : row[10].as<std::string>();
-      t.has_pk = row[11].is_null() ? false : row[11].as<bool>();
+      t.status = row[5].is_null() ? "" : row[5].as<std::string>();
+      t.pk_strategy = row[6].is_null() ? "" : row[6].as<std::string>();
+      t.pk_columns = row[7].is_null() ? "" : row[7].as<std::string>();
+      std::vector<std::string> pkCols = parseJSONArray(t.pk_columns);
+      t.has_pk = !pkCols.empty();
       data.push_back(t);
     }
   } catch (const std::exception &e) {
@@ -919,11 +917,10 @@ void OracleToPostgres::transferDataOracleToPostgres() {
           pqxx::work truncateTxn(pgConn);
           truncateTxn.exec("TRUNCATE TABLE \"" + lowerSchema + "\".\"" +
                            lowerTable + "\" CASCADE;");
-          truncateTxn.exec(
-              "UPDATE metadata.catalog SET last_processed_pk=NULL, "
-              "sync_metadata='{}'::jsonb WHERE schema_name=" +
-              truncateTxn.quote(schema_name) +
-              " AND table_name=" + truncateTxn.quote(table_name));
+          truncateTxn.exec("UPDATE metadata.catalog SET "
+                           "sync_metadata='{}'::jsonb WHERE schema_name=" +
+                           truncateTxn.quote(schema_name) +
+                           " AND table_name=" + truncateTxn.quote(table_name));
           truncateTxn.commit();
           targetCount = 0;
           Logger::info(LogCategory::TRANSFER, "transferDataOracleToPostgres",

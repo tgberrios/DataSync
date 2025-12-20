@@ -473,10 +473,36 @@ const GovernanceCatalogOracle = () => {
 
   useEffect(() => {
     isMountedRef.current = true;
-    fetchAllItems();
+    const loadData = async () => {
+      console.log("Oracle: Starting to load data...");
+      await fetchAllItems();
+      try {
+        console.log("Oracle: Fetching metrics...");
+        const metricsData = await governanceCatalogOracleApi.getOracleMetrics();
+        console.log("Oracle: Metrics received:", metricsData);
+        if (isMountedRef.current) {
+          setMetrics(metricsData || {});
+          console.log("Oracle: Metrics set in state:", metricsData);
+        }
+      } catch (err) {
+        console.error("Oracle: Error loading metrics:", err);
+        if (isMountedRef.current) {
+          console.error('Oracle: Error loading metrics:', err);
+        }
+      }
+    };
+    loadData();
     const interval = setInterval(() => {
       if (isMountedRef.current) {
         fetchAllItems();
+        governanceCatalogOracleApi.getOracleMetrics().then(metricsData => {
+          console.log("Oracle: Interval metrics received:", metricsData);
+          if (isMountedRef.current) {
+            setMetrics(metricsData || {});
+          }
+        }).catch(err => {
+          console.error('Oracle: Error loading metrics in interval:', err);
+        });
       }
     }, 30000);
     return () => {
@@ -619,6 +645,17 @@ const GovernanceCatalogOracle = () => {
       {error && <ErrorMessage>{error}</ErrorMessage>}
       
       <MetricsGrid $columns="repeat(auto-fit, minmax(180px, 1fr))">
+        {(() => {
+          console.log("Oracle: Rendering metrics cards, metrics object:", metrics);
+          console.log("Oracle: total_tables:", metrics.total_tables);
+          console.log("Oracle: total_size_mb:", metrics.total_size_mb);
+          console.log("Oracle: total_rows:", metrics.total_rows);
+          console.log("Oracle: healthy_count:", metrics.healthy_count);
+          console.log("Oracle: warning_count:", metrics.warning_count);
+          console.log("Oracle: critical_count:", metrics.critical_count);
+          console.log("Oracle: unique_servers:", metrics.unique_servers);
+          return null;
+        })()}
         <MetricCard $index={0}>
           <MetricLabel>
             <span>■</span>

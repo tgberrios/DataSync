@@ -147,8 +147,6 @@ export interface CatalogEntry {
   connection_string: string;
   active: boolean;
   status: string;
-  last_sync_time: string;
-  last_sync_column: string;
   cluster_name: string;
   updated_at: string;
   pk_strategy?: string;
@@ -185,10 +183,20 @@ export interface DashboardStats {
   };
   dbHealth: {
     activeConnections: string;
+    connectionPercentage: string;
     responseTime: string;
     bufferHitRate: string;
     cacheHitRate: string;
     status: string;
+    uptimeSeconds: number;
+    activeQueries: number;
+    waitingQueries: number;
+    avgQueryDuration: number;
+    databaseSizeBytes: number;
+    queryEfficiencyScore: number;
+    longRunningQueries: number;
+    blockingQueries: number;
+    totalQueries24h: number;
   };
   batchConfig: BatchConfig;
   // Connection pooling removed - using direct connections now
@@ -437,6 +445,22 @@ export const governanceApi = {
       throw error;
     }
   },
+  getGovernanceMetrics: async () => {
+    try {
+      const response = await api.get("/governance/metrics");
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching governance metrics:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
 };
 
 export const qualityApi = {
@@ -534,6 +558,51 @@ export const monitorApi = {
       return response.data;
     } catch (error) {
       console.error("Error cleaning up old processing logs:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getTransferMetrics: async (params: {
+    page?: number;
+    limit?: number;
+    schema_name?: string;
+    table_name?: string;
+    db_engine?: string;
+    status?: string;
+    transfer_type?: string;
+    days?: number;
+  }) => {
+    try {
+      const response = await api.get("/monitor/transfer-metrics", { params });
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching transfer metrics:", error);
+      if (axios.isAxiosError(error) && error.response) {
+        throw new Error(
+          error.response.data.details ||
+            error.response.data.error ||
+            error.message
+        );
+      }
+      throw error;
+    }
+  },
+
+  getTransferMetricsStats: async (params?: { days?: number }) => {
+    try {
+      const response = await api.get("/monitor/transfer-metrics/stats", {
+        params,
+      });
+      return response.data;
+    } catch (error) {
+      console.error("Error fetching transfer metrics stats:", error);
       if (axios.isAxiosError(error) && error.response) {
         throw new Error(
           error.response.data.details ||
@@ -1200,11 +1269,15 @@ export const dataLineageApi = {
 
   getMariaDBMetrics: async () => {
     try {
+      console.log("API: Calling /data-lineage/mariadb/metrics");
       const response = await api.get("/data-lineage/mariadb/metrics");
+      console.log("API: MariaDB metrics response:", response);
+      console.log("API: MariaDB metrics response.data:", response.data);
       return response.data;
     } catch (error) {
       console.error("Error fetching MariaDB lineage metrics:", error);
       if (axios.isAxiosError(error) && error.response) {
+        console.error("API: MariaDB metrics error response:", error.response);
         throw new Error(
           error.response.data.details ||
             error.response.data.error ||
@@ -1461,11 +1534,18 @@ export const governanceCatalogApi = {
 
   getMariaDBMetrics: async () => {
     try {
+      console.log("API: Calling /governance-catalog/mariadb/metrics");
       const response = await api.get("/governance-catalog/mariadb/metrics");
+      console.log("API: MariaDB governance metrics response:", response);
+      console.log(
+        "API: MariaDB governance metrics response.data:",
+        response.data
+      );
       return response.data;
     } catch (error) {
       console.error("Error fetching MariaDB governance metrics:", error);
       if (axios.isAxiosError(error) && error.response) {
+        console.error("API: MariaDB metrics error response:", error.response);
         throw new Error(
           error.response.data.details ||
             error.response.data.error ||
@@ -1542,11 +1622,18 @@ export const governanceCatalogApi = {
 
   getMSSQLMetrics: async () => {
     try {
+      console.log("API: Calling /governance-catalog/mssql/metrics");
       const response = await api.get("/governance-catalog/mssql/metrics");
+      console.log("API: MSSQL governance metrics response:", response);
+      console.log(
+        "API: MSSQL governance metrics response.data:",
+        response.data
+      );
       return response.data;
     } catch (error) {
       console.error("Error fetching MSSQL governance metrics:", error);
       if (axios.isAxiosError(error) && error.response) {
+        console.error("API: MSSQL metrics error response:", error.response);
         throw new Error(
           error.response.data.details ||
             error.response.data.error ||
@@ -1622,11 +1709,18 @@ export const governanceCatalogMongoDBApi = {
 
   getMongoDBMetrics: async () => {
     try {
+      console.log("API: Calling /governance-catalog/mongodb/metrics");
       const response = await api.get("/governance-catalog/mongodb/metrics");
+      console.log("API: MongoDB governance metrics response:", response);
+      console.log(
+        "API: MongoDB governance metrics response.data:",
+        response.data
+      );
       return response.data;
     } catch (error) {
       console.error("Error fetching MongoDB governance metrics:", error);
       if (axios.isAxiosError(error) && error.response) {
+        console.error("API: MongoDB metrics error response:", error.response);
         throw new Error(
           error.response.data.details ||
             error.response.data.error ||
@@ -1783,11 +1877,18 @@ export const governanceCatalogOracleApi = {
 
   getOracleMetrics: async () => {
     try {
+      console.log("API: Calling /governance-catalog/oracle/metrics");
       const response = await api.get("/governance-catalog/oracle/metrics");
+      console.log("API: Oracle governance metrics response:", response);
+      console.log(
+        "API: Oracle governance metrics response.data:",
+        response.data
+      );
       return response.data;
     } catch (error) {
       console.error("Error fetching Oracle governance metrics:", error);
       if (axios.isAxiosError(error) && error.response) {
+        console.error("API: Oracle metrics error response:", error.response);
         throw new Error(
           error.response.data.details ||
             error.response.data.error ||

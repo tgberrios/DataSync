@@ -97,7 +97,7 @@ private:
                              const MaintenanceMetrics &before,
                              const MaintenanceMetrics &after);
 
-  std::vector<MaintenanceTask> getPendingTasks();
+  std::vector<MaintenanceTask> getPendingTasks(int limit = 5);
   std::chrono::system_clock::time_point
   calculateNextMaintenanceDate(const std::string &maintenanceType);
 

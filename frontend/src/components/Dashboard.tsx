@@ -525,10 +525,20 @@ const Dashboard = () => {
     },
     dbHealth: {
       activeConnections: "1/100",
+      connectionPercentage: "0.0",
       responseTime: "< 1ms",
       bufferHitRate: "0.0",
       cacheHitRate: "0.0",
       status: "Healthy",
+      uptimeSeconds: 0,
+      activeQueries: 0,
+      waitingQueries: 0,
+      avgQueryDuration: 0,
+      databaseSizeBytes: 0,
+      queryEfficiencyScore: 0,
+      longRunningQueries: 0,
+      blockingQueries: 0,
+      totalQueries24h: 0,
     },
     batchConfig: {
       key: "chunk_size",
@@ -927,19 +937,6 @@ const Dashboard = () => {
           )}
         </div>
 
-      </Section>
-
-      <Section>
-        <SectionTitle>■ DATABASE HEALTH</SectionTitle>
-        <Grid>
-          <Value>
-            Active Connections: {stats.dbHealth.activeConnections}
-          </Value>
-          <Value>Response Time: {stats.dbHealth.responseTime}</Value>
-          <Value>Buffer Hit Rate: {stats.dbHealth.bufferHitRate}%</Value>
-          <Value>Cache Hit Rate: {stats.dbHealth.cacheHitRate}%</Value>
-          <Value>Status: ✓ {stats.dbHealth.status}</Value>
-        </Grid>
       </Section>
 
       <Section>

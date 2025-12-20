@@ -397,11 +397,17 @@ const DataLineageMariaDB = () => {
   const isMountedRef = useRef(true);
 
   const fetchData = useCallback(async () => {
-    if (!isMountedRef.current) return;
+    console.log("MariaDB fetchData called, isMounted:", isMountedRef.current);
+    if (!isMountedRef.current) {
+      console.log("MariaDB fetchData: Component not mounted, returning");
+      return;
+    }
     try {
+      console.log("MariaDB fetchData: Starting API calls...");
       setLoading(true);
       setError(null);
       const sanitizedSearch = sanitizeSearch(filters.search as string, 100);
+      console.log("MariaDB fetchData: Calling getMariaDBMetrics...");
       const [lineageData, metricsData, serversData] = await Promise.all([
         dataLineageApi.getMariaDBLineage({
           page,
@@ -412,10 +418,18 @@ const DataLineageMariaDB = () => {
           relationship_type: filters.relationship_type as string,
           search: sanitizedSearch
         }),
-        dataLineageApi.getMariaDBMetrics(),
+        dataLineageApi.getMariaDBMetrics().catch(err => {
+          console.error("MariaDB getMariaDBMetrics error:", err);
+          throw err;
+        }),
         dataLineageApi.getMariaDBServers()
       ]);
+      console.log("MariaDB fetchData: API calls completed");
       if (isMountedRef.current) {
+        console.log("MariaDB Lineage Data:", lineageData);
+        console.log("MariaDB Metrics Data:", metricsData);
+        console.log("MariaDB Metrics Data Type:", typeof metricsData);
+        console.log("MariaDB Metrics Data Keys:", metricsData ? Object.keys(metricsData) : 'null');
         setLineage(lineageData.data || []);
         setPagination(lineageData.pagination || {
           total: 0,
@@ -444,6 +458,23 @@ const DataLineageMariaDB = () => {
     filters.relationship_type, 
     filters.search
   ]);
+
+  const fetchMetrics = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    try {
+      console.log("MariaDB fetchMetrics: Starting...");
+      const metricsData = await dataLineageApi.getMariaDBMetrics().catch(err => {
+        console.error("MariaDB getMariaDBMetrics error:", err);
+        throw err;
+      });
+      console.log("MariaDB fetchMetrics: Received data:", metricsData);
+      if (isMountedRef.current) {
+        setMetrics(metricsData || {});
+      }
+    } catch (err) {
+      console.error("MariaDB fetchMetrics error:", err);
+    }
+  }, []);
 
   const fetchAllEdges = useCallback(async () => {
     if (!isMountedRef.current) return;
@@ -482,6 +513,7 @@ const DataLineageMariaDB = () => {
 
   useEffect(() => {
     isMountedRef.current = true;
+    fetchMetrics();
     if (viewMode === "table") {
       fetchData();
     } else {
@@ -489,6 +521,7 @@ const DataLineageMariaDB = () => {
     }
     const interval = setInterval(() => {
       if (isMountedRef.current) {
+        fetchMetrics();
         if (viewMode === "table") {
           fetchData();
         } else {
@@ -500,7 +533,7 @@ const DataLineageMariaDB = () => {
       isMountedRef.current = false;
       clearInterval(interval);
     };
-  }, [fetchData, fetchAllEdges, viewMode]);
+  }, [fetchData, fetchAllEdges, fetchMetrics, viewMode]);
 
   useEffect(() => {
     if (viewMode === "tree") {
@@ -628,6 +661,10 @@ const DataLineageMariaDB = () => {
     );
   }
 
+  console.log("MariaDB Component Render - Metrics State:", metrics);
+  console.log("MariaDB Component Render - Metrics total_relationships:", metrics.total_relationships);
+  console.log("MariaDB Component Render - Metrics type:", typeof metrics.total_relationships);
+
   return (
     <Container>
       <Header>Data Lineage - MariaDB</Header>
@@ -651,24 +688,73 @@ const DataLineageMariaDB = () => {
         </MetricCard>
         <MetricCard $index={2}>
           <MetricLabel>
-            <span>■</span>
+            <span>[S]</span>
             Unique Servers
           </MetricLabel>
           <MetricValue>{metrics.unique_servers || 0}</MetricValue>
         </MetricCard>
         <MetricCard $index={3}>
           <MetricLabel>
+            <span>[DB]</span>
+            Unique Databases
+          </MetricLabel>
+          <MetricValue>{metrics.unique_databases || 0}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={4}>
+          <MetricLabel>
+            <span>[SC]</span>
+            Unique Schemas
+          </MetricLabel>
+          <MetricValue>{metrics.unique_schemas || 0}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={5}>
+          <MetricLabel>
+            <span>&lt;-&gt;</span>
+            Relationship Types
+          </MetricLabel>
+          <MetricValue>{metrics.unique_relationship_types || 0}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={6}>
+          <MetricLabel>
             <span>✓</span>
             High Confidence
           </MetricLabel>
           <MetricValue>{metrics.high_confidence || 0}</MetricValue>
         </MetricCard>
-        <MetricCard $index={4}>
+        <MetricCard $index={7}>
+          <MetricLabel>
+            <span>[!]</span>
+            Low Confidence
+          </MetricLabel>
+          <MetricValue>{metrics.low_confidence || 0}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={8}>
           <MetricLabel>
             <span>%</span>
             Avg Confidence
           </MetricLabel>
           <MetricValue>{metrics.avg_confidence ? `${(Number(metrics.avg_confidence) * 100).toFixed(1)}%` : 'N/A'}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={9}>
+          <MetricLabel>
+            <span>[#]</span>
+            Avg Dependency Level
+          </MetricLabel>
+          <MetricValue>{metrics.avg_dependency_level ? Number(metrics.avg_dependency_level).toFixed(1) : 'N/A'}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={10}>
+          <MetricLabel>
+            <span>[+]</span>
+            Discovered (24h)
+          </MetricLabel>
+          <MetricValue>{metrics.discovered_last_24h || 0}</MetricValue>
+        </MetricCard>
+        <MetricCard $index={11}>
+          <MetricLabel>
+            <span>[*]</span>
+            Discovery Methods
+          </MetricLabel>
+          <MetricValue>{metrics.unique_discovery_methods || 0}</MetricValue>
         </MetricCard>
       </MetricsGrid>
 

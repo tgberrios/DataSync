@@ -315,3 +315,201 @@ void CatalogCleaner::cleanOldLogs(int retentionHours) {
                   "Error cleaning old logs: " + std::string(e.what()));
   }
 }
+
+void CatalogCleaner::cleanOrphanedGovernanceData() {
+  try {
+    pqxx::connection conn(metadataConnStr_);
+    pqxx::work txn(conn);
+
+    Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                 "Cleaning orphaned governance data");
+
+    std::string deleteMainGov = R"(
+      DELETE FROM metadata.data_governance_catalog
+      WHERE (schema_name, table_name) NOT IN (
+        SELECT schema_name, table_name FROM metadata.catalog
+      )
+    )";
+    auto result1 = txn.exec(deleteMainGov);
+    size_t deleted1 = result1.affected_rows();
+
+    std::string deleteMariaDBGov = R"(
+      DELETE FROM metadata.data_governance_catalog_mariadb
+      WHERE (schema_name, table_name) NOT IN (
+        SELECT schema_name, table_name FROM metadata.catalog
+        WHERE db_engine = 'MariaDB'
+      )
+    )";
+    auto result2 = txn.exec(deleteMariaDBGov);
+    size_t deleted2 = result2.affected_rows();
+
+    std::string deleteMSSQLGov = R"(
+      DELETE FROM metadata.data_governance_catalog_mssql
+      WHERE (schema_name, table_name) NOT IN (
+        SELECT schema_name, table_name FROM metadata.catalog
+        WHERE db_engine = 'MSSQL'
+      )
+    )";
+    auto result3 = txn.exec(deleteMSSQLGov);
+    size_t deleted3 = result3.affected_rows();
+
+    std::string deleteMongoDBGov = R"(
+      DELETE FROM metadata.data_governance_catalog_mongodb
+      WHERE (database_name, collection_name) NOT IN (
+        SELECT schema_name, table_name FROM metadata.catalog
+        WHERE db_engine = 'MongoDB'
+      )
+    )";
+    auto result4 = txn.exec(deleteMongoDBGov);
+    size_t deleted4 = result4.affected_rows();
+
+    std::string deleteOracleGov = R"(
+      DELETE FROM metadata.data_governance_catalog_oracle
+      WHERE (schema_name, table_name) NOT IN (
+        SELECT schema_name, table_name FROM metadata.catalog
+        WHERE db_engine = 'Oracle'
+      )
+    )";
+    auto result5 = txn.exec(deleteOracleGov);
+    size_t deleted5 = result5.affected_rows();
+
+    txn.commit();
+
+    size_t totalDeleted = deleted1 + deleted2 + deleted3 + deleted4 + deleted5;
+    Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                 "Orphaned governance data cleanup completed: " +
+                     std::to_string(totalDeleted) +
+                     " entries removed (main=" + std::to_string(deleted1) +
+                     ", mariadb=" + std::to_string(deleted2) +
+                     ", mssql=" + std::to_string(deleted3) +
+                     ", mongodb=" + std::to_string(deleted4) +
+                     ", oracle=" + std::to_string(deleted5) + ")");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::DATABASE, "CatalogCleaner",
+                  "Error cleaning orphaned governance data: " +
+                      std::string(e.what()));
+  }
+}
+
+void CatalogCleaner::cleanOrphanedQualityData() {
+  try {
+    pqxx::connection conn(metadataConnStr_);
+    pqxx::work txn(conn);
+
+    Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                 "Cleaning orphaned quality data");
+
+    std::string deleteQuality = R"(
+      DELETE FROM metadata.data_quality
+      WHERE (schema_name, table_name) NOT IN (
+        SELECT schema_name, table_name FROM metadata.catalog
+      )
+    )";
+    auto result = txn.exec(deleteQuality);
+    size_t deleted = result.affected_rows();
+
+    txn.commit();
+
+    Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                 "Orphaned quality data cleanup completed: " +
+                     std::to_string(deleted) + " entries removed");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::DATABASE, "CatalogCleaner",
+                  "Error cleaning orphaned quality data: " +
+                      std::string(e.what()));
+  }
+}
+
+void CatalogCleaner::cleanOrphanedMaintenanceData() {
+  try {
+    pqxx::connection conn(metadataConnStr_);
+    pqxx::work txn(conn);
+
+    Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                 "Cleaning orphaned maintenance data");
+
+    std::string deleteMaintenance = R"(
+      DELETE FROM metadata.maintenance_control
+      WHERE (schema_name, object_name) NOT IN (
+        SELECT schema_name, table_name FROM metadata.catalog
+      )
+    )";
+    auto result = txn.exec(deleteMaintenance);
+    size_t deleted = result.affected_rows();
+
+    txn.commit();
+
+    Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                 "Orphaned maintenance data cleanup completed: " +
+                     std::to_string(deleted) + " entries removed");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::DATABASE, "CatalogCleaner",
+                  "Error cleaning orphaned maintenance data: " +
+                      std::string(e.what()));
+  }
+}
+
+void CatalogCleaner::cleanOrphanedLineageData() {
+  try {
+    pqxx::connection conn(metadataConnStr_);
+    pqxx::work txn(conn);
+
+    Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                 "Cleaning orphaned lineage data");
+
+    std::string deleteMDBLineage = R"(
+      DELETE FROM metadata.mdb_lineage
+      WHERE (schema_name, object_name) NOT IN (
+        SELECT schema_name, table_name FROM metadata.catalog
+        WHERE db_engine = 'MariaDB'
+      )
+    )";
+    auto result1 = txn.exec(deleteMDBLineage);
+    size_t deleted1 = result1.affected_rows();
+
+    std::string deleteMSSQLLineage = R"(
+      DELETE FROM metadata.mssql_lineage
+      WHERE (schema_name, object_name) NOT IN (
+        SELECT schema_name, table_name FROM metadata.catalog
+        WHERE db_engine = 'MSSQL'
+      )
+    )";
+    auto result2 = txn.exec(deleteMSSQLLineage);
+    size_t deleted2 = result2.affected_rows();
+
+    std::string deleteMongoLineage = R"(
+      DELETE FROM metadata.mongo_lineage
+      WHERE (database_name, source_collection) NOT IN (
+        SELECT schema_name, table_name FROM metadata.catalog
+        WHERE db_engine = 'MongoDB'
+      )
+    )";
+    auto result3 = txn.exec(deleteMongoLineage);
+    size_t deleted3 = result3.affected_rows();
+
+    std::string deleteOracleLineage = R"(
+      DELETE FROM metadata.oracle_lineage
+      WHERE (schema_name, object_name) NOT IN (
+        SELECT schema_name, table_name FROM metadata.catalog
+        WHERE db_engine = 'Oracle'
+      )
+    )";
+    auto result4 = txn.exec(deleteOracleLineage);
+    size_t deleted4 = result4.affected_rows();
+
+    txn.commit();
+
+    size_t totalDeleted = deleted1 + deleted2 + deleted3 + deleted4;
+    Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                 "Orphaned lineage data cleanup completed: " +
+                     std::to_string(totalDeleted) +
+                     " entries removed (mdb=" + std::to_string(deleted1) +
+                     ", mssql=" + std::to_string(deleted2) +
+                     ", mongo=" + std::to_string(deleted3) +
+                     ", oracle=" + std::to_string(deleted4) + ")");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::DATABASE, "CatalogCleaner",
+                  "Error cleaning orphaned lineage data: " +
+                      std::string(e.what()));
+  }
+}

@@ -508,10 +508,36 @@ const GovernanceCatalogMSSQL = () => {
 
   useEffect(() => {
     isMountedRef.current = true;
-    fetchAllItems();
+    const loadData = async () => {
+      console.log("MSSQL: Starting to load data...");
+      await fetchAllItems();
+      try {
+        console.log("MSSQL: Fetching metrics...");
+        const metricsData = await governanceCatalogApi.getMSSQLMetrics();
+        console.log("MSSQL: Metrics received:", metricsData);
+        if (isMountedRef.current) {
+          setMetrics(metricsData || {});
+          console.log("MSSQL: Metrics set in state:", metricsData);
+        }
+      } catch (err) {
+        console.error("MSSQL: Error loading metrics:", err);
+        if (isMountedRef.current) {
+          console.error('MSSQL: Error loading metrics:', err);
+        }
+      }
+    };
+    loadData();
     const interval = setInterval(() => {
       if (isMountedRef.current) {
         fetchAllItems();
+        governanceCatalogApi.getMSSQLMetrics().then(metricsData => {
+          console.log("MSSQL: Interval metrics received:", metricsData);
+          if (isMountedRef.current) {
+            setMetrics(metricsData || {});
+          }
+        }).catch(err => {
+          console.error('MSSQL: Error loading metrics in interval:', err);
+        });
       }
     }, 30000);
     return () => {
@@ -670,6 +696,16 @@ const GovernanceCatalogMSSQL = () => {
       {error && <ErrorMessage>{error}</ErrorMessage>}
       
       <MetricsGrid $columns="repeat(auto-fit, minmax(180px, 1fr))">
+        {(() => {
+          console.log("MSSQL: Rendering metrics cards, metrics object:", metrics);
+          console.log("MSSQL: total_objects:", metrics.total_objects);
+          console.log("MSSQL: total_size_mb:", metrics.total_size_mb);
+          console.log("MSSQL: healthy_count:", metrics.healthy_count);
+          console.log("MSSQL: warning_count:", metrics.warning_count);
+          console.log("MSSQL: critical_count:", metrics.critical_count);
+          console.log("MSSQL: unique_servers:", metrics.unique_servers);
+          return null;
+        })()}
         <MetricCard $index={0}>
           <MetricLabel>
             <span>■</span>

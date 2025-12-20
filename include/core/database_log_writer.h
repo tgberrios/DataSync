@@ -19,7 +19,6 @@ public:
   explicit DatabaseLogWriter(const std::string &connectionString);
   ~DatabaseLogWriter() override { close(); }
 
-  bool write(const std::string &formattedMessage) override;
   void flush() override {}
   void close() override;
   bool isOpen() const override;

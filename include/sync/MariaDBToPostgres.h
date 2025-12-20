@@ -158,9 +158,9 @@ public:
       pqxx::work txn(pgConn);
       auto results = txn.exec(
           "SELECT schema_name, table_name, cluster_name, db_engine, "
-          "connection_string, last_sync_time, last_sync_column, "
-          "status, last_processed_pk, pk_strategy, "
-          "pk_columns, has_pk "
+          "connection_string, "
+          "status, pk_strategy, "
+          "pk_columns "
           "FROM metadata.catalog "
           "WHERE active=true AND db_engine='MariaDB' AND status != 'NO_DATA' "
           "ORDER BY schema_name, table_name;");
@@ -171,10 +171,10 @@ public:
                        " rows from catalog");
 
       for (const auto &row : results) {
-        if (row.size() < 12) {
+        if (row.size() < 8) {
           Logger::warning(LogCategory::TRANSFER, "getActiveTables",
                           "Row has only " + std::to_string(row.size()) +
-                              " columns, expected 12 - skipping");
+                              " columns, expected 8 - skipping");
           continue;
         }
 
@@ -190,13 +190,11 @@ public:
         t.cluster_name = row[2].is_null() ? "" : row[2].as<std::string>();
         t.db_engine = row[3].is_null() ? "" : row[3].as<std::string>();
         t.connection_string = row[4].is_null() ? "" : row[4].as<std::string>();
-        t.last_sync_time = row[5].is_null() ? "" : row[5].as<std::string>();
-        t.last_sync_column = row[6].is_null() ? "" : row[6].as<std::string>();
-        t.status = row[7].is_null() ? "" : row[7].as<std::string>();
-        t.last_processed_pk = row[8].is_null() ? "" : row[8].as<std::string>();
-        t.pk_strategy = row[9].is_null() ? "" : row[9].as<std::string>();
-        t.pk_columns = row[10].is_null() ? "" : row[10].as<std::string>();
-        t.has_pk = row[11].is_null() ? false : row[11].as<bool>();
+        t.status = row[5].is_null() ? "" : row[5].as<std::string>();
+        t.pk_strategy = row[6].is_null() ? "" : row[6].as<std::string>();
+        t.pk_columns = row[7].is_null() ? "" : row[7].as<std::string>();
+        std::vector<std::string> pkCols = parseJSONArray(t.pk_columns);
+        t.has_pk = !pkCols.empty();
         data.push_back(t);
       }
     } catch (const pqxx::sql_error &e) {
@@ -1233,24 +1231,7 @@ public:
             continue;
           }
 
-          // Para tablas que NO son FULL_LOAD, procesar cambios incrementales
-
-          // Procesar UPDATEs si hay columna de tiempo y last_sync_time
-          if (!table.last_sync_column.empty() &&
-              !table.last_sync_time.empty()) {
-
-            try {
-              processUpdatesByPrimaryKey(schema_name, table_name, mariadbConn,
-                                         pgConn, table.last_sync_column,
-                                         table.last_sync_time);
-
-            } catch (const std::exception &e) {
-              Logger::error(
-                  LogCategory::TRANSFER, "transferDataMariaDBToPostgres",
-                  "ERROR processing updates for " + schema_name + "." +
-                      table_name + ": " + std::string(e.what()));
-            }
-          } else {
+          else {
           }
 
           updateStatus(pgConn, schema_name, table_name, "LISTENING_CHANGES",
@@ -2119,14 +2100,6 @@ public:
           std::string pkStrategy = getPKStrategyFromCatalog(
               pgConn, table.schema_name, table.table_name);
 
-          txn.exec("UPDATE metadata.catalog SET last_processed_pk=NULL WHERE "
-                   "schema_name='" +
-                   escapeSQL(table.schema_name) + "' AND table_name='" +
-                   escapeSQL(table.table_name) + "';");
-          Logger::info(LogCategory::TRANSFER, "processTableParallel",
-                       "Reset last_processed_pk for table " +
-                           table.schema_name + "." + table.table_name);
-
           if (pkStrategy == "CDC") {
             txn.exec(
                 "UPDATE metadata.catalog SET sync_metadata = "
@@ -2201,24 +2174,6 @@ public:
             mysql_close(mariadbConn);
             removeTableProcessingState(tableKey);
             return;
-          }
-
-          if (!table.last_sync_column.empty() &&
-              !table.last_sync_time.empty()) {
-            try {
-              processUpdatesByPrimaryKey(
-                  table.schema_name, table.table_name, mariadbConn, pgConn,
-                  table.last_sync_column, table.last_sync_time);
-            } catch (const std::exception &e) {
-              Logger::error(LogCategory::TRANSFER, "processTableParallel",
-                            "Error processing updates for table " +
-                                table.schema_name + "." + table.table_name +
-                                ": " + std::string(e.what()));
-            } catch (...) {
-              Logger::error(LogCategory::TRANSFER, "processTableParallel",
-                            "Unknown error processing updates for table " +
-                                table.schema_name + "." + table.table_name);
-            }
           }
 
           updateStatus(pgConn, table.schema_name, table.table_name,
@@ -2577,70 +2532,23 @@ public:
       pqxx::work txn(pgConn);
 
       auto columnQuery =
-          txn.exec("SELECT last_sync_column, pk_strategy FROM metadata.catalog "
+          txn.exec("SELECT pk_strategy FROM metadata.catalog "
                    "WHERE schema_name='" +
                    escapeSQL(schema_name) + "' AND table_name='" +
                    escapeSQL(table_name) + "';");
-
-      std::string lastSyncColumn = "";
       std::string pkStrategy = "";
       if (!columnQuery.empty()) {
         if (!columnQuery[0][0].is_null()) {
-          lastSyncColumn = columnQuery[0][0].as<std::string>();
-        }
-        if (!columnQuery[0][1].is_null()) {
-          pkStrategy = columnQuery[0][1].as<std::string>();
+          pkStrategy = columnQuery[0][0].as<std::string>();
         }
       }
 
-      std::string updateQuery =
-          "UPDATE metadata.catalog SET status='" + status + "'";
-
-      if (pkStrategy == "PK" && (status == "FULL_LOAD" || status == "RESET" ||
-                                 status == "LISTENING_CHANGES")) {
-        updateQuery += ", last_processed_pk=NULL";
-      }
-
-      if (!lastSyncColumn.empty()) {
-        std::string lowerSchemaName = schema_name;
-        std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
-                       lowerSchemaName.begin(), ::tolower);
-        std::string lowerTableName = table_name;
-        std::transform(lowerTableName.begin(), lowerTableName.end(),
-                       lowerTableName.begin(), ::tolower);
-        std::string lowerLastSyncColumn = lastSyncColumn;
-        std::transform(lowerLastSyncColumn.begin(), lowerLastSyncColumn.end(),
-                       lowerLastSyncColumn.begin(), ::tolower);
-
-        auto tableCheck =
-            txn.exec("SELECT COUNT(*) FROM information_schema.tables "
-                     "WHERE table_schema='" +
-                     lowerSchemaName +
-                     "' "
-                     "AND table_name='" +
-                     lowerTableName + "';");
-
-        if (!tableCheck.empty() && tableCheck[0][0].as<int>() > 0) {
-          // Verificar si la tabla tiene datos antes de intentar obtener MAX
-          auto countCheck =
-              txn.exec("SELECT COUNT(*) FROM \"" + lowerSchemaName + "\".\"" +
-                       lowerTableName + "\"");
-          if (!countCheck.empty() && countCheck[0][0].as<int>() > 0) {
-            updateQuery += ", last_sync_time=(SELECT MAX(\"" +
-                           lowerLastSyncColumn + "\")::timestamp FROM \"" +
-                           lowerSchemaName + "\".\"" + lowerTableName + "\")";
-          } else {
-            updateQuery += ", last_sync_time=NOW()";
-          }
-        } else {
-          updateQuery += ", last_sync_time=NOW()";
-        }
-      } else {
-        updateQuery += ", last_sync_time=NOW()";
-      }
-
-      updateQuery += " WHERE schema_name='" + escapeSQL(schema_name) +
-                     "' AND table_name='" + escapeSQL(table_name) + "';";
+      std::string updateQuery = "UPDATE metadata.catalog SET status='" +
+                                status +
+                                "' "
+                                "WHERE schema_name='" +
+                                escapeSQL(schema_name) + "' AND table_name='" +
+                                escapeSQL(table_name) + "';";
 
       txn.exec(updateQuery);
       txn.commit();

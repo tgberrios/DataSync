@@ -78,36 +78,63 @@ MongoDBToPostgres::parseTimestamp(const std::string &timestamp) {
   return std::chrono::system_clock::from_time_t(time);
 }
 
-bool MongoDBToPostgres::shouldSyncCollection(const TableInfo &tableInfo) {
-  if (tableInfo.status != "FULL_LOAD" && tableInfo.status != "full_load" &&
-      tableInfo.status != "IN_PROGRESS") {
-    return false;
-  }
+bool MongoDBToPostgres::shouldSyncCollection(pqxx::connection &pgConn,
+                                             const std::string &schema_name,
+                                             const std::string &table_name) {
+  try {
+    pqxx::work txn(pgConn);
+    auto result = txn.exec_params(
+        "SELECT status, mongo_last_sync_time FROM metadata.catalog "
+        "WHERE schema_name = $1 AND table_name = $2 AND db_engine = 'MongoDB'",
+        schema_name, table_name);
+    txn.commit();
 
-  if (tableInfo.last_sync_time.empty()) {
+    if (result.empty()) {
+      return false;
+    }
+
+    std::string status =
+        result[0][0].is_null() ? "" : result[0][0].as<std::string>();
+    if (status != "FULL_LOAD" && status != "full_load" &&
+        status != "IN_PROGRESS") {
+      return false;
+    }
+
+    if (result[0][1].is_null()) {
+      return true;
+    }
+
+    std::string lastSyncTimeStr = result[0][1].as<std::string>();
+    if (lastSyncTimeStr.empty()) {
+      return true;
+    }
+
+    auto lastSync = parseTimestamp(lastSyncTimeStr);
+    if (lastSync == std::chrono::system_clock::time_point::min()) {
+      Logger::warning(LogCategory::TRANSFER, "shouldSyncCollection",
+                      "Invalid mongo_last_sync_time for " + schema_name + "." +
+                          table_name + ", forcing sync");
+      return true;
+    }
+
+    auto now = std::chrono::system_clock::now();
+    if (lastSync > now) {
+      Logger::warning(LogCategory::TRANSFER, "shouldSyncCollection",
+                      "Future timestamp detected for " + schema_name + "." +
+                          table_name);
+      return true;
+    }
+
+    auto hoursSinceLastSync =
+        std::chrono::duration_cast<std::chrono::hours>(now - lastSync).count();
+
+    return hoursSinceLastSync >= MongoDBToPostgres::SYNC_INTERVAL_HOURS;
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "shouldSyncCollection",
+                  "Error checking sync time for " + schema_name + "." +
+                      table_name + ": " + std::string(e.what()));
     return true;
   }
-
-  auto lastSync = parseTimestamp(tableInfo.last_sync_time);
-  if (lastSync == std::chrono::system_clock::time_point::min()) {
-    Logger::warning(LogCategory::TRANSFER, "shouldSyncCollection",
-                    "Invalid last_sync_time for " + tableInfo.schema_name +
-                        "." + tableInfo.table_name + ", forcing sync");
-    return true;
-  }
-
-  auto now = std::chrono::system_clock::now();
-  if (lastSync > now) {
-    Logger::warning(LogCategory::TRANSFER, "shouldSyncCollection",
-                    "Future timestamp detected for " + tableInfo.schema_name +
-                        "." + tableInfo.table_name);
-    return true;
-  }
-
-  auto hoursSinceLastSync =
-      std::chrono::duration_cast<std::chrono::hours>(now - lastSync).count();
-
-  return hoursSinceLastSync >= MongoDBToPostgres::SYNC_INTERVAL_HOURS;
 }
 
 void MongoDBToPostgres::updateLastSyncTime(pqxx::connection &pgConn,
@@ -116,14 +143,15 @@ void MongoDBToPostgres::updateLastSyncTime(pqxx::connection &pgConn,
   try {
     std::lock_guard<std::mutex> lock(metadataUpdateMutex);
     pqxx::work txn(pgConn);
-    txn.exec("UPDATE metadata.catalog SET last_sync_time = NOW() WHERE "
+    txn.exec("UPDATE metadata.catalog SET mongo_last_sync_time = NOW() WHERE "
              "schema_name = " +
              txn.quote(schema_name) + " AND table_name = " +
              txn.quote(table_name) + " AND db_engine = 'MongoDB'");
     txn.commit();
   } catch (const std::exception &e) {
     Logger::error(LogCategory::TRANSFER, "updateLastSyncTime",
-                  "Error updating last_sync_time: " + std::string(e.what()));
+                  "Error updating mongo_last_sync_time: " +
+                      std::string(e.what()));
   }
 }
 
@@ -731,7 +759,7 @@ void MongoDBToPostgres::transferDataMongoDBToPostgresParallel() {
     pqxx::work txn(conn);
 
     auto result = txn.exec("SELECT schema_name, table_name, connection_string, "
-                           "status, last_sync_time "
+                           "status "
                            "FROM metadata.catalog "
                            "WHERE db_engine = 'MongoDB' AND active = true");
 
@@ -745,10 +773,9 @@ void MongoDBToPostgres::transferDataMongoDBToPostgresParallel() {
       tableInfo.table_name = row[1].as<std::string>();
       tableInfo.connection_string = row[2].as<std::string>();
       tableInfo.status = row[3].as<std::string>();
-      tableInfo.last_sync_time =
-          row[4].is_null() ? "" : row[4].as<std::string>();
 
-      if (shouldSyncCollection(tableInfo)) {
+      if (shouldSyncCollection(conn, tableInfo.schema_name,
+                               tableInfo.table_name)) {
         collectionsToSync.push_back(tableInfo);
       }
     }

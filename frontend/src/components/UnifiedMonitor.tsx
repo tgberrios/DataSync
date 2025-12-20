@@ -598,12 +598,56 @@ const AxisLine = styled.line`
   opacity: 0.6;
 `;
 
+const Tooltip = styled.div<{ $x: number; $y: number; $visible: boolean }>`
+  position: absolute;
+  left: ${props => props.$x}px;
+  top: ${props => props.$y}px;
+  background: ${theme.colors.background.secondary};
+  border: 1px solid ${theme.colors.border.medium};
+  border-radius: ${theme.borderRadius.md};
+  padding: 8px 12px;
+  font-size: 0.85em;
+  pointer-events: none;
+  opacity: ${props => props.$visible ? 1 : 0};
+  transition: opacity 0.2s ease;
+  z-index: 1000;
+  box-shadow: ${theme.shadows.md};
+  transform: translate(-50%, -100%);
+  margin-top: -8px;
+  white-space: nowrap;
+  
+  &::after {
+    content: '';
+    position: absolute;
+    bottom: -6px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-top: 6px solid ${theme.colors.background.secondary};
+  }
+`;
+
+const TooltipLabel = styled.div`
+  font-weight: 600;
+  color: ${theme.colors.text.primary};
+  margin-bottom: 4px;
+`;
+
+const TooltipValue = styled.div`
+  color: ${theme.colors.text.secondary};
+  font-size: 0.9em;
+`;
+
 const SystemResourcesChart: React.FC<{
   datasets: Array<{ data: number[]; symbol: string; name: string }>;
   labels: string[];
 }> = ({ datasets, labels }) => {
   const chartRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 460 });
+  const [hoveredPoint, setHoveredPoint] = useState<{ x: number; y: number; name: string; value: number } | null>(null);
 
   useEffect(() => {
     const updateDimensions = () => {
@@ -652,6 +696,9 @@ const SystemResourcesChart: React.FC<{
     "Memory (%)": "#0d47a1",
     "Network (IOPS)": "#1565c0",
     "Throughput (RPS)": "#424242",
+    "DB Connections (%)": "#2e7d32",
+    "DB Queries/sec": "#388e3c",
+    "DB Query Efficiency (%)": "#66bb6a",
   };
   const lineWidth = 2;
 
@@ -716,7 +763,13 @@ const SystemResourcesChart: React.FC<{
   }
 
   return (
-    <ChartArea ref={chartRef}>
+    <ChartArea ref={chartRef} style={{ position: 'relative' }}>
+      {hoveredPoint && (
+        <Tooltip $x={hoveredPoint.x} $y={hoveredPoint.y} $visible={true}>
+          <TooltipLabel>{hoveredPoint.name}</TooltipLabel>
+          <TooltipValue>{hoveredPoint.value.toFixed(2)}</TooltipValue>
+        </Tooltip>
+      )}
       <SVGChart viewBox={`0 0 ${dimensions.width} ${dimensions.height}`} preserveAspectRatio="none">
         <defs>
           {datasets.map((dataset, idx) => {
@@ -774,10 +827,59 @@ const SystemResourcesChart: React.FC<{
                   d={path}
                   fill="none"
                   stroke={color}
-                  strokeWidth={lineWidth}
+                  strokeWidth={lineWidth + 1}
                   strokeLinecap="round"
                   strokeLinejoin="round"
+                  style={{ cursor: 'pointer' }}
+                  onMouseEnter={() => {
+                    const rect = chartRef.current?.getBoundingClientRect();
+                    if (rect && dataset.data.length > 0) {
+                      const lastIndex = dataset.data.length - 1;
+                      const x = getX(lastIndex) + padding.left + rect.left;
+                      const y = normalizeY(dataset.data[lastIndex]) + padding.top + rect.top;
+                      setHoveredPoint({
+                        x: x - rect.left,
+                        y: y - rect.top,
+                        name: dataset.name,
+                        value: dataset.data[lastIndex]
+                      });
+                    }
+                  }}
+                  onMouseLeave={() => setHoveredPoint(null)}
                 />
+                {dataset.data.length > 0 && (() => {
+                  const lastIdx = dataset.data.length - 1;
+                  const x = getX(lastIdx);
+                  const y = normalizeY(dataset.data[lastIdx]);
+                  
+                  return (
+                    <g key={`point-${lastIdx}`}>
+                      <circle
+                        cx={x}
+                        cy={y}
+                        r={5}
+                        fill={color}
+                        stroke={theme.colors.background.main}
+                        strokeWidth={2}
+                        style={{ cursor: 'pointer' }}
+                        onMouseEnter={() => {
+                          const rect = chartRef.current?.getBoundingClientRect();
+                          if (rect) {
+                            const absX = x + padding.left + rect.left;
+                            const absY = y + padding.top + rect.top;
+                            setHoveredPoint({
+                              x: absX - rect.left,
+                              y: absY - rect.top,
+                              name: dataset.name,
+                              value: dataset.data[lastIdx]
+                            });
+                          }
+                        }}
+                        onMouseLeave={() => setHoveredPoint(null)}
+                      />
+                    </g>
+                  );
+                })()}
               </g>
             );
           })}
@@ -849,12 +951,12 @@ const SectionTitle = styled.h3`
 
 const UnifiedMonitor: React.FC = () => {
   const location = useLocation();
-  const getInitialTab = (): 'monitor' | 'live' | 'performance' | 'system' => {
+  const getInitialTab = (): 'monitor' | 'live' | 'performance' | 'system' | 'transfer' => {
     if (location.pathname.includes('live-changes')) return 'live';
     if (location.pathname.includes('query-performance')) return 'performance';
     return 'monitor';
   };
-  const [activeTab, setActiveTab] = useState<'monitor' | 'live' | 'performance' | 'system'>(getInitialTab());
+  const [activeTab, setActiveTab] = useState<'monitor' | 'live' | 'performance' | 'system' | 'transfer'>(getInitialTab());
   
   useEffect(() => {
     setActiveTab(getInitialTab());
@@ -870,6 +972,8 @@ const UnifiedMonitor: React.FC = () => {
   const [processingStats, setProcessingStats] = useState<any>({});
   const [queryPerformance, setQueryPerformance] = useState<any[]>([]);
   const [performanceMetrics, setPerformanceMetrics] = useState<any>({});
+  const [transferMetrics, setTransferMetrics] = useState<any[]>([]);
+  const [transferStats, setTransferStats] = useState<any>({});
   
   const [resourceHistory, setResourceHistory] = useState<{
     timestamp: string[];
@@ -877,25 +981,37 @@ const UnifiedMonitor: React.FC = () => {
     memoryPercentage: number[];
     network: number[];
     throughput: number[];
+    dbConnections: number[];
+    dbQueriesPerSecond: number[];
+    dbQueryEfficiency: number[];
   }>({
     timestamp: [],
     cpuUsage: [],
     memoryPercentage: [],
     network: [],
     throughput: [],
+    dbConnections: [],
+    dbQueriesPerSecond: [],
+    dbQueryEfficiency: [],
   });
   const [visibleLines, setVisibleLines] = useState<{
     cpu: boolean;
     memory: boolean;
     network: boolean;
     throughput: boolean;
+    dbConnections: boolean;
+    dbQueriesPerSecond: boolean;
+    dbQueryEfficiency: boolean;
   }>({
     cpu: true,
     memory: true,
     network: true,
     throughput: true,
+    dbConnections: true,
+    dbQueriesPerSecond: true,
+    dbQueryEfficiency: true,
   });
-  const [systemResources, setSystemResources] = useState<any>({});
+  const [dbHealth, setDbHealth] = useState<any>({});
   
   const isMountedRef = useRef(true);
 
@@ -958,16 +1074,39 @@ const UnifiedMonitor: React.FC = () => {
     }
   }, []);
 
+  const fetchTransferMetrics = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    try {
+      const [metrics, stats] = await Promise.all([
+        monitorApi.getTransferMetrics({ page: 1, limit: 100, days: 7 }),
+        monitorApi.getTransferMetricsStats({ days: 7 })
+      ]);
+      if (isMountedRef.current) {
+        setTransferMetrics(metrics.data || []);
+        setTransferStats(stats || {});
+      }
+    } catch (err) {
+      if (isMountedRef.current) {
+        setError(extractApiError(err));
+      }
+    }
+  }, []);
+
   const fetchSystemResources = useCallback(async () => {
     if (!isMountedRef.current) return;
     try {
       const dashboardData = await dashboardApi.getDashboardStats();
       if (isMountedRef.current) {
-        setSystemResources(dashboardData.systemResources || {});
+        setDbHealth(dashboardData.dbHealth || {});
         const now = new Date();
         const timeLabel = `${now.getHours().toString().padStart(2, "0")}:${now.getMinutes().toString().padStart(2, "0")}:${now.getSeconds().toString().padStart(2, "0")}`;
         const networkValue = dashboardData.metricsCards?.currentIops || 0;
         const throughputValue = dashboardData.metricsCards?.currentThroughput?.avgRps || 0;
+        const dbConnectionsValue = parseFloat(dashboardData.dbHealth?.connectionPercentage || "0") || 0;
+        const dbQueriesPerSecondValue = dashboardData.dbHealth?.totalQueries24h 
+          ? (dashboardData.dbHealth.totalQueries24h / (24 * 3600)) 
+          : 0;
+        const dbQueryEfficiencyValue = parseFloat(dashboardData.dbHealth?.queryEfficiencyScore?.toString() || "0") || 0;
         
         setResourceHistory((prev) => {
           const maxPoints = 60;
@@ -989,6 +1128,18 @@ const UnifiedMonitor: React.FC = () => {
               ...prev.throughput,
               throughputValue,
             ].slice(-maxPoints),
+            dbConnections: [
+              ...prev.dbConnections,
+              dbConnectionsValue,
+            ].slice(-maxPoints),
+            dbQueriesPerSecond: [
+              ...prev.dbQueriesPerSecond,
+              dbQueriesPerSecondValue,
+            ].slice(-maxPoints),
+            dbQueryEfficiency: [
+              ...prev.dbQueryEfficiency,
+              dbQueryEfficiencyValue,
+            ].slice(-maxPoints),
           };
         });
       }
@@ -1003,6 +1154,7 @@ const UnifiedMonitor: React.FC = () => {
     try {
       if (!isMountedRef.current) return;
       const logs = await dashboardApi.getSystemLogs(60);
+      const dashboardData = await dashboardApi.getDashboardStats();
       if (isMountedRef.current && logs.length > 0) {
         setResourceHistory({
           timestamp: logs.map((log: any) => log.timestamp),
@@ -1010,6 +1162,11 @@ const UnifiedMonitor: React.FC = () => {
           memoryPercentage: logs.map((log: any) => log.memoryPercentage),
           network: logs.map((log: any) => log.network),
           throughput: logs.map((log: any) => log.throughput),
+          dbConnections: logs.map(() => parseFloat(dashboardData.dbHealth?.connectionPercentage || "0") || 0),
+          dbQueriesPerSecond: logs.map(() => dashboardData.dbHealth?.totalQueries24h 
+            ? (dashboardData.dbHealth.totalQueries24h / (24 * 3600)) 
+            : 0),
+          dbQueryEfficiency: logs.map(() => parseFloat(dashboardData.dbHealth?.queryEfficiencyScore?.toString() || "0") || 0),
         });
       }
     } catch (err) {
@@ -1028,6 +1185,9 @@ const UnifiedMonitor: React.FC = () => {
       if (activeTab === 'system') {
         await fetchSystemLogsHistory();
       }
+      if (activeTab === 'transfer') {
+        await fetchTransferMetrics();
+      }
       if (isMountedRef.current) {
         setLoading(false);
       }
@@ -1044,6 +1204,9 @@ const UnifiedMonitor: React.FC = () => {
         if (activeTab === 'system') {
           fetchSystemResources();
         }
+        if (activeTab === 'transfer') {
+          fetchTransferMetrics();
+        }
       }
     }, 5000);
     
@@ -1056,7 +1219,7 @@ const UnifiedMonitor: React.FC = () => {
         clearInterval(systemInterval);
       }
     };
-  }, [fetchMonitorData, fetchPerformanceData, fetchSystemResources, fetchSystemLogsHistory, activeTab]);
+  }, [fetchMonitorData, fetchPerformanceData, fetchSystemResources, fetchSystemLogsHistory, fetchTransferMetrics, activeTab]);
 
   const treeData = useMemo(() => {
     if (activeTab === 'monitor') {
@@ -1084,6 +1247,16 @@ const UnifiedMonitor: React.FC = () => {
         schemas.get(schema)!.push(log);
       });
       return databases;
+    } else if (activeTab === 'transfer') {
+      const databases = new Map<string, any[]>();
+      transferMetrics.forEach(metric => {
+        const db = metric.db_engine || 'Unknown';
+        if (!databases.has(db)) {
+          databases.set(db, []);
+        }
+        databases.get(db)!.push(metric);
+      });
+      return databases;
     } else {
       const databases = new Map<string, any[]>();
       queryPerformance.forEach(query => {
@@ -1095,7 +1268,7 @@ const UnifiedMonitor: React.FC = () => {
       });
       return databases;
     }
-  }, [activeTab, activeQueries, processingLogs, queryPerformance]);
+  }, [activeTab, activeQueries, processingLogs, queryPerformance, transferMetrics]);
 
   const toggleNode = useCallback((key: string) => {
     setExpandedNodes(prev => {
@@ -1228,6 +1401,14 @@ const UnifiedMonitor: React.FC = () => {
                           <QueryPreview>{item.query_text?.substring(0, 60)}...</QueryPreview>
                         </>
                       )}
+                      {activeTab === 'transfer' && (
+                        <>
+                          <div style={{ fontWeight: 500, color: theme.colors.text.primary }}>
+                            {item.schema_name}.{item.table_name}
+                          </div>
+                          <QueryPreview>{item.db_engine} - {formatDate(item.created_at)}</QueryPreview>
+                        </>
+                      )}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       {activeTab === 'monitor' && (
@@ -1250,6 +1431,11 @@ const UnifiedMonitor: React.FC = () => {
                       {activeTab === 'performance' && (
                         <StatusBadge $status={item.performance_tier || 'N/A'}>
                           {item.performance_tier || 'N/A'}
+                        </StatusBadge>
+                      )}
+                      {activeTab === 'transfer' && (
+                        <StatusBadge $status={item.status || 'PENDING'}>
+                          {item.status || 'PENDING'}
                         </StatusBadge>
                       )}
                     </div>
@@ -1592,6 +1778,199 @@ const UnifiedMonitor: React.FC = () => {
       );
     }
     
+    if (activeTab === 'transfer') {
+      const metricsByStatus = transferMetrics.reduce((acc: Record<string, number>, metric: any) => {
+        const status = metric.status || 'PENDING';
+        acc[status] = (acc[status] || 0) + 1;
+        return acc;
+      }, {});
+      
+      const metricsByType = transferMetrics.reduce((acc: Record<string, number>, metric: any) => {
+        const type = metric.transfer_type || 'UNKNOWN';
+        acc[type] = (acc[type] || 0) + 1;
+        return acc;
+      }, {});
+
+      const metricsByEngine = transferMetrics.reduce((acc: Record<string, number>, metric: any) => {
+        const engine = metric.db_engine || 'Unknown';
+        acc[engine] = (acc[engine] || 0) + 1;
+        return acc;
+      }, {});
+
+      const totalRecords = transferMetrics.reduce((sum: number, m: any) => sum + (parseInt(m.records_transferred) || 0), 0);
+      const totalBytes = transferMetrics.reduce((sum: number, m: any) => sum + (parseInt(m.bytes_transferred) || 0), 0);
+      const avgMemory = transferMetrics.length > 0 
+        ? transferMetrics.reduce((sum: number, m: any) => sum + (parseFloat(m.memory_used_mb) || 0), 0) / transferMetrics.length
+        : 0;
+      const avgIOPS = transferMetrics.length > 0
+        ? transferMetrics.reduce((sum: number, m: any) => sum + (parseInt(m.io_operations_per_second) || 0), 0) / transferMetrics.length
+        : 0;
+
+      return (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: theme.spacing.lg, marginBottom: theme.spacing.lg }}>
+          <ChartContainer style={{ padding: theme.spacing.md }}>
+            <ChartTitle style={{ marginBottom: theme.spacing.md, fontSize: '0.9em' }}>
+              Transfers by Status
+            </ChartTitle>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.sm }}>
+              {Object.entries(metricsByStatus)
+                .sort(([, a], [, b]) => b - a)
+                .map(([status, count]) => {
+                  const max = Math.max(...Object.values(metricsByStatus));
+                  const statusColors: Record<string, string> = {
+                    'SUCCESS': '#4caf50',
+                    'FAILED': '#f44336',
+                    'PENDING': '#ff9800',
+                  };
+                  return (
+                    <div key={status} style={{ display: 'flex', alignItems: 'center', gap: theme.spacing.sm }}>
+                      <span style={{ flex: 1, fontSize: '0.85em', color: theme.colors.text.primary, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {status}
+                      </span>
+                      <span style={{ fontSize: '0.85em', fontWeight: 600, color: theme.colors.text.secondary, minWidth: '40px' }}>
+                        {count}
+                      </span>
+                      <div style={{ 
+                        flex: 1, 
+                        height: '8px', 
+                        background: theme.colors.background.secondary, 
+                        borderRadius: theme.borderRadius.sm,
+                        overflow: 'hidden',
+                        maxWidth: '150px'
+                      }}>
+                        <div style={{
+                          width: `${max > 0 ? (count / max) * 100 : 0}%`,
+                          height: '100%',
+                          background: statusColors[status] || theme.colors.primary.main,
+                          transition: 'width 0.3s ease'
+                        }} />
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          </ChartContainer>
+          
+          <ChartContainer style={{ padding: theme.spacing.md }}>
+            <ChartTitle style={{ marginBottom: theme.spacing.md, fontSize: '0.9em' }}>
+              Transfers by Type
+            </ChartTitle>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.sm }}>
+              {Object.entries(metricsByType)
+                .sort(([, a], [, b]) => b - a)
+                .map(([type, count]) => {
+                  const max = Math.max(...Object.values(metricsByType));
+                  const typeColors: Record<string, string> = {
+                    'FULL_LOAD': '#1976d2',
+                    'INCREMENTAL': '#0d47a1',
+                    'SYNC': '#1565c0',
+                    'UNKNOWN': '#9e9e9e',
+                  };
+                  return (
+                    <div key={type} style={{ display: 'flex', alignItems: 'center', gap: theme.spacing.sm }}>
+                      <span style={{ flex: 1, fontSize: '0.85em', color: theme.colors.text.primary, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {type}
+                      </span>
+                      <span style={{ fontSize: '0.85em', fontWeight: 600, color: theme.colors.text.secondary, minWidth: '40px' }}>
+                        {count}
+                      </span>
+                      <div style={{ 
+                        flex: 1, 
+                        height: '8px', 
+                        background: theme.colors.background.secondary, 
+                        borderRadius: theme.borderRadius.sm,
+                        overflow: 'hidden',
+                        maxWidth: '150px'
+                      }}>
+                        <div style={{
+                          width: `${max > 0 ? (count / max) * 100 : 0}%`,
+                          height: '100%',
+                          background: typeColors[type] || theme.colors.primary.main,
+                          transition: 'width 0.3s ease'
+                        }} />
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          </ChartContainer>
+
+          <ChartContainer style={{ padding: theme.spacing.md }}>
+            <ChartTitle style={{ marginBottom: theme.spacing.md, fontSize: '0.9em' }}>
+              Transfers by Engine
+            </ChartTitle>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.sm }}>
+              {Object.entries(metricsByEngine)
+                .sort(([, a], [, b]) => b - a)
+                .slice(0, 5)
+                .map(([engine, count]) => {
+                  const max = Math.max(...Object.values(metricsByEngine));
+                  return (
+                    <div key={engine} style={{ display: 'flex', alignItems: 'center', gap: theme.spacing.sm }}>
+                      <span style={{ flex: 1, fontSize: '0.85em', color: theme.colors.text.primary, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {engine}
+                      </span>
+                      <span style={{ fontSize: '0.85em', fontWeight: 600, color: theme.colors.text.secondary, minWidth: '40px' }}>
+                        {count}
+                      </span>
+                      <div style={{ 
+                        flex: 1, 
+                        height: '8px', 
+                        background: theme.colors.background.secondary, 
+                        borderRadius: theme.borderRadius.sm,
+                        overflow: 'hidden',
+                        maxWidth: '150px'
+                      }}>
+                        <div style={{
+                          width: `${max > 0 ? (count / max) * 100 : 0}%`,
+                          height: '100%',
+                          background: theme.colors.primary.main,
+                          transition: 'width 0.3s ease'
+                        }} />
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          </ChartContainer>
+
+          <ChartContainer style={{ padding: theme.spacing.md }}>
+            <ChartTitle style={{ marginBottom: theme.spacing.md, fontSize: '0.9em' }}>
+              Summary Statistics
+            </ChartTitle>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.md }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: theme.spacing.sm }}>
+                <div>
+                  <div style={{ fontSize: '0.75em', color: theme.colors.text.secondary, marginBottom: '4px' }}>Total Records</div>
+                  <div style={{ fontSize: '1.1em', fontWeight: 600, color: theme.colors.text.primary }}>
+                    {totalRecords.toLocaleString()}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.75em', color: theme.colors.text.secondary, marginBottom: '4px' }}>Total Bytes</div>
+                  <div style={{ fontSize: '1.1em', fontWeight: 600, color: theme.colors.text.primary }}>
+                    {(totalBytes / (1024 * 1024 * 1024)).toFixed(2)} GB
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.75em', color: theme.colors.text.secondary, marginBottom: '4px' }}>Avg Memory</div>
+                  <div style={{ fontSize: '1.1em', fontWeight: 600, color: theme.colors.text.primary }}>
+                    {avgMemory.toFixed(2)} MB
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.75em', color: theme.colors.text.secondary, marginBottom: '4px' }}>Avg IOPS</div>
+                  <div style={{ fontSize: '1.1em', fontWeight: 600, color: theme.colors.text.primary }}>
+                    {avgIOPS.toFixed(0)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </ChartContainer>
+        </div>
+      );
+    }
+    
     return null;
   };
 
@@ -1698,6 +2077,72 @@ const UnifiedMonitor: React.FC = () => {
             </DetailValue>
           </DetailsGrid>
           <QueryText>{selectedItem.query || 'N/A'}</QueryText>
+        </DetailsCard>
+      );
+    } else if (activeTab === 'transfer') {
+      return (
+        <DetailsCard>
+          <DetailsTitle>Transfer Metrics Details</DetailsTitle>
+          <DetailsGrid>
+            <DetailLabel>Schema:</DetailLabel>
+            <DetailValue>{selectedItem.schema_name || 'N/A'}</DetailValue>
+            
+            <DetailLabel>Table:</DetailLabel>
+            <DetailValue>{selectedItem.table_name || 'N/A'}</DetailValue>
+            
+            <DetailLabel>Database Engine:</DetailLabel>
+            <DetailValue>{selectedItem.db_engine || 'N/A'}</DetailValue>
+            
+            <DetailLabel>Status:</DetailLabel>
+            <DetailValue>
+              <StatusBadge $status={selectedItem.status || 'PENDING'}>
+                {selectedItem.status || 'PENDING'}
+              </StatusBadge>
+            </DetailValue>
+            
+            <DetailLabel>Transfer Type:</DetailLabel>
+            <DetailValue>
+              <StatusBadge $status={selectedItem.transfer_type || 'UNKNOWN'}>
+                {selectedItem.transfer_type || 'UNKNOWN'}
+              </StatusBadge>
+            </DetailValue>
+            
+            <DetailLabel>Records Transferred:</DetailLabel>
+            <DetailValue>{(selectedItem.records_transferred || 0).toLocaleString()}</DetailValue>
+            
+            <DetailLabel>Bytes Transferred:</DetailLabel>
+            <DetailValue>
+              {selectedItem.bytes_transferred 
+                ? `${(selectedItem.bytes_transferred / (1024 * 1024 * 1024)).toFixed(2)} GB`
+                : '0 GB'}
+            </DetailValue>
+            
+            <DetailLabel>Memory Used:</DetailLabel>
+            <DetailValue>
+              {selectedItem.memory_used_mb 
+                ? `${parseFloat(selectedItem.memory_used_mb).toFixed(2)} MB`
+                : '0 MB'}
+            </DetailValue>
+            
+            <DetailLabel>IO Operations/sec:</DetailLabel>
+            <DetailValue>{selectedItem.io_operations_per_second || 0}</DetailValue>
+            
+            <DetailLabel>Started At:</DetailLabel>
+            <DetailValue>{selectedItem.started_at ? formatDate(selectedItem.started_at) : 'N/A'}</DetailValue>
+            
+            <DetailLabel>Completed At:</DetailLabel>
+            <DetailValue>{selectedItem.completed_at ? formatDate(selectedItem.completed_at) : 'N/A'}</DetailValue>
+            
+            <DetailLabel>Created At:</DetailLabel>
+            <DetailValue>{formatDate(selectedItem.created_at)}</DetailValue>
+            
+            {selectedItem.error_message && (
+              <>
+                <DetailLabel>Error Message:</DetailLabel>
+                <DetailValue>{selectedItem.error_message}</DetailValue>
+              </>
+            )}
+          </DetailsGrid>
         </DetailsCard>
       );
     } else {
@@ -1821,16 +2266,17 @@ const UnifiedMonitor: React.FC = () => {
             </LegendItem>
             <ShowAllButton
               onClick={() => {
-                const allVisible = Object.values(visibleLines).every((v) => v);
-                setVisibleLines({
+                const allVisible = [visibleLines.cpu, visibleLines.memory, visibleLines.network, visibleLines.throughput].every((v) => v);
+                setVisibleLines((prev) => ({
+                  ...prev,
                   cpu: !allVisible,
                   memory: !allVisible,
                   network: !allVisible,
                   throughput: !allVisible,
-                });
+                }));
               }}
             >
-              {Object.values(visibleLines).every((v) => v) ? "Clear All" : "Show All"}
+              {[visibleLines.cpu, visibleLines.memory, visibleLines.network, visibleLines.throughput].every((v) => v) ? "Clear All" : "Show All"}
             </ShowAllButton>
           </ChartTitle>
           <SystemResourcesChart
@@ -1875,25 +2321,169 @@ const UnifiedMonitor: React.FC = () => {
             labels={resourceHistory.timestamp}
           />
         </ChartContainer>
-        
-        <StatsContainer>
-          <StatCard>
-            <StatValue>{systemResources.cpuUsage || '0.0'}%</StatValue>
-            <StatLabel>CPU Usage</StatLabel>
-          </StatCard>
-          <StatCard>
-            <StatValue>{systemResources.memoryPercentage || '0.0'}%</StatValue>
-            <StatLabel>Memory</StatLabel>
-          </StatCard>
-          <StatCard>
-            <StatValue>{systemResources.memoryUsed || '0.0'} GB</StatValue>
-            <StatLabel>Memory Used</StatLabel>
-          </StatCard>
-          <StatCard>
-            <StatValue>{systemResources.memoryTotal || '0.0'} GB</StatValue>
-            <StatLabel>Memory Total</StatLabel>
-          </StatCard>
-        </StatsContainer>
+
+        <ChartContainer style={{ marginTop: theme.spacing.lg }}>
+          <ChartTitle>
+            <LegendItem
+              $lineStyle="solid"
+              $active={visibleLines.dbConnections}
+            >
+              <Checkbox
+                type="checkbox"
+                checked={visibleLines.dbConnections}
+                onChange={(e) => {
+                  setVisibleLines((prev) => ({ ...prev, dbConnections: e.target.checked }));
+                }}
+              />
+              <LegendLine $color="#2e7d32" $active={visibleLines.dbConnections} />
+              DB Connections (%)
+            </LegendItem>
+            <LegendItem
+              $lineStyle="solid"
+              $active={visibleLines.dbQueriesPerSecond}
+            >
+              <Checkbox
+                type="checkbox"
+                checked={visibleLines.dbQueriesPerSecond}
+                onChange={(e) => {
+                  setVisibleLines((prev) => ({ ...prev, dbQueriesPerSecond: e.target.checked }));
+                }}
+              />
+              <LegendLine $color="#388e3c" $active={visibleLines.dbQueriesPerSecond} />
+              DB Queries/sec
+            </LegendItem>
+            <ShowAllButton
+              onClick={() => {
+                const allVisible = [visibleLines.dbConnections, visibleLines.dbQueriesPerSecond].every((v) => v);
+                setVisibleLines((prev) => ({
+                  ...prev,
+                  dbConnections: !allVisible,
+                  dbQueriesPerSecond: !allVisible,
+                }));
+              }}
+            >
+              {[visibleLines.dbConnections, visibleLines.dbQueriesPerSecond].every((v) => v) ? "Clear All" : "Show All"}
+            </ShowAllButton>
+          </ChartTitle>
+          <SystemResourcesChart
+            datasets={[
+              ...(visibleLines.dbConnections
+                ? [
+                    {
+                      data: resourceHistory.dbConnections,
+                      symbol: "●",
+                      name: "DB Connections (%)",
+                    },
+                  ]
+                : []),
+              ...(visibleLines.dbQueriesPerSecond
+                ? [
+                    {
+                      data: resourceHistory.dbQueriesPerSecond,
+                      symbol: "▲",
+                      name: "DB Queries/sec",
+                    },
+                  ]
+                : []),
+            ]}
+            labels={resourceHistory.timestamp}
+          />
+        </ChartContainer>
+
+        <DetailsCard style={{ marginTop: theme.spacing.lg }}>
+          <DetailsTitle>■ DATABASE HEALTH</DetailsTitle>
+          <div style={{ 
+            fontFamily: 'Monaco, Menlo, "Courier New", monospace',
+            fontSize: '0.9em',
+            lineHeight: '1.8',
+            color: theme.colors.text.primary,
+            padding: theme.spacing.md,
+            background: theme.colors.background.main,
+            borderRadius: theme.borderRadius.md,
+            border: `1px solid ${theme.colors.border.light}`
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+              <span style={{ color: theme.colors.text.secondary }}>├─ Active Connections:</span>
+              <span style={{ fontWeight: 500, marginLeft: '20px' }}>{dbHealth.activeConnections || '0/0'}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+              <span style={{ color: theme.colors.text.secondary }}>├─ Connection Usage:</span>
+              <span style={{ fontWeight: 500, marginLeft: '20px' }}>{dbHealth.connectionPercentage || '0.0'}%</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+              <span style={{ color: theme.colors.text.secondary }}>├─ Response Time:</span>
+              <span style={{ fontWeight: 500, marginLeft: '20px' }}>{dbHealth.responseTime || '< 1ms'}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+              <span style={{ color: theme.colors.text.secondary }}>├─ Buffer Hit Rate:</span>
+              <span style={{ fontWeight: 500, marginLeft: '20px' }}>{dbHealth.bufferHitRate || '0.0'}%</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+              <span style={{ color: theme.colors.text.secondary }}>├─ Cache Hit Rate:</span>
+              <span style={{ fontWeight: 500, marginLeft: '20px' }}>{dbHealth.cacheHitRate || '0.0'}%</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+              <span style={{ color: theme.colors.text.secondary }}>├─ Status:</span>
+              <span style={{ marginLeft: '20px' }}>
+                <StatusBadge $status={dbHealth.status === 'Healthy' ? 'active' : 'idle'}>
+                  {dbHealth.status || 'Unknown'}
+                </StatusBadge>
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+              <span style={{ color: theme.colors.text.secondary }}>├─ Uptime:</span>
+              <span style={{ fontWeight: 500, marginLeft: '20px' }}>
+                {dbHealth.uptimeSeconds 
+                  ? `${Math.floor(dbHealth.uptimeSeconds / 86400)}d ${Math.floor((dbHealth.uptimeSeconds % 86400) / 3600)}h ${Math.floor((dbHealth.uptimeSeconds % 3600) / 60)}m`
+                  : 'N/A'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+              <span style={{ color: theme.colors.text.secondary }}>├─ Active Queries:</span>
+              <span style={{ fontWeight: 500, marginLeft: '20px' }}>{dbHealth.activeQueries || 0}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+              <span style={{ color: theme.colors.text.secondary }}>├─ Waiting Queries:</span>
+              <span style={{ fontWeight: 500, marginLeft: '20px' }}>{dbHealth.waitingQueries || 0}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+              <span style={{ color: theme.colors.text.secondary }}>├─ Avg Query Duration:</span>
+              <span style={{ fontWeight: 500, marginLeft: '20px' }}>
+                {dbHealth.avgQueryDuration && typeof dbHealth.avgQueryDuration === 'number' 
+                  ? `${dbHealth.avgQueryDuration.toFixed(2)}s` 
+                  : 'N/A'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+              <span style={{ color: theme.colors.text.secondary }}>├─ Query Efficiency:</span>
+              <span style={{ fontWeight: 500, marginLeft: '20px' }}>
+                {dbHealth.queryEfficiencyScore && typeof dbHealth.queryEfficiencyScore === 'number'
+                  ? `${dbHealth.queryEfficiencyScore.toFixed(1)}%`
+                  : '0.0%'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+              <span style={{ color: theme.colors.text.secondary }}>├─ Long Running Queries:</span>
+              <span style={{ fontWeight: 500, marginLeft: '20px' }}>{dbHealth.longRunningQueries || 0}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+              <span style={{ color: theme.colors.text.secondary }}>├─ Blocking Queries:</span>
+              <span style={{ fontWeight: 500, marginLeft: '20px' }}>{dbHealth.blockingQueries || 0}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+              <span style={{ color: theme.colors.text.secondary }}>├─ Total Queries (24h):</span>
+              <span style={{ fontWeight: 500, marginLeft: '20px' }}>{dbHealth.totalQueries24h || 0}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span style={{ color: theme.colors.text.secondary }}>└─ Database Size:</span>
+              <span style={{ fontWeight: 500, marginLeft: '20px' }}>
+                {dbHealth.databaseSizeBytes 
+                  ? `${(dbHealth.databaseSizeBytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
+                  : 'N/A'}
+              </span>
+            </div>
+          </div>
+        </DetailsCard>
       </DetailsPanel>
     );
   };
@@ -1942,6 +2532,43 @@ const UnifiedMonitor: React.FC = () => {
           <StatCard>
             <StatValue>{processingStats.errors || 0}</StatValue>
             <StatLabel>Errors</StatLabel>
+          </StatCard>
+        </StatsContainer>
+      );
+    } else if (activeTab === 'transfer') {
+      return (
+        <StatsContainer>
+          <StatCard>
+            <StatValue>{transferStats.total_transfers || 0}</StatValue>
+            <StatLabel>Total Transfers</StatLabel>
+          </StatCard>
+          <StatCard>
+            <StatValue>{transferStats.successful || 0}</StatValue>
+            <StatLabel>Successful</StatLabel>
+          </StatCard>
+          <StatCard>
+            <StatValue>{transferStats.failed || 0}</StatValue>
+            <StatLabel>Failed</StatLabel>
+          </StatCard>
+          <StatCard>
+            <StatValue>{transferStats.pending || 0}</StatValue>
+            <StatLabel>Pending</StatLabel>
+          </StatCard>
+          <StatCard>
+            <StatValue>
+              {transferStats.total_records 
+                ? `${(transferStats.total_records / 1000000).toFixed(1)}M` 
+                : '0'}
+            </StatValue>
+            <StatLabel>Total Records</StatLabel>
+          </StatCard>
+          <StatCard>
+            <StatValue>
+              {transferStats.total_bytes 
+                ? `${(transferStats.total_bytes / (1024 * 1024 * 1024)).toFixed(1)} GB` 
+                : '0 GB'}
+            </StatValue>
+            <StatLabel>Total Bytes</StatLabel>
           </StatCard>
         </StatsContainer>
       );
@@ -2005,6 +2632,9 @@ const UnifiedMonitor: React.FC = () => {
         </Tab>
         <Tab $active={activeTab === 'performance'} onClick={() => setActiveTab('performance')}>
           Query Performance
+        </Tab>
+        <Tab $active={activeTab === 'transfer'} onClick={() => setActiveTab('transfer')}>
+          Transfer Metrics
         </Tab>
         <Tab $active={activeTab === 'system'} onClick={() => setActiveTab('system')}>
           System Resources

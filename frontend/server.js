@@ -658,7 +658,6 @@ app.get("/api/catalog", requireAuth, async (req, res) => {
       "status",
       "active",
       "pk_strategy",
-      "last_sync_column",
       "cluster_name",
     ]);
 
@@ -885,8 +884,6 @@ app.post(
       ["PK", "OFFSET"],
       "OFFSET"
     );
-    const last_sync_column = req.body.last_sync_column || null;
-
     if (!schema_name || !table_name || !db_engine || !connection_string) {
       return res.status(400).json({
         error:
@@ -911,8 +908,8 @@ app.post(
       const result = await pool.query(
         `INSERT INTO metadata.catalog 
        (schema_name, table_name, db_engine, connection_string, status, active, 
-        cluster_name, pk_strategy, last_sync_column, last_sync_time)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL)
+        cluster_name, pk_strategy)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
         [
           schema_name,
@@ -923,7 +920,6 @@ app.post(
           active,
           cluster_name,
           pk_strategy,
-          last_sync_column,
         ]
       );
 
@@ -1226,7 +1222,21 @@ app.get("/api/dashboard/stats", async (req, res) => {
             'cache_hit_ratio', ROUND(COALESCE((sum(idx_blks_hit) * 100.0 / NULLIF(sum(idx_blks_hit) + sum(idx_blks_read), 0)), 100)::numeric, 1)
           )
           FROM pg_statio_user_tables
-        ) as cache_stats
+        ) as cache_stats,
+        (SELECT count(*) FROM pg_stat_activity WHERE state = 'active') as active_queries,
+        (SELECT count(*) FROM pg_stat_activity WHERE wait_event_type IS NOT NULL) as waiting_queries,
+        (SELECT ROUND(AVG(EXTRACT(EPOCH FROM (now() - query_start)))::numeric, 2) FROM pg_stat_activity WHERE state = 'active' AND query_start IS NOT NULL) as avg_query_duration,
+        (SELECT pg_database_size(current_database())) as database_size_bytes
+    `);
+
+    const queryPerformanceMetrics = await pool.query(`
+      SELECT 
+        ROUND(AVG(query_efficiency_score)::numeric, 2) as avg_efficiency_score,
+        COUNT(*) FILTER (WHERE is_long_running = true) as long_running_count,
+        COUNT(*) FILTER (WHERE is_blocking = true) as blocking_count,
+        COUNT(*) as total_queries_24h
+      FROM metadata.query_performance
+      WHERE captured_at > NOW() - INTERVAL '24 hours'
     `);
 
     // Connection pooling removed - using direct connections now
@@ -1286,6 +1296,14 @@ app.get("/api/dashboard/stats", async (req, res) => {
             "/" +
             dbHealth.rows[0].max_connections
           : "0/0",
+        connectionPercentage:
+          dbHealth.rows[0] && dbHealth.rows[0].max_connections > 0
+            ? (
+                (dbHealth.rows[0].active_connections /
+                  dbHealth.rows[0].max_connections) *
+                100
+              ).toFixed(1)
+            : "0.0",
         responseTime: "< 1ms",
         bufferHitRate: (
           dbHealth.rows[0]?.cache_stats?.buffer_hit_ratio || 0
@@ -1294,6 +1312,26 @@ app.get("/api/dashboard/stats", async (req, res) => {
           dbHealth.rows[0]?.cache_stats?.cache_hit_ratio || 0
         ).toFixed(1),
         status: dbHealth.rows[0] ? "Healthy" : "Unknown",
+        uptimeSeconds: parseFloat(dbHealth.rows[0]?.uptime_seconds || 0) || 0,
+        activeQueries: parseInt(dbHealth.rows[0]?.active_queries || 0) || 0,
+        waitingQueries: parseInt(dbHealth.rows[0]?.waiting_queries || 0) || 0,
+        avgQueryDuration:
+          parseFloat(dbHealth.rows[0]?.avg_query_duration || 0) || 0,
+        databaseSizeBytes:
+          parseInt(dbHealth.rows[0]?.database_size_bytes || 0) || 0,
+        queryEfficiencyScore:
+          parseFloat(
+            queryPerformanceMetrics.rows[0]?.avg_efficiency_score || 0
+          ) || 0,
+        longRunningQueries: parseInt(
+          queryPerformanceMetrics.rows[0]?.long_running_count || 0
+        ),
+        blockingQueries: parseInt(
+          queryPerformanceMetrics.rows[0]?.blocking_count || 0
+        ),
+        totalQueries24h: parseInt(
+          queryPerformanceMetrics.rows[0]?.total_queries_24h || 0
+        ),
       },
       // Connection pooling removed - using direct connections now
     };
@@ -1593,11 +1631,9 @@ app.post("/api/monitor/queries/:pid/kill", requireAuth, async (req, res) => {
         message: `Query with PID ${pid} has been terminated`,
       });
     } else {
-      res
-        .status(404)
-        .json({
-          error: `Query with PID ${pid} not found or could not be terminated`,
-        });
+      res.status(404).json({
+        error: `Query with PID ${pid} not found or could not be terminated`,
+      });
     }
   } catch (err) {
     console.error("Error killing query:", err);
@@ -1877,6 +1913,32 @@ app.get("/api/governance/data", async (req, res) => {
     const safeError = sanitizeError(
       err,
       "Error al obtener datos de governance",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
+  }
+});
+
+app.get("/api/governance/metrics", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        COUNT(DISTINCT schema_name || '.' || table_name) as total_tables,
+        SUM(COALESCE(table_size_mb, 0)) as total_size_mb,
+        SUM(COALESCE(total_rows, 0)) as total_rows,
+        COUNT(*) FILTER (WHERE health_status IN ('EXCELLENT', 'HEALTHY')) as healthy_count,
+        COUNT(*) FILTER (WHERE health_status = 'WARNING') as warning_count,
+        COUNT(*) FILTER (WHERE health_status = 'CRITICAL') as critical_count,
+        COUNT(DISTINCT inferred_source_engine) as unique_engines
+      FROM metadata.data_governance_catalog
+    `);
+
+    res.json(result.rows[0] || {});
+  } catch (err) {
+    console.error("Error getting governance metrics:", err);
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener métricas de governance",
       process.env.NODE_ENV === "production"
     );
     res.status(500).json({ error: safeError });
@@ -2874,6 +2936,155 @@ app.post(
   }
 );
 
+app.get("/api/monitor/transfer-metrics", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 100;
+    const offset = (page - 1) * limit;
+    const schemaName = req.query.schema_name;
+    const tableName = req.query.table_name;
+    const dbEngine = req.query.db_engine;
+    const status = req.query.status;
+    const transferType = req.query.transfer_type;
+    const days = parseInt(req.query.days) || 7;
+
+    let whereConditions = [`created_at > NOW() - INTERVAL '${days} days'`];
+    let queryParams = [];
+    let paramIndex = 1;
+
+    if (schemaName) {
+      whereConditions.push(`LOWER(schema_name) = LOWER($${paramIndex})`);
+      queryParams.push(schemaName);
+      paramIndex++;
+    }
+
+    if (tableName) {
+      whereConditions.push(`LOWER(table_name) = LOWER($${paramIndex})`);
+      queryParams.push(tableName);
+      paramIndex++;
+    }
+
+    if (dbEngine) {
+      whereConditions.push(`db_engine = $${paramIndex}`);
+      queryParams.push(dbEngine);
+      paramIndex++;
+    }
+
+    if (status) {
+      whereConditions.push(`status = $${paramIndex}`);
+      queryParams.push(status);
+      paramIndex++;
+    }
+
+    if (transferType) {
+      whereConditions.push(`transfer_type = $${paramIndex}`);
+      queryParams.push(transferType);
+      paramIndex++;
+    }
+
+    const whereClause = whereConditions.join(" AND ");
+
+    const countQuery = `SELECT COUNT(*) as total FROM metadata.transfer_metrics WHERE ${whereClause}`;
+    const countResult = await pool.query(countQuery, queryParams);
+    const total = parseInt(countResult.rows[0]?.total || 0);
+
+    const dataQuery = `
+      SELECT 
+        id,
+        schema_name,
+        table_name,
+        db_engine,
+        records_transferred,
+        bytes_transferred,
+        memory_used_mb,
+        io_operations_per_second,
+        transfer_type,
+        status,
+        error_message,
+        started_at,
+        completed_at,
+        created_at,
+        created_date
+      FROM metadata.transfer_metrics
+      WHERE ${whereClause}
+      ORDER BY created_at DESC
+      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+    `;
+
+    queryParams.push(limit, offset);
+    const dataResult = await pool.query(dataQuery, queryParams);
+
+    const totalPages = Math.ceil(total / limit);
+
+    res.json({
+      data: dataResult.rows,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages,
+        hasNext: page < totalPages,
+        hasPrev: page > 1,
+      },
+    });
+  } catch (err) {
+    console.error("Error getting transfer metrics:", err);
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener métricas de transferencia",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
+  }
+});
+
+app.get("/api/monitor/transfer-metrics/stats", async (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 7;
+
+    const statsQuery = `
+      SELECT 
+        COUNT(*) as total_transfers,
+        COUNT(*) FILTER (WHERE status = 'SUCCESS') as successful,
+        COUNT(*) FILTER (WHERE status = 'FAILED') as failed,
+        COUNT(*) FILTER (WHERE status = 'PENDING') as pending,
+        SUM(records_transferred) as total_records,
+        SUM(bytes_transferred) as total_bytes,
+        AVG(memory_used_mb) as avg_memory_mb,
+        AVG(io_operations_per_second) as avg_iops,
+        COUNT(*) FILTER (WHERE transfer_type = 'FULL_LOAD') as full_load_count,
+        COUNT(*) FILTER (WHERE transfer_type = 'INCREMENTAL') as incremental_count,
+        COUNT(*) FILTER (WHERE transfer_type = 'SYNC') as sync_count
+      FROM metadata.transfer_metrics
+      WHERE created_at > NOW() - INTERVAL '${days} days'
+    `;
+
+    const result = await pool.query(statsQuery);
+
+    res.json({
+      total_transfers: parseInt(result.rows[0]?.total_transfers || 0),
+      successful: parseInt(result.rows[0]?.successful || 0),
+      failed: parseInt(result.rows[0]?.failed || 0),
+      pending: parseInt(result.rows[0]?.pending || 0),
+      total_records: parseInt(result.rows[0]?.total_records || 0),
+      total_bytes: parseInt(result.rows[0]?.total_bytes || 0),
+      avg_memory_mb: parseFloat(result.rows[0]?.avg_memory_mb || 0),
+      avg_iops: parseFloat(result.rows[0]?.avg_iops || 0),
+      full_load_count: parseInt(result.rows[0]?.full_load_count || 0),
+      incremental_count: parseInt(result.rows[0]?.incremental_count || 0),
+      sync_count: parseInt(result.rows[0]?.sync_count || 0),
+    });
+  } catch (err) {
+    console.error("Error getting transfer metrics stats:", err);
+    const safeError = sanitizeError(
+      err,
+      "Error al obtener estadísticas de métricas de transferencia",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
+  }
+});
+
 app.get("/api/query-performance/queries", async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -3505,14 +3716,29 @@ app.get("/api/data-lineage/mariadb/metrics", async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT 
-        COUNT(*) as total_relationships,
-        COUNT(DISTINCT object_name) as unique_objects,
-        COUNT(DISTINCT server_name) as unique_servers,
-        COUNT(*) FILTER (WHERE confidence_score >= 0.8) as high_confidence,
-        ROUND(AVG(confidence_score)::numeric, 4) as avg_confidence
+        COUNT(*)::bigint as total_relationships,
+        COUNT(DISTINCT object_name)::bigint as unique_objects,
+        COUNT(DISTINCT server_name)::bigint as unique_servers,
+        COUNT(DISTINCT database_name) FILTER (WHERE database_name IS NOT NULL)::bigint as unique_databases,
+        COUNT(DISTINCT schema_name) FILTER (WHERE schema_name IS NOT NULL)::bigint as unique_schemas,
+        COUNT(DISTINCT relationship_type)::bigint as unique_relationship_types,
+        COUNT(*) FILTER (WHERE confidence_score >= 0.8)::bigint as high_confidence,
+        COUNT(*) FILTER (WHERE confidence_score < 0.5)::bigint as low_confidence,
+        ROUND(AVG(confidence_score)::numeric, 4) as avg_confidence,
+        ROUND(AVG(dependency_level)::numeric, 2) as avg_dependency_level,
+        MAX(dependency_level)::bigint as max_dependency_level,
+        COUNT(*) FILTER (WHERE first_seen_at >= NOW() - INTERVAL '24 hours')::bigint as discovered_last_24h,
+        COUNT(*) FILTER (WHERE first_seen_at >= NOW() - INTERVAL '7 days')::bigint as discovered_last_7d,
+        COUNT(DISTINCT discovery_method)::bigint as unique_discovery_methods,
+        COUNT(*) FILTER (WHERE consumer_type IS NOT NULL)::bigint as relationships_with_consumers
       FROM metadata.mdb_lineage
     `);
 
+    console.log(
+      "MariaDB Metrics Query Result:",
+      JSON.stringify(result.rows[0], null, 2)
+    );
+    console.log("MariaDB Metrics Raw:", result.rows[0]);
     res.json(result.rows[0] || {});
   } catch (err) {
     console.error("Error getting MariaDB lineage metrics:", err);
@@ -3679,15 +3905,33 @@ app.get("/api/data-lineage/mssql/metrics", async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT 
-        COUNT(*) as total_relationships,
-        COUNT(DISTINCT object_name) as unique_objects,
-        COUNT(DISTINCT server_name) as unique_servers,
-        COUNT(*) FILTER (WHERE confidence_score >= 0.8) as high_confidence,
+        COUNT(*)::bigint as total_relationships,
+        COUNT(DISTINCT object_name)::bigint as unique_objects,
+        COUNT(DISTINCT server_name)::bigint as unique_servers,
+        COUNT(DISTINCT instance_name) FILTER (WHERE instance_name IS NOT NULL)::bigint as unique_instances,
+        COUNT(DISTINCT database_name) FILTER (WHERE database_name IS NOT NULL)::bigint as unique_databases,
+        COUNT(DISTINCT schema_name) FILTER (WHERE schema_name IS NOT NULL)::bigint as unique_schemas,
+        COUNT(DISTINCT relationship_type)::bigint as unique_relationship_types,
+        COUNT(*) FILTER (WHERE confidence_score >= 0.8)::bigint as high_confidence,
+        COUNT(*) FILTER (WHERE confidence_score < 0.5)::bigint as low_confidence,
         ROUND(AVG(confidence_score)::numeric, 4) as avg_confidence,
-        SUM(COALESCE(execution_count, 0)) as total_executions
+        ROUND(AVG(dependency_level) FILTER (WHERE dependency_level IS NOT NULL)::numeric, 2) as avg_dependency_level,
+        MAX(dependency_level)::bigint as max_dependency_level,
+        SUM(COALESCE(execution_count, 0))::bigint as total_executions,
+        ROUND(AVG(avg_duration_ms) FILTER (WHERE avg_duration_ms IS NOT NULL)::numeric, 2) as avg_duration_ms,
+        ROUND(AVG(avg_cpu_ms) FILTER (WHERE avg_cpu_ms IS NOT NULL)::numeric, 2) as avg_cpu_ms,
+        COUNT(*) FILTER (WHERE first_seen_at >= NOW() - INTERVAL '24 hours')::bigint as discovered_last_24h,
+        COUNT(*) FILTER (WHERE first_seen_at >= NOW() - INTERVAL '7 days')::bigint as discovered_last_7d,
+        COUNT(DISTINCT discovery_method)::bigint as unique_discovery_methods,
+        COUNT(*) FILTER (WHERE consumer_type IS NOT NULL)::bigint as relationships_with_consumers
       FROM metadata.mssql_lineage
     `);
 
+    console.log(
+      "MSSQL Metrics Query Result:",
+      JSON.stringify(result.rows[0], null, 2)
+    );
+    console.log("MSSQL Metrics Raw:", result.rows[0]);
     res.json(result.rows[0] || {});
   } catch (err) {
     console.error("Error getting MSSQL lineage metrics:", err);
@@ -4228,14 +4472,33 @@ app.get("/api/data-lineage/mongodb/metrics", async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT 
-        COUNT(*) as total_relationships,
-        COUNT(DISTINCT source_collection) + COUNT(DISTINCT target_collection) as unique_collections,
-        COUNT(DISTINCT server_name) as unique_servers,
-        COUNT(*) FILTER (WHERE confidence_score >= 0.8) as high_confidence,
-        ROUND(AVG(confidence_score)::numeric, 4) as avg_confidence
+        COUNT(*)::bigint as total_relationships,
+        (SELECT COUNT(DISTINCT col) FROM (
+          SELECT source_collection as col FROM metadata.mongo_lineage WHERE source_collection IS NOT NULL
+          UNION
+          SELECT target_collection as col FROM metadata.mongo_lineage WHERE target_collection IS NOT NULL
+        ) t)::bigint as unique_collections,
+        COUNT(DISTINCT server_name)::bigint as unique_servers,
+        COUNT(DISTINCT database_name) FILTER (WHERE database_name IS NOT NULL)::bigint as unique_databases,
+        COUNT(DISTINCT schema_name) FILTER (WHERE schema_name IS NOT NULL)::bigint as unique_schemas,
+        COUNT(DISTINCT relationship_type)::bigint as unique_relationship_types,
+        COUNT(*) FILTER (WHERE confidence_score >= 0.8)::bigint as high_confidence,
+        COUNT(*) FILTER (WHERE confidence_score < 0.5)::bigint as low_confidence,
+        ROUND(AVG(confidence_score)::numeric, 4) as avg_confidence,
+        ROUND(AVG(dependency_level) FILTER (WHERE dependency_level IS NOT NULL)::numeric, 2) as avg_dependency_level,
+        MAX(dependency_level)::bigint as max_dependency_level,
+        COUNT(*) FILTER (WHERE first_seen_at >= NOW() - INTERVAL '24 hours')::bigint as discovered_last_24h,
+        COUNT(*) FILTER (WHERE first_seen_at >= NOW() - INTERVAL '7 days')::bigint as discovered_last_7d,
+        COUNT(DISTINCT discovery_method)::bigint as unique_discovery_methods,
+        COUNT(*) FILTER (WHERE consumer_type IS NOT NULL)::bigint as relationships_with_consumers
       FROM metadata.mongo_lineage
     `);
 
+    console.log(
+      "MongoDB Metrics Query Result:",
+      JSON.stringify(result.rows[0], null, 2)
+    );
+    console.log("MongoDB Metrics Raw:", result.rows[0]);
     res.json(result.rows[0] || {});
   } catch (err) {
     console.error("Error getting MongoDB lineage metrics:", err);
@@ -4569,14 +4832,31 @@ app.get("/api/data-lineage/oracle/metrics", async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT 
-        COUNT(*) as total_relationships,
-        COUNT(DISTINCT object_name) + COUNT(DISTINCT target_object_name) as unique_objects,
-        COUNT(DISTINCT server_name) as unique_servers,
-        COUNT(*) FILTER (WHERE confidence_score >= 0.8) as high_confidence,
-        ROUND(AVG(confidence_score)::numeric, 4) as avg_confidence
+        COUNT(*)::bigint as total_relationships,
+        (SELECT COUNT(DISTINCT col) FROM (
+          SELECT object_name as col FROM metadata.oracle_lineage WHERE object_name IS NOT NULL
+          UNION
+          SELECT target_object_name as col FROM metadata.oracle_lineage WHERE target_object_name IS NOT NULL
+        ) t)::bigint as unique_objects,
+        COUNT(DISTINCT server_name)::bigint as unique_servers,
+        COUNT(DISTINCT schema_name) FILTER (WHERE schema_name IS NOT NULL)::bigint as unique_schemas,
+        COUNT(DISTINCT relationship_type)::bigint as unique_relationship_types,
+        COUNT(*) FILTER (WHERE confidence_score >= 0.8)::bigint as high_confidence,
+        COUNT(*) FILTER (WHERE confidence_score < 0.5)::bigint as low_confidence,
+        ROUND(AVG(confidence_score)::numeric, 4) as avg_confidence,
+        ROUND(AVG(dependency_level) FILTER (WHERE dependency_level IS NOT NULL)::numeric, 2) as avg_dependency_level,
+        MAX(dependency_level)::bigint as max_dependency_level,
+        COUNT(*) FILTER (WHERE first_seen_at >= NOW() - INTERVAL '24 hours')::bigint as discovered_last_24h,
+        COUNT(*) FILTER (WHERE first_seen_at >= NOW() - INTERVAL '7 days')::bigint as discovered_last_7d,
+        COUNT(DISTINCT discovery_method) FILTER (WHERE discovery_method IS NOT NULL)::bigint as unique_discovery_methods
       FROM metadata.oracle_lineage
     `);
 
+    console.log(
+      "Oracle Metrics Query Result:",
+      JSON.stringify(result.rows[0], null, 2)
+    );
+    console.log("Oracle Metrics Raw:", result.rows[0]);
     res.json(result.rows[0] || {});
   } catch (err) {
     console.error("Error getting Oracle lineage metrics:", err);

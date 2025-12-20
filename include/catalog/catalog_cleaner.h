@@ -20,6 +20,10 @@ public:
   virtual void cleanNonExistentMongoDBTables() = 0;
   virtual void cleanOrphanedTables() = 0;
   virtual void cleanOldLogs(int retentionHours) = 0;
+  virtual void cleanOrphanedGovernanceData() = 0;
+  virtual void cleanOrphanedQualityData() = 0;
+  virtual void cleanOrphanedMaintenanceData() = 0;
+  virtual void cleanOrphanedLineageData() = 0;
 };
 
 class CatalogCleaner : public ICatalogCleaner {
@@ -36,6 +40,10 @@ public:
   void cleanNonExistentMongoDBTables() override;
   void cleanOrphanedTables() override;
   void cleanOldLogs(int retentionHours) override;
+  void cleanOrphanedGovernanceData() override;
+  void cleanOrphanedQualityData() override;
+  void cleanOrphanedMaintenanceData() override;
+  void cleanOrphanedLineageData() override;
 };
 
 #endif

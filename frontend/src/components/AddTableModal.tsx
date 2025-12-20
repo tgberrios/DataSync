@@ -147,7 +147,6 @@ const AddTableModal: React.FC<AddTableModalProps> = ({ onClose, onSave }) => {
     status: 'PENDING',
     cluster_name: '',
     pk_strategy: 'OFFSET',
-    last_sync_column: '',
   });
   const [error, setError] = useState<string | null>(null);
   const [isClosing, setIsClosing] = useState(false);
@@ -217,7 +216,6 @@ const AddTableModal: React.FC<AddTableModalProps> = ({ onClose, onSave }) => {
       status: formData.status,
       cluster_name: formData.cluster_name.trim() || '',
       pk_strategy: formData.pk_strategy,
-      last_sync_column: formData.last_sync_column.trim() || '',
     });
     handleClose();
   }, [formData, onSave, handleClose]);
@@ -313,15 +311,6 @@ const AddTableModal: React.FC<AddTableModalProps> = ({ onClose, onSave }) => {
             </Select>
           </FormGroup>
 
-          <FormGroup>
-            <Label>Sync Column</Label>
-            <Input 
-              type="text" 
-              value={formData.last_sync_column}
-              onChange={(e) => setFormData(prev => ({ ...prev, last_sync_column: e.target.value }))}
-              placeholder="Optional: column name for incremental sync"
-            />
-          </FormGroup>
 
           <FormGroup>
             <Label>Status</Label>

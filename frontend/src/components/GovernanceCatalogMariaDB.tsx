@@ -473,10 +473,36 @@ const GovernanceCatalogMariaDB = () => {
 
   useEffect(() => {
     isMountedRef.current = true;
-    fetchAllItems();
+    const loadData = async () => {
+      console.log("MariaDB: Starting to load data...");
+      await fetchAllItems();
+      try {
+        console.log("MariaDB: Fetching metrics...");
+        const metricsData = await governanceCatalogApi.getMariaDBMetrics();
+        console.log("MariaDB: Metrics received:", metricsData);
+        if (isMountedRef.current) {
+          setMetrics(metricsData || {});
+          console.log("MariaDB: Metrics set in state:", metricsData);
+        }
+      } catch (err) {
+        console.error("MariaDB: Error loading metrics:", err);
+        if (isMountedRef.current) {
+          console.error('MariaDB: Error loading metrics:', err);
+        }
+      }
+    };
+    loadData();
     const interval = setInterval(() => {
       if (isMountedRef.current) {
         fetchAllItems();
+        governanceCatalogApi.getMariaDBMetrics().then(metricsData => {
+          console.log("MariaDB: Interval metrics received:", metricsData);
+          if (isMountedRef.current) {
+            setMetrics(metricsData || {});
+          }
+        }).catch(err => {
+          console.error('MariaDB: Error loading metrics in interval:', err);
+        });
       }
     }, 30000);
     return () => {
@@ -627,6 +653,16 @@ const GovernanceCatalogMariaDB = () => {
       {error && <ErrorMessage>{error}</ErrorMessage>}
       
       <MetricsGrid $columns="repeat(auto-fit, minmax(180px, 1fr))">
+        {(() => {
+          console.log("MariaDB: Rendering metrics cards, metrics object:", metrics);
+          console.log("MariaDB: total_tables:", metrics.total_tables);
+          console.log("MariaDB: total_size_mb:", metrics.total_size_mb);
+          console.log("MariaDB: healthy_count:", metrics.healthy_count);
+          console.log("MariaDB: warning_count:", metrics.warning_count);
+          console.log("MariaDB: critical_count:", metrics.critical_count);
+          console.log("MariaDB: unique_servers:", metrics.unique_servers);
+          return null;
+        })()}
         <MetricCard $index={0}>
           <MetricLabel>
             <span>■</span>
