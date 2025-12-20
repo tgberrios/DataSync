@@ -168,14 +168,17 @@ const Maintenance = () => {
     try {
       setLoading(true);
       setError(null);
-      const statusFilter = activeTab === 'pending' ? 'PENDING' : activeTab === 'completed' ? 'COMPLETED' : '';
+      let statusFilter = filters.status as string;
+      if (!statusFilter && activeTab !== 'all') {
+        statusFilter = activeTab === 'pending' ? 'PENDING' : activeTab === 'completed' ? 'COMPLETED' : '';
+      }
       const [itemsData, metricsData] = await Promise.all([
         maintenanceApi.getMaintenanceItems({
           page: 1,
           limit: 1000,
           maintenance_type: filters.maintenance_type as string,
           db_engine: filters.db_engine as string,
-          status: statusFilter || (filters.status as string)
+          status: statusFilter
         }),
         maintenanceApi.getMetrics()
       ]);
@@ -316,19 +319,17 @@ const Maintenance = () => {
           <option value="MSSQL">MSSQL</option>
         </Select>
         
-        {activeTab === 'all' && (
-          <Select
-            value={filters.status as string}
-            onChange={(e) => handleFilterChange('status', e.target.value)}
-          >
-            <option value="">All Status</option>
-            <option value="PENDING">PENDING</option>
-            <option value="RUNNING">RUNNING</option>
-            <option value="COMPLETED">COMPLETED</option>
-            <option value="FAILED">FAILED</option>
-            <option value="SKIPPED">SKIPPED</option>
-          </Select>
-        )}
+        <Select
+          value={filters.status as string}
+          onChange={(e) => handleFilterChange('status', e.target.value)}
+        >
+          <option value="">All Status</option>
+          <option value="PENDING">PENDING</option>
+          <option value="RUNNING">RUNNING</option>
+          <option value="COMPLETED">COMPLETED</option>
+          <option value="FAILED">FAILED</option>
+          <option value="SKIPPED">SKIPPED</option>
+        </Select>
       </FiltersContainer>
 
       <div style={{ display: 'grid', gridTemplateColumns: selectedItem ? '1fr 400px' : '1fr', gap: theme.spacing.lg }}>

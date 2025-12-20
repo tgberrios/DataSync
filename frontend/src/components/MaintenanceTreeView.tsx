@@ -556,6 +556,26 @@ const MaintenanceTreeView: React.FC<MaintenanceTreeViewProps> = ({ items, onItem
         {item.status && (
           <Badge $status={item.status}>{item.status}</Badge>
         )}
+        {item.error_details && (
+          <span 
+            title={item.error_details}
+            style={{ 
+              marginLeft: '8px', 
+              color: theme.colors.status.error.text, 
+              fontSize: '0.75em',
+              padding: '2px 6px',
+              background: theme.colors.status.error.bg,
+              borderRadius: theme.borderRadius.sm,
+              border: `1px solid ${theme.colors.status.error.text}40`,
+              maxWidth: '200px',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            ⚠ {item.error_details}
+          </span>
+        )}
         <span style={{ marginLeft: 'auto', color: theme.colors.text.secondary, fontSize: '0.85em', display: 'flex', gap: '8px', alignItems: 'center' }}>
           {item.impact_score && (
             <span>Impact: {Number(item.impact_score).toFixed(1)}</span>

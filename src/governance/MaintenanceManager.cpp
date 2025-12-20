@@ -858,11 +858,22 @@ void MaintenanceManager::executeMaintenance() {
         storeExecutionMetrics(updatedTask, before, after);
         executed++;
       } catch (const std::exception &e) {
-        updateTaskStatus(task.id, "FAILED", "", std::string(e.what()));
-        Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
-                      "Error executing maintenance task " +
-                          std::to_string(task.id) + ": " +
-                          std::string(e.what()));
+        std::string errorMsg = std::string(e.what());
+        bool wasCleanedUp =
+            errorMsg.find("does not exist") != std::string::npos ||
+            errorMsg.find("doesn't exist") != std::string::npos ||
+            errorMsg.find("Invalid object") != std::string::npos;
+
+        if (!wasCleanedUp) {
+          updateTaskStatus(task.id, "FAILED", "", errorMsg);
+          Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
+                        "Error executing maintenance task " +
+                            std::to_string(task.id) + ": " + errorMsg);
+        } else {
+          Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
+                       "Maintenance task " + std::to_string(task.id) +
+                           " was cleaned up because object does not exist");
+        }
       }
     }
 
@@ -875,9 +886,96 @@ void MaintenanceManager::executeMaintenance() {
   }
 }
 
+bool MaintenanceManager::validatePostgreSQLObject(const MaintenanceTask &task) {
+  try {
+    pqxx::connection conn(task.connection_string);
+    if (!conn.is_open()) {
+      return false;
+    }
+
+    pqxx::work txn(conn);
+
+    std::string schemaCheckQuery = R"(
+      SELECT EXISTS(
+        SELECT 1 FROM information_schema.schemata 
+        WHERE schema_name = $1
+      )
+    )";
+
+    auto schemaResult = txn.exec_params(schemaCheckQuery, task.schema_name);
+    if (schemaResult.empty() || !schemaResult[0][0].as<bool>()) {
+      txn.commit();
+      return false;
+    }
+
+    if (task.object_type == "TABLE") {
+      std::string tableCheckQuery = R"(
+        SELECT EXISTS(
+          SELECT 1 FROM information_schema.tables 
+          WHERE table_schema = $1 AND table_name = $2
+        )
+      )";
+      auto tableResult =
+          txn.exec_params(tableCheckQuery, task.schema_name, task.object_name);
+      txn.commit();
+      return !tableResult.empty() && tableResult[0][0].as<bool>();
+    } else if (task.object_type == "INDEX") {
+      std::string indexCheckQuery = R"(
+        SELECT EXISTS(
+          SELECT 1 FROM pg_indexes 
+          WHERE schemaname = $1 AND indexname = $2
+        )
+      )";
+      auto indexResult =
+          txn.exec_params(indexCheckQuery, task.schema_name, task.object_name);
+      txn.commit();
+      return !indexResult.empty() && indexResult[0][0].as<bool>();
+    }
+
+    txn.commit();
+    return false;
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
+                  "Error validating PostgreSQL object: " +
+                      std::string(e.what()));
+    return false;
+  }
+}
+
+void MaintenanceManager::cleanupNonExistentTask(int taskId,
+                                                const std::string &reason) {
+  try {
+    pqxx::connection conn(metadataConnectionString_);
+    pqxx::work txn(conn);
+
+    std::string query = R"(
+      DELETE FROM metadata.maintenance_control
+      WHERE id = $1
+    )";
+
+    txn.exec_params(query, taskId);
+    txn.commit();
+
+    Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
+                 "Cleaned up maintenance task " + std::to_string(taskId) +
+                     " - Reason: " + reason);
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
+                  "Error cleaning up task " + std::to_string(taskId) + ": " +
+                      std::string(e.what()));
+  }
+}
+
 void MaintenanceManager::executePostgreSQLMaintenance(
     const MaintenanceTask &task) {
   try {
+    if (!validatePostgreSQLObject(task)) {
+      std::string reason = "Schema '" + task.schema_name + "' or object '" +
+                           task.object_name + "' does not exist";
+      cleanupNonExistentTask(task.id, reason);
+      throw std::runtime_error(reason);
+    }
+
     pqxx::connection conn(task.connection_string);
     if (!conn.is_open()) {
       throw std::runtime_error("Failed to connect to PostgreSQL");
@@ -910,14 +1008,64 @@ void MaintenanceManager::executePostgreSQLMaintenance(
                        task.schema_name + "." + task.object_name);
     }
   } catch (const std::exception &e) {
-    throw std::runtime_error("PostgreSQL maintenance failed: " +
-                             std::string(e.what()));
+    std::string errorMsg = std::string(e.what());
+    if (errorMsg.find("does not exist") != std::string::npos) {
+      cleanupNonExistentTask(task.id, errorMsg);
+    }
+    throw std::runtime_error("PostgreSQL maintenance failed: " + errorMsg);
+  }
+}
+
+bool MaintenanceManager::validateMariaDBObject(const MaintenanceTask &task) {
+  try {
+    auto params = ConnectionStringParser::parse(task.connection_string);
+    if (!params) {
+      return false;
+    }
+
+    MySQLConnection conn(*params);
+    if (!conn.isValid()) {
+      return false;
+    }
+
+    MYSQL *mysqlConn = conn.get();
+    std::string query = "SELECT COUNT(*) FROM information_schema.tables "
+                        "WHERE table_schema = '" +
+                        escapeSQL(mysqlConn, task.schema_name) +
+                        "' AND table_name = '" +
+                        escapeSQL(mysqlConn, task.object_name) + "'";
+
+    if (mysql_query(mysqlConn, query.c_str())) {
+      return false;
+    }
+
+    MYSQL_RES *res = mysql_store_result(mysqlConn);
+    if (!res) {
+      return false;
+    }
+
+    MYSQL_ROW row = mysql_fetch_row(res);
+    bool exists = row && row[0] && std::stoi(row[0]) > 0;
+    mysql_free_result(res);
+
+    return exists;
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
+                  "Error validating MariaDB object: " + std::string(e.what()));
+    return false;
   }
 }
 
 void MaintenanceManager::executeMariaDBMaintenance(
     const MaintenanceTask &task) {
   try {
+    if (!validateMariaDBObject(task)) {
+      std::string reason = "Schema '" + task.schema_name + "' or object '" +
+                           task.object_name + "' does not exist";
+      cleanupNonExistentTask(task.id, reason);
+      throw std::runtime_error(reason);
+    }
+
     auto params = ConnectionStringParser::parse(task.connection_string);
     if (!params) {
       throw std::runtime_error("Invalid connection string");
@@ -941,21 +1089,90 @@ void MaintenanceManager::executeMariaDBMaintenance(
 
     if (!query.empty()) {
       if (mysql_query(mysqlConn, query.c_str())) {
-        throw std::runtime_error("Query failed: " +
-                                 std::string(mysql_error(mysqlConn)));
+        std::string error = mysql_error(mysqlConn);
+        if (error.find("doesn't exist") != std::string::npos ||
+            error.find("Unknown database") != std::string::npos) {
+          cleanupNonExistentTask(task.id, error);
+        }
+        throw std::runtime_error("Query failed: " + error);
       }
       Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
                    "Executed " + task.maintenance_type + " on " +
                        task.schema_name + "." + task.object_name);
     }
   } catch (const std::exception &e) {
-    throw std::runtime_error("MariaDB maintenance failed: " +
-                             std::string(e.what()));
+    std::string errorMsg = std::string(e.what());
+    if (errorMsg.find("does not exist") != std::string::npos ||
+        errorMsg.find("doesn't exist") != std::string::npos) {
+      cleanupNonExistentTask(task.id, errorMsg);
+    }
+    throw std::runtime_error("MariaDB maintenance failed: " + errorMsg);
+  }
+}
+
+bool MaintenanceManager::validateMSSQLObject(const MaintenanceTask &task) {
+  try {
+    ODBCConnection conn(task.connection_string);
+    if (!conn.isValid()) {
+      return false;
+    }
+
+    SQLHDBC hdbc = conn.getDbc();
+    SQLHSTMT stmt;
+    SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &stmt);
+    if (ret != SQL_SUCCESS) {
+      return false;
+    }
+
+    std::string query;
+    if (task.object_type == "TABLE") {
+      query = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES "
+              "WHERE TABLE_SCHEMA = '" +
+              escapeSQLMSSQL(task.schema_name) + "' AND TABLE_NAME = '" +
+              escapeSQLMSSQL(task.object_name) + "'";
+    } else if (task.object_type == "INDEX") {
+      query = "SELECT COUNT(*) FROM sys.indexes i "
+              "INNER JOIN sys.objects o ON i.object_id = o.object_id "
+              "INNER JOIN sys.schemas s ON o.schema_id = s.schema_id "
+              "WHERE s.name = '" +
+              escapeSQLMSSQL(task.schema_name) + "' AND i.name = '" +
+              escapeSQLMSSQL(task.object_name) + "'";
+    } else {
+      SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+      return false;
+    }
+
+    ret = SQLExecDirect(stmt, (SQLCHAR *)query.c_str(), SQL_NTS);
+    if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
+      SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+      return false;
+    }
+
+    SQLINTEGER count = 0;
+    SQLINTEGER countLen = 0;
+    ret = SQLFetch(stmt);
+    if (ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) {
+      SQLGetData(stmt, 1, SQL_C_LONG, &count, sizeof(count), &countLen);
+    }
+    SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+
+    return count > 0;
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
+                  "Error validating MSSQL object: " + std::string(e.what()));
+    return false;
   }
 }
 
 void MaintenanceManager::executeMSSQLMaintenance(const MaintenanceTask &task) {
   try {
+    if (!validateMSSQLObject(task)) {
+      std::string reason = "Schema '" + task.schema_name + "' or object '" +
+                           task.object_name + "' does not exist";
+      cleanupNonExistentTask(task.id, reason);
+      throw std::runtime_error(reason);
+    }
+
     ODBCConnection conn(task.connection_string);
     if (!conn.isValid()) {
       throw std::runtime_error("Failed to connect to MSSQL");
@@ -1014,6 +1231,10 @@ void MaintenanceManager::executeMSSQLMaintenance(const MaintenanceTask &task) {
           errorStr = std::string((char *)errorMsg);
         }
         SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+        if (errorStr.find("does not exist") != std::string::npos ||
+            errorStr.find("Invalid object") != std::string::npos) {
+          cleanupNonExistentTask(task.id, errorStr);
+        }
         throw std::runtime_error(errorStr);
       }
       SQLFreeHandle(SQL_HANDLE_STMT, stmt);
@@ -1022,8 +1243,12 @@ void MaintenanceManager::executeMSSQLMaintenance(const MaintenanceTask &task) {
                        task.schema_name + "." + task.object_name);
     }
   } catch (const std::exception &e) {
-    throw std::runtime_error("MSSQL maintenance failed: " +
-                             std::string(e.what()));
+    std::string errorMsg = std::string(e.what());
+    if (errorMsg.find("does not exist") != std::string::npos ||
+        errorMsg.find("Invalid object") != std::string::npos) {
+      cleanupNonExistentTask(task.id, errorMsg);
+    }
+    throw std::runtime_error("MSSQL maintenance failed: " + errorMsg);
   }
 }
 
@@ -1157,6 +1382,18 @@ void MaintenanceManager::storeTask(const MaintenanceTask &task) {
     pqxx::connection conn(metadataConnectionString_);
     pqxx::work txn(conn);
 
+    auto now = std::chrono::system_clock::now();
+    auto nowTimeT = std::chrono::system_clock::to_time_t(now);
+    std::stringstream ssNow;
+    ssNow << std::put_time(std::gmtime(&nowTimeT), "%Y-%m-%d %H:%M:%S");
+    std::string nowStr = ssNow.str();
+
+    auto nextDate =
+        std::chrono::system_clock::to_time_t(task.next_maintenance_date);
+    std::stringstream ss;
+    ss << std::put_time(std::gmtime(&nextDate), "%Y-%m-%d %H:%M:%S");
+    std::string nextDateStr = ss.str();
+
     std::string query = R"(
       INSERT INTO metadata.maintenance_control (
         maintenance_type, db_engine, connection_string, schema_name, object_name,
@@ -1168,21 +1405,18 @@ void MaintenanceManager::storeTask(const MaintenanceTask &task) {
       ON CONFLICT (db_engine, maintenance_type, schema_name, object_name, object_type)
       DO UPDATE SET
         priority = EXCLUDED.priority,
-        next_maintenance_date = EXCLUDED.next_maintenance_date,
+        next_maintenance_date = CASE 
+          WHEN metadata.maintenance_control.last_maintenance_date IS NULL THEN NOW()
+          ELSE EXCLUDED.next_maintenance_date
+        END,
         last_checked_date = NOW(),
         updated_at = NOW()
     )";
 
-    auto nextDate =
-        std::chrono::system_clock::to_time_t(task.next_maintenance_date);
-    std::stringstream ss;
-    ss << std::put_time(std::gmtime(&nextDate), "%Y-%m-%d %H:%M:%S");
-    std::string nextDateStr = ss.str();
-
     txn.exec_params(
         query, task.maintenance_type, task.db_engine, task.connection_string,
         task.schema_name, task.object_name, task.object_type, task.auto_execute,
-        task.enabled, task.priority, task.status, nextDateStr,
+        task.enabled, task.priority, task.status, nowStr,
         task.thresholds.dump(),
         task.server_name.empty() ? nullptr : task.server_name.c_str(),
         task.database_name.empty() ? nullptr : task.database_name.c_str());
@@ -1289,7 +1523,10 @@ std::vector<MaintenanceTask> MaintenanceManager::getPendingTasks() {
       WHERE status = 'PENDING'
         AND auto_execute = true
         AND enabled = true
-        AND next_maintenance_date <= NOW()
+        AND (
+          next_maintenance_date <= NOW()
+          OR last_maintenance_date IS NULL
+        )
       ORDER BY priority DESC, next_maintenance_date ASC
       LIMIT 10
     )";

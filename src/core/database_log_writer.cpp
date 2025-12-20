@@ -3,7 +3,6 @@
 #include <cctype>
 #include <iostream>
 
-// Helper function to sanitize UTF-8 strings by removing invalid byte sequences
 static std::string sanitizeUTF8(const std::string &input) {
   std::string result;
   result.reserve(input.size());
@@ -11,46 +10,80 @@ static std::string sanitizeUTF8(const std::string &input) {
   for (size_t i = 0; i < input.size(); ++i) {
     unsigned char c = static_cast<unsigned char>(input[i]);
 
-    if ((c >= 0x20 && c <= 0x7E) || c == '\n' || c == '\r' || c == '\t') {
-      result += c;
+    if (c <= 0x7F) {
+      if ((c >= 0x20 && c <= 0x7E) || c == '\n' || c == '\r' || c == '\t') {
+        result += c;
+      }
       continue;
     }
 
     if ((c & 0xE0) == 0xC0) {
-      if (i + 1 < input.size() &&
-          (static_cast<unsigned char>(input[i + 1]) & 0xC0) == 0x80) {
-        result += c;
-        result += input[i + 1];
-        ++i;
+      if (c < 0xC2 || c > 0xDF) {
         continue;
       }
-    } else if ((c & 0xF0) == 0xE0) {
-      if (i + 2 < input.size() &&
-          (static_cast<unsigned char>(input[i + 1]) & 0xC0) == 0x80 &&
-          (static_cast<unsigned char>(input[i + 2]) & 0xC0) == 0x80) {
-        result += c;
-        result += input[i + 1];
-        result += input[i + 2];
-        i += 2;
+      if (i + 1 >= input.size()) {
         continue;
       }
-    } else if ((c & 0xF8) == 0xF0) {
-      if (i + 3 < input.size() &&
-          (static_cast<unsigned char>(input[i + 1]) & 0xC0) == 0x80 &&
-          (static_cast<unsigned char>(input[i + 2]) & 0xC0) == 0x80 &&
-          (static_cast<unsigned char>(input[i + 3]) & 0xC0) == 0x80) {
-        result += c;
-        result += input[i + 1];
-        result += input[i + 2];
-        result += input[i + 3];
-        i += 3;
+      unsigned char c2 = static_cast<unsigned char>(input[i + 1]);
+      if ((c2 & 0xC0) != 0x80) {
         continue;
       }
-    } else if ((c & 0xC0) == 0x80) {
+      result += c;
+      result += static_cast<char>(c2);
+      ++i;
       continue;
     }
 
-    if (c == 0x00) {
+    if ((c & 0xF0) == 0xE0) {
+      if (i + 2 >= input.size()) {
+        continue;
+      }
+      unsigned char c2 = static_cast<unsigned char>(input[i + 1]);
+      unsigned char c3 = static_cast<unsigned char>(input[i + 2]);
+      if ((c2 & 0xC0) != 0x80 || (c3 & 0xC0) != 0x80) {
+        continue;
+      }
+      if (c == 0xE0 && c2 < 0xA0) {
+        continue;
+      }
+      if (c == 0xED && c2 >= 0xA0) {
+        continue;
+      }
+      result += c;
+      result += static_cast<char>(c2);
+      result += static_cast<char>(c3);
+      i += 2;
+      continue;
+    }
+
+    if ((c & 0xF8) == 0xF0) {
+      if (c > 0xF4) {
+        continue;
+      }
+      if (i + 3 >= input.size()) {
+        continue;
+      }
+      unsigned char c2 = static_cast<unsigned char>(input[i + 1]);
+      unsigned char c3 = static_cast<unsigned char>(input[i + 2]);
+      unsigned char c4 = static_cast<unsigned char>(input[i + 3]);
+      if ((c2 & 0xC0) != 0x80 || (c3 & 0xC0) != 0x80 || (c4 & 0xC0) != 0x80) {
+        continue;
+      }
+      if (c == 0xF0 && c2 < 0x90) {
+        continue;
+      }
+      if (c == 0xF4 && c2 > 0x8F) {
+        continue;
+      }
+      result += c;
+      result += static_cast<char>(c2);
+      result += static_cast<char>(c3);
+      result += static_cast<char>(c4);
+      i += 3;
+      continue;
+    }
+
+    if ((c & 0xC0) == 0x80) {
       continue;
     }
   }

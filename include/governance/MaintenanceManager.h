@@ -108,6 +108,11 @@ private:
   std::string escapeSQL(MYSQL *conn, const std::string &str);
   std::string escapeSQLMSSQL(const std::string &str);
 
+  bool validatePostgreSQLObject(const MaintenanceTask &task);
+  bool validateMariaDBObject(const MaintenanceTask &task);
+  bool validateMSSQLObject(const MaintenanceTask &task);
+  void cleanupNonExistentTask(int taskId, const std::string &reason);
+
 public:
   explicit MaintenanceManager(const std::string &metadataConnectionString);
   ~MaintenanceManager();

@@ -1263,69 +1263,401 @@ const UnifiedMonitor: React.FC = () => {
     });
   };
 
+  const renderCharts = () => {
+    if (activeTab === 'performance') {
+      const tierDistribution = {
+        EXCELLENT: queryPerformance.filter((q: any) => q.performance_tier === 'EXCELLENT').length,
+        GOOD: queryPerformance.filter((q: any) => q.performance_tier === 'GOOD').length,
+        FAIR: queryPerformance.filter((q: any) => q.performance_tier === 'FAIR').length,
+        POOR: queryPerformance.filter((q: any) => q.performance_tier === 'POOR').length,
+      };
+      
+      const blockingQueries = queryPerformance.filter((q: any) => q.is_blocking).length;
+      const nonBlockingQueries = queryPerformance.length - blockingQueries;
+      
+      const avgTime = queryPerformance.length > 0
+        ? queryPerformance.reduce((sum: number, q: any) => sum + (Number(q.mean_time_ms) || 0), 0) / queryPerformance.length
+        : 0;
+
+      return (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: theme.spacing.lg, marginBottom: theme.spacing.lg }}>
+          <ChartContainer style={{ padding: theme.spacing.md }}>
+            <ChartTitle style={{ marginBottom: theme.spacing.md, fontSize: '0.9em' }}>
+              Distribution by Tier
+            </ChartTitle>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.sm }}>
+              {Object.entries(tierDistribution).map(([tier, count]) => {
+                const total = Object.values(tierDistribution).reduce((a, b) => a + b, 0);
+                const percentage = total > 0 ? (count / total) * 100 : 0;
+                const colors: Record<string, string> = {
+                  EXCELLENT: '#4caf50',
+                  GOOD: '#8bc34a',
+                  FAIR: '#ff9800',
+                  POOR: '#f44336',
+                };
+                return (
+                  <div key={tier} style={{ display: 'flex', alignItems: 'center', gap: theme.spacing.sm }}>
+                    <div style={{ 
+                      width: '12px', 
+                      height: '12px', 
+                      borderRadius: '50%', 
+                      background: colors[tier] || theme.colors.primary.main 
+                    }} />
+                    <span style={{ flex: 1, fontSize: '0.85em', color: theme.colors.text.primary }}>
+                      {tier}
+                    </span>
+                    <span style={{ fontSize: '0.85em', fontWeight: 600, color: theme.colors.text.secondary }}>
+                      {count} ({percentage.toFixed(1)}%)
+                    </span>
+                    <div style={{ 
+                      flex: 1, 
+                      height: '8px', 
+                      background: theme.colors.background.secondary, 
+                      borderRadius: theme.borderRadius.sm,
+                      overflow: 'hidden'
+                    }}>
+                      <div style={{
+                        width: `${percentage}%`,
+                        height: '100%',
+                        background: colors[tier] || theme.colors.primary.main,
+                        transition: 'width 0.3s ease'
+                      }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </ChartContainer>
+          
+          <ChartContainer style={{ padding: theme.spacing.md }}>
+            <ChartTitle style={{ marginBottom: theme.spacing.md, fontSize: '0.9em' }}>
+              Blocking vs Non-Blocking
+            </ChartTitle>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.sm }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: theme.spacing.sm }}>
+                <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#f44336' }} />
+                <span style={{ flex: 1, fontSize: '0.85em', color: theme.colors.text.primary }}>Blocking</span>
+                <span style={{ fontSize: '0.85em', fontWeight: 600, color: theme.colors.text.secondary }}>
+                  {blockingQueries}
+                </span>
+                <div style={{ 
+                  flex: 1, 
+                  height: '8px', 
+                  background: theme.colors.background.secondary, 
+                  borderRadius: theme.borderRadius.sm,
+                  overflow: 'hidden'
+                }}>
+                  <div style={{
+                    width: `${queryPerformance.length > 0 ? (blockingQueries / queryPerformance.length) * 100 : 0}%`,
+                    height: '100%',
+                    background: '#f44336',
+                    transition: 'width 0.3s ease'
+                  }} />
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: theme.spacing.sm }}>
+                <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#4caf50' }} />
+                <span style={{ flex: 1, fontSize: '0.85em', color: theme.colors.text.primary }}>Non-Blocking</span>
+                <span style={{ fontSize: '0.85em', fontWeight: 600, color: theme.colors.text.secondary }}>
+                  {nonBlockingQueries}
+                </span>
+                <div style={{ 
+                  flex: 1, 
+                  height: '8px', 
+                  background: theme.colors.background.secondary, 
+                  borderRadius: theme.borderRadius.sm,
+                  overflow: 'hidden'
+                }}>
+                  <div style={{
+                    width: `${queryPerformance.length > 0 ? (nonBlockingQueries / queryPerformance.length) * 100 : 0}%`,
+                    height: '100%',
+                    background: '#4caf50',
+                    transition: 'width 0.3s ease'
+                  }} />
+                </div>
+              </div>
+            </div>
+            <div style={{ marginTop: theme.spacing.md, paddingTop: theme.spacing.md, borderTop: `1px solid ${theme.colors.border.light}` }}>
+              <div style={{ fontSize: '0.85em', color: theme.colors.text.secondary }}>Avg Execution Time</div>
+              <div style={{ fontSize: '1.2em', fontWeight: 600, color: theme.colors.text.primary }}>
+                {formatTime(avgTime)}
+              </div>
+            </div>
+          </ChartContainer>
+        </div>
+      );
+    }
+    
+    if (activeTab === 'monitor') {
+      const queriesByDb = activeQueries.reduce((acc: Record<string, number>, q: any) => {
+        const db = q.datname || 'Unknown';
+        acc[db] = (acc[db] || 0) + 1;
+        return acc;
+      }, {});
+      
+      const queriesByState = activeQueries.reduce((acc: Record<string, number>, q: any) => {
+        const state = q.state || 'Unknown';
+        acc[state] = (acc[state] || 0) + 1;
+        return acc;
+      }, {});
+
+      return (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: theme.spacing.lg, marginBottom: theme.spacing.lg }}>
+          <ChartContainer style={{ padding: theme.spacing.md }}>
+            <ChartTitle style={{ marginBottom: theme.spacing.md, fontSize: '0.9em' }}>
+              Queries by Database
+            </ChartTitle>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.sm }}>
+              {Object.entries(queriesByDb)
+                .sort(([, a], [, b]) => b - a)
+                .slice(0, 5)
+                .map(([db, count]) => {
+                  const max = Math.max(...Object.values(queriesByDb));
+                  return (
+                    <div key={db} style={{ display: 'flex', alignItems: 'center', gap: theme.spacing.sm }}>
+                      <span style={{ flex: 1, fontSize: '0.85em', color: theme.colors.text.primary, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {db}
+                      </span>
+                      <span style={{ fontSize: '0.85em', fontWeight: 600, color: theme.colors.text.secondary, minWidth: '40px' }}>
+                        {count}
+                      </span>
+                      <div style={{ 
+                        flex: 1, 
+                        height: '8px', 
+                        background: theme.colors.background.secondary, 
+                        borderRadius: theme.borderRadius.sm,
+                        overflow: 'hidden',
+                        maxWidth: '150px'
+                      }}>
+                        <div style={{
+                          width: `${max > 0 ? (count / max) * 100 : 0}%`,
+                          height: '100%',
+                          background: theme.colors.primary.main,
+                          transition: 'width 0.3s ease'
+                        }} />
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          </ChartContainer>
+          
+          <ChartContainer style={{ padding: theme.spacing.md }}>
+            <ChartTitle style={{ marginBottom: theme.spacing.md, fontSize: '0.9em' }}>
+              Queries by State
+            </ChartTitle>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.sm }}>
+              {Object.entries(queriesByState)
+                .sort(([, a], [, b]) => b - a)
+                .map(([state, count]) => {
+                  const max = Math.max(...Object.values(queriesByState));
+                  const stateColors: Record<string, string> = {
+                    'active': '#4caf50',
+                    'idle': '#9e9e9e',
+                    'idle in transaction': '#ff9800',
+                    'idle in transaction (aborted)': '#f44336',
+                    'fastpath function call': '#2196f3',
+                    'disabled': '#9e9e9e',
+                  };
+                  return (
+                    <div key={state} style={{ display: 'flex', alignItems: 'center', gap: theme.spacing.sm }}>
+                      <span style={{ flex: 1, fontSize: '0.85em', color: theme.colors.text.primary, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {state}
+                      </span>
+                      <span style={{ fontSize: '0.85em', fontWeight: 600, color: theme.colors.text.secondary, minWidth: '40px' }}>
+                        {count}
+                      </span>
+                      <div style={{ 
+                        flex: 1, 
+                        height: '8px', 
+                        background: theme.colors.background.secondary, 
+                        borderRadius: theme.borderRadius.sm,
+                        overflow: 'hidden',
+                        maxWidth: '150px'
+                      }}>
+                        <div style={{
+                          width: `${max > 0 ? (count / max) * 100 : 0}%`,
+                          height: '100%',
+                          background: stateColors[state.toLowerCase()] || theme.colors.primary.main,
+                          transition: 'width 0.3s ease'
+                        }} />
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          </ChartContainer>
+        </div>
+      );
+    }
+    
+    if (activeTab === 'live') {
+      const eventsByType = processingLogs.reduce((acc: Record<string, number>, log: any) => {
+        const type = log.pk_strategy || 'Unknown';
+        acc[type] = (acc[type] || 0) + 1;
+        return acc;
+      }, {});
+      
+      const eventsByStatus = processingLogs.reduce((acc: Record<string, number>, log: any) => {
+        const status = log.status || 'Unknown';
+        acc[status] = (acc[status] || 0) + 1;
+        return acc;
+      }, {});
+
+      return (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: theme.spacing.lg, marginBottom: theme.spacing.lg }}>
+          <ChartContainer style={{ padding: theme.spacing.md }}>
+            <ChartTitle style={{ marginBottom: theme.spacing.md, fontSize: '0.9em' }}>
+              Events by Type
+            </ChartTitle>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.sm }}>
+              {Object.entries(eventsByType)
+                .sort(([, a], [, b]) => b - a)
+                .slice(0, 5)
+                .map(([type, count]) => {
+                  const max = Math.max(...Object.values(eventsByType));
+                  return (
+                    <div key={type} style={{ display: 'flex', alignItems: 'center', gap: theme.spacing.sm }}>
+                      <span style={{ flex: 1, fontSize: '0.85em', color: theme.colors.text.primary, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {type}
+                      </span>
+                      <span style={{ fontSize: '0.85em', fontWeight: 600, color: theme.colors.text.secondary, minWidth: '40px' }}>
+                        {count}
+                      </span>
+                      <div style={{ 
+                        flex: 1, 
+                        height: '8px', 
+                        background: theme.colors.background.secondary, 
+                        borderRadius: theme.borderRadius.sm,
+                        overflow: 'hidden',
+                        maxWidth: '150px'
+                      }}>
+                        <div style={{
+                          width: `${max > 0 ? (count / max) * 100 : 0}%`,
+                          height: '100%',
+                          background: theme.colors.primary.main,
+                          transition: 'width 0.3s ease'
+                        }} />
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          </ChartContainer>
+          
+          <ChartContainer style={{ padding: theme.spacing.md }}>
+            <ChartTitle style={{ marginBottom: theme.spacing.md, fontSize: '0.9em' }}>
+              Events by Status
+            </ChartTitle>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.sm }}>
+              {Object.entries(eventsByStatus)
+                .sort(([, a], [, b]) => b - a)
+                .map(([status, count]) => {
+                  const max = Math.max(...Object.values(eventsByStatus));
+                  const statusColors: Record<string, string> = {
+                    'SUCCESS': '#4caf50',
+                    'ERROR': '#f44336',
+                    'PENDING': '#ff9800',
+                    'IN_PROGRESS': '#2196f3',
+                  };
+                  return (
+                    <div key={status} style={{ display: 'flex', alignItems: 'center', gap: theme.spacing.sm }}>
+                      <span style={{ flex: 1, fontSize: '0.85em', color: theme.colors.text.primary, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {status}
+                      </span>
+                      <span style={{ fontSize: '0.85em', fontWeight: 600, color: theme.colors.text.secondary, minWidth: '40px' }}>
+                        {count}
+                      </span>
+                      <div style={{ 
+                        flex: 1, 
+                        height: '8px', 
+                        background: theme.colors.background.secondary, 
+                        borderRadius: theme.borderRadius.sm,
+                        overflow: 'hidden',
+                        maxWidth: '150px'
+                      }}>
+                        <div style={{
+                          width: `${max > 0 ? (count / max) * 100 : 0}%`,
+                          height: '100%',
+                          background: statusColors[status] || theme.colors.primary.main,
+                          transition: 'width 0.3s ease'
+                        }} />
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          </ChartContainer>
+        </div>
+      );
+    }
+    
+    return null;
+  };
+
   const renderDetails = () => {
     if (activeTab === 'live') {
       const recentEvents = [...processingLogs]
         .sort((a, b) => new Date(b.processed_at || 0).getTime() - new Date(a.processed_at || 0).getTime())
         .slice(0, 20);
 
-      if (recentEvents.length === 0) {
-        return (
-          <EmptyDetails>
-            No recent events available
-          </EmptyDetails>
-        );
-      }
-
       return (
         <>
+          {renderCharts()}
           <SectionTitle>Current Changes</SectionTitle>
-          <RecentEventsList>
-            {recentEvents.map((event, idx) => (
-              <RecentEventCard key={idx}>
-                <EventHeader>
-                  <StatusBadge $status={event.status}>{event.status}</StatusBadge>
-                  <EventTime>{formatDate(event.processed_at)}</EventTime>
-                </EventHeader>
-                <EventInfo>
-                  <EventLabel>Database:</EventLabel>
-                  <EventValue>{event.db_engine || 'N/A'}</EventValue>
-                  
-                  <EventLabel>Schema:</EventLabel>
-                  <EventValue>{event.schema_name || 'N/A'}</EventValue>
-                  
-                  <EventLabel>Table:</EventLabel>
-                  <EventValue>{event.table_name || 'N/A'}</EventValue>
-                  
-                  <EventLabel>Strategy:</EventLabel>
-                  <EventValue>{event.pk_strategy || 'N/A'}</EventValue>
-                  
-                  {event.new_pk && (
-                    <>
-                      <EventLabel>Last PK:</EventLabel>
-                      <EventValue>{event.new_pk}</EventValue>
-                    </>
-                  )}
-                  
-                  {event.record_count !== null && event.record_count !== undefined && (
-                    <>
-                      <EventLabel>Records:</EventLabel>
-                      <EventValue>{event.record_count.toLocaleString()}</EventValue>
-                    </>
-                  )}
-                </EventInfo>
-              </RecentEventCard>
-            ))}
-          </RecentEventsList>
+          {recentEvents.length === 0 ? (
+            <EmptyDetails>No recent events available</EmptyDetails>
+          ) : (
+            <RecentEventsList>
+              {recentEvents.map((event, idx) => (
+                <RecentEventCard key={idx}>
+                  <EventHeader>
+                    <StatusBadge $status={event.status}>{event.status}</StatusBadge>
+                    <EventTime>{formatDate(event.processed_at)}</EventTime>
+                  </EventHeader>
+                  <EventInfo>
+                    <EventLabel>Database:</EventLabel>
+                    <EventValue>{event.db_engine || 'N/A'}</EventValue>
+                    
+                    <EventLabel>Schema:</EventLabel>
+                    <EventValue>{event.schema_name || 'N/A'}</EventValue>
+                    
+                    <EventLabel>Table:</EventLabel>
+                    <EventValue>{event.table_name || 'N/A'}</EventValue>
+                    
+                    <EventLabel>Strategy:</EventLabel>
+                    <EventValue>{event.pk_strategy || 'N/A'}</EventValue>
+                    
+                    {event.new_pk && (
+                      <>
+                        <EventLabel>Last PK:</EventLabel>
+                        <EventValue>{event.new_pk}</EventValue>
+                      </>
+                    )}
+                    
+                    {event.record_count !== null && event.record_count !== undefined && (
+                      <>
+                        <EventLabel>Records:</EventLabel>
+                        <EventValue>{event.record_count.toLocaleString()}</EventValue>
+                      </>
+                    )}
+                  </EventInfo>
+                </RecentEventCard>
+              ))}
+            </RecentEventsList>
+          )}
         </>
       );
     }
 
     if (!selectedItem) {
       return (
-        <EmptyDetails>
-          Select an item to view details
-        </EmptyDetails>
+        <>
+          {renderCharts()}
+          <EmptyDetails>
+            Select an item to view details
+          </EmptyDetails>
+        </>
       );
     }
 
