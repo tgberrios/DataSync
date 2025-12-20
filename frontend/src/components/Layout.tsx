@@ -211,7 +211,7 @@ const Layout = () => {
     lineage: false,
     governance: false,
     dataSources: false,
-    monitoring: false,
+    quality: false,
     operations: false,
     system: false,
   });
@@ -235,6 +235,10 @@ const Layout = () => {
         
         <NavItem to="/" end>
           ■ Dashboard
+        </NavItem>
+
+        <NavItem to="/monitor">
+          ■ Monitor
         </NavItem>
 
         <NavGroup>
@@ -308,6 +312,20 @@ const Layout = () => {
 
         <NavGroup>
           <NavGroupHeader 
+            $isOpen={openGroups.quality} 
+            onClick={() => toggleGroup('quality')}
+          >
+            Quality
+          </NavGroupHeader>
+          <NavGroupContent $isOpen={openGroups.quality}>
+            <NavSubItem to="/quality">
+              ■ Quality
+            </NavSubItem>
+          </NavGroupContent>
+        </NavGroup>
+
+        <NavGroup>
+          <NavGroupHeader 
             $isOpen={openGroups.dataSources} 
             onClick={() => toggleGroup('dataSources')}
           >
@@ -319,29 +337,6 @@ const Layout = () => {
             </NavSubItem>
             <NavSubItem to="/custom-jobs">
               ■ Custom Jobs
-            </NavSubItem>
-          </NavGroupContent>
-        </NavGroup>
-
-        <NavGroup>
-          <NavGroupHeader 
-            $isOpen={openGroups.monitoring} 
-            onClick={() => toggleGroup('monitoring')}
-          >
-            Monitoring
-          </NavGroupHeader>
-          <NavGroupContent $isOpen={openGroups.monitoring}>
-            <NavSubItem to="/monitor">
-              ■ Monitor
-            </NavSubItem>
-            <NavSubItem to="/live-changes">
-              ■ Live Changes
-            </NavSubItem>
-            <NavSubItem to="/query-performance">
-              ■ Query Performance
-            </NavSubItem>
-            <NavSubItem to="/quality">
-              ■ Quality
             </NavSubItem>
           </NavGroupContent>
         </NavGroup>

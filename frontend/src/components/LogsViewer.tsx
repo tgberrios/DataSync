@@ -438,6 +438,8 @@ const LogsViewer = () => {
   useEffect(() => {
     if (allLogs.length > 0 && isMountedRef.current) {
       const logsPerPage = 50;
+      const totalPages = Math.ceil(allLogs.length / logsPerPage);
+      setTotalPages(totalPages);
       const startIndex = (currentPage - 1) * logsPerPage;
       const endIndex = startIndex + logsPerPage;
       setLogs(allLogs.slice(startIndex, endIndex));

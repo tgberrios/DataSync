@@ -7,13 +7,12 @@ import {
   LoadingOverlay,
   Button,
   Input,
-  FormGroup,
-  Label,
 } from './shared/BaseComponents';
 import { configApi } from '../services/api';
 import type { ConfigEntry } from '../services/api';
 import { extractApiError } from '../utils/errorHandler';
 import { theme } from '../theme/theme';
+import ConfigTreeView from './ConfigTreeView';
 
 const ConfigTable = styled.table`
   width: 100%;
@@ -158,6 +157,8 @@ const Config = () => {
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<ConfigEntry | null>(null);
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
+  const [selectedConfig, setSelectedConfig] = useState<ConfigEntry | null>(null);
+  const [viewMode, setViewMode] = useState<'table' | 'tree'>('tree');
   const isMountedRef = useRef(true);
 
   const fetchConfigs = useCallback(async () => {
@@ -265,7 +266,7 @@ const Config = () => {
   }, []);
 
   const isLongValue = useCallback((value: string): boolean => {
-    return value && value.length > 100;
+    return !!(value && value.length > 100);
   }, []);
 
   const shouldBeExpandable = useCallback((value: string): boolean => {
@@ -329,9 +330,103 @@ const Config = () => {
 
       {error && <ErrorMessage>{error}</ErrorMessage>}
 
-      <AddButton onClick={handleAdd}>+ Add New Configuration</AddButton>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: theme.spacing.md }}>
+        <AddButton onClick={handleAdd}>+ Add New Configuration</AddButton>
+        <div style={{ display: 'flex', gap: theme.spacing.sm }}>
+          <Button
+            $variant={viewMode === 'tree' ? 'primary' : 'secondary'}
+            onClick={() => setViewMode('tree')}
+            style={{ padding: '8px 16px', fontSize: '0.9em' }}
+          >
+            Tree View
+          </Button>
+          <Button
+            $variant={viewMode === 'table' ? 'primary' : 'secondary'}
+            onClick={() => setViewMode('table')}
+            style={{ padding: '8px 16px', fontSize: '0.9em' }}
+          >
+            Table View
+          </Button>
+        </div>
+      </div>
 
-      <ConfigTable>
+      {viewMode === 'tree' ? (
+        <div style={{ display: 'grid', gridTemplateColumns: selectedConfig ? '1fr 400px' : '1fr', gap: theme.spacing.lg }}>
+          <ConfigTreeView 
+            configs={configs} 
+            onConfigClick={(config) => setSelectedConfig(prev => prev?.key === config.key ? null : config)}
+          />
+          
+          {selectedConfig && (
+            <div style={{
+              background: theme.colors.background.secondary,
+              border: `1px solid ${theme.colors.border.light}`,
+              borderRadius: theme.borderRadius.md,
+              padding: theme.spacing.lg,
+              position: 'sticky',
+              top: theme.spacing.md,
+              maxHeight: 'calc(100vh - 200px)',
+              overflowY: 'auto'
+            }}>
+              <h3 style={{ marginTop: 0, marginBottom: theme.spacing.md, color: theme.colors.text.primary }}>
+                Configuration Details
+              </h3>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: theme.spacing.md }}>
+                <div>
+                  <strong style={{ color: theme.colors.text.secondary, fontSize: '0.85em' }}>Key:</strong>
+                  <div style={{ color: theme.colors.text.primary, fontFamily: 'monospace', fontSize: '0.9em', marginTop: '4px' }}>
+                    {selectedConfig.key}
+                  </div>
+                </div>
+                <div>
+                  <strong style={{ color: theme.colors.text.secondary, fontSize: '0.85em' }}>Value:</strong>
+                  <div style={{ 
+                    color: theme.colors.text.primary, 
+                    fontSize: '0.9em',
+                    fontFamily: 'monospace',
+                    padding: theme.spacing.sm,
+                    background: theme.colors.background.main,
+                    borderRadius: theme.borderRadius.sm,
+                    border: `1px solid ${theme.colors.border.light}`,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    maxHeight: '300px',
+                    overflowY: 'auto'
+                  }}>
+                    {selectedConfig.value || '(empty)'}
+                  </div>
+                </div>
+                {selectedConfig.description && (
+                  <div>
+                    <strong style={{ color: theme.colors.text.secondary, fontSize: '0.85em' }}>Description:</strong>
+                    <div style={{ color: theme.colors.text.primary, fontSize: '0.9em', marginTop: '4px' }}>
+                      {selectedConfig.description}
+                    </div>
+                  </div>
+                )}
+                <div>
+                  <strong style={{ color: theme.colors.text.secondary, fontSize: '0.85em' }}>Last Updated:</strong>
+                  <div style={{ color: theme.colors.text.primary, fontSize: '0.9em', marginTop: '4px' }}>
+                    {formatDate(selectedConfig.updated_at)}
+                  </div>
+                </div>
+                <div style={{ marginTop: theme.spacing.md, paddingTop: theme.spacing.md, borderTop: `1px solid ${theme.colors.border.light}` }}>
+                  <Button
+                    onClick={() => {
+                      handleEdit(selectedConfig);
+                      setSelectedConfig(null);
+                    }}
+                    style={{ width: '100%', marginBottom: theme.spacing.sm }}
+                  >
+                    Edit Configuration
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <ConfigTable>
         <thead>
           <tr>
             <Th>Key</Th>
@@ -431,6 +526,7 @@ const Config = () => {
           ))}
         </tbody>
       </ConfigTable>
+      )}
     </Container>
   );
 };

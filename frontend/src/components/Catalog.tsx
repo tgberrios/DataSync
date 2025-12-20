@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import EditModal from "./EditModal";
 import AddTableModal from "./AddTableModal";
+import CatalogTreeView from "./CatalogTreeView";
 import {
   Container,
   Header,
@@ -431,6 +432,9 @@ const Catalog = () => {
   const [selectedEntry, setSelectedEntry] = useState<CatalogEntry | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedEntries, setSelectedEntries] = useState<Set<string>>(new Set());
+  const [viewMode, setViewMode] = useState<"table" | "tree">("tree");
+  const [allEntries, setAllEntries] = useState<CatalogEntry[]>([]);
+  const [loadingTree, setLoadingTree] = useState(false);
   const [pagination, setPagination] = useState({
     total: 0,
     totalPages: 0,
@@ -545,6 +549,38 @@ const Catalog = () => {
     sortField, 
     sortDirection
   ]);
+
+  const fetchAllEntries = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    try {
+      setLoadingTree(true);
+      setError(null);
+      const sanitizedSearch = sanitizeSearch(search, 100);
+      const params = {
+        page: 1,
+        limit: 10000,
+        engine: filters.engine as string,
+        status: filters.status as string,
+        active: filters.active as string,
+        search: sanitizedSearch,
+        sort_field: sortField,
+        sort_direction: sortDirection,
+      };
+      
+      const response = await catalogApi.getCatalogEntries(params);
+      if (isMountedRef.current) {
+        setAllEntries(response.data || []);
+      }
+    } catch (err) {
+      if (isMountedRef.current) {
+        setError(extractApiError(err));
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setLoadingTree(false);
+      }
+    }
+  }, [filters.engine, filters.status, filters.active, search, sortField, sortDirection]);
 
   // Alias para compatibilidad con código existente
   const fetchData = fetchDataForCurrentPage;
@@ -848,16 +884,26 @@ const Catalog = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page]); // Solo dependemos de page
 
+  // Cargar todas las entradas cuando se cambia a tree view
+  useEffect(() => {
+    if (viewMode === "tree") {
+      fetchAllEntries();
+    }
+  }, [viewMode, fetchAllEntries]);
+
   // Configurar el intervalo de actualización (solo una vez al montar)
   useEffect(() => {
     const interval = setInterval(() => {
       if (fetchDataRef.current && isMountedRef.current) {
         fetchDataRef.current();
+        if (viewMode === "tree") {
+          fetchAllEntries();
+        }
       }
     }, 30000);
     
     return () => clearInterval(interval);
-  }, []); // Sin dependencias - solo se ejecuta una vez al montar
+  }, [viewMode, fetchAllEntries]); // Sin dependencias - solo se ejecuta una vez al montar
 
 
   return (
@@ -1061,10 +1107,29 @@ const Catalog = () => {
 
       <TableActions>
         <PaginationInfo>
-          Showing {data.length} of {pagination.total} entries (Page{" "}
-          {pagination.currentPage} of {pagination.totalPages})
+          {viewMode === "table" 
+            ? `Showing ${data.length} of ${pagination.total} entries (Page ${pagination.currentPage} of ${pagination.totalPages})`
+            : `Total: ${allEntries.length} entries`
+          }
         </PaginationInfo>
         <div style={{ display: 'flex', gap: theme.spacing.sm }}>
+          <Button
+            $variant={viewMode === "table" ? "primary" : "secondary"}
+            onClick={() => setViewMode("table")}
+            style={{ padding: "6px 12px", fontSize: "0.85em" }}
+          >
+            Table View
+          </Button>
+          <Button
+            $variant={viewMode === "tree" ? "primary" : "secondary"}
+            onClick={() => {
+              setViewMode("tree");
+              fetchAllEntries();
+            }}
+            style={{ padding: "6px 12px", fontSize: "0.85em" }}
+          >
+            Tree View
+          </Button>
           <Button
             $variant="primary"
             onClick={() => setShowAddModal(true)}
@@ -1078,6 +1143,16 @@ const Catalog = () => {
         </div>
       </TableActions>
 
+      {viewMode === "tree" ? (
+        loadingTree ? (
+          <LoadingOverlay>Loading tree view...</LoadingOverlay>
+        ) : (
+          <CatalogTreeView 
+            entries={allEntries}
+            onEntryClick={(entry) => setSelectedEntry(entry)}
+          />
+        )
+      ) : (
       <TableContainer>
         <TableWrapper>
           <StyledTable $minWidth="1200px">
@@ -1306,6 +1381,7 @@ const Catalog = () => {
         </StyledTable>
         </TableWrapper>
       </TableContainer>
+      )}
 
       <Pagination>
         <PageButton

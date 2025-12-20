@@ -37,6 +37,7 @@ import { extractApiError } from '../utils/errorHandler';
 import { sanitizeSearch } from '../utils/validation';
 import styled from 'styled-components';
 import { theme } from '../theme/theme';
+import UserManagementTreeView from './UserManagementTreeView';
 
 const HeaderContent = styled.div`
   display: flex;
@@ -138,6 +139,8 @@ const UserManagement = () => {
   });
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [selectedUser, setSelectedUser] = useState<User | null>(null);
+  const [viewMode, setViewMode] = useState<'table' | 'tree'>('tree');
   const isMountedRef = useRef(true);
 
   const fetchUsers = useCallback(async () => {
@@ -147,8 +150,8 @@ const UserManagement = () => {
       setError(null);
       const sanitizedSearch = sanitizeSearch(search, 100);
       const params: any = {
-        page,
-        limit,
+        page: viewMode === 'tree' ? 1 : page,
+        limit: viewMode === 'tree' ? 1000 : limit,
         search: sanitizedSearch
       };
       
@@ -174,7 +177,7 @@ const UserManagement = () => {
         setLoading(false);
       }
     }
-  }, [page, limit, filters.role, filters.active, search]);
+  }, [page, limit, filters.role, filters.active, search, viewMode]);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -366,7 +369,130 @@ const UserManagement = () => {
         </Select>
       </FiltersContainer>
 
-      <TableContainer>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: theme.spacing.md }}>
+        <div style={{ display: 'flex', gap: theme.spacing.sm }}>
+          <Button
+            $variant={viewMode === 'tree' ? 'primary' : 'secondary'}
+            onClick={() => setViewMode('tree')}
+            style={{ padding: '8px 16px', fontSize: '0.9em' }}
+          >
+            Tree View
+          </Button>
+          <Button
+            $variant={viewMode === 'table' ? 'primary' : 'secondary'}
+            onClick={() => setViewMode('table')}
+            style={{ padding: '8px 16px', fontSize: '0.9em' }}
+          >
+            Table View
+          </Button>
+        </div>
+      </div>
+
+      {viewMode === 'tree' ? (
+        <div style={{ display: 'grid', gridTemplateColumns: selectedUser ? '1fr 400px' : '1fr', gap: theme.spacing.lg }}>
+          <UserManagementTreeView 
+            users={data} 
+            onUserClick={(user) => setSelectedUser(prev => prev?.id === user.id ? null : user)}
+          />
+          
+          {selectedUser && (
+            <div style={{
+              background: theme.colors.background.secondary,
+              border: `1px solid ${theme.colors.border.light}`,
+              borderRadius: theme.borderRadius.md,
+              padding: theme.spacing.lg,
+              position: 'sticky',
+              top: theme.spacing.md,
+              maxHeight: 'calc(100vh - 200px)',
+              overflowY: 'auto'
+            }}>
+              <h3 style={{ marginTop: 0, marginBottom: theme.spacing.md, color: theme.colors.text.primary }}>
+                User Details
+              </h3>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: theme.spacing.md }}>
+                <div>
+                  <strong style={{ color: theme.colors.text.secondary, fontSize: '0.85em' }}>Username:</strong>
+                  <div style={{ color: theme.colors.text.primary, fontSize: '0.9em', marginTop: '4px' }}>
+                    {selectedUser.username}
+                  </div>
+                </div>
+                <div>
+                  <strong style={{ color: theme.colors.text.secondary, fontSize: '0.85em' }}>Email:</strong>
+                  <div style={{ color: theme.colors.text.primary, fontSize: '0.9em', marginTop: '4px' }}>
+                    {selectedUser.email}
+                  </div>
+                </div>
+                <div>
+                  <strong style={{ color: theme.colors.text.secondary, fontSize: '0.85em' }}>Role:</strong>
+                  <div style={{ marginTop: '4px' }}>
+                    <RoleBadge $role={selectedUser.role}>{selectedUser.role}</RoleBadge>
+                  </div>
+                </div>
+                <div>
+                  <strong style={{ color: theme.colors.text.secondary, fontSize: '0.85em' }}>Status:</strong>
+                  <div style={{ marginTop: '4px' }}>
+                    <ActiveBadge $active={selectedUser.active}>
+                      {selectedUser.active ? 'Active' : 'Inactive'}
+                    </ActiveBadge>
+                  </div>
+                </div>
+                <div>
+                  <strong style={{ color: theme.colors.text.secondary, fontSize: '0.85em' }}>Created:</strong>
+                  <div style={{ color: theme.colors.text.primary, fontSize: '0.9em', marginTop: '4px' }}>
+                    {format(new Date(selectedUser.created_at), 'yyyy-MM-dd HH:mm')}
+                  </div>
+                </div>
+                <div>
+                  <strong style={{ color: theme.colors.text.secondary, fontSize: '0.85em' }}>Last Login:</strong>
+                  <div style={{ color: theme.colors.text.primary, fontSize: '0.9em', marginTop: '4px' }}>
+                    {selectedUser.last_login
+                      ? format(new Date(selectedUser.last_login), 'yyyy-MM-dd HH:mm')
+                      : 'Never'}
+                  </div>
+                </div>
+                <div style={{ marginTop: theme.spacing.md, paddingTop: theme.spacing.md, borderTop: `1px solid ${theme.colors.border.light}` }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.sm }}>
+                    <ActionButton onClick={() => {
+                      handleOpenModal(selectedUser);
+                      setSelectedUser(null);
+                    }}>
+                      Edit User
+                    </ActionButton>
+                    <ActionButton
+                      $variant="danger"
+                      onClick={() => {
+                        handleToggleActive(selectedUser.id, selectedUser.active);
+                        setSelectedUser(null);
+                      }}
+                    >
+                      {selectedUser.active ? 'Deactivate' : 'Activate'}
+                    </ActionButton>
+                    <ActionButton
+                      onClick={() => {
+                        handleOpenPasswordModal(selectedUser.id);
+                        setSelectedUser(null);
+                      }}
+                    >
+                      Reset Password
+                    </ActionButton>
+                    <ActionButton
+                      $variant="danger"
+                      onClick={() => {
+                        handleDelete(selectedUser.id, selectedUser.username);
+                        setSelectedUser(null);
+                      }}
+                    >
+                      Delete User
+                    </ActionButton>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
+          <TableContainer>
         <Table>
           <thead>
             <tr>
@@ -446,7 +572,9 @@ const UserManagement = () => {
           >
             Next
           </PageButton>
-        </Pagination>
+          </Pagination>
+        )}
+        </>
       )}
 
       {isModalOpen && (

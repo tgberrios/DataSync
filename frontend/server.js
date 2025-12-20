@@ -1575,6 +1575,41 @@ app.get("/api/monitor/queries", async (req, res) => {
   }
 });
 
+app.post("/api/monitor/queries/:pid/kill", requireAuth, async (req, res) => {
+  try {
+    const pid = parseInt(req.params.pid);
+    if (isNaN(pid)) {
+      return res.status(400).json({ error: "Invalid PID" });
+    }
+
+    const result = await pool.query(
+      "SELECT pg_terminate_backend($1) as terminated",
+      [pid]
+    );
+
+    if (result.rows[0].terminated) {
+      res.json({
+        success: true,
+        message: `Query with PID ${pid} has been terminated`,
+      });
+    } else {
+      res
+        .status(404)
+        .json({
+          error: `Query with PID ${pid} not found or could not be terminated`,
+        });
+    }
+  } catch (err) {
+    console.error("Error killing query:", err);
+    const safeError = sanitizeError(
+      err,
+      "Error al terminar la query",
+      process.env.NODE_ENV === "production"
+    );
+    res.status(500).json({ error: safeError });
+  }
+});
+
 // Obtener métricas de calidad
 app.get("/api/quality/metrics", async (req, res) => {
   try {
@@ -5082,10 +5117,285 @@ app.get("/api/api-catalog/metrics", async (req, res) => {
   } catch (err) {
     console.error("Error getting API catalog metrics:", err);
     res.status(500).json({
-      error: "Error al obtener métricas del catálogo de APIs",
       error: sanitizeError(
         err,
         "Error en el servidor",
+        process.env.NODE_ENV === "production"
+      ),
+    });
+  }
+});
+
+app.post("/api/test-connection", requireAuth, async (req, res) => {
+  const { db_engine, connection_string } = req.body;
+
+  if (!db_engine || !connection_string) {
+    return res.status(400).json({
+      success: false,
+      error: "Missing required fields: db_engine and connection_string",
+    });
+  }
+
+  const validEngine = validateEnum(
+    db_engine,
+    ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle"],
+    null
+  );
+
+  if (!validEngine) {
+    return res.status(400).json({
+      success: false,
+      error:
+        "Invalid db_engine. Must be one of: PostgreSQL, MariaDB, MSSQL, MongoDB, Oracle",
+    });
+  }
+
+  try {
+    let testResult = false;
+    let message = "";
+
+    switch (db_engine) {
+      case "PostgreSQL": {
+        try {
+          let config;
+
+          if (
+            connection_string.includes("postgresql://") ||
+            connection_string.includes("postgres://")
+          ) {
+            config = {
+              connectionString: connection_string,
+              connectionTimeoutMillis: 5000,
+            };
+          } else {
+            const params = {};
+            const parts = connection_string.split(";");
+
+            for (const part of parts) {
+              const [key, value] = part.split("=").map((s) => s.trim());
+              if (key && value) {
+                switch (key.toLowerCase()) {
+                  case "host":
+                  case "hostname":
+                    params.host = value;
+                    break;
+                  case "user":
+                  case "username":
+                    params.user = value;
+                    break;
+                  case "password":
+                    params.password = value;
+                    break;
+                  case "db":
+                  case "database":
+                    params.database = value;
+                    break;
+                  case "port":
+                    params.port = parseInt(value, 10);
+                    break;
+                }
+              }
+            }
+
+            config = {
+              ...params,
+              connectionTimeoutMillis: 5000,
+            };
+          }
+
+          console.log("Testing PostgreSQL connection with config:", {
+            host: config.host || "from connectionString",
+            user: config.user || "from connectionString",
+            database: config.database || "from connectionString",
+            port: config.port || "from connectionString",
+          });
+
+          const testPool = new Pool(config);
+          const client = await testPool.connect();
+          await client.query("SELECT 1");
+          client.release();
+          await testPool.end();
+          testResult = true;
+          message = "PostgreSQL connection successful!";
+        } catch (err) {
+          console.error("PostgreSQL connection error:", err);
+          message = `PostgreSQL connection failed: ${err.message}`;
+        }
+        break;
+      }
+
+      case "MariaDB": {
+        try {
+          const mysql = await import("mysql2/promise").catch(() => null);
+          if (!mysql) {
+            message =
+              "MariaDB driver (mysql2) is not installed. Please install it with: npm install mysql2";
+            break;
+          }
+
+          const connStr = connection_string;
+          const params = {};
+          connStr.split(";").forEach((param) => {
+            const [key, value] = param.split("=");
+            if (key && value) {
+              params[key.trim().toLowerCase()] = value.trim();
+            }
+          });
+
+          const connection = await mysql.createConnection({
+            host: params.host || "localhost",
+            port: params.port ? parseInt(params.port) : 3306,
+            user: params.user || "root",
+            password: params.password || "",
+            database: params.db || params.database || "",
+            connectTimeout: 5000,
+          });
+
+          await connection.query("SELECT 1");
+          await connection.end();
+          testResult = true;
+          message = "MariaDB connection successful!";
+        } catch (err) {
+          message = `MariaDB connection failed: ${err.message}`;
+        }
+        break;
+      }
+
+      case "MSSQL": {
+        try {
+          const sql = await import("mssql").catch(() => null);
+          if (!sql) {
+            message =
+              "MSSQL driver (mssql) is not installed. Please install it with: npm install mssql";
+            break;
+          }
+
+          const connStr = connection_string;
+          const config = {
+            options: {
+              encrypt: false,
+              trustServerCertificate: true,
+              connectTimeout: 5000,
+            },
+          };
+
+          const parts = connStr.split(";");
+          parts.forEach((part) => {
+            const [key, value] = part.split("=");
+            if (key && value) {
+              const k = key.trim().toUpperCase();
+              if (k === "SERVER") {
+                const [host, port] = value.split(",");
+                config.server = host.trim();
+                if (port) config.port = parseInt(port.trim());
+              } else if (k === "DATABASE") {
+                config.database = value.trim();
+              } else if (k === "UID") {
+                config.user = value.trim();
+              } else if (k === "PWD") {
+                config.password = value.trim();
+              }
+            }
+          });
+
+          const pool = await sql.connect(config);
+          await pool.request().query("SELECT 1");
+          await pool.close();
+          testResult = true;
+          message = "MSSQL connection successful!";
+        } catch (err) {
+          message = `MSSQL connection failed: ${err.message}`;
+        }
+        break;
+      }
+
+      case "MongoDB": {
+        try {
+          const { MongoClient } = await import("mongodb").catch(() => ({
+            MongoClient: null,
+          }));
+          if (!MongoClient) {
+            message =
+              "MongoDB driver (mongodb) is not installed. Please install it with: npm install mongodb";
+            break;
+          }
+
+          const client = new MongoClient(connection_string, {
+            serverSelectionTimeoutMS: 5000,
+          });
+          await client.connect();
+          await client.db().admin().ping();
+          await client.close();
+          testResult = true;
+          message = "MongoDB connection successful!";
+        } catch (err) {
+          message = `MongoDB connection failed: ${err.message}`;
+        }
+        break;
+      }
+
+      case "Oracle": {
+        try {
+          const oracledb = await import("oracledb").catch(() => null);
+          if (!oracledb) {
+            message =
+              "Oracle driver (oracledb) is not installed. Please install it with: npm install oracledb";
+            break;
+          }
+
+          const connStr = connection_string;
+          const params = {};
+          connStr.split(";").forEach((param) => {
+            const [key, value] = param.split("=");
+            if (key && value) {
+              params[key.trim().toLowerCase()] = value.trim();
+            }
+          });
+
+          const connection = await oracledb.getConnection({
+            user: params.user || "",
+            password: params.password || "",
+            connectString: `${params.host || "localhost"}:${
+              params.port || 1521
+            }/${params.db || params.database || ""}`,
+            connectionTimeout: 5000,
+          });
+
+          await connection.execute("SELECT 1 FROM DUAL");
+          await connection.close();
+          testResult = true;
+          message = "Oracle connection successful!";
+        } catch (err) {
+          message = `Oracle connection failed: ${err.message}`;
+        }
+        break;
+      }
+
+      default:
+        return res.status(400).json({
+          success: false,
+          error: `Unsupported database engine: ${db_engine}`,
+        });
+    }
+
+    if (testResult) {
+      res.json({
+        success: true,
+        message: message,
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        error: message,
+      });
+    }
+  } catch (err) {
+    console.error("Error testing connection:", err);
+    res.status(500).json({
+      success: false,
+      error: sanitizeError(
+        err,
+        "Error testing connection",
         process.env.NODE_ENV === "production"
       ),
     });

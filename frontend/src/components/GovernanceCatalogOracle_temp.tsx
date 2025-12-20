@@ -25,7 +25,7 @@ import { governanceCatalogApi } from '../services/api';
 import { extractApiError } from '../utils/errorHandler';
 import { sanitizeSearch } from '../utils/validation';
 import { theme } from '../theme/theme';
-import GovernanceCatalogMariaDBTreeView from './GovernanceCatalogMariaDBTreeView';
+import GovernanceCatalogMSSQLTreeView from './GovernanceCatalogMSSQLTreeView';
 
 const fadeIn = keyframes`
   from {
@@ -328,7 +328,7 @@ const StyledTableContainer = styled(TableContainer)`
 `;
 
 const DetailsPanel = styled.div<{ $isOpen: boolean }>`
-  max-height: ${props => props.$isOpen ? '600px' : '0'};
+  max-height: ${props => props.$isOpen ? '700px' : '0'};
   opacity: ${props => props.$isOpen ? '1' : '0'};
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   border-top: ${props => props.$isOpen ? `1px solid ${theme.colors.border.light}` : 'none'};
@@ -353,15 +353,46 @@ const DetailValue = styled.div`
   color: ${theme.colors.text.primary};
 `;
 
+const PerformanceGrid = styled.div`
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: ${theme.spacing.sm};
+  padding: ${theme.spacing.md};
+  background: linear-gradient(135deg, ${theme.colors.background.secondary} 0%, ${theme.colors.background.main} 100%);
+  border-radius: ${theme.borderRadius.md};
+  border: 1px solid ${theme.colors.border.light};
+  margin: ${theme.spacing.md};
+`;
+
+const PerformanceMetric = styled.div`
+  padding: ${theme.spacing.sm};
+  background: ${theme.colors.background.main};
+  border-radius: ${theme.borderRadius.md};
+  border: 1px solid ${theme.colors.border.medium};
+`;
+
+const PerformanceLabel = styled.div`
+  font-size: 0.8em;
+  color: ${theme.colors.text.secondary};
+  margin-bottom: 5px;
+`;
+
+const PerformanceValue = styled.div`
+  font-size: 1.1em;
+  font-weight: bold;
+  color: ${theme.colors.text.primary};
+`;
+
 /**
- * Governance Catalog component for MariaDB
- * Displays governance metadata for MariaDB tables including health status, access frequency, and recommendations
+ * Governance Catalog component for MSSQL
+ * Displays governance metadata for MSSQL objects including tables, views, and stored procedures
  */
-const GovernanceCatalogMariaDB = () => {
+const GovernanceCatalogMSSQL = () => {
   const { page, limit, setPage } = usePagination(1, 20);
   const { filters, setFilter, clearFilters } = useTableFilters({
     server_name: '',
     database_name: '',
+    object_type: '',
     health_status: '',
     access_frequency: '',
     search: ''
@@ -383,6 +414,7 @@ const GovernanceCatalogMariaDB = () => {
   });
   const [servers, setServers] = useState<string[]>([]);
   const [databases, setDatabases] = useState<string[]>([]);
+  const [viewMode, setViewMode] = useState<"table" | "tree">("tree");
   const [allItems, setAllItems] = useState<any[]>([]);
   const [loadingTree, setLoadingTree] = useState(false);
   const isMountedRef = useRef(true);
@@ -394,17 +426,18 @@ const GovernanceCatalogMariaDB = () => {
       setError(null);
       const sanitizedSearch = sanitizeSearch(filters.search as string, 100);
       const [itemsData, metricsData, serversData] = await Promise.all([
-        governanceCatalogApi.getMariaDBItems({
+        governanceCatalogApi.getMSSQLItems({
           page,
           limit,
           server_name: filters.server_name as string,
           database_name: filters.database_name as string,
+          object_type: filters.object_type as string,
           health_status: filters.health_status as string,
           access_frequency: filters.access_frequency as string,
           search: sanitizedSearch
         }),
-        governanceCatalogApi.getMariaDBMetrics(),
-        governanceCatalogApi.getMariaDBServers()
+        governanceCatalogApi.getMSSQLMetrics(),
+        governanceCatalogApi.getMSSQLServers()
       ]);
       if (isMountedRef.current) {
         setItems(itemsData.data || []);
@@ -431,6 +464,7 @@ const GovernanceCatalogMariaDB = () => {
     limit, 
     filters.server_name, 
     filters.database_name, 
+    filters.object_type, 
     filters.health_status, 
     filters.access_frequency, 
     filters.search
@@ -442,11 +476,12 @@ const GovernanceCatalogMariaDB = () => {
       setLoadingTree(true);
       setError(null);
       const sanitizedSearch = sanitizeSearch(filters.search as string, 100);
-      const itemsData = await governanceCatalogApi.getMariaDBItems({
+      const itemsData = await governanceCatalogApi.getMSSQLItems({
         page: 1,
         limit: 10000,
         server_name: filters.server_name as string,
         database_name: filters.database_name as string,
+        object_type: filters.object_type as string,
         health_status: filters.health_status as string,
         access_frequency: filters.access_frequency as string,
         search: sanitizedSearch
@@ -466,6 +501,7 @@ const GovernanceCatalogMariaDB = () => {
   }, [
     filters.server_name,
     filters.database_name,
+    filters.object_type,
     filters.health_status,
     filters.access_frequency,
     filters.search
@@ -473,23 +509,37 @@ const GovernanceCatalogMariaDB = () => {
 
   useEffect(() => {
     isMountedRef.current = true;
-    fetchAllItems();
+    if (viewMode === "table") {
+      fetchData();
+    } else {
+      fetchAllItems();
+    }
     const interval = setInterval(() => {
       if (isMountedRef.current) {
-        fetchAllItems();
+        if (viewMode === "table") {
+          fetchData();
+        } else {
+          fetchAllItems();
+        }
       }
     }, 30000);
     return () => {
       isMountedRef.current = false;
       clearInterval(interval);
     };
-  }, [fetchAllItems]);
+  }, [fetchData, fetchAllItems, viewMode]);
+
+  useEffect(() => {
+    if (viewMode === "tree") {
+      fetchAllItems();
+    }
+  }, [viewMode, fetchAllItems]);
 
   useEffect(() => {
     const fetchDatabases = async () => {
       if (filters.server_name && isMountedRef.current) {
         try {
-          const databasesData = await governanceCatalogApi.getMariaDBDatabases(filters.server_name as string);
+          const databasesData = await governanceCatalogApi.getMSSQLDatabases(filters.server_name as string);
           if (isMountedRef.current) {
             setDatabases(databasesData || []);
           }
@@ -534,6 +584,14 @@ const GovernanceCatalogMariaDB = () => {
   const formatDate = useCallback((date: string | null | undefined) => {
     if (!date) return 'N/A';
     return new Date(date).toLocaleString();
+  }, []);
+
+  const formatTime = useCallback((seconds: number | string | null | undefined) => {
+    if (seconds === null || seconds === undefined) return 'N/A';
+    const num = Number(seconds);
+    if (isNaN(num)) return 'N/A';
+    if (num < 1) return `${(num * 1000).toFixed(2)} ms`;
+    return `${num.toFixed(2)} s`;
   }, []);
 
   const handleFilterChange = useCallback((key: string, value: string) => {
@@ -582,17 +640,17 @@ const GovernanceCatalogMariaDB = () => {
   }, [items, sortField, sortDirection]);
 
   const handleExportCSV = useCallback(() => {
-    const headers = ["Server", "Database", "Schema", "Table", "Rows", "Size (MB)", "Health", "Access", "Engine"];
+    const headers = ["Server", "Database", "Schema", "Object", "Type", "Rows", "Size (MB)", "Health", "Access"];
     const rows = sortedItems.map(item => [
       item.server_name || "",
       item.database_name || "",
       item.schema_name || "",
-      item.table_name || "",
+      item.object_name || "",
+      item.object_type || "",
       formatNumber(item.row_count),
       item.total_size_mb || 0,
       item.health_status || "",
-      item.access_frequency || "",
-      item.engine || ""
+      item.access_frequency || ""
     ]);
     
     const csvContent = [
@@ -604,17 +662,17 @@ const GovernanceCatalogMariaDB = () => {
     const link = document.createElement("a");
     const url = URL.createObjectURL(blob);
     link.setAttribute("href", url);
-    link.setAttribute("download", `governance_catalog_mariadb_export_${new Date().toISOString().split('T')[0]}.csv`);
+    link.setAttribute("download", `governance_catalog_mssql_export_${new Date().toISOString().split('T')[0]}.csv`);
     link.style.visibility = "hidden";
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   }, [sortedItems, formatNumber]);
 
-  if (loadingTree && allItems.length === 0) {
+  if ((loading && items.length === 0 && viewMode === "table") || (loadingTree && allItems.length === 0 && viewMode === "tree")) {
     return (
       <Container>
-        <Header>Governance Catalog - MariaDB</Header>
+        <Header>Governance Catalog - MSSQL</Header>
         <LoadingOverlay>Loading governance catalog...</LoadingOverlay>
       </Container>
     );
@@ -622,7 +680,7 @@ const GovernanceCatalogMariaDB = () => {
 
   return (
     <Container>
-      <Header>Governance Catalog - MariaDB</Header>
+      <Header>Governance Catalog - MSSQL</Header>
       
       {error && <ErrorMessage>{error}</ErrorMessage>}
       
@@ -630,9 +688,9 @@ const GovernanceCatalogMariaDB = () => {
         <MetricCard $index={0}>
           <MetricLabel>
             <span>■</span>
-            Total Tables
+            Total Objects
           </MetricLabel>
-          <MetricValue>{metrics.total_tables || 0}</MetricValue>
+          <MetricValue>{metrics.total_objects || 0}</MetricValue>
         </MetricCard>
         <MetricCard $index={1}>
           <MetricLabel>
@@ -694,6 +752,16 @@ const GovernanceCatalogMariaDB = () => {
         </Select>
         
         <Select
+          value={filters.object_type as string}
+          onChange={(e) => handleFilterChange('object_type', e.target.value)}
+        >
+          <option value="">All Types</option>
+          <option value="TABLE">TABLE</option>
+          <option value="VIEW">VIEW</option>
+          <option value="STORED_PROCEDURE">STORED_PROCEDURE</option>
+        </Select>
+        
+        <Select
           value={filters.health_status as string}
           onChange={(e) => handleFilterChange('health_status', e.target.value)}
         >
@@ -718,7 +786,7 @@ const GovernanceCatalogMariaDB = () => {
         
         <Input
           type="text"
-          placeholder="Search table name..."
+          placeholder="Search object name..."
           value={filters.search as string}
           onChange={(e) => handleFilterChange('search', e.target.value)}
           style={{ flex: 1, minWidth: "200px" }}
@@ -738,20 +806,323 @@ const GovernanceCatalogMariaDB = () => {
 
       <TableActions>
         <PaginationInfo>
-          Total: {allItems.length} entries
+          {viewMode === "table" 
+            ? `Showing ${sortedItems.length} of ${pagination.total} entries (Page ${pagination.currentPage} of ${pagination.totalPages})`
+            : `Total: ${allItems.length} entries`
+          }
         </PaginationInfo>
-        <ExportButton $variant="secondary" onClick={handleExportCSV}>
-          Export CSV
-        </ExportButton>
+        <div style={{ display: 'flex', gap: theme.spacing.sm, alignItems: 'center' }}>
+          <Button
+            $variant={viewMode === "table" ? "primary" : "secondary"}
+            onClick={() => setViewMode("table")}
+            style={{ padding: "6px 12px", fontSize: "0.85em" }}
+          >
+            Table View
+          </Button>
+          <Button
+            $variant={viewMode === "tree" ? "primary" : "secondary"}
+            onClick={() => {
+              setViewMode("tree");
+              fetchAllItems();
+            }}
+            style={{ padding: "6px 12px", fontSize: "0.85em" }}
+          >
+            Tree View
+          </Button>
+          <ExportButton $variant="secondary" onClick={handleExportCSV}>
+            Export CSV
+          </ExportButton>
+        </div>
       </TableActions>
 
-      {loadingTree ? (
-        <LoadingOverlay>Loading tree view...</LoadingOverlay>
+      {viewMode === "tree" ? (
+        loadingTree ? (
+          <LoadingOverlay>Loading tree view...</LoadingOverlay>
+        ) : (
+          <GovernanceCatalogMSSQLTreeView items={allItems} onItemClick={(item: any) => toggleItem(item.id)} />
+        )
       ) : (
-        <GovernanceCatalogMariaDBTreeView items={allItems} onItemClick={(item: any) => toggleItem(item.id)} />
+        <StyledTableContainer>
+        <Table $minWidth="1400px">
+          <thead>
+            <tr>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "server_name"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("server_name")}
+              >
+                Server
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "database_name"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("database_name")}
+              >
+                Database
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "schema_name"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("schema_name")}
+              >
+                Schema
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "object_name"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("object_name")}
+              >
+                Object
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "object_type"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("object_type")}
+              >
+                Type
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "row_count"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("row_count")}
+              >
+                Rows
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "table_size_mb"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("table_size_mb")}
+              >
+                Size
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "health_status"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("health_status")}
+              >
+                Health
+              </SortableTh>
+              <SortableTh 
+                $sortable 
+                $active={sortField === "access_frequency"} 
+                $direction={sortDirection}
+                onClick={() => handleSort("access_frequency")}
+              >
+                Access
+              </SortableTh>
+            </tr>
+          </thead>
+          <tbody>
+            {sortedItems.length === 0 ? (
+              <TableRow>
+                <Td colSpan={9} style={{ padding: '60px 40px', textAlign: 'center', color: theme.colors.text.secondary }}>
+                  <div style={{ 
+                    fontSize: '3em', 
+                    marginBottom: theme.spacing.md,
+                    animation: `${fadeIn} 0.5s ease-out`,
+                    fontFamily: "'Courier New', monospace",
+                    opacity: 0.5
+                  }}>
+                    ■
+                  </div>
+                  <div style={{ 
+                    fontSize: '1.1em',
+                    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen", "Ubuntu", "Cantarell", sans-serif',
+                    fontWeight: 500,
+                    marginBottom: theme.spacing.sm
+                  }}>
+                    No governance data available
+                  </div>
+                  <div style={{ fontSize: '0.9em', opacity: 0.7 }}>
+                    Data will appear here once collected.
+                  </div>
+                </Td>
+              </TableRow>
+            ) : (
+              sortedItems.map((item, index) => (
+                <React.Fragment key={item.id}>
+                  <StyledTableRow onClick={() => toggleItem(item.id)} style={{ cursor: 'pointer' }} $delay={index}>
+                    <Td style={{ color: theme.colors.text.secondary }}>
+                      {item.server_name || 'N/A'}
+                    </Td>
+                    <Td style={{ color: theme.colors.text.secondary }}>
+                      {item.database_name || 'N/A'}
+                    </Td>
+                    <Td style={{ color: theme.colors.text.secondary }}>
+                      {item.schema_name || 'N/A'}
+                    </Td>
+                    <Td>
+                      <strong style={{ color: theme.colors.primary.main }}>
+                        {item.object_name || item.table_name || 'N/A'}
+                      </strong>
+                    </Td>
+                    <Td>
+                      <Badge $type={item.object_type}>
+                        {item.object_type || 'N/A'}
+                      </Badge>
+                    </Td>
+                    <Td style={{ color: theme.colors.text.secondary }}>
+                      {formatNumber(item.row_count)}
+                    </Td>
+                    <Td style={{ color: theme.colors.text.secondary }}>
+                      {formatBytes(item.table_size_mb)}
+                    </Td>
+                    <Td>
+                      <Badge $status={item.health_status}>
+                        {item.health_status || 'N/A'}
+                      </Badge>
+                    </Td>
+                    <Td>
+                      <Badge $status={item.access_frequency}>
+                        {item.access_frequency || 'N/A'}
+                      </Badge>
+                    </Td>
+                  </StyledTableRow>
+                  {openItemId === item.id && (
+                    <TableRow>
+                      <Td colSpan={9} style={{ padding: 0, border: 'none' }}>
+                        <DetailsPanel $isOpen={openItemId === item.id}>
+                <DetailGrid>
+                  <DetailLabel>Object ID:</DetailLabel>
+                  <DetailValue>{formatNumber(item.object_id)}</DetailValue>
+                  
+                  <DetailLabel>Index Name:</DetailLabel>
+                  <DetailValue>{item.index_name || 'N/A'}</DetailValue>
+                  
+                  <DetailLabel>Index ID:</DetailLabel>
+                  <DetailValue>{formatNumber(item.index_id)}</DetailValue>
+                  
+                  <DetailLabel>Fragmentation:</DetailLabel>
+                  <DetailValue>{formatPercentage(item.fragmentation_pct)}</DetailValue>
+                  
+                  <DetailLabel>Page Count:</DetailLabel>
+                  <DetailValue>{formatNumber(item.page_count)}</DetailValue>
+                  
+                  <DetailLabel>Fill Factor:</DetailLabel>
+                  <DetailValue>{item.fill_factor ? `${item.fill_factor}%` : 'N/A'}</DetailValue>
+                  
+                  <DetailLabel>Index Key Columns:</DetailLabel>
+                  <DetailValue>{item.index_key_columns || 'N/A'}</DetailValue>
+                  
+                  <DetailLabel>Index Include Columns:</DetailLabel>
+                  <DetailValue>{item.index_include_columns || 'N/A'}</DetailValue>
+                  
+                  <DetailLabel>Has Missing Index:</DetailLabel>
+                  <DetailValue>{item.has_missing_index ? 'Yes' : 'No'}</DetailValue>
+                  
+                  <DetailLabel>Is Unused:</DetailLabel>
+                  <DetailValue>{item.is_unused ? 'Yes' : 'No'}</DetailValue>
+                  
+                  <DetailLabel>Compatibility Level:</DetailLabel>
+                  <DetailValue>{item.compatibility_level || 'N/A'}</DetailValue>
+                  
+                  <DetailLabel>Recovery Model:</DetailLabel>
+                  <DetailValue>{item.recovery_model || 'N/A'}</DetailValue>
+                  
+                  <DetailLabel>Health Score:</DetailLabel>
+                  <DetailValue>{item.health_score ? `${Number(item.health_score).toFixed(2)}` : 'N/A'}</DetailValue>
+                  
+                  <DetailLabel>Recommendation:</DetailLabel>
+                  <DetailValue>{item.recommendation_summary || 'N/A'}</DetailValue>
+                  
+                  <DetailLabel>Last Full Backup:</DetailLabel>
+                  <DetailValue>{formatDate(item.last_full_backup)}</DetailValue>
+                  
+                  <DetailLabel>Last Diff Backup:</DetailLabel>
+                  <DetailValue>{formatDate(item.last_diff_backup)}</DetailValue>
+                  
+                  <DetailLabel>Last Log Backup:</DetailLabel>
+                  <DetailValue>{formatDate(item.last_log_backup)}</DetailValue>
+                  
+                  <DetailLabel>Snapshot Date:</DetailLabel>
+                  <DetailValue>{formatDate(item.snapshot_date)}</DetailValue>
+                </DetailGrid>
+                
+                {(item.user_seeks || item.user_scans || item.user_lookups || item.user_updates || item.execution_count) && (
+                  <PerformanceGrid>
+                    <PerformanceMetric>
+                      <PerformanceLabel>User Seeks</PerformanceLabel>
+                      <PerformanceValue>{formatNumber(item.user_seeks)}</PerformanceValue>
+                    </PerformanceMetric>
+                    <PerformanceMetric>
+                      <PerformanceLabel>User Scans</PerformanceLabel>
+                      <PerformanceValue>{formatNumber(item.user_scans)}</PerformanceValue>
+                    </PerformanceMetric>
+                    <PerformanceMetric>
+                      <PerformanceLabel>User Lookups</PerformanceLabel>
+                      <PerformanceValue>{formatNumber(item.user_lookups)}</PerformanceValue>
+                    </PerformanceMetric>
+                    <PerformanceMetric>
+                      <PerformanceLabel>User Updates</PerformanceLabel>
+                      <PerformanceValue>{formatNumber(item.user_updates)}</PerformanceValue>
+                    </PerformanceMetric>
+                    {item.execution_count && (
+                      <PerformanceMetric>
+                        <PerformanceLabel>Execution Count</PerformanceLabel>
+                        <PerformanceValue>{formatNumber(item.execution_count)}</PerformanceValue>
+                      </PerformanceMetric>
+                    )}
+                    {item.avg_execution_time_seconds && (
+                      <PerformanceMetric>
+                        <PerformanceLabel>Avg Execution Time</PerformanceLabel>
+                        <PerformanceValue>{formatTime(item.avg_execution_time_seconds)}</PerformanceValue>
+                      </PerformanceMetric>
+                    )}
+                    {item.avg_logical_reads && (
+                      <PerformanceMetric>
+                        <PerformanceLabel>Avg Logical Reads</PerformanceLabel>
+                        <PerformanceValue>{formatNumber(item.avg_logical_reads)}</PerformanceValue>
+                      </PerformanceMetric>
+                    )}
+                    {item.avg_physical_reads && (
+                      <PerformanceMetric>
+                        <PerformanceLabel>Avg Physical Reads</PerformanceLabel>
+                        <PerformanceValue>{formatNumber(item.avg_physical_reads)}</PerformanceValue>
+                      </PerformanceMetric>
+                    )}
+                  </PerformanceGrid>
+                )}
+                        </DetailsPanel>
+                      </Td>
+                    </TableRow>
+                  )}
+                </React.Fragment>
+              ))
+            )}
+          </tbody>
+        </Table>
+      </StyledTableContainer>
+      )}
+
+      {viewMode === "table" && pagination.totalPages > 1 && (
+        <Pagination>
+          <PageButton
+            onClick={() => setPage(Math.max(1, page - 1))}
+            disabled={page === 1}
+          >
+            Previous
+          </PageButton>
+          <span>
+            Page {pagination.currentPage} of {pagination.totalPages} ({pagination.total} total)
+          </span>
+          <PageButton
+            onClick={() => setPage(Math.min(pagination.totalPages, page + 1))}
+            disabled={page === pagination.totalPages}
+          >
+            Next
+          </PageButton>
+        </Pagination>
       )}
     </Container>
   );
 };
 
-export default GovernanceCatalogMariaDB;
+export default GovernanceCatalogMSSQL;

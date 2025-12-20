@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import styled from 'styled-components';
+import styled, { keyframes } from 'styled-components';
 import {
   Container,
   Header,
@@ -18,7 +18,6 @@ import {
   Td,
   TableRow,
   Button,
-  StatusBadge,
 } from './shared/BaseComponents';
 import { usePagination } from '../hooks/usePagination';
 import { useTableFilters } from '../hooks/useTableFilters';
@@ -26,30 +25,99 @@ import { governanceCatalogApi } from '../services/api';
 import { extractApiError } from '../utils/errorHandler';
 import { sanitizeSearch } from '../utils/validation';
 import { theme } from '../theme/theme';
+import GovernanceCatalogMSSQLTreeView from './GovernanceCatalogMSSQLTreeView';
+
+const fadeIn = keyframes`
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+`;
+
+const slideUp = keyframes`
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+`;
 
 const MetricsGrid = styled(Grid)`
   margin-bottom: ${theme.spacing.xxl};
-  animation: slideUp 0.25s ease-out;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  animation: ${slideUp} 0.4s cubic-bezier(0.4, 0, 0.2, 1);
   animation-delay: 0.1s;
   animation-fill-mode: both;
 `;
 
-const MetricCard = styled(Value)`
-  padding: ${theme.spacing.md};
-  min-height: 80px;
+const MetricCard = styled(Value)<{ $index?: number }>`
+  padding: ${theme.spacing.lg};
+  min-height: 100px;
+  background: linear-gradient(135deg, ${theme.colors.background.main} 0%, ${theme.colors.background.secondary} 100%);
+  border: 2px solid ${theme.colors.border.light};
+  border-left: 4px solid ${theme.colors.primary.main};
+  border-radius: ${theme.borderRadius.lg};
+  box-shadow: ${theme.shadows.md};
+  transition: all ${theme.transitions.normal};
+  animation: ${fadeIn} 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  animation-delay: ${props => (props.$index || 0) * 0.1}s;
+  animation-fill-mode: both;
+  position: relative;
+  overflow: hidden;
+  
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+    transition: left 0.5s;
+  }
+  
+  &:hover {
+    transform: translateY(-4px) scale(1.02);
+    box-shadow: ${theme.shadows.xl};
+    border-color: ${theme.colors.primary.main};
+    border-left-color: ${theme.colors.primary.dark};
+    
+    &::before {
+      left: 100%;
+    }
+  }
 `;
 
 const MetricLabel = styled.div`
-  font-size: 0.85em;
+  font-size: 0.9em;
   color: ${theme.colors.text.secondary};
-  margin-bottom: ${theme.spacing.xs};
-  font-weight: 500;
+  margin-bottom: ${theme.spacing.sm};
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 `;
 
 const MetricValue = styled.div`
-  font-size: 1.5em;
-  font-weight: bold;
-  color: ${theme.colors.text.primary};
+  font-size: 2.2em;
+  font-weight: 700;
+  color: ${theme.colors.primary.main};
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  background: linear-gradient(135deg, ${theme.colors.primary.main} 0%, ${theme.colors.primary.light} 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 `;
 
 const TableActions = styled.div`
@@ -58,6 +126,20 @@ const TableActions = styled.div`
   align-items: center;
   margin-bottom: ${theme.spacing.md};
   gap: ${theme.spacing.sm};
+  padding: ${theme.spacing.md};
+  background: linear-gradient(135deg, ${theme.colors.background.secondary} 0%, ${theme.colors.background.tertiary} 100%);
+  border-radius: ${theme.borderRadius.md};
+  border: 1px solid ${theme.colors.border.light};
+  border-left: 4px solid ${theme.colors.primary.main};
+  box-shadow: ${theme.shadows.sm};
+  animation: ${slideUp} 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  transition: all ${theme.transitions.normal};
+  
+  &:hover {
+    box-shadow: ${theme.shadows.md};
+    transform: translateY(-1px);
+  }
 `;
 
 const ExportButton = styled(Button)`
@@ -66,6 +148,13 @@ const ExportButton = styled(Button)`
   display: flex;
   align-items: center;
   gap: 6px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  transition: all ${theme.transitions.normal};
+  
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: ${theme.shadows.md};
+  }
 `;
 
 const PaginationInfo = styled.div`
@@ -102,46 +191,139 @@ const SortableTh = styled(Th)<{ $sortable?: boolean; $active?: boolean; $directi
   `}
 `;
 
-const Badge = styled.span<{ $status?: string }>`
-  padding: 4px 10px;
+const Badge = styled.span<{ $status?: string; $type?: string; $level?: number }>`
+  padding: 6px 12px;
   border-radius: ${theme.borderRadius.md};
-  font-size: 0.75em;
-  font-weight: 500;
-  display: inline-block;
+  font-size: 0.8em;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   transition: all ${theme.transitions.normal};
+  border: 2px solid transparent;
+  box-shadow: ${theme.shadows.sm};
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  position: relative;
+  overflow: hidden;
   
   ${props => {
-    switch (props.$status) {
-      case 'EXCELLENT':
-      case 'HEALTHY':
-        return `background-color: ${theme.colors.status.success.bg}; color: ${theme.colors.status.success.text};`;
-      case 'WARNING':
-        return `background-color: ${theme.colors.status.warning.bg}; color: ${theme.colors.status.warning.text};`;
-      case 'CRITICAL':
-      case 'EMERGENCY':
-        return `background-color: ${theme.colors.status.error.bg}; color: ${theme.colors.status.error.text};`;
-      case 'REAL_TIME':
-      case 'HIGH':
-        return `background-color: ${theme.colors.primary.light}; color: ${theme.colors.primary.dark};`;
-      case 'MEDIUM':
-        return `background-color: ${theme.colors.status.info.bg}; color: ${theme.colors.status.info.text};`;
-      case 'LOW':
-      case 'RARE':
-        return `background-color: ${theme.colors.background.secondary}; color: ${theme.colors.text.secondary};`;
-      case 'TABLE':
-        return `background-color: ${theme.colors.primary.light}; color: ${theme.colors.primary.dark};`;
-      case 'VIEW':
-        return `background-color: ${theme.colors.status.info.bg}; color: ${theme.colors.status.info.text};`;
-      case 'STORED_PROCEDURE':
-        return `background-color: ${theme.colors.status.success.bg}; color: ${theme.colors.status.success.text};`;
-      default:
-        return `background-color: ${theme.colors.background.secondary}; color: ${theme.colors.text.secondary};`;
+    if (props.$status) {
+      const statusColors: Record<string, { bg: string; text: string; border: string }> = {
+        'HEALTHY': { bg: theme.colors.status.success.bg, text: theme.colors.status.success.text, border: `${theme.colors.status.success.text}40` },
+        'WARNING': { bg: theme.colors.status.warning.bg, text: theme.colors.status.warning.text, border: `${theme.colors.status.warning.text}40` },
+        'CRITICAL': { bg: theme.colors.status.error.bg, text: theme.colors.status.error.text, border: `${theme.colors.status.error.text}40` },
+      };
+      const colors = statusColors[props.$status] || { bg: theme.colors.background.secondary, text: theme.colors.text.secondary, border: theme.colors.border.medium };
+      return `
+        background: linear-gradient(135deg, ${colors.bg} 0%, ${colors.text}15 100%);
+        color: ${colors.text};
+        border-color: ${colors.border};
+      `;
     }
+    if (props.$type) {
+      return `
+        background: linear-gradient(135deg, ${theme.colors.background.secondary} 0%, ${theme.colors.background.tertiary} 100%);
+        color: ${theme.colors.text.primary};
+        border-color: ${theme.colors.border.medium};
+      `;
+    }
+    if (props.$level !== undefined) {
+      if (props.$level === 0) return `
+        background: linear-gradient(135deg, ${theme.colors.status.success.bg} 0%, ${theme.colors.status.success.text}15 100%);
+        color: ${theme.colors.status.success.text};
+        border-color: ${theme.colors.status.success.text}40;
+      `;
+      if (props.$level === 1) return `
+        background: linear-gradient(135deg, ${theme.colors.status.warning.bg} 0%, ${theme.colors.status.warning.text}15 100%);
+        color: ${theme.colors.status.warning.text};
+        border-color: ${theme.colors.status.warning.text}40;
+      `;
+      if (props.$level === 2) return `
+        background: linear-gradient(135deg, ${theme.colors.status.error.bg} 0%, ${theme.colors.status.error.text}15 100%);
+        color: ${theme.colors.status.error.text};
+        border-color: ${theme.colors.status.error.text}40;
+      `;
+      return `
+        background: ${theme.colors.background.secondary};
+        color: ${theme.colors.text.secondary};
+        border-color: ${theme.colors.border.medium};
+      `;
+    }
+    return `
+      background: ${theme.colors.background.secondary};
+      color: ${theme.colors.text.secondary};
+      border-color: ${theme.colors.border.medium};
+    `;
   }}
   
   &:hover {
-    transform: scale(1.05);
-    box-shadow: ${theme.shadows.sm};
+    transform: translateY(-2px) scale(1.08);
+    box-shadow: ${theme.shadows.lg};
+    border-width: 2px;
+  }
+`;
+
+const StyledTableRow = styled(TableRow)<{ $delay?: number }>`
+  transition: all ${theme.transitions.normal};
+  animation: ${fadeIn} 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  animation-delay: ${props => (props.$delay || 0) * 0.05}s;
+  animation-fill-mode: both;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  border-left: 3px solid transparent;
+  position: relative;
+  
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 0;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(13, 27, 42, 0.05), transparent);
+    transition: width 0.3s;
+  }
+  
+  &:hover {
+    background: linear-gradient(135deg, ${theme.colors.background.secondary} 0%, ${theme.colors.background.tertiary} 100%) !important;
+    transform: translateX(4px) scale(1.01);
+    box-shadow: ${theme.shadows.md};
+    border-left-color: ${theme.colors.primary.main};
+    
+    &::before {
+      width: 100%;
+    }
+  }
+  
+  &:active {
+    transform: translateX(2px) scale(0.99);
+  }
+`;
+
+const StyledTableContainer = styled(TableContainer)`
+  border-radius: ${theme.borderRadius.lg};
+  border: 1px solid ${theme.colors.border.light};
+  box-shadow: ${theme.shadows.md};
+  background: ${theme.colors.background.main};
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  
+  &::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  
+  &::-webkit-scrollbar-track {
+    background: ${theme.colors.background.secondary};
+    border-radius: ${theme.borderRadius.sm};
+  }
+  
+  &::-webkit-scrollbar-thumb {
+    background: ${theme.colors.border.medium};
+    border-radius: ${theme.borderRadius.sm};
+    transition: background ${theme.transitions.normal};
+    
+    &:hover {
+      background: ${theme.colors.primary.main};
+    }
   }
 `;
 
@@ -232,6 +414,8 @@ const GovernanceCatalogMSSQL = () => {
   });
   const [servers, setServers] = useState<string[]>([]);
   const [databases, setDatabases] = useState<string[]>([]);
+  const [allItems, setAllItems] = useState<any[]>([]);
+  const [loadingTree, setLoadingTree] = useState(false);
   const isMountedRef = useRef(true);
 
   const fetchData = useCallback(async () => {
@@ -285,19 +469,56 @@ const GovernanceCatalogMSSQL = () => {
     filters.search
   ]);
 
+  const fetchAllItems = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    try {
+      setLoadingTree(true);
+      setError(null);
+      const sanitizedSearch = sanitizeSearch(filters.search as string, 100);
+      const itemsData = await governanceCatalogApi.getMSSQLItems({
+        page: 1,
+        limit: 10000,
+        server_name: filters.server_name as string,
+        database_name: filters.database_name as string,
+        object_type: filters.object_type as string,
+        health_status: filters.health_status as string,
+        access_frequency: filters.access_frequency as string,
+        search: sanitizedSearch
+      });
+      if (isMountedRef.current) {
+        setAllItems(itemsData.data || []);
+      }
+    } catch (err) {
+      if (isMountedRef.current) {
+        setError(extractApiError(err));
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setLoadingTree(false);
+      }
+    }
+  }, [
+    filters.server_name,
+    filters.database_name,
+    filters.object_type,
+    filters.health_status,
+    filters.access_frequency,
+    filters.search
+  ]);
+
   useEffect(() => {
     isMountedRef.current = true;
-    fetchData();
+    fetchAllItems();
     const interval = setInterval(() => {
       if (isMountedRef.current) {
-        fetchData();
+        fetchAllItems();
       }
     }, 30000);
     return () => {
       isMountedRef.current = false;
       clearInterval(interval);
     };
-  }, [fetchData]);
+  }, [fetchAllItems]);
 
   useEffect(() => {
     const fetchDatabases = async () => {
@@ -433,7 +654,7 @@ const GovernanceCatalogMSSQL = () => {
     document.body.removeChild(link);
   }, [sortedItems, formatNumber]);
 
-  if (loading && items.length === 0) {
+  if (loadingTree && allItems.length === 0) {
     return (
       <Container>
         <Header>Governance Catalog - MSSQL</Header>
@@ -449,28 +670,46 @@ const GovernanceCatalogMSSQL = () => {
       {error && <ErrorMessage>{error}</ErrorMessage>}
       
       <MetricsGrid $columns="repeat(auto-fit, minmax(180px, 1fr))">
-        <MetricCard>
-          <MetricLabel>Total Objects</MetricLabel>
+        <MetricCard $index={0}>
+          <MetricLabel>
+            <span>■</span>
+            Total Objects
+          </MetricLabel>
           <MetricValue>{metrics.total_objects || 0}</MetricValue>
         </MetricCard>
-        <MetricCard>
-          <MetricLabel>Total Size</MetricLabel>
+        <MetricCard $index={1}>
+          <MetricLabel>
+            <span>■</span>
+            Total Size
+          </MetricLabel>
           <MetricValue>{formatBytes(metrics.total_size_mb)}</MetricValue>
         </MetricCard>
-        <MetricCard>
-          <MetricLabel>Healthy</MetricLabel>
+        <MetricCard $index={2}>
+          <MetricLabel>
+            <span>✓</span>
+            Healthy
+          </MetricLabel>
           <MetricValue>{metrics.healthy_count || 0}</MetricValue>
         </MetricCard>
-        <MetricCard>
-          <MetricLabel>Warning</MetricLabel>
+        <MetricCard $index={3}>
+          <MetricLabel>
+            <span>!</span>
+            Warning
+          </MetricLabel>
           <MetricValue>{metrics.warning_count || 0}</MetricValue>
         </MetricCard>
-        <MetricCard>
-          <MetricLabel>Critical</MetricLabel>
+        <MetricCard $index={4}>
+          <MetricLabel>
+            <span>×</span>
+            Critical
+          </MetricLabel>
           <MetricValue>{metrics.critical_count || 0}</MetricValue>
         </MetricCard>
-        <MetricCard>
-          <MetricLabel>Unique Servers</MetricLabel>
+        <MetricCard $index={5}>
+          <MetricLabel>
+            <span>■</span>
+            Unique Servers
+          </MetricLabel>
           <MetricValue>{metrics.unique_servers || 0}</MetricValue>
         </MetricCard>
       </MetricsGrid>
@@ -552,272 +791,17 @@ const GovernanceCatalogMSSQL = () => {
 
       <TableActions>
         <PaginationInfo>
-          Showing {sortedItems.length} of {pagination.total} entries (Page{" "}
-          {pagination.currentPage} of {pagination.totalPages})
+          Total: {allItems.length} entries
         </PaginationInfo>
         <ExportButton $variant="secondary" onClick={handleExportCSV}>
           Export CSV
         </ExportButton>
       </TableActions>
 
-      <TableContainer>
-        <Table $minWidth="1400px">
-          <thead>
-            <tr>
-              <SortableTh 
-                $sortable 
-                $active={sortField === "server_name"} 
-                $direction={sortDirection}
-                onClick={() => handleSort("server_name")}
-              >
-                Server
-              </SortableTh>
-              <SortableTh 
-                $sortable 
-                $active={sortField === "database_name"} 
-                $direction={sortDirection}
-                onClick={() => handleSort("database_name")}
-              >
-                Database
-              </SortableTh>
-              <SortableTh 
-                $sortable 
-                $active={sortField === "schema_name"} 
-                $direction={sortDirection}
-                onClick={() => handleSort("schema_name")}
-              >
-                Schema
-              </SortableTh>
-              <SortableTh 
-                $sortable 
-                $active={sortField === "object_name"} 
-                $direction={sortDirection}
-                onClick={() => handleSort("object_name")}
-              >
-                Object
-              </SortableTh>
-              <SortableTh 
-                $sortable 
-                $active={sortField === "object_type"} 
-                $direction={sortDirection}
-                onClick={() => handleSort("object_type")}
-              >
-                Type
-              </SortableTh>
-              <SortableTh 
-                $sortable 
-                $active={sortField === "row_count"} 
-                $direction={sortDirection}
-                onClick={() => handleSort("row_count")}
-              >
-                Rows
-              </SortableTh>
-              <SortableTh 
-                $sortable 
-                $active={sortField === "table_size_mb"} 
-                $direction={sortDirection}
-                onClick={() => handleSort("table_size_mb")}
-              >
-                Size
-              </SortableTh>
-              <SortableTh 
-                $sortable 
-                $active={sortField === "health_status"} 
-                $direction={sortDirection}
-                onClick={() => handleSort("health_status")}
-              >
-                Health
-              </SortableTh>
-              <SortableTh 
-                $sortable 
-                $active={sortField === "access_frequency"} 
-                $direction={sortDirection}
-                onClick={() => handleSort("access_frequency")}
-              >
-                Access
-              </SortableTh>
-            </tr>
-          </thead>
-          <tbody>
-            {sortedItems.length === 0 ? (
-              <TableRow>
-                <Td colSpan={9} style={{ padding: '40px', textAlign: 'center', color: theme.colors.text.secondary }}>
-                  No governance data available. Data will appear here once collected.
-                </Td>
-              </TableRow>
-            ) : (
-              sortedItems.map((item) => (
-                <React.Fragment key={item.id}>
-                  <TableRow onClick={() => toggleItem(item.id)} style={{ cursor: 'pointer' }}>
-                    <Td style={{ color: theme.colors.text.secondary }}>
-                      {item.server_name || 'N/A'}
-                    </Td>
-                    <Td style={{ color: theme.colors.text.secondary }}>
-                      {item.database_name || 'N/A'}
-                    </Td>
-                    <Td style={{ color: theme.colors.text.secondary }}>
-                      {item.schema_name || 'N/A'}
-                    </Td>
-                    <Td>
-                      <strong style={{ color: theme.colors.primary.main }}>
-                        {item.object_name || item.table_name || 'N/A'}
-                      </strong>
-                    </Td>
-                    <Td>
-                      <StatusBadge $status={item.object_type}>
-                        {item.object_type || 'N/A'}
-                      </StatusBadge>
-                    </Td>
-                    <Td style={{ color: theme.colors.text.secondary }}>
-                      {formatNumber(item.row_count)}
-                    </Td>
-                    <Td style={{ color: theme.colors.text.secondary }}>
-                      {formatBytes(item.table_size_mb)}
-                    </Td>
-                    <Td>
-                      <StatusBadge $status={item.health_status}>
-                        {item.health_status || 'N/A'}
-                      </StatusBadge>
-                    </Td>
-                    <Td>
-                      <StatusBadge $status={item.access_frequency}>
-                        {item.access_frequency || 'N/A'}
-                      </StatusBadge>
-                    </Td>
-                  </TableRow>
-                  {openItemId === item.id && (
-                    <TableRow>
-                      <Td colSpan={9} style={{ padding: 0, border: 'none' }}>
-                        <DetailsPanel $isOpen={openItemId === item.id}>
-                <DetailGrid>
-                  <DetailLabel>Object ID:</DetailLabel>
-                  <DetailValue>{formatNumber(item.object_id)}</DetailValue>
-                  
-                  <DetailLabel>Index Name:</DetailLabel>
-                  <DetailValue>{item.index_name || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Index ID:</DetailLabel>
-                  <DetailValue>{formatNumber(item.index_id)}</DetailValue>
-                  
-                  <DetailLabel>Fragmentation:</DetailLabel>
-                  <DetailValue>{formatPercentage(item.fragmentation_pct)}</DetailValue>
-                  
-                  <DetailLabel>Page Count:</DetailLabel>
-                  <DetailValue>{formatNumber(item.page_count)}</DetailValue>
-                  
-                  <DetailLabel>Fill Factor:</DetailLabel>
-                  <DetailValue>{item.fill_factor ? `${item.fill_factor}%` : 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Index Key Columns:</DetailLabel>
-                  <DetailValue>{item.index_key_columns || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Index Include Columns:</DetailLabel>
-                  <DetailValue>{item.index_include_columns || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Has Missing Index:</DetailLabel>
-                  <DetailValue>{item.has_missing_index ? 'Yes' : 'No'}</DetailValue>
-                  
-                  <DetailLabel>Is Unused:</DetailLabel>
-                  <DetailValue>{item.is_unused ? 'Yes' : 'No'}</DetailValue>
-                  
-                  <DetailLabel>Compatibility Level:</DetailLabel>
-                  <DetailValue>{item.compatibility_level || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Recovery Model:</DetailLabel>
-                  <DetailValue>{item.recovery_model || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Health Score:</DetailLabel>
-                  <DetailValue>{item.health_score ? `${Number(item.health_score).toFixed(2)}` : 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Recommendation:</DetailLabel>
-                  <DetailValue>{item.recommendation_summary || 'N/A'}</DetailValue>
-                  
-                  <DetailLabel>Last Full Backup:</DetailLabel>
-                  <DetailValue>{formatDate(item.last_full_backup)}</DetailValue>
-                  
-                  <DetailLabel>Last Diff Backup:</DetailLabel>
-                  <DetailValue>{formatDate(item.last_diff_backup)}</DetailValue>
-                  
-                  <DetailLabel>Last Log Backup:</DetailLabel>
-                  <DetailValue>{formatDate(item.last_log_backup)}</DetailValue>
-                  
-                  <DetailLabel>Snapshot Date:</DetailLabel>
-                  <DetailValue>{formatDate(item.snapshot_date)}</DetailValue>
-                </DetailGrid>
-                
-                {(item.user_seeks || item.user_scans || item.user_lookups || item.user_updates || item.execution_count) && (
-                  <PerformanceGrid>
-                    <PerformanceMetric>
-                      <PerformanceLabel>User Seeks</PerformanceLabel>
-                      <PerformanceValue>{formatNumber(item.user_seeks)}</PerformanceValue>
-                    </PerformanceMetric>
-                    <PerformanceMetric>
-                      <PerformanceLabel>User Scans</PerformanceLabel>
-                      <PerformanceValue>{formatNumber(item.user_scans)}</PerformanceValue>
-                    </PerformanceMetric>
-                    <PerformanceMetric>
-                      <PerformanceLabel>User Lookups</PerformanceLabel>
-                      <PerformanceValue>{formatNumber(item.user_lookups)}</PerformanceValue>
-                    </PerformanceMetric>
-                    <PerformanceMetric>
-                      <PerformanceLabel>User Updates</PerformanceLabel>
-                      <PerformanceValue>{formatNumber(item.user_updates)}</PerformanceValue>
-                    </PerformanceMetric>
-                    {item.execution_count && (
-                      <PerformanceMetric>
-                        <PerformanceLabel>Execution Count</PerformanceLabel>
-                        <PerformanceValue>{formatNumber(item.execution_count)}</PerformanceValue>
-                      </PerformanceMetric>
-                    )}
-                    {item.avg_execution_time_seconds && (
-                      <PerformanceMetric>
-                        <PerformanceLabel>Avg Execution Time</PerformanceLabel>
-                        <PerformanceValue>{formatTime(item.avg_execution_time_seconds)}</PerformanceValue>
-                      </PerformanceMetric>
-                    )}
-                    {item.avg_logical_reads && (
-                      <PerformanceMetric>
-                        <PerformanceLabel>Avg Logical Reads</PerformanceLabel>
-                        <PerformanceValue>{formatNumber(item.avg_logical_reads)}</PerformanceValue>
-                      </PerformanceMetric>
-                    )}
-                    {item.avg_physical_reads && (
-                      <PerformanceMetric>
-                        <PerformanceLabel>Avg Physical Reads</PerformanceLabel>
-                        <PerformanceValue>{formatNumber(item.avg_physical_reads)}</PerformanceValue>
-                      </PerformanceMetric>
-                    )}
-                  </PerformanceGrid>
-                )}
-                        </DetailsPanel>
-                      </Td>
-                    </TableRow>
-                  )}
-                </React.Fragment>
-              ))
-            )}
-          </tbody>
-        </Table>
-      </TableContainer>
-
-      {pagination.totalPages > 1 && (
-        <Pagination>
-          <PageButton
-            onClick={() => setPage(Math.max(1, page - 1))}
-            disabled={page === 1}
-          >
-            Previous
-          </PageButton>
-          <span>
-            Page {pagination.currentPage} of {pagination.totalPages} ({pagination.total} total)
-          </span>
-          <PageButton
-            onClick={() => setPage(Math.min(pagination.totalPages, page + 1))}
-            disabled={page === pagination.totalPages}
-          >
-            Next
-          </PageButton>
-        </Pagination>
+      {loadingTree ? (
+        <LoadingOverlay>Loading tree view...</LoadingOverlay>
+      ) : (
+        <GovernanceCatalogMSSQLTreeView items={allItems} onItemClick={(item: any) => toggleItem(item.id)} />
       )}
     </Container>
   );

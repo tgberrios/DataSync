@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import styled from 'styled-components';
 import {
   Container,
@@ -6,160 +6,76 @@ import {
   ErrorMessage,
   LoadingOverlay,
   Select,
-  Pagination,
-  PageButton,
   FiltersContainer,
-  TableContainer,
-  Table,
-  Th,
-  Td,
-  TableRow,
   Button,
-  StatusBadge,
 } from './shared/BaseComponents';
-import { usePagination } from '../hooks/usePagination';
 import { useTableFilters } from '../hooks/useTableFilters';
 import { qualityApi } from '../services/api';
 import { extractApiError } from '../utils/errorHandler';
 import { theme } from '../theme/theme';
+import QualityTreeView from './QualityTreeView';
 
-const TableActions = styled.div`
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: ${theme.spacing.md};
-  gap: ${theme.spacing.sm};
-`;
-
-const ExportButton = styled(Button)`
-  padding: 8px 16px;
-  font-size: 0.9em;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-`;
-
-const PaginationInfo = styled.div`
-  text-align: center;
-  margin-bottom: ${theme.spacing.sm};
-  color: ${theme.colors.text.secondary};
-  font-size: 0.9em;
-  animation: fadeIn 0.25s ease-in;
-`;
-
-const SortableTh = styled(Th)<{ $sortable?: boolean; $active?: boolean; $direction?: "asc" | "desc" }>`
-  cursor: ${props => props.$sortable ? "pointer" : "default"};
-  user-select: none;
-  position: relative;
-  transition: all ${theme.transitions.normal};
-  
-  ${props => props.$sortable && `
-    &:hover {
-      background: linear-gradient(180deg, ${theme.colors.primary.light} 0%, ${theme.colors.primary.main} 100%);
-      color: ${theme.colors.text.white};
-    }
-  `}
-  
-  ${props => props.$active && `
-    background: linear-gradient(180deg, ${theme.colors.primary.main} 0%, ${theme.colors.primary.dark} 100%);
-    color: ${theme.colors.text.white};
-    
-    &::after {
-      content: "${props.$direction === "asc" ? "▲" : "▼"}";
-      position: absolute;
-      right: 8px;
-      font-size: 0.8em;
-    }
-  `}
-`;
-
-const QualityDetails = styled.div<{ $isOpen: boolean }>`
-  max-height: ${props => props.$isOpen ? '800px' : '0'};
-  opacity: ${props => props.$isOpen ? '1' : '0'};
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-  border-top: ${props => props.$isOpen ? `1px solid ${theme.colors.border.light}` : 'none'};
-  background-color: ${theme.colors.background.main};
-  overflow: hidden;
-`;
-
-const DetailsGrid = styled.div`
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  padding: ${theme.spacing.md};
-  gap: ${theme.spacing.md};
-`;
-
-const DetailCard = styled.div`
-  background: ${theme.colors.background.main};
-  border: 1px solid ${theme.colors.border.light};
+const Badge = styled.span<{ $status?: string }>`
+  padding: 6px 12px;
   border-radius: ${theme.borderRadius.md};
-  padding: ${theme.spacing.sm};
+  font-size: 0.8em;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   transition: all ${theme.transitions.normal};
-  animation: fadeIn 0.2s ease-in;
-  animation-fill-mode: both;
+  border: 2px solid transparent;
+  box-shadow: ${theme.shadows.sm};
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  
+  ${props => {
+    const badgeType = props.$status || '';
+    if (badgeType === 'PASSED') {
+      return `
+        background: linear-gradient(135deg, ${theme.colors.status.success.bg} 0%, ${theme.colors.status.success.text}15 100%);
+        color: ${theme.colors.status.success.text};
+        border-color: ${theme.colors.status.success.text}40;
+      `;
+    }
+    if (badgeType === 'WARNING') {
+      return `
+        background: linear-gradient(135deg, ${theme.colors.status.warning.bg} 0%, ${theme.colors.status.warning.text}15 100%);
+        color: ${theme.colors.status.warning.text};
+        border-color: ${theme.colors.status.warning.text}40;
+      `;
+    }
+    if (badgeType === 'FAILED') {
+      return `
+        background: linear-gradient(135deg, ${theme.colors.status.error.bg} 0%, ${theme.colors.status.error.text}15 100%);
+        color: ${theme.colors.status.error.text};
+        border-color: ${theme.colors.status.error.text}40;
+      `;
+    }
+    return `
+      background: linear-gradient(135deg, ${theme.colors.background.secondary} 0%, ${theme.colors.background.tertiary} 100%);
+      color: ${theme.colors.text.primary};
+      border-color: ${theme.colors.border.medium};
+    `;
+  }}
   
   &:hover {
-    transform: translateY(-3px);
-    box-shadow: ${theme.shadows.md};
-    border-color: ${theme.colors.border.dark};
+    transform: translateY(-2px) scale(1.08);
+    box-shadow: ${theme.shadows.lg};
   }
-`;
-
-const DetailLabel = styled.div`
-  color: ${theme.colors.text.secondary};
-  font-size: 0.85em;
-  margin-bottom: 5px;
-  font-weight: 500;
-`;
-
-const DetailValue = styled.div`
-  font-size: 1.1em;
-  font-weight: 500;
-  color: ${theme.colors.text.primary};
-`;
-
-const ValidationStatus = styled.span<{ $status: string }>`
-  padding: 4px 10px;
-  border-radius: ${theme.borderRadius.md};
-  font-size: 0.85em;
-  font-weight: bold;
-  display: inline-block;
-  transition: all ${theme.transitions.normal};
-  
-  &:hover {
-    transform: scale(1.05);
-    box-shadow: ${theme.shadows.sm};
-  }
-  background-color: ${props => {
-    switch (props.$status) {
-      case 'PASSED': return theme.colors.status.success.bg;
-      case 'WARNING': return theme.colors.status.warning.bg;
-      case 'FAILED': return theme.colors.status.error.bg;
-      default: return theme.colors.background.secondary;
-    }
-  }};
-  color: ${props => {
-    switch (props.$status) {
-      case 'PASSED': return theme.colors.status.success.text;
-      case 'WARNING': return theme.colors.status.warning.text;
-      case 'FAILED': return theme.colors.status.error.text;
-      default: return theme.colors.text.secondary;
-    }
-  }};
 `;
 
 const QualityScore = styled.span<{ $score: number }>`
-  padding: 4px 10px;
+  padding: 6px 12px;
   border-radius: ${theme.borderRadius.md};
-  font-size: 0.9em;
-  font-weight: bold;
-  display: inline-block;
+  font-size: 0.8em;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   transition: all ${theme.transitions.normal};
-  
-  &:hover {
-    transform: scale(1.05);
-    box-shadow: ${theme.shadows.sm};
-  }
+  border: 2px solid transparent;
+  box-shadow: ${theme.shadows.sm};
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
   background-color: ${props => {
     if (props.$score >= 90) return theme.colors.status.success.bg;
     if (props.$score >= 70) return '#f1f8e9';
@@ -168,28 +84,15 @@ const QualityScore = styled.span<{ $score: number }>`
   }};
   color: ${props => {
     if (props.$score >= 90) return theme.colors.status.success.text;
-    if (props.$score >= 70) return '#33691e';
+    if (props.$score >= 70) return '#558b2f';
     if (props.$score >= 50) return theme.colors.status.warning.text;
     return theme.colors.status.error.text;
   }};
-`;
-
-const ErrorDetails = styled.pre`
-  margin: ${theme.spacing.md};
-  padding: ${theme.spacing.sm};
-  background-color: ${theme.colors.background.secondary};
-  border-radius: ${theme.borderRadius.sm};
-  font-size: 0.9em;
-  overflow-x: auto;
-  border: 1px solid ${theme.colors.border.light};
-  white-space: pre-wrap;
-  color: ${theme.colors.text.primary};
-`;
-
-const ActionButton = styled(Button)`
-  padding: 6px 12px;
-  margin-right: 5px;
-  font-size: 0.9em;
+  
+  &:hover {
+    transform: translateY(-2px) scale(1.08);
+    box-shadow: ${theme.shadows.lg};
+  }
 `;
 
 const Quality = () => {
@@ -197,22 +100,12 @@ const Quality = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [qualityData, setQualityData] = useState<any[]>([]);
-  const [openItemId, setOpenItemId] = useState<number | null>(null);
-  const [pagination, setPagination] = useState({
-    total: 0,
-    totalPages: 0,
-    currentPage: 1,
-    limit: 10
-  });
+  const [selectedItem, setSelectedItem] = useState<any | null>(null);
 
-  const { page, setPage } = usePagination(1, 10);
   const { filters, setFilter, clearFilters } = useTableFilters({
     engine: '',
     status: ''
   });
-
-  const [sortField, setSortField] = useState("check_timestamp");
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
 
   const formatNumber = useCallback((num: number) => num.toLocaleString(), []);
 
@@ -220,76 +113,6 @@ const Quality = () => {
     if (!date) return '-';
     return new Date(date).toLocaleString();
   }, []);
-
-  const sortedData = useMemo(() => {
-    if (!sortField) return qualityData;
-    return [...qualityData].sort((a, b) => {
-      let aVal: any = a[sortField as keyof typeof a];
-      let bVal: any = b[sortField as keyof typeof b];
-      
-      if (aVal === null || aVal === undefined) aVal = "";
-      if (bVal === null || bVal === undefined) bVal = "";
-      
-      if (typeof aVal === "string" && typeof bVal === "string") {
-        return sortDirection === "asc" 
-          ? aVal.localeCompare(bVal)
-          : bVal.localeCompare(aVal);
-      }
-      
-      const aNum = Number(aVal);
-      const bNum = Number(bVal);
-      if (!isNaN(aNum) && !isNaN(bNum)) {
-        return sortDirection === "asc" ? aNum - bNum : bNum - aNum;
-      }
-      
-      return sortDirection === "asc"
-        ? String(aVal).localeCompare(String(bVal))
-        : String(bVal).localeCompare(String(aVal));
-    });
-  }, [qualityData, sortField, sortDirection]);
-
-  const handleSort = useCallback((field: string) => {
-    if (sortField === field) {
-      setSortDirection(prev => prev === "asc" ? "desc" : "asc");
-    } else {
-      setSortField(field);
-      setSortDirection("asc");
-    }
-    setPage(1);
-  }, [sortField, setPage]);
-
-  const handleExportCSV = useCallback(() => {
-    const headers = ["Schema", "Table", "Total Rows", "Status", "Quality Score", "Missing Values", "Duplicates", "Type Mismatches", "Range Violations", "Referential Issues", "Constraint Violations", "Last Check"];
-    const rows = sortedData.map(item => [
-      item.schema_name,
-      item.table_name,
-      item.total_rows || 0,
-      item.validation_status || "",
-      item.quality_score || 0,
-      item.null_count || 0,
-      item.duplicate_count || 0,
-      item.invalid_type_count || 0,
-      item.out_of_range_count || 0,
-      item.referential_integrity_errors || 0,
-      item.constraint_violation_count || 0,
-      formatDate(item.check_timestamp)
-    ]);
-    
-    const csvContent = [
-      headers.join(","),
-      ...rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))
-    ].join("\n");
-    
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const link = document.createElement("a");
-    const url = URL.createObjectURL(blob);
-    link.setAttribute("href", url);
-    link.setAttribute("download", `quality_export_${new Date().toISOString().split('T')[0]}.csv`);
-    link.style.visibility = "hidden";
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  }, [sortedData, formatDate]);
 
   const isInitialLoadRef = useRef(true);
   
@@ -304,15 +127,14 @@ const Quality = () => {
         setLoading(true);
       }
       const response = await qualityApi.getQualityMetrics({
-        page,
-        limit: 10,
+        page: 1,
+        limit: 1000,
         search: filters.engine as string ? `engine:${filters.engine}` : undefined,
         status: filters.status as string || undefined
       });
       
       if (isMountedRef.current) {
-        setQualityData(response.data);
-        setPagination(response.pagination);
+        setQualityData(response.data || []);
         isInitialLoadRef.current = false;
       }
     } catch (err) {
@@ -324,7 +146,7 @@ const Quality = () => {
         setLoading(false);
       }
     }
-  }, [page, filters.engine, filters.status]);
+  }, [filters.engine, filters.status]);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -341,8 +163,8 @@ const Quality = () => {
     };
   }, [fetchQualityData]);
 
-  const toggleItem = useCallback((id: number) => {
-    setOpenItemId(prev => prev === id ? null : id);
+  const handleItemClick = useCallback((item: any) => {
+    setSelectedItem((prev: any) => prev?.id === item.id ? null : item);
   }, []);
 
   return (
@@ -358,7 +180,6 @@ const Quality = () => {
           value={filters.engine as string}
           onChange={(e) => {
             setFilter('engine', e.target.value);
-            setPage(1);
           }}
         >
           <option value="">All Engines</option>
@@ -373,7 +194,6 @@ const Quality = () => {
           value={filters.status as string}
           onChange={(e) => {
             setFilter('status', e.target.value);
-            setPage(1);
           }}
         >
           <option value="">All Status</option>
@@ -386,224 +206,98 @@ const Quality = () => {
           $variant="secondary"
           onClick={() => {
             clearFilters();
-            setPage(1);
           }}
         >
           Reset All
         </Button>
       </FiltersContainer>
 
-      <TableActions>
-        <PaginationInfo>
-          Showing {sortedData.length} of {pagination.total} entries (Page{" "}
-          {pagination.currentPage} of {pagination.totalPages})
-        </PaginationInfo>
-        <ExportButton $variant="secondary" onClick={handleExportCSV}>
-          Export CSV
-        </ExportButton>
-      </TableActions>
-
-      <TableContainer>
-        <Table $minWidth="1400px">
-          <thead>
-            <tr>
-              <SortableTh 
-                $sortable 
-                $active={sortField === "schema_name"} 
-                $direction={sortDirection}
-                onClick={() => handleSort("schema_name")}
-              >
-                Schema
-              </SortableTh>
-              <SortableTh 
-                $sortable 
-                $active={sortField === "table_name"} 
-                $direction={sortDirection}
-                onClick={() => handleSort("table_name")}
-              >
-                Table
-              </SortableTh>
-              <SortableTh 
-                $sortable 
-                $active={sortField === "total_rows"} 
-                $direction={sortDirection}
-                onClick={() => handleSort("total_rows")}
-              >
-                Total Rows
-              </SortableTh>
-              <SortableTh 
-                $sortable 
-                $active={sortField === "validation_status"} 
-                $direction={sortDirection}
-                onClick={() => handleSort("validation_status")}
-              >
-                Status
-              </SortableTh>
-              <SortableTh 
-                $sortable 
-                $active={sortField === "quality_score"} 
-                $direction={sortDirection}
-                onClick={() => handleSort("quality_score")}
-              >
-                Quality Score
-              </SortableTh>
-              <SortableTh 
-                $sortable 
-                $active={sortField === "check_timestamp"} 
-                $direction={sortDirection}
-                onClick={() => handleSort("check_timestamp")}
-              >
-                Last Check
-              </SortableTh>
-              <Th>Actions</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {sortedData.length === 0 ? (
-              <TableRow>
-                <Td colSpan={7} style={{ textAlign: 'center', padding: '20px', color: theme.colors.text.secondary }}>
-                  No quality metrics found
-                </Td>
-              </TableRow>
-            ) : (
-              sortedData.map((item) => (
-                <React.Fragment key={item.id}>
-                  <TableRow>
-                    <Td>
-                      <strong style={{ color: theme.colors.primary.main }}>
-                        {item.schema_name}
-                      </strong>
-                    </Td>
-                    <Td>{item.table_name}</Td>
-                    <Td>{formatNumber(item.total_rows || 0)}</Td>
-                    <Td>
-                      <ValidationStatus $status={item.validation_status}>
-                        {item.validation_status}
-                      </ValidationStatus>
-                    </Td>
-                    <Td>
-                      <QualityScore $score={item.quality_score || 0}>
-                        {item.quality_score || 0}%
-                      </QualityScore>
-                    </Td>
-                    <Td style={{ color: theme.colors.text.secondary, fontSize: '0.9em' }}>
-                      {formatDate(item.check_timestamp)}
-                    </Td>
-                    <Td>
-                      <ActionButton
-                        $variant="secondary"
-                        onClick={() => toggleItem(item.id)}
-                      >
-                        {openItemId === item.id ? 'Hide Details' : 'Show Details'}
-                      </ActionButton>
-                    </Td>
-                  </TableRow>
-                  {openItemId === item.id && (
-                    <TableRow>
-                      <Td colSpan={7} style={{ padding: 0 }}>
-                        <QualityDetails $isOpen={true}>
-                          <DetailsGrid>
-                            <DetailCard>
-                              <DetailValue>{formatNumber(item.null_count || 0)} rows</DetailValue>
-                              <DetailLabel>Missing Values</DetailLabel>
-                            </DetailCard>
-                            <DetailCard>
-                              <DetailValue>{formatNumber(item.duplicate_count || 0)} rows</DetailValue>
-                              <DetailLabel>Duplicate Records</DetailLabel>
-                            </DetailCard>
-                            <DetailCard>
-                              <DetailValue>{formatNumber(item.invalid_type_count || 0)} fields</DetailValue>
-                              <DetailLabel>Type Mismatches</DetailLabel>
-                            </DetailCard>
-                            <DetailCard>
-                              <DetailValue>{formatNumber(item.out_of_range_count || 0)} values</DetailValue>
-                              <DetailLabel>Range Violations</DetailLabel>
-                            </DetailCard>
-                            <DetailCard>
-                              <DetailValue>{formatNumber(item.referential_integrity_errors || 0)} errors</DetailValue>
-                              <DetailLabel>Referential Issues</DetailLabel>
-                            </DetailCard>
-                            <DetailCard>
-                              <DetailValue>{formatNumber(item.constraint_violation_count || 0)} violations</DetailValue>
-                              <DetailLabel>Constraint Issues</DetailLabel>
-                            </DetailCard>
-                            <DetailCard>
-                              <DetailValue>{(item.check_duration_ms / 1000 || 0).toFixed(2)}s</DetailValue>
-                              <DetailLabel>Analysis Time</DetailLabel>
-                            </DetailCard>
-                          </DetailsGrid>
-
-                          {item.type_mismatch_details && (
-                            <>
-                              <DetailLabel style={{ margin: `0 ${theme.spacing.md}` }}>Type Mismatch Details:</DetailLabel>
-                              <ErrorDetails>
-                                {Object.entries(item.type_mismatch_details).map(([column, details]) => (
-                                  `Column: ${column}\n${JSON.stringify(details, null, 2)}\n\n`
-                                ))}
-                              </ErrorDetails>
-                            </>
-                          )}
-
-                          {item.integrity_check_details && (
-                            <>
-                              <DetailLabel style={{ margin: `0 ${theme.spacing.md}` }}>Integrity Check Details:</DetailLabel>
-                              <ErrorDetails>
-                                {Object.entries(item.integrity_check_details).map(([column, details]) => (
-                                  `Column: ${column}\n${JSON.stringify(details, null, 2)}\n\n`
-                                ))}
-                              </ErrorDetails>
-                            </>
-                          )}
-
-                          {item.error_details && (
-                            <>
-                              <DetailLabel style={{ margin: `0 ${theme.spacing.md}` }}>Error Details:</DetailLabel>
-                              <ErrorDetails>{item.error_details}</ErrorDetails>
-                            </>
-                          )}
-                        </QualityDetails>
-                      </Td>
-                    </TableRow>
-                  )}
-                </React.Fragment>
-              ))
-            )}
-          </tbody>
-        </Table>
-      </TableContainer>
-
-      {pagination.totalPages > 1 && (
-        <Pagination>
-          <PageButton
-            disabled={page === 1}
-            onClick={() => setPage(page - 1)}
-          >
-            Previous
-          </PageButton>
-          
-          {Array.from({ length: pagination.totalPages }, (_, i) => i + 1)
-            .filter(p => Math.abs(p - page) <= 2 || p === 1 || p === pagination.totalPages)
-            .map((p, i, arr) => (
-              <React.Fragment key={p}>
-                {i > 0 && arr[i - 1] !== p - 1 && <span>...</span>}
-                <PageButton
-                  $active={p === page}
-                  onClick={() => setPage(p)}
-                >
-                  {p}
-                </PageButton>
-              </React.Fragment>
-            ))
-          }
-          
-          <PageButton
-            disabled={page === pagination.totalPages}
-            onClick={() => setPage(page + 1)}
-          >
-            Next
-          </PageButton>
-        </Pagination>
-      )}
+      <div style={{ display: 'grid', gridTemplateColumns: selectedItem ? '1fr 400px' : '1fr', gap: theme.spacing.lg }}>
+        <QualityTreeView 
+          items={qualityData} 
+          onItemClick={handleItemClick}
+        />
+        
+        {selectedItem && (
+          <div style={{
+            background: theme.colors.background.secondary,
+            border: `1px solid ${theme.colors.border.light}`,
+            borderRadius: theme.borderRadius.md,
+            padding: theme.spacing.lg,
+            position: 'sticky',
+            top: theme.spacing.md,
+            maxHeight: 'calc(100vh - 200px)',
+            overflowY: 'auto'
+          }}>
+            <h3 style={{ marginTop: 0, marginBottom: theme.spacing.md, color: theme.colors.text.primary }}>
+              Quality Details
+            </h3>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: theme.spacing.md }}>
+              <div>
+                <strong style={{ color: theme.colors.text.secondary, fontSize: '0.85em' }}>Schema:</strong>
+                <div style={{ color: theme.colors.text.primary }}>{selectedItem.schema_name || 'N/A'}</div>
+              </div>
+              <div>
+                <strong style={{ color: theme.colors.text.secondary, fontSize: '0.85em' }}>Table:</strong>
+                <div style={{ color: theme.colors.text.primary }}>{selectedItem.table_name || 'N/A'}</div>
+              </div>
+              <div>
+                <strong style={{ color: theme.colors.text.secondary, fontSize: '0.85em' }}>Total Rows:</strong>
+                <div style={{ color: theme.colors.text.primary }}>{formatNumber(selectedItem.total_rows || 0)}</div>
+              </div>
+              <div>
+                <strong style={{ color: theme.colors.text.secondary, fontSize: '0.85em' }}>Status:</strong>
+                <div>
+                  <Badge $status={selectedItem.validation_status}>{selectedItem.validation_status}</Badge>
+                </div>
+              </div>
+              <div>
+                <strong style={{ color: theme.colors.text.secondary, fontSize: '0.85em' }}>Quality Score:</strong>
+                <div>
+                  <QualityScore $score={selectedItem.quality_score || 0}>
+                    {selectedItem.quality_score || 0}%
+                  </QualityScore>
+                </div>
+              </div>
+              <div>
+                <strong style={{ color: theme.colors.text.secondary, fontSize: '0.85em' }}>Last Check:</strong>
+                <div style={{ color: theme.colors.text.primary, fontSize: '0.9em' }}>
+                  {formatDate(selectedItem.check_timestamp)}
+                </div>
+              </div>
+              <div style={{ borderTop: `1px solid ${theme.colors.border.light}`, paddingTop: theme.spacing.md, marginTop: theme.spacing.sm }}>
+                <strong style={{ color: theme.colors.text.secondary, fontSize: '0.85em' }}>Metrics:</strong>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: theme.spacing.sm, marginTop: theme.spacing.sm }}>
+                  <div>
+                    <div style={{ fontSize: '0.85em', color: theme.colors.text.secondary }}>Missing Values</div>
+                    <div style={{ fontWeight: 600 }}>{formatNumber(selectedItem.null_count || 0)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.85em', color: theme.colors.text.secondary }}>Duplicates</div>
+                    <div style={{ fontWeight: 600 }}>{formatNumber(selectedItem.duplicate_count || 0)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.85em', color: theme.colors.text.secondary }}>Type Mismatches</div>
+                    <div style={{ fontWeight: 600 }}>{formatNumber(selectedItem.invalid_type_count || 0)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.85em', color: theme.colors.text.secondary }}>Range Violations</div>
+                    <div style={{ fontWeight: 600 }}>{formatNumber(selectedItem.out_of_range_count || 0)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.85em', color: theme.colors.text.secondary }}>Referential Issues</div>
+                    <div style={{ fontWeight: 600 }}>{formatNumber(selectedItem.referential_integrity_errors || 0)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.85em', color: theme.colors.text.secondary }}>Constraint Issues</div>
+                    <div style={{ fontWeight: 600 }}>{formatNumber(selectedItem.constraint_violation_count || 0)}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </Container>
   );
 };

@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import styled, { keyframes } from 'styled-components';
 import { theme } from '../theme/theme';
+import { StatusBadge } from './shared/BaseComponents';
 
 const fadeIn = keyframes`
   from {
@@ -82,7 +83,7 @@ const TreeLine = styled.span<{ $isLast?: boolean }>`
   transition: color ${theme.transitions.normal};
 `;
 
-const TreeContent = styled.div<{ $level: number; $isExpanded?: boolean; $nodeType?: 'schema' | 'table' | 'column' }>`
+const TreeContent = styled.div<{ $level: number; $isExpanded?: boolean; $nodeType?: 'schema' | 'table' | 'api' }>`
   display: flex;
   align-items: center;
   padding: ${props => props.$level === 0 ? '12px 8px' : props.$level === 1 ? '10px 8px' : '8px 8px'};
@@ -157,7 +158,7 @@ const ExpandIconContainer = styled.div<{ $isExpanded: boolean }>`
   }
 `;
 
-const NodeLabel = styled.span<{ $isSchema?: boolean; $isTable?: boolean; $isColumn?: boolean }>`
+const NodeLabel = styled.span<{ $isSchema?: boolean; $isTable?: boolean; $isApi?: boolean }>`
   font-weight: ${props => props.$isSchema ? '700' : props.$isTable ? '600' : '500'};
   font-size: ${props => props.$isSchema ? '1.05em' : props.$isTable ? '0.98em' : '0.92em'};
   color: ${props => {
@@ -174,7 +175,7 @@ const NodeLabel = styled.span<{ $isSchema?: boolean; $isTable?: boolean; $isColu
   `}
 `;
 
-const ColumnInfo = styled.div`
+const ApiInfo = styled.div`
   display: inline-flex;
   gap: 6px;
   align-items: center;
@@ -201,76 +202,32 @@ const CountBadge = styled.span`
   }
 `;
 
-const Badge = styled.span<{ $type?: string; $level?: string; $flag?: boolean }>`
-  padding: 4px 10px;
-  border-radius: ${theme.borderRadius.md};
+const ActionButton = styled.button`
+  padding: 4px 8px;
+  border: none;
+  border-radius: ${theme.borderRadius.sm};
+  background: ${theme.colors.primary.main};
+  color: ${theme.colors.text.white};
+  cursor: pointer;
   font-size: 0.75em;
-  font-weight: 600;
-  display: inline-flex;
+  transition: all ${theme.transitions.normal};
+  display: flex;
   align-items: center;
   gap: 4px;
-  transition: all ${theme.transitions.normal};
-  white-space: nowrap;
-  
-  ${props => {
-    if (props.$type) {
-      const typeColors: Record<string, { bg: string; text: string }> = {
-        'PK': { bg: theme.colors.status.info.bg, text: theme.colors.status.info.text },
-        'FK': { bg: theme.colors.status.warning.bg, text: theme.colors.status.warning.text },
-        'UQ': { bg: theme.colors.status.success.bg, text: theme.colors.status.success.text },
-        'IDX': { bg: '#e8eaf6', text: '#3f51b5' },
-      };
-      const colors = typeColors[props.$type] || { bg: theme.colors.background.secondary, text: theme.colors.text.primary };
-      return `
-        background-color: ${colors.bg};
-        color: ${colors.text};
-        border: 1px solid ${colors.text}20;
-      `;
-    }
-    if (props.$level) {
-      switch (props.$level) {
-        case 'HIGH': return `
-          background-color: ${theme.colors.status.error.bg};
-          color: ${theme.colors.status.error.text};
-          border: 1px solid ${theme.colors.status.error.text}30;
-        `;
-        case 'MEDIUM': return `
-          background-color: ${theme.colors.status.warning.bg};
-          color: ${theme.colors.status.warning.text};
-          border: 1px solid ${theme.colors.status.warning.text}30;
-        `;
-        case 'LOW': return `
-          background-color: ${theme.colors.status.success.bg};
-          color: ${theme.colors.status.success.text};
-          border: 1px solid ${theme.colors.status.success.text}30;
-        `;
-        default: return `
-          background-color: ${theme.colors.background.secondary};
-          color: ${theme.colors.text.secondary};
-        `;
-      }
-    }
-    if (props.$flag !== undefined) {
-      return props.$flag 
-        ? `
-          background-color: ${theme.colors.status.error.bg};
-          color: ${theme.colors.status.error.text};
-          border: 1px solid ${theme.colors.status.error.text}30;
-        `
-        : `
-          background-color: ${theme.colors.status.success.bg};
-          color: ${theme.colors.status.success.text};
-        `;
-    }
-    return `
-      background-color: ${theme.colors.background.secondary};
-      color: ${theme.colors.text.primary};
-    `;
-  }}
   
   &:hover {
-    transform: translateY(-2px) scale(1.05);
-    box-shadow: ${theme.shadows.md};
+    background: ${theme.colors.primary.dark};
+    transform: translateY(-1px);
+    box-shadow: ${theme.shadows.sm};
+  }
+  
+  &:active {
+    transform: translateY(0);
+  }
+  
+  svg {
+    width: 12px;
+    height: 12px;
   }
 `;
 
@@ -280,33 +237,6 @@ const ExpandableContent = styled.div<{ $isExpanded: boolean; $level: number }>`
   padding-left: ${props => props.$level * 24 + 36}px;
 `;
 
-const ColumnDetailsRow = styled.div<{ $level: number }>`
-  padding: 12px 16px;
-  margin: 4px 0 8px 0;
-  font-size: 0.88em;
-  color: ${theme.colors.text.secondary};
-  background: linear-gradient(135deg, ${theme.colors.background.secondary} 0%, ${theme.colors.background.tertiary} 100%);
-  border-left: 3px solid ${theme.colors.primary.main};
-  border-radius: ${theme.borderRadius.md};
-  box-shadow: ${theme.shadows.sm};
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 12px;
-  animation: ${fadeIn} 0.3s ease-out;
-  
-  div {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    
-    strong {
-      color: ${theme.colors.text.primary};
-      font-weight: 600;
-      min-width: 80px;
-    }
-  }
-`;
-
 const EmptyState = styled.div`
   padding: 60px 40px;
   text-align: center;
@@ -314,7 +244,7 @@ const EmptyState = styled.div`
   animation: ${fadeIn} 0.5s ease-out;
   
   &::before {
-    content: '📊';
+    content: '🔌';
     font-size: 3em;
     display: block;
     margin-bottom: ${theme.spacing.md};
@@ -324,9 +254,9 @@ const EmptyState = styled.div`
 
 const IconSchema = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-    <ellipse cx="12" cy="5" rx="9" ry="3"/>
-    <path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/>
-    <path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/>
+    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+    <line x1="9" y1="3" x2="9" y2="21"/>
+    <line x1="3" y1="9" x2="21" y2="9"/>
   </svg>
 );
 
@@ -336,29 +266,30 @@ const IconTable = () => (
   </svg>
 );
 
-const IconColumn = () => (
+const IconAPI = () => (
   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-    <line x1="12" y1="5" x2="12" y2="19"/>
-    <line x1="5" y1="12" x2="19" y2="12"/>
+    <path d="M4 9h16M4 15h16M12 3v18"/>
   </svg>
 );
 
-interface Column {
+interface APICatalogEntry {
   id: number;
-  schema_name: string;
-  table_name: string;
-  column_name: string;
-  db_engine?: string;
-  data_type?: string;
-  ordinal_position?: number;
-  is_nullable?: boolean;
-  sensitivity_level?: string;
-  contains_pii?: boolean;
-  contains_phi?: boolean;
-  is_primary_key?: boolean;
-  is_foreign_key?: boolean;
-  is_unique?: boolean;
-  is_indexed?: boolean;
+  api_name: string;
+  api_type: string;
+  base_url: string;
+  endpoint: string;
+  http_method: string;
+  auth_type: string;
+  target_db_engine: string;
+  target_schema: string;
+  target_table: string;
+  status: string;
+  active: boolean;
+  sync_interval: number;
+  last_sync_time: string | null;
+  last_sync_status: string | null;
+  created_at: string;
+  updated_at: string;
   [key: string]: any;
 }
 
@@ -369,25 +300,25 @@ interface SchemaNode {
 
 interface TableNode {
   name: string;
-  columns: Column[];
+  apis: APICatalogEntry[];
 }
 
 interface TreeViewProps {
-  columns: Column[];
-  onColumnClick?: (column: Column) => void;
+  entries: APICatalogEntry[];
+  onEntryClick?: (entry: APICatalogEntry) => void;
+  onDuplicate?: (entry: APICatalogEntry) => void;
 }
 
-const ColumnCatalogTreeView: React.FC<TreeViewProps> = ({ columns, onColumnClick }) => {
+const APICatalogTreeView: React.FC<TreeViewProps> = ({ entries, onEntryClick, onDuplicate }) => {
   const [expandedSchemas, setExpandedSchemas] = useState<Set<string>>(new Set());
   const [expandedTables, setExpandedTables] = useState<Set<string>>(new Set());
-  const [expandedColumns, setExpandedColumns] = useState<Set<number>>(new Set());
 
   const treeData = useMemo(() => {
     const schemas = new Map<string, SchemaNode>();
 
-    columns.forEach(column => {
-      const schemaName = column.schema_name;
-      const tableName = column.table_name;
+    entries.forEach(entry => {
+      const schemaName = entry.target_schema || 'Other';
+      const tableName = entry.target_table || 'Other';
 
       if (!schemas.has(schemaName)) {
         schemas.set(schemaName, {
@@ -401,22 +332,15 @@ const ColumnCatalogTreeView: React.FC<TreeViewProps> = ({ columns, onColumnClick
       if (!schema.tables.has(tableName)) {
         schema.tables.set(tableName, {
           name: tableName,
-          columns: []
+          apis: []
         });
       }
 
-      const table = schema.tables.get(tableName)!;
-      table.columns.push(column);
-    });
-
-    schemas.forEach(schema => {
-      schema.tables.forEach(table => {
-        table.columns.sort((a, b) => (a.ordinal_position || 0) - (b.ordinal_position || 0));
-      });
+      schema.tables.get(tableName)!.apis.push(entry);
     });
 
     return Array.from(schemas.values()).sort((a, b) => a.name.localeCompare(b.name));
-  }, [columns]);
+  }, [entries]);
 
   const toggleSchema = (schemaName: string) => {
     setExpandedSchemas(prev => {
@@ -454,18 +378,6 @@ const ColumnCatalogTreeView: React.FC<TreeViewProps> = ({ columns, onColumnClick
     });
   };
 
-  const toggleColumn = (columnId: number) => {
-    setExpandedColumns(prev => {
-      const next = new Set(prev);
-      if (next.has(columnId)) {
-        next.delete(columnId);
-      } else {
-        next.add(columnId);
-      }
-      return next;
-    });
-  };
-
   const renderTreeLine = (level: number, isLast: boolean) => {
     if (level === 0) return null;
     
@@ -480,121 +392,92 @@ const ColumnCatalogTreeView: React.FC<TreeViewProps> = ({ columns, onColumnClick
       lines.push('├── ');
     }
     
-    return <TreeLine>{lines.join('')}</TreeLine>;
+    return <TreeLine $isLast={isLast}>{lines.join('')}</TreeLine>;
   };
 
-  const renderColumn = (column: Column, schemaName: string, tableName: string, level: number) => {
-    const columnId = column.id;
-    const isExpanded = expandedColumns.has(columnId);
-    const table = treeData.find(s => s.name === schemaName)?.tables.get(tableName);
-    const columnIndex = table?.columns.findIndex(c => c.id === columnId) ?? -1;
-    const isLastColumn = columnIndex === (table?.columns.length ?? 0) - 1;
-
+  const renderAPI = (api: APICatalogEntry, level: number, isLast: boolean) => {
     return (
-      <TreeNode key={columnId}>
+      <TreeNode key={api.id}>
         <TreeContent 
           $level={level} 
-          $isExpanded={isExpanded}
-          $nodeType="column"
-          onClick={() => {
-            toggleColumn(columnId);
-            onColumnClick?.(column);
-          }}
+          $nodeType="api"
+          onClick={() => onEntryClick?.(api)}
         >
-          {renderTreeLine(level, isLastColumn)}
-          <ExpandIconContainer $isExpanded={isExpanded}>
-            {isExpanded ? (
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                <polyline points="18 15 12 9 6 15"/>
-              </svg>
+          {renderTreeLine(level, isLast)}
+          <IconAPI />
+          <NodeLabel $isApi>{api.api_name}</NodeLabel>
+          <ApiInfo>
+            <StatusBadge $status={api.status}>{api.status}</StatusBadge>
+            {api.active ? (
+              <CountBadge style={{ background: theme.colors.status.success.bg, color: theme.colors.status.success.text }}>
+                Active
+              </CountBadge>
             ) : (
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                <polyline points="9 18 15 12 9 6"/>
-              </svg>
+              <CountBadge style={{ background: theme.colors.status.error.bg, color: theme.colors.status.error.text }}>
+                Inactive
+              </CountBadge>
             )}
-          </ExpandIconContainer>
-          <IconColumn />
-          <span style={{ marginRight: '8px' }}></span>
-          <NodeLabel $isColumn>{column.column_name}</NodeLabel>
-          <ColumnInfo>
-            {column.data_type && (
-              <Badge $type={column.data_type}>
-                {column.data_type}
-              </Badge>
+            <CountBadge>{api.http_method}</CountBadge>
+            <CountBadge>{api.api_type}</CountBadge>
+            {onDuplicate && (
+              <ActionButton
+                onClick={(e: React.MouseEvent) => {
+                  e.stopPropagation();
+                  onDuplicate(api);
+                }}
+                title="Duplicate API"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                </svg>
+                Duplicate
+              </ActionButton>
             )}
-            {column.sensitivity_level && (
-              <Badge $level={column.sensitivity_level}>
-                {column.sensitivity_level}
-              </Badge>
-            )}
-            {column.contains_pii && <Badge $flag={true}>PII</Badge>}
-            {column.contains_phi && <Badge $flag={true}>PHI</Badge>}
-            {column.is_primary_key && <Badge $type="PK">PK</Badge>}
-            {column.is_foreign_key && <Badge $type="FK">FK</Badge>}
-            {column.is_unique && <Badge $type="UQ">UQ</Badge>}
-            {column.is_indexed && <Badge $type="IDX">IDX</Badge>}
-          </ColumnInfo>
+          </ApiInfo>
         </TreeContent>
-        <ExpandableContent $isExpanded={isExpanded} $level={level}>
-          {isExpanded && (
-            <ColumnDetailsRow $level={level}>
-              <div><strong>Engine:</strong> <span>{column.db_engine || 'N/A'}</span></div>
-              <div><strong>Position:</strong> <span>{column.ordinal_position || 'N/A'}</span></div>
-              <div><strong>Nullable:</strong> <span>{column.is_nullable ? 'Yes' : 'No'}</span></div>
-              {column.character_maximum_length && (
-                <div><strong>Max Length:</strong> <span>{column.character_maximum_length}</span></div>
-              )}
-              {column.numeric_precision && (
-                <div><strong>Precision:</strong> <span>{column.numeric_precision}</span></div>
-              )}
-              {column.column_default && (
-                <div><strong>Default:</strong> <span>{column.column_default}</span></div>
-              )}
-            </ColumnDetailsRow>
-          )}
-        </ExpandableContent>
       </TreeNode>
     );
   };
 
   const renderTable = (table: TableNode, schemaName: string, level: number) => {
-    const tableKey = `${schemaName}.${table.name}`;
-    const isExpanded = expandedTables.has(tableKey);
+    const key = `${schemaName}.${table.name}`;
+    const isExpanded = expandedTables.has(key);
     const schema = treeData.find(s => s.name === schemaName);
-    const tableIndex = schema ? Array.from(schema.tables.keys()).indexOf(table.name) : -1;
-    const isLastTable = tableIndex === (schema?.tables.size ?? 0) - 1;
+    const tableKeys = Array.from(schema?.tables.keys() || []);
+    const isLast = tableKeys[tableKeys.length - 1] === table.name;
 
     return (
-      <TreeNode key={tableKey}>
+      <TreeNode key={key}>
         <TreeContent 
           $level={level} 
           $isExpanded={isExpanded}
           $nodeType="table"
           onClick={() => toggleTable(schemaName, table.name)}
         >
-          {renderTreeLine(level, isLastTable)}
+          {renderTreeLine(level, isLast)}
           <ExpandIconContainer $isExpanded={isExpanded}>
             {isExpanded ? (
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
                 <polyline points="18 15 12 9 6 15"/>
               </svg>
             ) : (
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
                 <polyline points="9 18 15 12 9 6"/>
               </svg>
             )}
           </ExpandIconContainer>
           <IconTable />
-          <span style={{ marginRight: '8px' }}></span>
           <NodeLabel $isTable>{table.name}</NodeLabel>
-          <ColumnInfo>
-            <CountBadge>{table.columns.length} {table.columns.length === 1 ? 'column' : 'columns'}</CountBadge>
-          </ColumnInfo>
+          <ApiInfo>
+            <CountBadge>{table.apis.length} {table.apis.length === 1 ? 'API' : 'APIs'}</CountBadge>
+          </ApiInfo>
         </TreeContent>
         <ExpandableContent $isExpanded={isExpanded} $level={level}>
-          {isExpanded && table.columns.map((column) => 
-            renderColumn(column, schemaName, table.name, level + 1)
-          )}
+          {isExpanded && table.apis.map((api, index) => {
+            const isLast = index === table.apis.length - 1;
+            return renderAPI(api, level + 1, isLast);
+          })}
         </ExpandableContent>
       </TreeNode>
     );
@@ -626,11 +509,10 @@ const ColumnCatalogTreeView: React.FC<TreeViewProps> = ({ columns, onColumnClick
             )}
           </ExpandIconContainer>
           <IconSchema />
-          <span style={{ marginRight: '8px' }}></span>
           <NodeLabel $isSchema>{schema.name}</NodeLabel>
-          <ColumnInfo>
+          <ApiInfo>
             <CountBadge>{schema.tables.size} {schema.tables.size === 1 ? 'table' : 'tables'}</CountBadge>
-          </ColumnInfo>
+          </ApiInfo>
         </TreeContent>
         <ExpandableContent $isExpanded={isExpanded} $level={level}>
           {isExpanded && Array.from(schema.tables.values()).map((table) => 
@@ -645,7 +527,7 @@ const ColumnCatalogTreeView: React.FC<TreeViewProps> = ({ columns, onColumnClick
     return (
       <TreeContainer>
         <EmptyState>
-          No column data available. Columns will appear here once cataloged.
+          No API entries available. APIs will appear here once configured.
         </EmptyState>
       </TreeContainer>
     );
@@ -662,4 +544,5 @@ const ColumnCatalogTreeView: React.FC<TreeViewProps> = ({ columns, onColumnClick
   );
 };
 
-export default ColumnCatalogTreeView;
+export default APICatalogTreeView;
+

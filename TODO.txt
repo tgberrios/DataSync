@@ -39,8 +39,51 @@ y el de mssql de azure
     ANADIR FORMA DE HACER FIRST SETUP DIGAMOS DE LA DB eso seria con un backup de la db de solo la estructura pero tambien, con la data de config
 
 
+12/20/2025, 10:17:23 AM[ERROR][TRANSFER][processAPIFullLoad]Error processing API Cats: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
+12/20/2025, 10:17:23 AM[ERROR][TRANSFER][createPostgreSQLTable]Error creating PostgreSQL table: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
+12/20/2025, 10:17:23 AM[ERROR][QUALITY][validateTable]Schema and table names contain invalid characters
+12/20/2025, 10:17:23 AM[ERROR][QUALITY][validateTable]Schema and table names contain invalid characters
+12/20/2025, 10:16:53 AM[ERROR][TRANSFER][processAPIFullLoad]Error processing API Cats: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
+12/20/2025, 10:16:53 AM[ERROR][TRANSFER][createPostgreSQLTable]Error creating PostgreSQL table: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
+12/20/2025, 10:16:22 AM[ERROR][TRANSFER][processAPIFullLoad]Error processing API Cats: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
+12/20/2025, 10:16:22 AM[ERROR][TRANSFER][createPostgreSQLTable]Error creating PostgreSQL table: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
+12/20/2025, 10:15:51 AM[ERROR][TRANSFER][processAPIFullLoad]Error processing API Cats: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
+12/20/2025, 10:15:51 AM[ERROR][TRANSFER][createPostgreSQLTable]Error creating PostgreSQL table: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
+12/20/2025, 10:15:21 AM[ERROR][TRANSFER][processAPIFullLoad]Error processing API Cats: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
+12/20/2025, 10:15:21 AM[ERROR][TRANSFER][createPostgreSQLTable]Error creating PostgreSQL table: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
+12/20/2025, 10:14:50 AM[ERROR][TRANSFER][processAPIFullLoad]Error processing API Cats: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
+12/20/2025, 10:14:50 AM[ERROR][TRANSFER][createPostgreSQLTable]Error creating PostgreSQL table: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
+12/20/2025, 10:14:19 AM[ERROR][TRANSFER][processAPIFullLoad]Error processing API Cats: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
+12/20/2025, 10:14:19 AM[ERROR][TRANSFER][createPostgreSQLTable]Error creating PostgreSQL table: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
+12/20/2025, 10:13:49 AM[ERROR][TRANSFER][processAPIFullLoad]Error processing API Cats: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
+12/20/2025, 10:13:49 AM[ERROR][TRANSFER][createPostgreSQLTable]Error creating PostgreSQL table: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
+12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error executing maintenance task 319: PostgreSQL maintenance failed: ERROR: schema "test_source" does not exist
+12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error collecting metrics before: ERROR: relation "test_source.json_types" does not exist CONTEXT: unnamed portal parameter $1 = '...'
+12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error executing maintenance task 317: PostgreSQL maintenance failed: ERROR: schema "sportbook" does not exist
+12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error collecting metrics before: ERROR: relation "sportbook.event_schedules" does not exist CONTEXT: unnamed portal parameter $1 = '...'
+12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error executing maintenance task 316: PostgreSQL maintenance failed: ERROR: schema "domain_specific" does not exist
+12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error collecting metrics before: ERROR: relation "domain_specific.crypto_wallets" does not exist CONTEXT: unnamed portal parameter $1 = '...'
+12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error executing maintenance task 315: PostgreSQL maintenance failed: ERROR: schema "testing_demo" does not exist
+12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error collecting metrics before: ERROR: relation "testing_demo.edge_cases" does not exist CONTEXT: unnamed portal parameter $1 = '...'
+12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error executing maintenance task 312: PostgreSQL maintenance failed: ERROR: schema "constraints_demo" does not exist
+12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error collecting metrics before: ERROR: relation "constraints_demo.orders_defaults" does not exist CONTEXT: unnamed portal parameter $1 = '...'
+12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error executing maintenance task 310: PostgreSQL maintenance failed: ERROR: schema "social_media" does not exist
+12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error collecting metrics before: ERROR: relation "social_media.posts" does not exist CONTEXT: unnamed portal parameter $1 = '...'
+12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error executing maintenance task 308: PostgreSQL maintenance failed: ERROR: schema "distributions_demo" does not exist
+12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error collecting metrics before: ERROR: relation "distributions_demo.call_arrivals" does not exist CONTEXT: unnamed portal parameter $1 = '...'
+12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error executing maintenance task 314: PostgreSQL maintenance failed: ERROR: schema "localization_demo" does not exist
+12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error collecting metrics before: ERROR: relation "localization_demo.users_mexico" does not exist CONTEXT: unnamed portal parameter $1 = '...'
+12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error executing maintenance task 311: PostgreSQL maintenance failed: ERROR: schema "banking" does not exist
+12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error collecting metrics before: ERROR: relation "banking.accounts" does not exist CONTEXT: unnamed portal parameter $1 = '...'
+12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error executing maintenance task 309: PostgreSQL maintenance failed: ERROR: schema "test_source" does not exist
+12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error collecting metrics before: ERROR: relation "test_source.products" does not exist CONTEXT: unnamed portal parameter $1 = '...'
+12/20/2025, 10:13:23 AM[ERROR][GOVERNANCE][discoverTables]Error discovering tables: Schema name and table name contain invalid characters
+12/20/2025, 10:13:22 AM[ERROR][QUALITY][validateTable]Schema and table names contain invalid characters
+12/20/2025, 10:13:22 AM[ERROR][QUALITY][validateTable]Schema and table names contain invalid characters
+12/20/2025, 10:13:18 AM[ERROR][TRANSFER][processAPIFullLoad]Error processing API Cats: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
+12/20/2025, 10:13:16 AM[ERROR][TRANSFER][createPostgreSQLTable]Error creating PostgreSQL table: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known 
 
-
+verificar en todos los lugares donde se use el status PENDING
     Mejoras implementadas
 Animaciones
 Fade-in al cargar nodos

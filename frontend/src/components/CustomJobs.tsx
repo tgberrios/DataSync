@@ -40,6 +40,7 @@ import { extractApiError } from '../utils/errorHandler';
 import { sanitizeSearch } from '../utils/validation';
 import styled from 'styled-components';
 import { theme } from '../theme/theme';
+import CustomJobsTreeView from './CustomJobsTreeView';
 
 const HeaderContent = styled.div`
   display: flex;
@@ -107,6 +108,8 @@ const CustomJobs = () => {
   const [data, setData] = useState<CustomJobEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [allJobs, setAllJobs] = useState<CustomJobEntry[]>([]);
+  const [loadingTree, setLoadingTree] = useState(false);
   const [pagination, setPagination] = useState({
     total: 0,
     totalPages: 0,
@@ -115,6 +118,7 @@ const CustomJobs = () => {
   });
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingJob, setEditingJob] = useState<CustomJobEntry | null>(null);
+  const [duplicateData, setDuplicateData] = useState<CustomJobEntry | null>(null);
   const [availableScripts, setAvailableScripts] = useState<Array<{name: string, content: string}>>([]);
   const [selectedScript, setSelectedScript] = useState<string>('');
   const [jobForm, setJobForm] = useState({
@@ -133,15 +137,15 @@ const CustomJobs = () => {
   });
   const isMountedRef = useRef(true);
 
-  const fetchJobs = useCallback(async () => {
+  const fetchAllJobs = useCallback(async () => {
     if (!isMountedRef.current) return;
     try {
-      setLoading(true);
+      setLoadingTree(true);
       setError(null);
       const sanitizedSearch = sanitizeSearch(search, 100);
       const params: any = {
-        page,
-        limit,
+        page: 1,
+        limit: 10000,
         search: sanitizedSearch
       };
       
@@ -152,13 +156,7 @@ const CustomJobs = () => {
       
       const response = await customJobsApi.getJobs(params);
       if (isMountedRef.current) {
-        setData(response.data || []);
-        setPagination(response.pagination || {
-          total: 0,
-          totalPages: 0,
-          currentPage: 1,
-          limit: 20
-        });
+        setAllJobs(response.data || []);
       }
     } catch (err) {
       if (isMountedRef.current) {
@@ -166,12 +164,10 @@ const CustomJobs = () => {
       }
     } finally {
       if (isMountedRef.current) {
-        setLoading(false);
+        setLoadingTree(false);
       }
     }
   }, [
-    page, 
-    limit, 
     filters.source_db_engine, 
     filters.target_db_engine, 
     filters.active, 
@@ -181,11 +177,17 @@ const CustomJobs = () => {
 
   useEffect(() => {
     isMountedRef.current = true;
-    fetchJobs();
+    fetchAllJobs();
+    const interval = setInterval(() => {
+      if (isMountedRef.current) {
+        fetchAllJobs();
+      }
+    }, 30000);
     return () => {
       isMountedRef.current = false;
+      clearInterval(interval);
     };
-  }, [fetchJobs]);
+  }, [fetchAllJobs]);
 
   const handleSearch = useCallback(() => {
     setSearch(searchInput);
@@ -206,25 +208,25 @@ const CustomJobs = () => {
   const handleToggleActive = useCallback(async (jobName: string, currentActive: boolean) => {
     try {
       await customJobsApi.updateActive(jobName, !currentActive);
-      fetchJobs();
+      fetchAllJobs();
     } catch (err) {
       if (isMountedRef.current) {
         setError(extractApiError(err));
       }
     }
-  }, [fetchJobs]);
+  }, [fetchAllJobs]);
 
   const handleExecute = useCallback(async (jobName: string) => {
     try {
       await customJobsApi.executeJob(jobName);
       alert(`Job "${jobName}" execution triggered. Check process_log for results.`);
-      fetchJobs();
+      fetchAllJobs();
     } catch (err) {
       if (isMountedRef.current) {
         setError(extractApiError(err));
       }
     }
-  }, [fetchJobs]);
+  }, [fetchAllJobs]);
 
   const handleDelete = useCallback(async (jobName: string) => {
     if (!confirm(`Are you sure you want to delete job "${jobName}"?`)) {
@@ -232,13 +234,13 @@ const CustomJobs = () => {
     }
     try {
       await customJobsApi.deleteJob(jobName);
-      fetchJobs();
+      fetchAllJobs();
     } catch (err) {
       if (isMountedRef.current) {
         setError(extractApiError(err));
       }
     }
-  }, [fetchJobs]);
+  }, [fetchAllJobs]);
 
   const loadScripts = useCallback(async () => {
     try {
@@ -249,25 +251,46 @@ const CustomJobs = () => {
     }
   }, []);
 
-  const handleOpenModal = useCallback((job?: CustomJobEntry) => {
+  const handleOpenModal = useCallback((job?: CustomJobEntry, isDuplicate?: boolean) => {
     if (job) {
-      setEditingJob(job);
-      setJobForm({
-        job_name: job.job_name,
-        description: job.description || '',
-        source_db_engine: job.source_db_engine,
-        source_connection_string: job.source_connection_string || '',
-        query_sql: job.query_sql || '',
-        target_db_engine: job.target_db_engine,
-        target_connection_string: job.target_connection_string || '',
-        target_schema: job.target_schema || '',
-        target_table: job.target_table || '',
-        schedule_cron: job.schedule_cron || '',
-        active: job.active,
-        enabled: job.enabled
-      });
+      if (isDuplicate) {
+        setEditingJob(null);
+        setDuplicateData(job);
+        setJobForm({
+          job_name: `${job.job_name} (Copy)`,
+          description: job.description || '',
+          source_db_engine: job.source_db_engine,
+          source_connection_string: job.source_connection_string || '',
+          query_sql: job.query_sql || '',
+          target_db_engine: job.target_db_engine,
+          target_connection_string: job.target_connection_string || '',
+          target_schema: job.target_schema || '',
+          target_table: job.target_table || '',
+          schedule_cron: job.schedule_cron || '',
+          active: job.active,
+          enabled: job.enabled
+        });
+      } else {
+        setEditingJob(job);
+        setDuplicateData(null);
+        setJobForm({
+          job_name: job.job_name,
+          description: job.description || '',
+          source_db_engine: job.source_db_engine,
+          source_connection_string: job.source_connection_string || '',
+          query_sql: job.query_sql || '',
+          target_db_engine: job.target_db_engine,
+          target_connection_string: job.target_connection_string || '',
+          target_schema: job.target_schema || '',
+          target_table: job.target_table || '',
+          schedule_cron: job.schedule_cron || '',
+          active: job.active,
+          enabled: job.enabled
+        });
+      }
     } else {
       setEditingJob(null);
+      setDuplicateData(null);
       setJobForm({
         job_name: '',
         description: '',
@@ -287,9 +310,14 @@ const CustomJobs = () => {
     setIsModalOpen(true);
   }, []);
 
+  const handleDuplicate = useCallback((job: CustomJobEntry) => {
+    handleOpenModal(job, true);
+  }, [handleOpenModal]);
+
   const handleCloseModal = useCallback(() => {
     setIsModalOpen(false);
     setEditingJob(null);
+    setDuplicateData(null);
     setSelectedScript('');
   }, []);
 
@@ -329,14 +357,14 @@ const CustomJobs = () => {
         throw new Error(error.error || error.details || 'Error saving job');
       }
       
-      await fetchJobs();
+      await fetchAllJobs();
       handleCloseModal();
     } catch (err) {
       if (isMountedRef.current) {
         setError(extractApiError(err));
       }
     }
-  }, [jobForm, fetchJobs, handleCloseModal]);
+  }, [jobForm, fetchAllJobs, handleCloseModal]);
 
   useEffect(() => {
     if (isModalOpen && jobForm.source_db_engine === 'Python') {
@@ -344,8 +372,13 @@ const CustomJobs = () => {
     }
   }, [isModalOpen, jobForm.source_db_engine, loadScripts]);
 
-  if (loading && data.length === 0) {
-    return <LoadingOverlay>Loading Custom Jobs...</LoadingOverlay>;
+  if (loadingTree && allJobs.length === 0) {
+    return (
+      <Container>
+        <Header>Custom Jobs</Header>
+        <LoadingOverlay>Loading Custom Jobs...</LoadingOverlay>
+      </Container>
+    );
   }
 
   return (
@@ -420,130 +453,24 @@ const CustomJobs = () => {
         </Select>
       </FiltersContainer>
 
-      <TableContainer>
-        <Table $minWidth="1600px">
-          <thead>
-            <tr>
-              <Th>Job Name</Th>
-              <Th>Description</Th>
-              <Th>Source Engine</Th>
-              <Th>Target Engine</Th>
-              <Th>Target Schema</Th>
-              <Th>Target Table</Th>
-              <Th>Schedule</Th>
-              <Th>Active</Th>
-              <Th>Enabled</Th>
-              <Th>Query Preview</Th>
-              <Th>Created</Th>
-              <Th>Updated</Th>
-              <Th>Actions</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.map((job) => (
-              <TableRow key={job.id}>
-                <Td>{job.job_name}</Td>
-                <Td title={job.description || ''}>
-                  {job.description ? (job.description.length > 50 ? job.description.substring(0, 50) + '...' : job.description) : '-'}
-                </Td>
-                <Td>{job.source_db_engine}</Td>
-                <Td>{job.target_db_engine}</Td>
-                <Td>{job.target_schema}</Td>
-                <Td>{job.target_table}</Td>
-                <Td>{job.schedule_cron || 'Manual'}</Td>
-                <Td>
-                  <ActiveBadge $active={job.active}>
-                    {job.active ? 'Yes' : 'No'}
-                  </ActiveBadge>
-                </Td>
-                <Td>
-                  <ActiveBadge $active={job.enabled}>
-                    {job.enabled ? 'Yes' : 'No'}
-                  </ActiveBadge>
-                </Td>
-                <Td>
-                  <QueryPreview title={job.query_sql}>
-                    {job.query_sql.length > 50 ? job.query_sql.substring(0, 50) + '...' : job.query_sql}
-                  </QueryPreview>
-                </Td>
-                <Td>
-                  {job.created_at
-                    ? format(new Date(job.created_at), 'yyyy-MM-dd HH:mm')
-                    : '-'}
-                </Td>
-                <Td>
-                  {job.updated_at
-                    ? format(new Date(job.updated_at), 'yyyy-MM-dd HH:mm')
-                    : '-'}
-                </Td>
-                <Td>
-                  <PlayButton
-                    onClick={() => handleExecute(job.job_name)}
-                    title={`Execute job: ${job.job_name}`}
-                  >
-                    ▶
-                  </PlayButton>
-                  <ActionButton
-                    onClick={() => handleOpenModal(job)}
-                  >
-                    Edit
-                  </ActionButton>
-                  <ActionButton
-                    onClick={() => handleToggleActive(job.job_name, job.active)}
-                  >
-                    {job.active ? 'Deactivate' : 'Activate'}
-                  </ActionButton>
-                  <ActionButton
-                    onClick={() => handleDelete(job.job_name)}
-                    $variant="danger"
-                  >
-                    Delete
-                  </ActionButton>
-                </Td>
-              </TableRow>
-            ))}
-            {!loading && data.length === 0 && (
-              <tr>
-                <td colSpan={13} style={{ textAlign: 'center', padding: '40px', color: theme.colors.text.secondary }}>
-                  No custom jobs found. Create a new job to get started.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </Table>
-      </TableContainer>
-
-      {pagination.totalPages > 1 && (
-        <>
-          <PaginationInfo>
-            Showing {((pagination.currentPage - 1) * pagination.limit) + 1} to{' '}
-            {Math.min(pagination.currentPage * pagination.limit, pagination.total)} of{' '}
-            {pagination.total} jobs
-          </PaginationInfo>
-          <Pagination>
-            <PageButton
-              onClick={() => setPage(Math.max(1, page - 1))}
-              disabled={page === 1}
-            >
-              Previous
-            </PageButton>
-            <span>
-              Page {pagination.currentPage} of {pagination.totalPages}
-            </span>
-            <PageButton
-              onClick={() => setPage(Math.min(pagination.totalPages, page + 1))}
-              disabled={page === pagination.totalPages}
-            >
-              Next
-            </PageButton>
-          </Pagination>
-        </>
+      {loadingTree ? (
+        <LoadingOverlay>Loading tree view...</LoadingOverlay>
+      ) : (
+        <CustomJobsTreeView 
+          jobs={allJobs}
+          onJobClick={(job) => handleOpenModal(job)}
+          onJobEdit={(job) => handleOpenModal(job)}
+          onJobExecute={handleExecute}
+          onJobToggleActive={handleToggleActive}
+          onJobDelete={handleDelete}
+          onJobDuplicate={handleDuplicate}
+        />
       )}
 
       <ModalOverlay $isOpen={isModalOpen} onClick={handleCloseModal}>
         <ModalContent onClick={(e) => e.stopPropagation()}>
           <ModalHeader>
-            <ModalTitle>{editingJob ? 'Edit Job' : 'Create New Job'}</ModalTitle>
+            <ModalTitle>{editingJob ? 'Edit Job' : duplicateData ? 'Duplicate Job' : 'Create New Job'}</ModalTitle>
             <CloseButton onClick={handleCloseModal}>×</CloseButton>
           </ModalHeader>
 

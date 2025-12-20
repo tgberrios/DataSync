@@ -22,10 +22,22 @@ api.interceptors.response.use(
     if (error.response?.status === 401) {
       const isLoginEndpoint = error.config?.url?.includes("/auth/login");
       if (!isLoginEndpoint) {
-        localStorage.removeItem("authToken");
-        localStorage.removeItem("authUser");
-        if (window.location.pathname !== "/login") {
-          window.location.href = "/login";
+        const errorMessage =
+          error.response?.data?.error || error.response?.data?.message || "";
+
+        if (
+          errorMessage.includes("Authentication required") ||
+          errorMessage.includes("Invalid token") ||
+          errorMessage.includes("Token expired")
+        ) {
+          localStorage.removeItem("authToken");
+          localStorage.removeItem("authUser");
+
+          if (window.location.pathname !== "/login") {
+            setTimeout(() => {
+              window.location.href = "/login";
+            }, 100);
+          }
         }
       }
     }

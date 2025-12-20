@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import styled from 'styled-components';
+import styled, { keyframes } from 'styled-components';
 import {
   Container,
   Header,
@@ -26,30 +26,99 @@ import { dataLineageMongoDBApi } from '../services/api';
 import { extractApiError } from '../utils/errorHandler';
 import { sanitizeSearch } from '../utils/validation';
 import { theme } from '../theme/theme';
+import DataLineageMongoDBTreeView from './DataLineageMongoDBTreeView';
+
+const fadeIn = keyframes`
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+`;
+
+const slideUp = keyframes`
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+`;
 
 const MetricsGrid = styled(Grid)`
   margin-bottom: ${theme.spacing.xxl};
-  animation: slideUp 0.25s ease-out;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  animation: ${slideUp} 0.4s cubic-bezier(0.4, 0, 0.2, 1);
   animation-delay: 0.1s;
   animation-fill-mode: both;
 `;
 
-const MetricCard = styled(Value)`
-  padding: ${theme.spacing.md};
-  min-height: 80px;
+const MetricCard = styled(Value)<{ $index?: number }>`
+  padding: ${theme.spacing.lg};
+  min-height: 100px;
+  background: linear-gradient(135deg, ${theme.colors.background.main} 0%, ${theme.colors.background.secondary} 100%);
+  border: 2px solid ${theme.colors.border.light};
+  border-left: 4px solid ${theme.colors.primary.main};
+  border-radius: ${theme.borderRadius.lg};
+  box-shadow: ${theme.shadows.md};
+  transition: all ${theme.transitions.normal};
+  animation: ${fadeIn} 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  animation-delay: ${props => (props.$index || 0) * 0.1}s;
+  animation-fill-mode: both;
+  position: relative;
+  overflow: hidden;
+  
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+    transition: left 0.5s;
+  }
+  
+  &:hover {
+    transform: translateY(-4px) scale(1.02);
+    box-shadow: ${theme.shadows.xl};
+    border-color: ${theme.colors.primary.main};
+    border-left-color: ${theme.colors.primary.dark};
+    
+    &::before {
+      left: 100%;
+    }
+  }
 `;
 
 const MetricLabel = styled.div`
-  font-size: 0.85em;
+  font-size: 0.9em;
   color: ${theme.colors.text.secondary};
-  margin-bottom: ${theme.spacing.xs};
-  font-weight: 500;
+  margin-bottom: ${theme.spacing.sm};
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 `;
 
 const MetricValue = styled.div`
-  font-size: 1.5em;
-  font-weight: bold;
-  color: ${theme.colors.text.primary};
+  font-size: 2.2em;
+  font-weight: 700;
+  color: ${theme.colors.primary.main};
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  background: linear-gradient(135deg, ${theme.colors.primary.main} 0%, ${theme.colors.primary.light} 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 `;
 
 const TableActions = styled.div`
@@ -58,6 +127,20 @@ const TableActions = styled.div`
   align-items: center;
   margin-bottom: ${theme.spacing.md};
   gap: ${theme.spacing.sm};
+  padding: ${theme.spacing.md};
+  background: linear-gradient(135deg, ${theme.colors.background.secondary} 0%, ${theme.colors.background.tertiary} 100%);
+  border-radius: ${theme.borderRadius.md};
+  border: 1px solid ${theme.colors.border.light};
+  border-left: 4px solid ${theme.colors.primary.main};
+  box-shadow: ${theme.shadows.sm};
+  animation: ${slideUp} 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  transition: all ${theme.transitions.normal};
+  
+  &:hover {
+    box-shadow: ${theme.shadows.md};
+    transform: translateY(-1px);
+  }
 `;
 
 const ExportButton = styled(Button)`
@@ -66,6 +149,13 @@ const ExportButton = styled(Button)`
   display: flex;
   align-items: center;
   gap: 6px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  transition: all ${theme.transitions.normal};
+  
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: ${theme.shadows.md};
+  }
 `;
 
 const SortableTh = styled(Th)<{ $sortable?: boolean; $active?: boolean; $direction?: "asc" | "desc" }>`
@@ -95,29 +185,61 @@ const SortableTh = styled(Th)<{ $sortable?: boolean; $active?: boolean; $directi
 `;
 
 const Badge = styled.span<{ $type?: string; $level?: number }>`
-  padding: 4px 10px;
+  padding: 6px 12px;
   border-radius: ${theme.borderRadius.md};
-  font-size: 0.75em;
-  font-weight: 500;
-  display: inline-block;
+  font-size: 0.8em;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   transition: all ${theme.transitions.normal};
+  border: 2px solid transparent;
+  box-shadow: ${theme.shadows.sm};
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  position: relative;
+  overflow: hidden;
   
   ${props => {
     if (props.$type) {
-      return `background-color: ${theme.colors.background.secondary}; color: ${theme.colors.text.primary};`;
+      return `
+        background: linear-gradient(135deg, ${theme.colors.background.secondary} 0%, ${theme.colors.background.tertiary} 100%);
+        color: ${theme.colors.text.primary};
+        border-color: ${theme.colors.border.medium};
+      `;
     }
     if (props.$level !== undefined) {
-      if (props.$level === 0) return `background-color: ${theme.colors.status.success.bg}; color: ${theme.colors.status.success.text};`;
-      if (props.$level === 1) return `background-color: ${theme.colors.status.warning.bg}; color: ${theme.colors.status.warning.text};`;
-      if (props.$level === 2) return `background-color: ${theme.colors.status.error.bg}; color: ${theme.colors.status.error.text};`;
-      return `background-color: ${theme.colors.background.secondary}; color: ${theme.colors.text.secondary};`;
+      if (props.$level === 0) return `
+        background: linear-gradient(135deg, ${theme.colors.status.success.bg} 0%, ${theme.colors.status.success.text}15 100%);
+        color: ${theme.colors.status.success.text};
+        border-color: ${theme.colors.status.success.text}40;
+      `;
+      if (props.$level === 1) return `
+        background: linear-gradient(135deg, ${theme.colors.status.warning.bg} 0%, ${theme.colors.status.warning.text}15 100%);
+        color: ${theme.colors.status.warning.text};
+        border-color: ${theme.colors.status.warning.text}40;
+      `;
+      if (props.$level === 2) return `
+        background: linear-gradient(135deg, ${theme.colors.status.error.bg} 0%, ${theme.colors.status.error.text}15 100%);
+        color: ${theme.colors.status.error.text};
+        border-color: ${theme.colors.status.error.text}40;
+      `;
+      return `
+        background: ${theme.colors.background.secondary};
+        color: ${theme.colors.text.secondary};
+        border-color: ${theme.colors.border.medium};
+      `;
     }
-    return `background-color: ${theme.colors.background.secondary}; color: ${theme.colors.text.secondary};`;
+    return `
+      background: ${theme.colors.background.secondary};
+      color: ${theme.colors.text.secondary};
+      border-color: ${theme.colors.border.medium};
+    `;
   }}
   
   &:hover {
-    transform: scale(1.05);
-    box-shadow: ${theme.shadows.sm};
+    transform: translateY(-2px) scale(1.08);
+    box-shadow: ${theme.shadows.lg};
+    border-width: 2px;
   }
 `;
 
@@ -128,10 +250,80 @@ const RelationshipArrow = styled.div`
   color: ${theme.colors.primary.main};
   font-weight: bold;
   font-size: 1.2em;
+  transition: all ${theme.transitions.normal};
+  
+  &:hover {
+    transform: scale(1.2);
+    color: ${theme.colors.primary.dark};
+  }
+`;
+
+const StyledTableRow = styled(TableRow)<{ $delay?: number }>`
+  transition: all ${theme.transitions.normal};
+  animation: ${fadeIn} 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  animation-delay: ${props => (props.$delay || 0) * 0.05}s;
+  animation-fill-mode: both;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  border-left: 3px solid transparent;
+  position: relative;
+  
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 0;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(13, 27, 42, 0.05), transparent);
+    transition: width 0.3s;
+  }
+  
+  &:hover {
+    background: linear-gradient(135deg, ${theme.colors.background.secondary} 0%, ${theme.colors.background.tertiary} 100%) !important;
+    transform: translateX(4px) scale(1.01);
+    box-shadow: ${theme.shadows.md};
+    border-left-color: ${theme.colors.primary.main};
+    
+    &::before {
+      width: 100%;
+    }
+  }
+  
+  &:active {
+    transform: translateX(2px) scale(0.99);
+  }
+`;
+
+const StyledTableContainer = styled(TableContainer)`
+  border-radius: ${theme.borderRadius.lg};
+  border: 1px solid ${theme.colors.border.light};
+  box-shadow: ${theme.shadows.md};
+  background: ${theme.colors.background.main};
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  
+  &::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  
+  &::-webkit-scrollbar-track {
+    background: ${theme.colors.background.secondary};
+    border-radius: ${theme.borderRadius.sm};
+  }
+  
+  &::-webkit-scrollbar-thumb {
+    background: ${theme.colors.border.medium};
+    border-radius: ${theme.borderRadius.sm};
+    transition: background ${theme.transitions.normal};
+    
+    &:hover {
+      background: ${theme.colors.primary.main};
+    }
+  }
 `;
 
 const LineageDetails = styled.div<{ $isOpen: boolean }>`
-  max-height: ${props => props.$isOpen ? '600px' : '0'};
+  max-height: ${props => props.$isOpen ? '700px' : '0'};
   opacity: ${props => props.$isOpen ? '1' : '0'};
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   border-top: ${props => props.$isOpen ? `1px solid ${theme.colors.border.light}` : 'none'};
@@ -197,6 +389,9 @@ const DataLineageMongoDB = () => {
   });
   const [servers, setServers] = useState<string[]>([]);
   const [databases, setDatabases] = useState<string[]>([]);
+  const [viewMode, setViewMode] = useState<"table" | "tree">("tree");
+  const [allEdges, setAllEdges] = useState<any[]>([]);
+  const [loadingTree, setLoadingTree] = useState(false);
   const isMountedRef = useRef(true);
 
   const fetchData = useCallback(async () => {
@@ -246,19 +441,66 @@ const DataLineageMongoDB = () => {
     filters.search
   ]);
 
+  const fetchAllEdges = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    try {
+      setLoadingTree(true);
+      setError(null);
+      const sanitizedSearch = sanitizeSearch(filters.search as string, 100);
+      const lineageData = await dataLineageMongoDBApi.getMongoDBLineage({
+        page: 1,
+        limit: 10000,
+        server_name: filters.server_name as string,
+        database_name: filters.database_name as string,
+        relationship_type: filters.relationship_type as string,
+        search: sanitizedSearch
+      });
+      if (isMountedRef.current) {
+        setAllEdges(lineageData.data || []);
+      }
+    } catch (err) {
+      if (isMountedRef.current) {
+        setError(extractApiError(err));
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setLoadingTree(false);
+      }
+    }
+  }, [
+    filters.server_name,
+    filters.database_name,
+    filters.relationship_type,
+    filters.search
+  ]);
+
   useEffect(() => {
     isMountedRef.current = true;
-    fetchData();
+    if (viewMode === "table") {
+      fetchData();
+    } else {
+      fetchAllEdges();
+    }
     const interval = setInterval(() => {
       if (isMountedRef.current) {
-        fetchData();
+        if (viewMode === "table") {
+          fetchData();
+        } else {
+          fetchAllEdges();
+        }
       }
     }, 30000);
     return () => {
       isMountedRef.current = false;
       clearInterval(interval);
     };
-  }, [fetchData]);
+  }, [fetchData, fetchAllEdges, viewMode]);
+
+  useEffect(() => {
+    if (viewMode === "tree") {
+      fetchAllEdges();
+    }
+  }, [viewMode, fetchAllEdges]);
 
   useEffect(() => {
     const fetchDatabases = async () => {
@@ -371,7 +613,7 @@ const DataLineageMongoDB = () => {
     document.body.removeChild(link);
   }, [sortedLineage, formatConfidence]);
 
-  if (loading && lineage.length === 0) {
+  if ((loading && lineage.length === 0 && viewMode === "table") || (loadingTree && allEdges.length === 0 && viewMode === "tree")) {
     return (
       <Container>
         <Header>Data Lineage - MongoDB</Header>
@@ -387,24 +629,39 @@ const DataLineageMongoDB = () => {
       {error && <ErrorMessage>{error}</ErrorMessage>}
       
       <MetricsGrid $columns="repeat(auto-fit, minmax(180px, 1fr))">
-        <MetricCard>
-          <MetricLabel>Total Relationships</MetricLabel>
+        <MetricCard $index={0}>
+          <MetricLabel>
+            <span>→</span>
+            Total Relationships
+          </MetricLabel>
           <MetricValue>{metrics.total_relationships || 0}</MetricValue>
         </MetricCard>
-        <MetricCard>
-          <MetricLabel>Unique Collections</MetricLabel>
+        <MetricCard $index={1}>
+          <MetricLabel>
+            <span>■</span>
+            Unique Collections
+          </MetricLabel>
           <MetricValue>{metrics.unique_collections || 0}</MetricValue>
         </MetricCard>
-        <MetricCard>
-          <MetricLabel>Unique Servers</MetricLabel>
+        <MetricCard $index={2}>
+          <MetricLabel>
+            <span>■</span>
+            Unique Servers
+          </MetricLabel>
           <MetricValue>{metrics.unique_servers || 0}</MetricValue>
         </MetricCard>
-        <MetricCard>
-          <MetricLabel>High Confidence</MetricLabel>
+        <MetricCard $index={3}>
+          <MetricLabel>
+            <span>✓</span>
+            High Confidence
+          </MetricLabel>
           <MetricValue>{metrics.high_confidence || 0}</MetricValue>
         </MetricCard>
-        <MetricCard>
-          <MetricLabel>Avg Confidence</MetricLabel>
+        <MetricCard $index={4}>
+          <MetricLabel>
+            <span>%</span>
+            Avg Confidence
+          </MetricLabel>
           <MetricValue>{metrics.avg_confidence ? `${(Number(metrics.avg_confidence) * 100).toFixed(1)}%` : 'N/A'}</MetricValue>
         </MetricCard>
       </MetricsGrid>
@@ -464,15 +721,43 @@ const DataLineageMongoDB = () => {
 
       <TableActions>
         <PaginationInfo>
-          Showing {sortedLineage.length} of {pagination.total} relationships (Page{" "}
-          {pagination.currentPage} of {pagination.totalPages})
+          {viewMode === "table" 
+            ? `Showing ${sortedLineage.length} of ${pagination.total} relationships (Page ${pagination.currentPage} of ${pagination.totalPages})`
+            : `Total: ${allEdges.length} relationships`
+          }
         </PaginationInfo>
-        <ExportButton $variant="secondary" onClick={handleExportCSV}>
-          Export CSV
-        </ExportButton>
+        <div style={{ display: 'flex', gap: theme.spacing.sm, alignItems: 'center' }}>
+          <Button
+            $variant={viewMode === "table" ? "primary" : "secondary"}
+            onClick={() => setViewMode("table")}
+            style={{ padding: "6px 12px", fontSize: "0.85em" }}
+          >
+            Table View
+          </Button>
+          <Button
+            $variant={viewMode === "tree" ? "primary" : "secondary"}
+            onClick={() => {
+              setViewMode("tree");
+              fetchAllEdges();
+            }}
+            style={{ padding: "6px 12px", fontSize: "0.85em" }}
+          >
+            Tree View
+          </Button>
+          <ExportButton $variant="secondary" onClick={handleExportCSV}>
+            Export CSV
+          </ExportButton>
+        </div>
       </TableActions>
 
-      <TableContainer>
+      {viewMode === "tree" ? (
+        loadingTree ? (
+          <LoadingOverlay>Loading tree view...</LoadingOverlay>
+        ) : (
+          <DataLineageMongoDBTreeView edges={allEdges} onEdgeClick={(edge) => toggleEdge(edge.id)} />
+        )
+      ) : (
+        <StyledTableContainer>
         <Table $minWidth="1400px">
           <thead>
             <tr>
@@ -546,14 +831,33 @@ const DataLineageMongoDB = () => {
           <tbody>
             {sortedLineage.length === 0 ? (
               <TableRow>
-                <Td colSpan={9} style={{ padding: '40px', textAlign: 'center', color: theme.colors.text.secondary }}>
-                  No lineage data available. Lineage relationships will appear here once extracted.
+                <Td colSpan={9} style={{ padding: '60px 40px', textAlign: 'center', color: theme.colors.text.secondary }}>
+                  <div style={{ 
+                    fontSize: '3em', 
+                    marginBottom: theme.spacing.md,
+                    animation: `${fadeIn} 0.5s ease-out`,
+                    fontFamily: "'Courier New', monospace",
+                    opacity: 0.5
+                  }}>
+                    →
+                  </div>
+                  <div style={{ 
+                    fontSize: '1.1em',
+                    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen", "Ubuntu", "Cantarell", sans-serif',
+                    fontWeight: 500,
+                    marginBottom: theme.spacing.sm
+                  }}>
+                    No lineage data available
+                  </div>
+                  <div style={{ fontSize: '0.9em', opacity: 0.7 }}>
+                    Lineage relationships will appear here once extracted.
+                  </div>
                 </Td>
               </TableRow>
             ) : (
-              sortedLineage.map((edge) => (
+              sortedLineage.map((edge, index) => (
                 <React.Fragment key={edge.id}>
-                  <TableRow onClick={() => toggleEdge(edge.id)} style={{ cursor: 'pointer' }}>
+                  <StyledTableRow onClick={() => toggleEdge(edge.id)} style={{ cursor: 'pointer' }} $delay={index}>
                     <Td>
                       <strong style={{ color: theme.colors.primary.main }}>
                         {edge.source_collection || 'N/A'}
@@ -594,7 +898,7 @@ const DataLineageMongoDB = () => {
                     <Td style={{ color: theme.colors.text.secondary }}>
                       {edge.discovery_method || 'N/A'}
                     </Td>
-                  </TableRow>
+                  </StyledTableRow>
                   {openEdgeId === edge.id && (
                     <TableRow>
                       <Td colSpan={9} style={{ padding: 0, border: 'none' }}>
@@ -642,9 +946,10 @@ const DataLineageMongoDB = () => {
             )}
           </tbody>
         </Table>
-      </TableContainer>
+      </StyledTableContainer>
+      )}
 
-      {pagination.totalPages > 1 && (
+      {viewMode === "table" && pagination.totalPages > 1 && (
         <Pagination>
           <PageButton
             onClick={() => setPage(Math.max(1, page - 1))}

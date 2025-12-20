@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { format } from 'date-fns';
 import AddAPIModal from './AddAPIModal';
+import APICatalogTreeView from './APICatalogTreeView';
 import {
   Container,
   Header,
@@ -66,6 +67,9 @@ const APICatalog = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [duplicateData, setDuplicateData] = useState<any>(null);
+  const [allEntries, setAllEntries] = useState<APICatalogEntry[]>([]);
+  const [loadingTree, setLoadingTree] = useState(false);
   const [pagination, setPagination] = useState({
     total: 0,
     totalPages: 0,
@@ -115,13 +119,51 @@ const APICatalog = () => {
     search
   ]);
 
+  const fetchAllEntries = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    try {
+      setLoadingTree(true);
+      setError(null);
+      const sanitizedSearch = sanitizeSearch(search, 100);
+      const params: any = {
+        page: 1,
+        limit: 10000,
+        search: sanitizedSearch
+      };
+      
+      if (filters.api_type) params.api_type = filters.api_type;
+      if (filters.target_db_engine) params.target_db_engine = filters.target_db_engine;
+      if (filters.status) params.status = filters.status;
+      if (filters.active) params.active = filters.active;
+      
+      const response = await apiCatalogApi.getAPIs(params);
+      if (isMountedRef.current) {
+        setAllEntries(response.data || []);
+      }
+    } catch (err) {
+      if (isMountedRef.current) {
+        setError(extractApiError(err));
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setLoadingTree(false);
+      }
+    }
+  }, [filters.api_type, filters.target_db_engine, filters.status, filters.active, search]);
+
   useEffect(() => {
     isMountedRef.current = true;
-    fetchData();
+    fetchAllEntries();
+    const interval = setInterval(() => {
+      if (isMountedRef.current && !showAddModal) {
+        fetchAllEntries();
+      }
+    }, 30000);
     return () => {
       isMountedRef.current = false;
+      clearInterval(interval);
     };
-  }, [fetchData]);
+  }, [fetchAllEntries, showAddModal]);
 
   const handleSearch = useCallback(() => {
     setSearch(searchInput);
@@ -145,12 +187,16 @@ const APICatalog = () => {
         setLoading(true);
         setError(null);
         await apiCatalogApi.createAPI(newEntry);
-        await fetchData();
+        await fetchAllEntries();
         setShowAddModal(false);
         alert(`API "${newEntry.api_name}" added successfully.`);
-      } catch (err) {
+      } catch (err: any) {
         if (isMountedRef.current) {
-          setError(extractApiError(err));
+          if (err.message && err.message.includes('Network Error')) {
+            setError('Network error. Please check if the server is running and try again.');
+          } else {
+            setError(extractApiError(err));
+          }
         }
       } finally {
         if (isMountedRef.current) {
@@ -158,22 +204,32 @@ const APICatalog = () => {
         }
       }
     },
-    [fetchData]
+    [fetchAllEntries]
   );
 
   const handleToggleActive = useCallback(async (apiName: string, currentActive: boolean) => {
     try {
       await apiCatalogApi.updateActive(apiName, !currentActive);
-      fetchData();
+      fetchAllEntries();
     } catch (err) {
       if (isMountedRef.current) {
         setError(extractApiError(err));
       }
     }
-  }, [fetchData]);
+  }, [fetchAllEntries]);
 
-  if (loading && data.length === 0) {
-    return <LoadingOverlay>Loading API Catalog...</LoadingOverlay>;
+  const handleDuplicate = useCallback((entry: APICatalogEntry) => {
+    setDuplicateData(entry);
+    setShowAddModal(true);
+  }, []);
+
+  if (loadingTree && allEntries.length === 0) {
+    return (
+      <Container>
+        <Header>API Catalog</Header>
+        <LoadingOverlay>Loading API Catalog...</LoadingOverlay>
+      </Container>
+    );
   }
 
   return (
@@ -200,7 +256,6 @@ const APICatalog = () => {
         <Button
           $variant="primary"
           onClick={() => setShowAddModal(true)}
-          style={{ marginRight: 'auto' }}
         >
           Add API
         </Button>
@@ -248,108 +303,24 @@ const APICatalog = () => {
         </Select>
       </FiltersContainer>
 
-      <TableContainer>
-        <Table $minWidth="1400px">
-          <thead>
-            <tr>
-              <Th>API Name</Th>
-              <Th>API Type</Th>
-              <Th>Endpoint</Th>
-              <Th>Method</Th>
-              <Th>Auth Type</Th>
-              <Th>Target Engine</Th>
-              <Th>Target Schema</Th>
-              <Th>Target Table</Th>
-              <Th>Status</Th>
-              <Th>Active</Th>
-              <Th>Sync Interval</Th>
-              <Th>Last Sync</Th>
-              <Th>Last Status</Th>
-              <Th>Actions</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.map((entry) => (
-              <TableRow key={entry.id}>
-                <Td>{entry.api_name}</Td>
-                <Td>{entry.api_type}</Td>
-                <Td title={entry.base_url + entry.endpoint}>
-                  {entry.endpoint}
-                </Td>
-                <Td>{entry.http_method}</Td>
-                <Td>{entry.auth_type}</Td>
-                <Td>{entry.target_db_engine}</Td>
-                <Td>{entry.target_schema}</Td>
-                <Td>{entry.target_table}</Td>
-                <Td>
-                  <StatusBadge $status={entry.status}>
-                    {entry.status}
-                  </StatusBadge>
-                </Td>
-                <Td>
-                  <ActiveBadge $active={entry.active}>
-                    {entry.active ? 'Yes' : 'No'}
-                  </ActiveBadge>
-                </Td>
-                <Td>{entry.sync_interval}s</Td>
-                <Td>
-                  {entry.last_sync_time
-                    ? format(new Date(entry.last_sync_time), 'yyyy-MM-dd HH:mm:ss')
-                    : 'Never'}
-                </Td>
-                <Td>
-                  {entry.last_sync_status ? (
-                    <StatusBadge $status={entry.last_sync_status}>
-                      {entry.last_sync_status}
-                    </StatusBadge>
-                  ) : (
-                    '-'
-                  )}
-                </Td>
-                <Td>
-                  <ActionButton
-                    onClick={() => handleToggleActive(entry.api_name, entry.active)}
-                  >
-                    {entry.active ? 'Deactivate' : 'Activate'}
-                  </ActionButton>
-                </Td>
-              </TableRow>
-            ))}
-          </tbody>
-        </Table>
-      </TableContainer>
-
-      {pagination.totalPages > 1 && (
-        <>
-          <PaginationInfo>
-            Showing {((pagination.currentPage - 1) * pagination.limit) + 1} to{' '}
-            {Math.min(pagination.currentPage * pagination.limit, pagination.total)} of{' '}
-            {pagination.total} APIs
-          </PaginationInfo>
-          <Pagination>
-            <PageButton
-              onClick={() => setPage(Math.max(1, page - 1))}
-              disabled={page === 1}
-            >
-              Previous
-            </PageButton>
-            <span>
-              Page {pagination.currentPage} of {pagination.totalPages}
-            </span>
-            <PageButton
-              onClick={() => setPage(Math.min(pagination.totalPages, page + 1))}
-              disabled={page === pagination.totalPages}
-            >
-              Next
-            </PageButton>
-          </Pagination>
-        </>
+      {loadingTree ? (
+        <LoadingOverlay>Loading tree view...</LoadingOverlay>
+      ) : (
+        <APICatalogTreeView 
+          entries={allEntries}
+          onEntryClick={(entry) => handleToggleActive(entry.api_name, entry.active)}
+          onDuplicate={handleDuplicate}
+        />
       )}
 
       {showAddModal && (
         <AddAPIModal
-          onClose={() => setShowAddModal(false)}
+          onClose={() => {
+            setShowAddModal(false);
+            setDuplicateData(null);
+          }}
           onSave={handleAdd}
+          initialData={duplicateData}
         />
       )}
     </Container>

@@ -12,14 +12,12 @@ const LoadingFallback = () => (
 
 const Dashboard = lazy(() => import("./components/Dashboard"));
 const Catalog = lazy(() => import("./components/Catalog"));
-const Monitor = lazy(() => import("./components/Monitor"));
-const LiveChanges = lazy(() => import("./components/LiveChanges"));
+const UnifiedMonitor = lazy(() => import("./components/UnifiedMonitor"));
 const Quality = lazy(() => import("./components/Quality"));
 const Governance = lazy(() => import("./components/Governance"));
 const Security = lazy(() => import("./components/Security"));
 const LogsViewer = lazy(() => import("./components/LogsViewer"));
 const Config = lazy(() => import("./components/Config"));
-const QueryPerformance = lazy(() => import("./components/QueryPerformance"));
 const Maintenance = lazy(() => import("./components/Maintenance"));
 const ColumnCatalog = lazy(() => import("./components/ColumnCatalog"));
 const CatalogLocks = lazy(() => import("./components/CatalogLocks"));
@@ -199,7 +197,7 @@ function App() {
             element={
               <ProtectedRoute>
                 <Suspense fallback={<LoadingFallback />}>
-                  <Monitor />
+                  <UnifiedMonitor />
                 </Suspense>
               </ProtectedRoute>
             }
@@ -209,7 +207,7 @@ function App() {
             element={
               <ProtectedRoute>
                 <Suspense fallback={<LoadingFallback />}>
-                  <QueryPerformance />
+                  <UnifiedMonitor />
                 </Suspense>
               </ProtectedRoute>
             }
@@ -229,7 +227,7 @@ function App() {
             element={
               <ProtectedRoute>
                 <Suspense fallback={<LoadingFallback />}>
-                  <LiveChanges />
+                  <UnifiedMonitor />
                 </Suspense>
               </ProtectedRoute>
             }

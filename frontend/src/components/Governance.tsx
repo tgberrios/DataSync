@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import styled from 'styled-components';
+import styled, { keyframes } from 'styled-components';
 import {
   Container,
   Header,
@@ -15,13 +15,35 @@ import {
   Td,
   TableRow,
   Button,
-  StatusBadge,
 } from './shared/BaseComponents';
 import { usePagination } from '../hooks/usePagination';
 import { useTableFilters } from '../hooks/useTableFilters';
 import { governanceApi } from '../services/api';
 import { extractApiError } from '../utils/errorHandler';
 import { theme } from '../theme/theme';
+import GovernanceTreeView from './GovernanceTreeView';
+
+const fadeIn = keyframes`
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+`;
+
+const slideUp = keyframes`
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+`;
 
 const TableActions = styled.div`
   display: flex;
@@ -29,6 +51,20 @@ const TableActions = styled.div`
   align-items: center;
   margin-bottom: ${theme.spacing.md};
   gap: ${theme.spacing.sm};
+  padding: ${theme.spacing.md};
+  background: linear-gradient(135deg, ${theme.colors.background.secondary} 0%, ${theme.colors.background.tertiary} 100%);
+  border-radius: ${theme.borderRadius.md};
+  border: 1px solid ${theme.colors.border.light};
+  border-left: 4px solid ${theme.colors.primary.main};
+  box-shadow: ${theme.shadows.sm};
+  animation: ${slideUp} 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  transition: all ${theme.transitions.normal};
+  
+  &:hover {
+    box-shadow: ${theme.shadows.md};
+    transform: translateY(-1px);
+  }
 `;
 
 const ExportButton = styled(Button)`
@@ -37,6 +73,13 @@ const ExportButton = styled(Button)`
   display: flex;
   align-items: center;
   gap: 6px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  transition: all ${theme.transitions.normal};
+  
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: ${theme.shadows.md};
+  }
 `;
 
 const PaginationInfo = styled.div`
@@ -44,7 +87,7 @@ const PaginationInfo = styled.div`
   margin-bottom: ${theme.spacing.sm};
   color: ${theme.colors.text.secondary};
   font-size: 0.9em;
-  animation: fadeIn 0.25s ease-in;
+  animation: ${fadeIn} 0.25s ease-in;
 `;
 
 const SortableTh = styled(Th)<{ $sortable?: boolean; $active?: boolean; $direction?: "asc" | "desc" }>`
@@ -126,85 +169,76 @@ const DetailValue = styled.div`
   color: ${theme.colors.text.primary};
 `;
 
-const Badge = styled.span<{ type: string }>`
-  padding: 4px 10px;
+const Badge = styled.span<{ $status?: string; $type?: string; $level?: number; type?: string }>`
+  padding: 6px 12px;
   border-radius: ${theme.borderRadius.md};
-  font-size: 0.9em;
-  font-weight: 500;
-  display: inline-block;
+  font-size: 0.8em;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   transition: all ${theme.transitions.normal};
+  border: 2px solid transparent;
+  box-shadow: ${theme.shadows.sm};
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  position: relative;
+  overflow: hidden;
+  
+  ${props => {
+    const badgeType = props.$status || props.$type || props.type || '';
+    if (badgeType === 'EXCELLENT' || badgeType === 'HEALTHY') {
+      return `
+        background: linear-gradient(135deg, ${theme.colors.status.success.bg} 0%, ${theme.colors.status.success.text}15 100%);
+        color: ${theme.colors.status.success.text};
+        border-color: ${theme.colors.status.success.text}40;
+      `;
+    }
+    if (badgeType === 'WARNING') {
+      return `
+        background: linear-gradient(135deg, ${theme.colors.status.warning.bg} 0%, ${theme.colors.status.warning.text}15 100%);
+        color: ${theme.colors.status.warning.text};
+        border-color: ${theme.colors.status.warning.text}40;
+      `;
+    }
+    if (badgeType === 'CRITICAL' || badgeType === 'EMERGENCY') {
+      return `
+        background: linear-gradient(135deg, ${theme.colors.status.error.bg} 0%, ${theme.colors.status.error.text}15 100%);
+        color: ${theme.colors.status.error.text};
+        border-color: ${theme.colors.status.error.text}40;
+      `;
+    }
+    if (props.$level !== undefined) {
+      if (props.$level === 0) return `
+        background: linear-gradient(135deg, ${theme.colors.status.success.bg} 0%, ${theme.colors.status.success.text}15 100%);
+        color: ${theme.colors.status.success.text};
+        border-color: ${theme.colors.status.success.text}40;
+      `;
+      if (props.$level === 1) return `
+        background: linear-gradient(135deg, ${theme.colors.status.warning.bg} 0%, ${theme.colors.status.warning.text}15 100%);
+        color: ${theme.colors.status.warning.text};
+        border-color: ${theme.colors.status.warning.text}40;
+      `;
+      if (props.$level === 2) return `
+        background: linear-gradient(135deg, ${theme.colors.status.error.bg} 0%, ${theme.colors.status.error.text}15 100%);
+        color: ${theme.colors.status.error.text};
+        border-color: ${theme.colors.status.error.text}40;
+      `;
+    }
+    return `
+      background: linear-gradient(135deg, ${theme.colors.background.secondary} 0%, ${theme.colors.background.tertiary} 100%);
+      color: ${theme.colors.text.primary};
+      border-color: ${theme.colors.border.medium};
+    `;
+  }}
   
   &:hover {
-    transform: scale(1.05);
-    box-shadow: ${theme.shadows.sm};
+    transform: translateY(-2px) scale(1.08);
+    box-shadow: ${theme.shadows.lg};
+    border-width: 2px;
   }
-  background-color: ${props => {
-    switch (props.type) {
-      case 'EXCELLENT': return theme.colors.status.success.bg;
-      case 'HEALTHY': return theme.colors.status.success.bg;
-      case 'WARNING': return theme.colors.status.warning.bg;
-      case 'CRITICAL': return theme.colors.status.error.bg;
-      case 'EMERGENCY': return '#fce4ec';
-      case 'REAL_TIME': return '#e1f5fe';
-      case 'HIGH': return '#e3f2fd';
-      case 'MEDIUM': return '#f3e5f5';
-      case 'LOW': return theme.colors.background.secondary;
-      case 'RARE': return theme.colors.background.secondary;
-      case 'ARCHIVED': return '#eeeeee';
-      case 'PUBLIC_SENSITIVITY': return '#f1f8e9';
-      case 'LOW_SENSITIVITY': return '#f1f8e9';
-      case 'MEDIUM_SENSITIVITY': return theme.colors.status.warning.bg;
-      case 'HIGH_SENSITIVITY': return theme.colors.status.error.bg;
-      case 'CRITICAL_SENSITIVITY': return '#fce4ec';
-      case 'TRANSACTIONAL': return '#e8eaf6';
-      case 'ANALYTICAL': return '#f3e5f5';
-      case 'REFERENCE': return '#e0f2f1';
-      case 'MASTER_DATA': return theme.colors.status.success.bg;
-      case 'OPERATIONAL': return theme.colors.status.warning.bg;
-      case 'TEMPORAL': return '#e1f5fe';
-      case 'GEOSPATIAL': return '#f1f8e9';
-      case 'FINANCIAL': return theme.colors.status.error.bg;
-      case 'COMPLIANCE': return '#fce4ec';
-      case 'TECHNICAL': return theme.colors.background.secondary;
-      case 'SPORTS': return '#e3f2fd';
-      default: return theme.colors.background.secondary;
-    }
-  }};
-  color: ${props => {
-    switch (props.type) {
-      case 'EXCELLENT': return '#1b5e20';
-      case 'HEALTHY': return '#2e7d32';
-      case 'WARNING': return theme.colors.status.warning.text;
-      case 'CRITICAL': return theme.colors.status.error.text;
-      case 'EMERGENCY': return '#ad1457';
-      case 'REAL_TIME': return '#0277bd';
-      case 'HIGH': return '#1565c0';
-      case 'MEDIUM': return '#6a1b9a';
-      case 'LOW': return '#616161';
-      case 'RARE': return '#757575';
-      case 'ARCHIVED': return '#9e9e9e';
-      case 'PUBLIC_SENSITIVITY': return '#388e3c';
-      case 'LOW_SENSITIVITY': return '#558b2f';
-      case 'MEDIUM_SENSITIVITY': return theme.colors.status.warning.text;
-      case 'HIGH_SENSITIVITY': return theme.colors.status.error.text;
-      case 'CRITICAL_SENSITIVITY': return '#ad1457';
-      case 'TRANSACTIONAL': return '#3949ab';
-      case 'ANALYTICAL': return '#7b1fa2';
-      case 'REFERENCE': return '#00796b';
-      case 'MASTER_DATA': return '#2e7d32';
-      case 'OPERATIONAL': return '#f57c00';
-      case 'TEMPORAL': return '#0277bd';
-      case 'GEOSPATIAL': return '#388e3c';
-      case 'FINANCIAL': return '#d32f2f';
-      case 'COMPLIANCE': return '#c2185b';
-      case 'TECHNICAL': return '#616161';
-      case 'SPORTS': return '#1976d2';
-      default: return theme.colors.text.secondary;
-    }
-  }};
 `;
 
-const QualityScore = styled.span<{ score: number }>`
+const QualityScore = styled.span<{ $score: number }>`
   padding: 4px 10px;
   border-radius: ${theme.borderRadius.md};
   font-size: 0.9em;
@@ -217,15 +251,15 @@ const QualityScore = styled.span<{ score: number }>`
     box-shadow: ${theme.shadows.sm};
   }
   background-color: ${props => {
-    if (props.score >= 90) return theme.colors.status.success.bg;
-    if (props.score >= 70) return '#f1f8e9';
-    if (props.score >= 50) return theme.colors.status.warning.bg;
+    if (props.$score >= 90) return theme.colors.status.success.bg;
+    if (props.$score >= 70) return '#f1f8e9';
+    if (props.$score >= 50) return theme.colors.status.warning.bg;
     return theme.colors.status.error.bg;
   }};
   color: ${props => {
-    if (props.score >= 90) return theme.colors.status.success.text;
-    if (props.score >= 70) return '#558b2f';
-    if (props.score >= 50) return theme.colors.status.warning.text;
+    if (props.$score >= 90) return theme.colors.status.success.text;
+    if (props.$score >= 70) return '#558b2f';
+    if (props.$score >= 50) return theme.colors.status.warning.text;
     return theme.colors.status.error.text;
   }};
 `;
@@ -307,6 +341,8 @@ const Governance = () => {
   });
   const [sortField, setSortField] = useState('health_status');
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">('desc');
+  const [allItems, setAllItems] = useState<any[]>([]);
+  const [loadingTree, setLoadingTree] = useState(false);
   const isMountedRef = useRef(true);
 
   const fetchData = useCallback(async () => {
@@ -353,19 +389,53 @@ const Governance = () => {
       sortDirection
   ]);
 
+  const fetchAllItems = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    try {
+      setLoadingTree(true);
+      setError(null);
+      const response = await governanceApi.getGovernanceData({
+        page: 1,
+        limit: 10000,
+        engine: filters.engine as string,
+        category: filters.category as string,
+        health: filters.health as string,
+        domain: filters.domain as string,
+        sensitivity: filters.sensitivity as string
+      });
+      if (isMountedRef.current) {
+        setAllItems(response.data || []);
+      }
+    } catch (err) {
+      if (isMountedRef.current) {
+        setError(extractApiError(err));
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setLoadingTree(false);
+      }
+    }
+  }, [
+    filters.engine,
+    filters.category,
+    filters.health,
+    filters.domain,
+    filters.sensitivity
+  ]);
+
   useEffect(() => {
     isMountedRef.current = true;
-    fetchData();
+    fetchAllItems();
     const interval = setInterval(() => {
       if (isMountedRef.current) {
-        fetchData();
+        fetchAllItems();
       }
     }, 30000);
     return () => {
       isMountedRef.current = false;
       clearInterval(interval);
     };
-  }, [fetchData]);
+  }, [fetchAllItems]);
 
   const toggleItem = useCallback((id: number) => {
     setOpenItemId(prev => prev === id ? null : id);
@@ -415,7 +485,7 @@ const Governance = () => {
 
   const handleExportCSV = useCallback(() => {
     const headers = ["Schema", "Table", "Engine", "Category", "Domain", "Health", "Sensitivity", "Quality Score", "Size (MB)", "Total Rows", "Access Frequency", "Last Analyzed"];
-    const rows = sortedData.map(item => [
+    const rows = allItems.map(item => [
       item.schema_name,
       item.table_name,
       item.inferred_source_engine || "",
@@ -444,7 +514,7 @@ const Governance = () => {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-  }, [sortedData, formatDate]);
+  }, [allItems, formatDate]);
 
   const formatSize = useCallback((mb: number | null | undefined) => {
     if (mb == null) return '-';
@@ -504,7 +574,7 @@ const Governance = () => {
     setPage(1);
   }, [setFilter, setPage]);
 
-  if (loading && data.length === 0) {
+  if (loadingTree && allItems.length === 0) {
     return (
       <Container>
         <Header>Data Governance Catalog</Header>
@@ -612,443 +682,25 @@ const Governance = () => {
         </Button>
       </FiltersContainer>
 
-      {!loading && !error && (
+      {!loadingTree && !error && (
         <>
           <TableActions>
             <PaginationInfo>
-              Showing {sortedData.length} of {pagination.total} entries (Page{" "}
-              {pagination.currentPage} of {pagination.totalPages})
+              Total: {allItems.length} entries
             </PaginationInfo>
             <ExportButton $variant="secondary" onClick={handleExportCSV}>
               Export CSV
             </ExportButton>
           </TableActions>
 
-          <TableContainer>
-            <Table $minWidth="1600px">
-              <thead>
-                <tr>
-                  <SortableTh 
-                    $sortable 
-                    $active={sortField === "schema_name"} 
-                    $direction={sortDirection}
-                    onClick={() => handleSort("schema_name")}
-                  >
-                    Schema.Table
-                  </SortableTh>
-                  <SortableTh 
-                    $sortable 
-                    $active={sortField === "inferred_source_engine"} 
-                    $direction={sortDirection}
-                    onClick={() => handleSort("inferred_source_engine")}
-                  >
-                    Engine
-                  </SortableTh>
-                  <SortableTh 
-                    $sortable 
-                    $active={sortField === "data_category"} 
-                    $direction={sortDirection}
-                    onClick={() => handleSort("data_category")}
-                  >
-                    Category
-                  </SortableTh>
-                  <SortableTh 
-                    $sortable 
-                    $active={sortField === "business_domain"} 
-                    $direction={sortDirection}
-                    onClick={() => handleSort("business_domain")}
-                  >
-                    Domain
-                  </SortableTh>
-                  <SortableTh 
-                    $sortable 
-                    $active={sortField === "health_status"} 
-                    $direction={sortDirection}
-                    onClick={() => handleSort("health_status")}
-                  >
-                    Health
-                  </SortableTh>
-                  <SortableTh 
-                    $sortable 
-                    $active={sortField === "sensitivity_level"} 
-                    $direction={sortDirection}
-                    onClick={() => handleSort("sensitivity_level")}
-                  >
-                    Sensitivity
-                  </SortableTh>
-                  <SortableTh 
-                    $sortable 
-                    $active={sortField === "data_quality_score"} 
-                    $direction={sortDirection}
-                    onClick={() => handleSort("data_quality_score")}
-                  >
-                    Quality
-                  </SortableTh>
-                  <SortableTh 
-                    $sortable 
-                    $active={sortField === "table_size_mb"} 
-                    $direction={sortDirection}
-                    onClick={() => handleSort("table_size_mb")}
-                  >
-                    Size (MB)
-                  </SortableTh>
-                  <SortableTh 
-                    $sortable 
-                    $active={sortField === "total_rows"} 
-                    $direction={sortDirection}
-                    onClick={() => handleSort("total_rows")}
-                  >
-                    Rows
-                  </SortableTh>
-                  <SortableTh 
-                    $sortable 
-                    $active={sortField === "access_frequency"} 
-                    $direction={sortDirection}
-                    onClick={() => handleSort("access_frequency")}
-                  >
-                    Access
-                  </SortableTh>
-                  <SortableTh 
-                    $sortable 
-                    $active={sortField === "last_analyzed"} 
-                    $direction={sortDirection}
-                    onClick={() => handleSort("last_analyzed")}
-                  >
-                    Last Analyzed
-                  </SortableTh>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedData.length === 0 ? (
-                  <TableRow>
-                    <Td colSpan={11} style={{ padding: '40px', textAlign: 'center', color: theme.colors.text.secondary }}>
-                      No governance data found
-                    </Td>
-                  </TableRow>
-                ) : (
-                  sortedData.map((item) => (
-                    <React.Fragment key={item.id}>
-                      <TableRow onClick={() => toggleItem(item.id)} style={{ cursor: 'pointer' }}>
-                        <Td>
-                          <strong style={{ color: theme.colors.primary.main }}>
-                            {item.schema_name}
-                          </strong>
-                          <span style={{ color: theme.colors.text.secondary }}>.
-                            {item.table_name}
-                          </span>
-                        </Td>
-                        <Td>
-                          <span style={{ 
-                            padding: "2px 8px", 
-                            borderRadius: theme.borderRadius.sm,
-                            backgroundColor: theme.colors.background.secondary,
-                            fontSize: "0.85em"
-                          }}>
-                            {item.inferred_source_engine}
-                          </span>
-                        </Td>
-                        <Td>
-                          <Badge type={item.data_category}>
-                            {item.data_category}
-                          </Badge>
-                        </Td>
-                        <Td style={{ color: theme.colors.text.secondary }}>
-                          {item.business_domain || "-"}
-                        </Td>
-                        <Td>
-                          <StatusBadge $status={item.health_status}>
-                            {item.health_status}
-                          </StatusBadge>
-                        </Td>
-                        <Td>
-                          <Badge type={`${item.sensitivity_level}_SENSITIVITY`}>
-                            {item.sensitivity_level}
-                          </Badge>
-                        </Td>
-                        <Td>
-                          <QualityScore score={item.data_quality_score}>
-                            {item.data_quality_score}%
-                          </QualityScore>
-                        </Td>
-                        <Td style={{ color: theme.colors.text.secondary }}>
-                          {formatSize(item.table_size_mb)}
-                        </Td>
-                        <Td style={{ color: theme.colors.text.secondary }}>
-                          {formatNumber(item.total_rows)}
-                        </Td>
-                        <Td>
-                          <Badge type={item.access_frequency}>
-                            {item.access_frequency}
-                          </Badge>
-                        </Td>
-                        <Td style={{ color: theme.colors.text.secondary, fontSize: '0.85em' }}>
-                          {formatDate(item.last_analyzed)}
-                        </Td>
-                      </TableRow>
-                      {openItemId === item.id && (
-                        <TableRow>
-                          <Td colSpan={11} style={{ padding: 0, border: 'none' }}>
-                            <GovernanceDetails $isOpen={openItemId === item.id}>
-                              <DetailsGrid>
-                                <DetailCard>
-                                  <DetailLabel>Schema Name</DetailLabel>
-                                  <DetailValue>{item.schema_name}</DetailValue>
-                                </DetailCard>
-                                <DetailCard>
-                                  <DetailLabel>Table Name</DetailLabel>
-                                  <DetailValue>{item.table_name}</DetailValue>
-                                </DetailCard>
-                                <DetailCard>
-                                  <DetailLabel>Database Engine</DetailLabel>
-                                  <DetailValue>{item.inferred_source_engine}</DetailValue>
-                                </DetailCard>
-                                <DetailCard>
-                                  <DetailLabel>Data Category</DetailLabel>
-                                  <DetailValue>
-                                    <Tooltip>
-                                      <Badge type={item.data_category}>
-                                        {item.data_category}
-                                      </Badge>
-                                      <TooltipContent className="tooltip-content">
-                                        {getCategoryDescription(item.data_category)}
-                                      </TooltipContent>
-                                    </Tooltip>
-                                  </DetailValue>
-                                </DetailCard>
-                                <DetailCard>
-                                  <DetailLabel>Business Domain</DetailLabel>
-                                  <DetailValue>{item.business_domain || 'N/A'}</DetailValue>
-                                </DetailCard>
-                                <DetailCard>
-                                  <DetailLabel>Health Status</DetailLabel>
-                                  <DetailValue>
-                                    <Tooltip>
-                                      <Badge type={item.health_status}>
-                                        {item.health_status}
-                                      </Badge>
-                                      <TooltipContent className="tooltip-content">
-                                        {getHealthDescription(item.health_status)}
-                                      </TooltipContent>
-                                    </Tooltip>
-                                  </DetailValue>
-                                </DetailCard>
-                                <DetailCard>
-                                  <DetailLabel>Sensitivity Level</DetailLabel>
-                                  <DetailValue>
-                                    <Tooltip>
-                                      <Badge type={`${item.sensitivity_level}_SENSITIVITY`}>
-                                        {item.sensitivity_level}
-                                      </Badge>
-                                      <TooltipContent className="tooltip-content">
-                                        {getSensitivityDescription(item.sensitivity_level)}
-                                      </TooltipContent>
-                                    </Tooltip>
-                                  </DetailValue>
-                                </DetailCard>
-                                <DetailCard>
-                                  <DetailLabel>Data Quality Score</DetailLabel>
-                                  <DetailValue>
-                                    <QualityScore score={item.data_quality_score}>
-                                      {item.data_quality_score}%
-                                    </QualityScore>
-                                  </DetailValue>
-                                </DetailCard>
-                                <DetailCard>
-                                  <DetailLabel>Table Size</DetailLabel>
-                                  <DetailValue>{formatSize(item.table_size_mb)}</DetailValue>
-                                </DetailCard>
-                                <DetailCard>
-                                  <DetailLabel>Total Rows</DetailLabel>
-                                  <DetailValue>{formatNumber(item.total_rows)}</DetailValue>
-                                </DetailCard>
-                                <DetailCard>
-                                  <DetailLabel>Access Frequency</DetailLabel>
-                                  <DetailValue>
-                                    <Badge type={item.access_frequency}>
-                                      {item.access_frequency}
-                                    </Badge>
-                                  </DetailValue>
-                                </DetailCard>
-                                <DetailCard>
-                                  <DetailLabel>Last Analyzed</DetailLabel>
-                                  <DetailValue>{formatDate(item.last_analyzed)}</DetailValue>
-                                </DetailCard>
-                                {item.data_classification && (
-                                  <DetailCard>
-                                    <DetailLabel>Data Classification</DetailLabel>
-                                    <DetailValue>{item.data_classification}</DetailValue>
-                                  </DetailCard>
-                                )}
-                                {item.retention_policy && (
-                                  <DetailCard>
-                                    <DetailLabel>Retention Policy</DetailLabel>
-                                    <DetailValue>{item.retention_policy}</DetailValue>
-                                  </DetailCard>
-                                )}
-                                {item.owner && (
-                                  <DetailCard>
-                                    <DetailLabel>Data Owner</DetailLabel>
-                                    <DetailValue>{item.owner}</DetailValue>
-                                  </DetailCard>
-                                )}
-                                {item.compliance_requirements && (
-                                  <DetailCard>
-                                    <DetailLabel>Compliance Requirements</DetailLabel>
-                                    <DetailValue>{item.compliance_requirements}</DetailValue>
-                                  </DetailCard>
-                                )}
-                                {item.null_percentage != null && (
-                                  <DetailCard>
-                                    <DetailLabel>Null Percentage</DetailLabel>
-                                    <DetailValue>{item.null_percentage}%</DetailValue>
-                                  </DetailCard>
-                                )}
-                                {item.duplicate_percentage != null && (
-                                  <DetailCard>
-                                    <DetailLabel>Duplicate Percentage</DetailLabel>
-                                    <DetailValue>{item.duplicate_percentage}%</DetailValue>
-                                  </DetailCard>
-                                )}
-                                {item.fragmentation_percentage != null && (
-                                  <DetailCard>
-                                    <DetailLabel>Fragmentation Percentage</DetailLabel>
-                                    <DetailValue>{item.fragmentation_percentage}%</DetailValue>
-                                  </DetailCard>
-                                )}
-                                {item.query_count_daily != null && (
-                                  <DetailCard>
-                                    <DetailLabel>Daily Query Count</DetailLabel>
-                                    <DetailValue>{formatNumber(item.query_count_daily)}</DetailValue>
-                                  </DetailCard>
-                                )}
-                                {item.last_vacuum && (
-                                  <DetailCard>
-                                    <DetailLabel>Last Vacuum</DetailLabel>
-                                    <DetailValue>{formatDate(item.last_vacuum)}</DetailValue>
-                                  </DetailCard>
-                                )}
-                                {item.total_columns != null && (
-                                  <DetailCard>
-                                    <DetailLabel>Total Columns</DetailLabel>
-                                    <DetailValue>{formatNumber(item.total_columns)}</DetailValue>
-                                  </DetailCard>
-                                )}
-                                {item.index_count != null && (
-                                  <DetailCard>
-                                    <DetailLabel>Index Count</DetailLabel>
-                                    <DetailValue>{formatNumber(item.index_count)}</DetailValue>
-                                  </DetailCard>
-                                )}
-                                {item.constraint_count != null && (
-                                  <DetailCard>
-                                    <DetailLabel>Constraint Count</DetailLabel>
-                                    <DetailValue>{formatNumber(item.constraint_count)}</DetailValue>
-                                  </DetailCard>
-                                )}
-                                {item.primary_key_columns && (
-                                  <DetailCard>
-                                    <DetailLabel>Primary Key Columns</DetailLabel>
-                                    <DetailValue>{item.primary_key_columns}</DetailValue>
-                                  </DetailCard>
-                                )}
-                                {item.first_discovered && (
-                                  <DetailCard>
-                                    <DetailLabel>First Discovered</DetailLabel>
-                                    <DetailValue>{formatDate(item.first_discovered)}</DetailValue>
-                                  </DetailCard>
-                                )}
-                                {item.last_accessed && (
-                                  <DetailCard>
-                                    <DetailLabel>Last Accessed</DetailLabel>
-                                    <DetailValue>{formatDate(item.last_accessed)}</DetailValue>
-                                  </DetailCard>
-                                )}
-                              </DetailsGrid>
-                              {item.health_status === 'CRITICAL' && (
-                                <CriticalStatusBox>
-                                  <div style={{ 
-                                    fontWeight: 'bold', 
-                                    color: theme.colors.status.error.text, 
-                                    marginBottom: '10px',
-                                    fontSize: '1.1em'
-                                  }}>
-                                    CRITICAL STATUS REASONS:
-                                  </div>
-                                  <div style={{ color: theme.colors.text.primary, lineHeight: '1.5' }}>
-                                    {item.data_quality_score < 50 && (
-                                      <div>• Low data quality score ({item.data_quality_score}%)</div>
-                                    )}
-                                    {item.null_percentage > 20 && (
-                                      <div>• High null percentage ({item.null_percentage}%)</div>
-                                    )}
-                                    {item.duplicate_percentage > 10 && (
-                                      <div>• High duplicate percentage ({item.duplicate_percentage}%)</div>
-                                    )}
-                                    {item.fragmentation_percentage > 30 && (
-                                      <div>• High fragmentation ({item.fragmentation_percentage}%)</div>
-                                    )}
-                                    {item.query_count_daily === 0 && (
-                                      <div>• No recent queries detected</div>
-                                    )}
-                                    {item.last_vacuum && (() => {
-                                      const lastVacuum = new Date(item.last_vacuum);
-                                      const daysSinceVacuum = Math.floor((Date.now() - lastVacuum.getTime()) / (1000 * 60 * 60 * 24));
-                                      return daysSinceVacuum > 7 && <div>• No vacuum in {daysSinceVacuum} days</div>;
-                                    })()}
-                                    {(!item.null_percentage || item.null_percentage <= 20) && 
-                                     (!item.duplicate_percentage || item.duplicate_percentage <= 10) && 
-                                     (!item.fragmentation_percentage || item.fragmentation_percentage <= 30) && 
-                                     item.data_quality_score >= 50 && (
-                                      <div>• Manual classification or business rule violation</div>
-                                    )}
-                                  </div>
-                                </CriticalStatusBox>
-                              )}
-                            </GovernanceDetails>
-                          </Td>
-                        </TableRow>
-                      )}
-                    </React.Fragment>
-                  ))
-                )}
-              </tbody>
-            </Table>
-          </TableContainer>
-
-          {pagination.totalPages > 1 && (
-            <Pagination>
-              <PageButton
-                disabled={page === 1}
-                onClick={() => setPage(Math.max(1, page - 1))}
-              >
-                Previous
-              </PageButton>
-              
-              {Array.from({ length: pagination.totalPages }, (_, i) => i + 1)
-                .filter(p => Math.abs(p - page) <= 2 || p === 1 || p === pagination.totalPages)
-                .map((p, i, arr) => (
-                  <React.Fragment key={p}>
-                    {i > 0 && arr[i - 1] !== p - 1 && <span>...</span>}
-                    <PageButton
-                      $active={p === page}
-                      onClick={() => setPage(p)}
-                    >
-                      {p}
-                    </PageButton>
-                  </React.Fragment>
-                ))
-              }
-              
-              <PageButton
-                disabled={page === pagination.totalPages}
-                onClick={() => setPage(Math.min(pagination.totalPages, page + 1))}
-              >
-                Next
-              </PageButton>
-            </Pagination>
+          {loadingTree ? (
+            <LoadingOverlay>Loading tree view...</LoadingOverlay>
+          ) : (
+            <GovernanceTreeView items={allItems} onItemClick={(item: any) => toggleItem(item.id)} />
           )}
         </>
       )}
+
     </Container>
   );
 };
