@@ -1145,6 +1145,7 @@ void MaintenanceManager::executeMariaDBMaintenance(
 }
 
 bool MaintenanceManager::validateMSSQLObject(const MaintenanceTask &task) {
+  SQLHSTMT stmt = SQL_NULL_HANDLE;
   try {
     ODBCConnection conn(task.connection_string);
     if (!conn.isValid()) {
@@ -1152,7 +1153,6 @@ bool MaintenanceManager::validateMSSQLObject(const MaintenanceTask &task) {
     }
 
     SQLHDBC hdbc = conn.getDbc();
-    SQLHSTMT stmt;
     SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &stmt);
     if (ret != SQL_SUCCESS) {
       return false;
@@ -1192,6 +1192,9 @@ bool MaintenanceManager::validateMSSQLObject(const MaintenanceTask &task) {
 
     return count > 0;
   } catch (const std::exception &e) {
+    if (stmt != SQL_NULL_HANDLE) {
+      SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+    }
     Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
                   "Error validating MSSQL object: " + std::string(e.what()));
     return false;
@@ -1199,6 +1202,7 @@ bool MaintenanceManager::validateMSSQLObject(const MaintenanceTask &task) {
 }
 
 void MaintenanceManager::executeMSSQLMaintenance(const MaintenanceTask &task) {
+  SQLHSTMT stmt = SQL_NULL_HANDLE;
   try {
     if (!validateMSSQLObject(task)) {
       std::string reason = "Schema '" + task.schema_name + "' or object '" +
@@ -1213,7 +1217,6 @@ void MaintenanceManager::executeMSSQLMaintenance(const MaintenanceTask &task) {
     }
 
     SQLHDBC hdbc = conn.getDbc();
-    SQLHSTMT stmt;
     SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &stmt);
     if (ret != SQL_SUCCESS) {
       throw std::runtime_error("SQLAllocHandle(STMT) failed");
@@ -1277,6 +1280,9 @@ void MaintenanceManager::executeMSSQLMaintenance(const MaintenanceTask &task) {
                        task.schema_name + "." + task.object_name);
     }
   } catch (const std::exception &e) {
+    if (stmt != SQL_NULL_HANDLE) {
+      SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+    }
     std::string errorMsg = std::string(e.what());
     if (errorMsg.find("does not exist") != std::string::npos ||
         errorMsg.find("Invalid object") != std::string::npos) {

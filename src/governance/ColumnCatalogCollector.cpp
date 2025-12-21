@@ -490,6 +490,7 @@ void ColumnCatalogCollector::collectMariaDBColumns(
 
 void ColumnCatalogCollector::collectMSSQLColumns(
     const std::string &connectionString) {
+  SQLHSTMT stmt = SQL_NULL_HANDLE;
   try {
     ODBCConnection conn(connectionString);
     if (!conn.isValid()) {
@@ -575,7 +576,6 @@ void ColumnCatalogCollector::collectMSSQLColumns(
       ORDER BY OBJECT_SCHEMA_NAME(c.object_id), OBJECT_NAME(c.object_id), c.column_id
     )";
 
-    SQLHSTMT stmt;
     SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &stmt);
     if (ret != SQL_SUCCESS) {
       Logger::error(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
@@ -711,6 +711,9 @@ void ColumnCatalogCollector::collectMSSQLColumns(
     Logger::info(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
                  "Collected " + std::to_string(count) + " MSSQL columns");
   } catch (const std::exception &e) {
+    if (stmt != SQL_NULL_HANDLE) {
+      SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+    }
     Logger::error(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
                   "Error collecting MSSQL columns: " + std::string(e.what()));
   }
