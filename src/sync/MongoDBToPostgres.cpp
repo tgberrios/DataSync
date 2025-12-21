@@ -1051,6 +1051,37 @@ void MongoDBToPostgres::transferDataMongoDBToPostgresParallel() {
               "CDC strategy detected for " + tableInfo.schema_name + "." +
                   tableInfo.table_name + " - processing changes only");
           processTableCDC(tableInfo, conn);
+
+          size_t finalCount = 0;
+          try {
+            pqxx::work countTxn(conn);
+            std::string lowerSchema = tableInfo.schema_name;
+            std::transform(lowerSchema.begin(), lowerSchema.end(),
+                           lowerSchema.begin(), ::tolower);
+            std::string lowerTable = tableInfo.table_name;
+            std::transform(lowerTable.begin(), lowerTable.end(),
+                           lowerTable.begin(), ::tolower);
+            auto res = countTxn.exec("SELECT COUNT(*) FROM " +
+                                     countTxn.quote_name(lowerSchema) + "." +
+                                     countTxn.quote_name(lowerTable));
+            if (!res.empty())
+              finalCount = res[0][0].as<size_t>();
+            countTxn.commit();
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::TRANSFER,
+                          "transferDataMongoDBToPostgresParallel",
+                          "Error getting final count for CDC table: " +
+                              std::string(e.what()));
+          }
+
+          pqxx::work statusTxn(conn);
+          statusTxn.exec(
+              "UPDATE metadata.catalog SET status = 'LISTENING_CHANGES' "
+              "WHERE schema_name = " +
+              statusTxn.quote(tableInfo.schema_name) +
+              " AND table_name = " + statusTxn.quote(tableInfo.table_name) +
+              " AND db_engine = 'MongoDB'");
+          statusTxn.commit();
         } else {
           if (pkStrategy == "CDC" && targetStatus == "FULL_LOAD") {
             Logger::info(
@@ -1426,6 +1457,7 @@ void MongoDBToPostgres::processTableCDC(const TableInfo &table,
             " AND table_name=" + finalUpdateTxn.quote(table.table_name) +
             " AND db_engine='MongoDB'");
       }
+
       if (processedCount < maxChanges) {
         finalUpdateTxn.exec(
             "UPDATE metadata.catalog SET status = 'LISTENING_CHANGES' "
@@ -1436,6 +1468,12 @@ void MongoDBToPostgres::processTableCDC(const TableInfo &table,
       } else {
         Logger::info(LogCategory::TRANSFER, "processTableCDC",
                      "Reached max changes limit, will continue in next cycle");
+        finalUpdateTxn.exec(
+            "UPDATE metadata.catalog SET status = 'LISTENING_CHANGES' "
+            "WHERE schema_name=" +
+            finalUpdateTxn.quote(table.schema_name) +
+            " AND table_name=" + finalUpdateTxn.quote(table.table_name) +
+            " AND db_engine='MongoDB'");
       }
       finalUpdateTxn.commit();
     }
