@@ -30,6 +30,9 @@ class CatalogCleaner : public ICatalogCleaner {
   std::string metadataConnStr_;
   std::unique_ptr<IMetadataRepository> repo_;
 
+  template <typename EngineType>
+  size_t cleanNonExistentTablesForEngine(const std::string &dbEngine);
+
 public:
   explicit CatalogCleaner(std::string metadataConnStr);
 

@@ -434,11 +434,7 @@ std::vector<CatalogTableInfo> OracleEngine::discoverTables() {
     if (row.size() >= 2) {
       CatalogTableInfo info;
       info.schema = row[0];
-      std::transform(info.schema.begin(), info.schema.end(),
-                     info.schema.begin(), ::tolower);
       info.table = row[1];
-      std::transform(info.table.begin(), info.table.end(), info.table.begin(),
-                     ::tolower);
       info.connectionString = connectionString_;
       tables.push_back(info);
     }

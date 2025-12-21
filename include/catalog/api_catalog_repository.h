@@ -38,7 +38,6 @@ class APICatalogRepository {
 public:
   explicit APICatalogRepository(std::string connectionString);
 
-  void createAPICatalogTable();
   std::vector<APICatalogEntry> getActiveAPIs();
   APICatalogEntry getAPIEntry(const std::string &apiName);
   void updateSyncStatus(const std::string &apiName, const std::string &status,

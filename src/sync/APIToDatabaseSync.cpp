@@ -41,7 +41,6 @@ static std::string extractOracleSchema(const std::string &connectionString) {
 APIToDatabaseSync::APIToDatabaseSync(std::string metadataConnectionString)
     : metadataConnectionString_(std::move(metadataConnectionString)) {
   apiRepo_ = std::make_unique<APICatalogRepository>(metadataConnectionString_);
-  apiRepo_->createAPICatalogTable();
 }
 
 APIToDatabaseSync::~APIToDatabaseSync() = default;

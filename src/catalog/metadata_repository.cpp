@@ -147,10 +147,12 @@ void MetadataRepository::insertOrUpdateTable(
     std::string pkStrategy = "CDC";
 
     auto existing = txn.exec_params(
-        "SELECT pk_columns, pk_strategy, table_size "
+        "SELECT pk_columns, pk_strategy, table_size, connection_string, active "
         "FROM metadata.catalog "
-        "WHERE schema_name = $1 AND table_name = $2 AND db_engine = $3",
-        tableInfo.schema, tableInfo.table, dbEngine);
+        "WHERE schema_name = $1 AND table_name = $2 AND db_engine = $3 AND "
+        "connection_string = $4",
+        tableInfo.schema, tableInfo.table, dbEngine,
+        tableInfo.connectionString);
 
     if (existing.empty()) {
       txn.exec_params("INSERT INTO metadata.catalog "
@@ -158,31 +160,36 @@ void MetadataRepository::insertOrUpdateTable(
                       "connection_string, "
                       "status, active, pk_columns, pk_strategy, "
                       "table_size) "
-                      "VALUES ($1, $2, '', $3, $4, $7, false, $5, $6, "
+                      "VALUES ($1, $2, '', $3, $4, $5, false, $6, $7, "
                       "$8)",
                       tableInfo.schema, tableInfo.table, dbEngine,
-                      tableInfo.connectionString, pkColumnsJSON, pkStrategy,
-                      std::string(CatalogStatus::FULL_LOAD), tableSize);
+                      tableInfo.connectionString,
+                      std::string(CatalogStatus::FULL_LOAD), pkColumnsJSON,
+                      pkStrategy, tableSize);
     } else {
+      bool currentActive = existing[0][4].as<bool>();
       std::string currentPKColumns =
           existing[0][0].is_null() ? "" : existing[0][0].as<std::string>();
       std::string currentPKStrategy =
           existing[0][1].is_null() ? "" : existing[0][1].as<std::string>();
       if (currentPKColumns != pkColumnsJSON ||
           currentPKStrategy != pkStrategy) {
-        txn.exec_params(
-            "UPDATE metadata.catalog SET "
-            "pk_columns = $1, pk_strategy = $2, "
-            "table_size = $3, status = $4 "
-            "WHERE schema_name = $5 AND table_name = $6 AND db_engine = $7",
-            pkColumnsJSON, pkStrategy, tableSize,
-            std::string(CatalogStatus::FULL_LOAD), tableInfo.schema,
-            tableInfo.table, dbEngine);
+        txn.exec_params("UPDATE metadata.catalog SET "
+                        "pk_columns = $1, pk_strategy = $2, "
+                        "table_size = $3, status = $4, active = $5 "
+                        "WHERE schema_name = $6 AND table_name = $7 AND "
+                        "db_engine = $8 AND connection_string = $9",
+                        pkColumnsJSON, pkStrategy, tableSize,
+                        std::string(CatalogStatus::FULL_LOAD), currentActive,
+                        tableInfo.schema, tableInfo.table, dbEngine,
+                        tableInfo.connectionString);
       } else {
         txn.exec_params(
-            "UPDATE metadata.catalog SET table_size = $1 "
-            "WHERE schema_name = $2 AND table_name = $3 AND db_engine = $4",
-            tableSize, tableInfo.schema, tableInfo.table, dbEngine);
+            "UPDATE metadata.catalog SET table_size = $1, active = $2 "
+            "WHERE schema_name = $3 AND table_name = $4 AND "
+            "db_engine = $5 AND connection_string = $6",
+            tableSize, currentActive, tableInfo.schema, tableInfo.table,
+            dbEngine, tableInfo.connectionString);
       }
     }
     txn.commit();
@@ -282,7 +289,6 @@ int MetadataRepository::reactivateTablesWithData() {
     auto inactiveTables = txn.exec(
         "SELECT schema_name, table_name, db_engine FROM metadata.catalog "
         "WHERE active = false");
-
     txn.commit();
 
     int reactivatedCount = 0;
@@ -290,16 +296,20 @@ int MetadataRepository::reactivateTablesWithData() {
       std::string schema = row[0].as<std::string>();
       std::string table = row[1].as<std::string>();
       std::string dbEngine = row[2].as<std::string>();
-
       std::string lowerSchema = StringUtils::toLower(schema);
       std::string lowerTable = StringUtils::toLower(table);
-
       try {
-        pqxx::work checkTxn(conn);
-        auto countResult = checkTxn.exec("SELECT COUNT(*) FROM " +
-                                         checkTxn.quote_name(lowerSchema) +
-                                         "." + checkTxn.quote_name(lowerTable));
-        if (!countResult.empty() && countResult[0][0].as<int64_t>() > 0) {
+        auto checkConn = getConnection();
+        pqxx::work checkTxn(checkConn);
+        std::string query = "SELECT COUNT(*) FROM " +
+                            checkTxn.quote_name(lowerSchema) + "." +
+                            checkTxn.quote_name(lowerTable);
+        auto countResult = checkTxn.exec(query);
+        int64_t rowCount = 0;
+        if (!countResult.empty()) {
+          rowCount = countResult[0][0].as<int64_t>();
+        }
+        if (rowCount > 0) {
           checkTxn.exec_params(
               "UPDATE metadata.catalog SET active = true "
               "WHERE schema_name = $1 AND table_name = $2 AND db_engine = $3",
@@ -310,9 +320,10 @@ int MetadataRepository::reactivateTablesWithData() {
           checkTxn.commit();
         }
       } catch (const std::exception &e) {
-        Logger::error(LogCategory::DATABASE, "MetadataRepository",
-                      "Error checking table data for " + schema + "." + table +
-                          ": " + std::string(e.what()));
+        Logger::warning(LogCategory::DATABASE, "MetadataRepository",
+                        "Table " + schema + "." + table +
+                            " does not exist or error checking data: " +
+                            std::string(e.what()));
       }
     }
 
@@ -361,54 +372,64 @@ int MetadataRepository::deactivateNoDataTables() {
 int MetadataRepository::markInactiveTablesAsSkip(bool truncateTarget) {
   try {
     auto conn = getConnection();
-    pqxx::work txn(conn);
 
-    auto inactiveTables =
-        txn.exec_params("SELECT schema_name, table_name FROM metadata.catalog "
-                        "WHERE active = false AND status != $1",
-                        std::string(CatalogStatus::NO_DATA));
+    pqxx::work selectTxn(conn);
+    auto inactiveTables = selectTxn.exec_params(
+        "SELECT schema_name, table_name, db_engine FROM metadata.catalog "
+        "WHERE active = false AND status != $1",
+        std::string(CatalogStatus::NO_DATA));
+    selectTxn.commit();
+    struct TableInfo {
+      std::string schema;
+      std::string table;
+      std::string dbEngine;
+    };
+    std::vector<TableInfo> tablesToSkip;
 
-    std::vector<std::pair<std::string, std::string>> tablesToSkip;
     if (truncateTarget) {
       for (const auto &row : inactiveTables) {
         std::string schema = row[0].as<std::string>();
         std::string table = row[1].as<std::string>();
-
+        std::string dbEngine = row[2].as<std::string>();
         std::string lowerSchema = StringUtils::toLower(schema);
         std::string lowerTable = StringUtils::toLower(table);
-        std::string target_full_table =
-            txn.quote_name(lowerSchema) + "." + txn.quote_name(lowerTable);
+
         try {
-          txn.exec("TRUNCATE TABLE " + target_full_table);
-          tablesToSkip.push_back({schema, table});
+          auto truncateConn = getConnection();
+          pqxx::work truncateTxn(truncateConn);
+          std::string target_full_table = truncateTxn.quote_name(lowerSchema) +
+                                          "." +
+                                          truncateTxn.quote_name(lowerTable);
+          truncateTxn.exec("TRUNCATE TABLE " + target_full_table);
+          truncateTxn.commit();
         } catch (const std::exception &e) {
-          Logger::error(LogCategory::DATABASE, "MetadataRepository",
-                        "Error truncating table " + target_full_table + ": " +
-                            std::string(e.what()));
           Logger::warning(LogCategory::DATABASE, "MetadataRepository",
-                          "Skipping marking " + schema + "." + table +
-                              " as SKIP due to truncate failure");
+                          "Error truncating table " + schema + "." + table +
+                              ": " + std::string(e.what()) +
+                              " - continuing to mark as SKIP");
         }
+        tablesToSkip.push_back({schema, table, dbEngine});
       }
     } else {
       for (const auto &row : inactiveTables) {
-        tablesToSkip.push_back(
-            {row[0].as<std::string>(), row[1].as<std::string>()});
+        tablesToSkip.push_back({row[0].as<std::string>(),
+                                row[1].as<std::string>(),
+                                row[2].as<std::string>()});
       }
     }
-
+    pqxx::work updateTxn(conn);
     int updatedCount = 0;
     for (const auto &entry : tablesToSkip) {
-      auto result =
-          txn.exec_params("UPDATE metadata.catalog SET "
-                          "status = $1 "
-                          "WHERE schema_name = $2 AND table_name = $3 "
-                          "AND active = false AND status != $4",
-                          std::string(CatalogStatus::SKIP), entry.first,
-                          entry.second, std::string(CatalogStatus::NO_DATA));
+      auto result = updateTxn.exec_params(
+          "UPDATE metadata.catalog SET "
+          "status = $1 "
+          "WHERE schema_name = $2 AND table_name = $3 AND db_engine = $4 "
+          "AND active = false AND status != $5",
+          std::string(CatalogStatus::SKIP), entry.schema, entry.table,
+          entry.dbEngine, std::string(CatalogStatus::NO_DATA));
       updatedCount += result.affected_rows();
     }
-    txn.commit();
+    updateTxn.commit();
     return updatedCount;
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "MetadataRepository",
@@ -504,26 +525,25 @@ MetadataRepository::getTableSizesBatch() {
                  "JOIN pg_namespace n ON c.relnamespace = n.oid "
                  "WHERE c.relkind = 'r' AND n.nspname NOT IN ('pg_catalog', "
                  "'information_schema', 'pg_toast')");
-
     for (const auto &row : result) {
       std::string schema = row[0].as<std::string>();
       std::string table = row[1].as<std::string>();
-
       try {
-        auto countResult =
-            txn.exec("SELECT COUNT(*) FROM " + txn.quote_name(schema) + "." +
-                     txn.quote_name(table));
+        std::string lowerSchema = StringUtils::toLower(schema);
+        std::string lowerTable = StringUtils::toLower(table);
+        std::string query = "SELECT COUNT(*) FROM " +
+                            txn.quote_name(lowerSchema) + "." +
+                            txn.quote_name(lowerTable);
+        auto countResult = txn.exec(query);
         if (!countResult.empty()) {
           int64_t size = countResult[0][0].as<int64_t>();
-          std::string lowerSchema = StringUtils::toLower(schema);
-          std::string lowerTable = StringUtils::toLower(table);
           std::string key = lowerSchema + "|" + lowerTable;
           sizes[key] = size;
         }
       } catch (const std::exception &e) {
-        Logger::error(LogCategory::DATABASE, "MetadataRepository",
-                      "Error getting size for " + schema + "." + table + ": " +
-                          std::string(e.what()));
+        Logger::warning(LogCategory::DATABASE, "MetadataRepository",
+                        "Error getting size for " + schema + "." + table +
+                            ": " + std::string(e.what()));
       }
     }
 

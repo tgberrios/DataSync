@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo } from 'react';
-import styled from 'styled-components';
+import styled, { keyframes } from 'styled-components';
 import {
   Button,
   Input,
@@ -9,6 +9,17 @@ import {
 } from './shared/BaseComponents';
 import type { CatalogEntry } from '../services/api';
 import { theme } from '../theme/theme';
+
+const fadeIn = keyframes`
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+`;
 
 const BlurOverlay = styled.div`
   position: fixed;
@@ -116,6 +127,20 @@ const ErrorMessage = styled.div`
   font-size: 0.9em;
 `;
 
+const ConnectionTestResult = styled.div<{ $success: boolean }>`
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: ${theme.borderRadius.sm};
+  font-size: 0.9em;
+  background-color: ${props => props.$success 
+    ? theme.colors.status.success.bg 
+    : theme.colors.status.error.bg};
+  color: ${props => props.$success 
+    ? theme.colors.status.success.text 
+    : theme.colors.status.error.text};
+  animation: ${fadeIn} 0.3s ease-out;
+`;
+
 interface AddTableModalProps {
   onClose: () => void;
   onSave: (entry: Omit<CatalogEntry, 'last_sync_time' | 'updated_at'>) => void;
@@ -137,6 +162,37 @@ const connectionStringHelp: Record<string, string> = {
   MongoDB: 'Format: mongodb://username:password@host:port/database\n\nFor MongoDB Atlas (cloud): mongodb+srv://username:password@cluster.mongodb.net/database\n\nExample:\nmongodb://admin:secret123@localhost:27017/mydb\nmongodb+srv://admin:secret123@cluster0.xxxxx.mongodb.net/mydb',
 };
 
+const extractClusterName = (connectionString: string, dbEngine: string): string => {
+  if (dbEngine === 'MongoDB') {
+    const srvMatch = connectionString.match(/mongodb\+srv:\/\/[^@]+@([^.]+)/);
+    if (srvMatch) {
+      return srvMatch[1];
+    }
+    const standardMatch = connectionString.match(/mongodb:\/\/[^@]+@([^:]+)/);
+    if (standardMatch) {
+      return standardMatch[1];
+    }
+  } else {
+    const parts = connectionString.split(';');
+    for (const part of parts) {
+      const [key, value] = part.split('=').map(s => s.trim());
+      if (key && value) {
+        const keyLower = key.toLowerCase();
+        if (keyLower === 'host' || keyLower === 'hostname' || keyLower === 'server') {
+          return value;
+        }
+      }
+    }
+    if (dbEngine === 'PostgreSQL' && (connectionString.includes('postgresql://') || connectionString.includes('postgres://'))) {
+      const urlMatch = connectionString.match(/:\/\/(?:[^@]+@)?([^:]+)/);
+      if (urlMatch) {
+        return urlMatch[1];
+      }
+    }
+  }
+  return '';
+};
+
 const AddTableModal: React.FC<AddTableModalProps> = ({ onClose, onSave }) => {
   const [formData, setFormData] = useState({
     schema_name: '',
@@ -144,12 +200,18 @@ const AddTableModal: React.FC<AddTableModalProps> = ({ onClose, onSave }) => {
     db_engine: '',
     connection_string: '',
     active: true,
-    status: 'PENDING',
+    status: 'FULL_LOAD',
     cluster_name: '',
-    pk_strategy: 'OFFSET',
+    pk_strategy: 'CDC',
   });
   const [error, setError] = useState<string | null>(null);
   const [isClosing, setIsClosing] = useState(false);
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
+  const [connectionTestResult, setConnectionTestResult] = useState<{ success: boolean; message: string; cluster_name?: string } | null>(null);
+  const [schemas, setSchemas] = useState<string[]>([]);
+  const [tables, setTables] = useState<string[]>([]);
+  const [isLoadingSchemas, setIsLoadingSchemas] = useState(false);
+  const [isLoadingTables, setIsLoadingTables] = useState(false);
 
   const connectionExample = useMemo(() => {
     if (!formData.db_engine) return '';
@@ -226,7 +288,155 @@ const AddTableModal: React.FC<AddTableModalProps> = ({ onClose, onSave }) => {
       db_engine: engine,
       connection_string: engine ? connectionStringExamples[engine] || '' : '',
     }));
+    setConnectionTestResult(null);
   }, []);
+
+  const handleTestConnection = useCallback(async () => {
+    if (!formData.db_engine) {
+      setConnectionTestResult({ success: false, message: 'Please select a database engine first' });
+      return;
+    }
+
+    if (!formData.connection_string.trim()) {
+      setConnectionTestResult({ success: false, message: 'Please enter a connection string' });
+      return;
+    }
+
+    setIsTestingConnection(true);
+    setConnectionTestResult(null);
+
+    try {
+      const token = localStorage.getItem('authToken');
+      const response = await fetch('/api/test-connection', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(token && { 'Authorization': `Bearer ${token}` }),
+        },
+        body: JSON.stringify({
+          db_engine: formData.db_engine,
+          connection_string: formData.connection_string.trim(),
+        }),
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          setConnectionTestResult({ success: false, message: 'Authentication required. Please log in again.' });
+          return;
+        }
+        if (response.status === 0 || response.status >= 500) {
+          setConnectionTestResult({ success: false, message: 'Server error. Please check if the server is running.' });
+          return;
+        }
+      }
+
+      let data;
+      try {
+        data = await response.json();
+      } catch (parseErr) {
+        setConnectionTestResult({ success: false, message: 'Invalid response from server' });
+        return;
+      }
+
+      if (response.ok && data.success) {
+        const extractedClusterName = data.cluster_name || extractClusterName(formData.connection_string.trim(), formData.db_engine);
+        if (extractedClusterName) {
+          setFormData(prev => ({ ...prev, cluster_name: extractedClusterName }));
+        }
+        setConnectionTestResult({ 
+          success: true, 
+          message: data.message || 'Connection successful!',
+          cluster_name: extractedClusterName 
+        });
+        
+        await handleDiscoverSchemas();
+      } else {
+        setConnectionTestResult({ success: false, message: data.error || data.message || 'Connection failed' });
+      }
+    } catch (err: any) {
+      if (err.name === 'TypeError' && err.message.includes('fetch')) {
+        setConnectionTestResult({ success: false, message: 'Network error. Please check if the server is running and try again.' });
+      } else {
+        setConnectionTestResult({ success: false, message: err.message || 'Error testing connection' });
+      }
+    } finally {
+      setIsTestingConnection(false);
+    }
+  }, [formData.db_engine, formData.connection_string]);
+
+  const handleDiscoverSchemas = useCallback(async () => {
+    if (!formData.db_engine || !formData.connection_string.trim()) {
+      return;
+    }
+
+    setIsLoadingSchemas(true);
+    setSchemas([]);
+    setTables([]);
+    setFormData(prev => ({ ...prev, schema_name: '', table_name: '' }));
+
+    try {
+      const token = localStorage.getItem('authToken');
+      const response = await fetch('/api/discover-schemas', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(token && { 'Authorization': `Bearer ${token}` }),
+        },
+        body: JSON.stringify({
+          db_engine: formData.db_engine,
+          connection_string: formData.connection_string.trim(),
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.schemas) {
+          setSchemas(data.schemas);
+        }
+      }
+    } catch (err: any) {
+      console.error('Error discovering schemas:', err);
+    } finally {
+      setIsLoadingSchemas(false);
+    }
+  }, [formData.db_engine, formData.connection_string]);
+
+  const handleSchemaChange = useCallback(async (schema: string) => {
+    setFormData(prev => ({ ...prev, schema_name: schema, table_name: '' }));
+    setTables([]);
+
+    if (!schema || !formData.db_engine || !formData.connection_string.trim()) {
+      return;
+    }
+
+    setIsLoadingTables(true);
+    try {
+      const token = localStorage.getItem('authToken');
+      const response = await fetch('/api/discover-tables', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(token && { 'Authorization': `Bearer ${token}` }),
+        },
+        body: JSON.stringify({
+          db_engine: formData.db_engine,
+          connection_string: formData.connection_string.trim(),
+          schema_name: schema,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.tables) {
+          setTables(data.tables);
+        }
+      }
+    } catch (err: any) {
+      console.error('Error discovering tables:', err);
+    } finally {
+      setIsLoadingTables(false);
+    }
+  }, [formData.db_engine, formData.connection_string]);
 
   return (
     <>
@@ -262,33 +472,111 @@ const AddTableModal: React.FC<AddTableModalProps> = ({ onClose, onSave }) => {
           )}
 
           <FormGroup>
-            <Label>Schema Name *</Label>
-            <Input 
-              type="text" 
-              value={formData.schema_name}
-              onChange={(e) => setFormData(prev => ({ ...prev, schema_name: e.target.value }))}
-              placeholder="e.g., public, dbo, my_schema"
-            />
-          </FormGroup>
-
-          <FormGroup>
-            <Label>Table Name *</Label>
-            <Input 
-              type="text" 
-              value={formData.table_name}
-              onChange={(e) => setFormData(prev => ({ ...prev, table_name: e.target.value }))}
-              placeholder="e.g., users, products, orders"
-            />
-          </FormGroup>
-
-          <FormGroup>
-            <Label>Connection String *</Label>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <Label style={{ marginBottom: 0 }}>Connection String *</Label>
+              <Button
+                type="button"
+                $variant="secondary"
+                onClick={handleTestConnection}
+                disabled={isTestingConnection || !formData.db_engine || !formData.connection_string.trim()}
+                style={{ padding: '6px 12px', fontSize: '0.85em', minWidth: 'auto' }}
+              >
+                {isTestingConnection ? 'Testing...' : 'Test Connection'}
+              </Button>
+            </div>
             <Textarea
               value={formData.connection_string}
-              onChange={(e) => setFormData(prev => ({ ...prev, connection_string: e.target.value }))}
+              onChange={(e) => {
+                setFormData(prev => ({ 
+                  ...prev, 
+                  connection_string: e.target.value,
+                  schema_name: '',
+                  table_name: ''
+                }));
+                setConnectionTestResult(null);
+                setSchemas([]);
+                setTables([]);
+              }}
               placeholder={connectionExample || "Enter connection string..."}
             />
+            {connectionTestResult && (
+              <ConnectionTestResult $success={connectionTestResult.success}>
+                {connectionTestResult.success ? '✓ ' : '✗ '}
+                {connectionTestResult.message}
+                {connectionTestResult.success && connectionTestResult.cluster_name && (
+                  <div style={{ marginTop: '4px', fontSize: '0.85em' }}>
+                    Cluster name detected: {connectionTestResult.cluster_name}
+                  </div>
+                )}
+              </ConnectionTestResult>
+            )}
           </FormGroup>
+
+          {connectionTestResult?.success && (
+            <>
+              <FormGroup>
+                <Label>Schema Name *</Label>
+                <Select
+                  value={formData.schema_name}
+                  onChange={(e) => handleSchemaChange(e.target.value)}
+                  disabled={isLoadingSchemas}
+                >
+                  <option value="">
+                    {isLoadingSchemas ? 'Loading schemas...' : 'Select Schema'}
+                  </option>
+                  {schemas.map((schema) => (
+                    <option key={schema} value={schema}>
+                      {schema}
+                    </option>
+                  ))}
+                </Select>
+              </FormGroup>
+
+              {formData.schema_name && (
+                <FormGroup>
+                  <Label>Table Name *</Label>
+                  <Select
+                    value={formData.table_name}
+                    onChange={(e) => setFormData(prev => ({ ...prev, table_name: e.target.value }))}
+                    disabled={isLoadingTables}
+                  >
+                    <option value="">
+                      {isLoadingTables ? 'Loading tables...' : 'Select Table'}
+                    </option>
+                    {tables.map((table) => (
+                      <option key={table} value={table}>
+                        {table}
+                      </option>
+                    ))}
+                  </Select>
+                </FormGroup>
+              )}
+            </>
+          )}
+
+          {!connectionTestResult?.success && (
+            <>
+              <FormGroup>
+                <Label>Schema Name *</Label>
+                <Input 
+                  type="text" 
+                  value={formData.schema_name}
+                  onChange={(e) => setFormData(prev => ({ ...prev, schema_name: e.target.value }))}
+                  placeholder="e.g., public, dbo, my_schema"
+                />
+              </FormGroup>
+
+              <FormGroup>
+                <Label>Table Name *</Label>
+                <Input 
+                  type="text" 
+                  value={formData.table_name}
+                  onChange={(e) => setFormData(prev => ({ ...prev, table_name: e.target.value }))}
+                  placeholder="e.g., users, products, orders"
+                />
+              </FormGroup>
+            </>
+          )}
 
           <FormGroup>
             <Label>Cluster Name</Label>
@@ -304,10 +592,10 @@ const AddTableModal: React.FC<AddTableModalProps> = ({ onClose, onSave }) => {
             <Label>PK Strategy</Label>
             <Select
               value={formData.pk_strategy}
-              onChange={(e) => setFormData(prev => ({ ...prev, pk_strategy: e.target.value }))}
+              disabled
+              style={{ opacity: 0.6, cursor: 'not-allowed' }}
             >
-              <option value="OFFSET">OFFSET</option>
-              <option value="PK">Primary Key</option>
+              <option value="CDC">CDC (Change Data Capture)</option>
             </Select>
           </FormGroup>
 
@@ -318,7 +606,7 @@ const AddTableModal: React.FC<AddTableModalProps> = ({ onClose, onSave }) => {
               value={formData.status}
               onChange={(e) => setFormData(prev => ({ ...prev, status: e.target.value }))}
             >
-              <option value="PENDING">PENDING</option>
+              <option value="FULL_LOAD">FULL_LOAD</option>
               <option value="IN_PROGRESS">IN_PROGRESS</option>
               <option value="LISTENING_CHANGES">LISTENING_CHANGES</option>
               <option value="NO_DATA">NO_DATA</option>

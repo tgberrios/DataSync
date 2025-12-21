@@ -34,8 +34,6 @@ class CustomJobsRepository {
 public:
   explicit CustomJobsRepository(std::string connectionString);
 
-  void createCustomJobsTable();
-  void createJobResultsTable();
   std::vector<CustomJob> getActiveJobs();
   std::vector<CustomJob> getScheduledJobs();
   CustomJob getJob(const std::string &jobName);

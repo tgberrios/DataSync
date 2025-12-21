@@ -6,11 +6,16 @@
 #include "engines/mongodb_engine.h"
 #include "engines/mssql_engine.h"
 #include "engines/oracle_engine.h"
+#include "third_party/json.hpp"
 #include "utils/connection_utils.h"
 #include "utils/string_utils.h"
 #include <algorithm>
+#include <chrono>
+#include <fstream>
 #include <sql.h>
 #include <sqlext.h>
+
+using json = nlohmann::json;
 
 CatalogManager::CatalogManager(std::string metadataConnStr)
     : metadataConnStr_(std::move(metadataConnStr)),
@@ -101,10 +106,20 @@ void CatalogManager::updateClusterNames() {
                   "Error updating cluster names: " + std::string(e.what()));
   }
 }
-
 // This will validate that the schema in the source database matches the schema
 // in the metadata catalog. If there is a mismatch, the table will be reset to
 // trigger a full reload.
+// NOTE: Schema and table names are stored in the catalog with their original
+// case (as returned by discoverTables()). The getColumnCounts() function
+// handles case conversion appropriately for each engine:
+// - MariaDB: Case-insensitive by default, works with any case
+// - PostgreSQL: Uses parameterized queries, case-sensitive but works if case
+// matches
+// - MSSQL: Case-sensitive, uses names as-is from catalog (must match source
+// exactly)
+// - Oracle: Converts to UPPERCASE internally before querying
+// IMPORTANT: For MSSQL and PostgreSQL, the catalog must store the exact case
+// as it exists in the source database, otherwise validation may fail.
 void CatalogManager::validateSchemaConsistency() {
   try {
     pqxx::connection conn(metadataConnStr_);
@@ -152,7 +167,11 @@ void CatalogManager::validateSchemaConsistency() {
 // This function queries the metadata catalog to get the connection string and
 // database engine, then connects to the source database to retrieve the table
 // size. For MariaDB it uses information_schema.tables.table_rows, for MSSQL
-// and PostgreSQL it delegates to the respective engine's getTableSize method.
+// and PostgreSQL it uses COUNT(*), and for Oracle it uses COUNT(*) with
+// proper case handling.
+// NOTE: Schema and table names from catalog are lowercase, but we use the
+// original case from parameters when querying the source database. For
+// case-sensitive databases, the original case must be preserved.
 // Returns 0 if the table is not found or if there's an error connecting.
 int64_t CatalogManager::getTableSize(const std::string &schema,
                                      const std::string &table) {
@@ -182,6 +201,7 @@ int64_t CatalogManager::getTableSize(const std::string &schema,
     std::string connStr = result[0][0].as<std::string>();
     std::string db_engine = result[0][1].as<std::string>();
 
+    // Use original case from parameters when querying source database
     if (db_engine == "MariaDB") {
       auto params = ConnectionStringParser::parse(connStr);
       if (!params) {
@@ -555,6 +575,9 @@ int64_t CatalogManager::getTableSize(const std::string &schema,
 // mechanism to prevent multiple instances from syncing the same catalog
 // simultaneously. Lock is held for 60 seconds and tries to acquire for
 // 30 seconds. If lock cannot be acquired, the sync is skipped.
+// NOTE: This function should be scheduled to run daily (e.g., via cron job).
+// A frontend endpoint should also be provided to trigger manual sync on demand.
+
 void CatalogManager::syncCatalog(const std::string &dbEngine) {
   if (dbEngine.empty()) {
     Logger::error(LogCategory::DATABASE, "CatalogManager",
@@ -585,10 +608,45 @@ void CatalogManager::syncCatalog(const std::string &dbEngine) {
         engine = std::make_unique<PostgreSQLEngine>(connStr);
       else if (dbEngine == "MongoDB") {
         auto mongoEngine = std::make_unique<MongoDBEngine>(connStr);
+        // #region agent log
+        std::ofstream logFile("/home/iks/OneDrive/DataSync/.cursor/debug.log",
+                              std::ios::app);
+        json logEntry = {
+            {"sessionId", "debug-session"},
+            {"runId", "run1"},
+            {"hypothesisId", "H3"},
+            {"location", "catalog_manager.cpp:605"},
+            {"message", "MongoDB engine created"},
+            {"data",
+             {{"isValid", mongoEngine ? mongoEngine->isValid() : false}}},
+            {"timestamp",
+             std::chrono::duration_cast<std::chrono::milliseconds>(
+                 std::chrono::system_clock::now().time_since_epoch())
+                 .count()}};
+        logFile << logEntry.dump() << "\n";
+        logFile.close();
+        // #endregion
         if (mongoEngine && mongoEngine->isValid()) {
           std::vector<CatalogTableInfo> allTables;
           try {
             allTables = mongoEngine->discoverAllDatabasesAndCollections();
+            // #region agent log
+            logFile.open("/home/iks/OneDrive/DataSync/.cursor/debug.log",
+                         std::ios::app);
+            logEntry = {
+                {"sessionId", "debug-session"},
+                {"runId", "run1"},
+                {"hypothesisId", "H3"},
+                {"location", "catalog_manager.cpp:612"},
+                {"message", "MongoDB discovered tables"},
+                {"data", {{"tableCount", allTables.size()}}},
+                {"timestamp",
+                 std::chrono::duration_cast<std::chrono::milliseconds>(
+                     std::chrono::system_clock::now().time_since_epoch())
+                     .count()}};
+            logFile << logEntry.dump() << "\n";
+            logFile.close();
+            // #endregion
             for (const auto &table : allTables) {
               auto pkColumns =
                   mongoEngine->detectPrimaryKey(table.schema, table.table);
@@ -610,8 +668,28 @@ void CatalogManager::syncCatalog(const std::string &dbEngine) {
                               std::string(e.what()));
           }
           continue;
+        } else {
+          // #region agent log
+          logFile.open("/home/iks/OneDrive/DataSync/.cursor/debug.log",
+                       std::ios::app);
+          logEntry = {{"sessionId", "debug-session"},
+                      {"runId", "run1"},
+                      {"hypothesisId", "H3"},
+                      {"location", "catalog_manager.cpp:632"},
+                      {"message",
+                       "MongoDB engine invalid, using discoverTables fallback"},
+                      {"data", {}},
+                      {"timestamp",
+                       std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::system_clock::now().time_since_epoch())
+                           .count()}};
+          logFile << logEntry.dump() << "\n";
+          logFile.close();
+          // #endregion
+          if (mongoEngine) {
+            engine = std::move(mongoEngine);
+          }
         }
-        engine = std::move(mongoEngine);
       } else if (dbEngine == "Oracle")
         engine = std::make_unique<OracleEngine>(connStr);
 

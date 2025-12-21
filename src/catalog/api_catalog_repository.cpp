@@ -9,63 +9,6 @@ pqxx::connection APICatalogRepository::getConnection() {
   return pqxx::connection(connectionString_);
 }
 
-void APICatalogRepository::createAPICatalogTable() {
-  try {
-    auto conn = getConnection();
-    pqxx::work txn(conn);
-
-    std::string createTableSQL =
-        "CREATE TABLE IF NOT EXISTS metadata.api_catalog ("
-        "id SERIAL PRIMARY KEY,"
-        "api_name VARCHAR(255) NOT NULL UNIQUE,"
-        "api_type VARCHAR(50) NOT NULL,"
-        "base_url VARCHAR(500) NOT NULL,"
-        "endpoint VARCHAR(500) NOT NULL,"
-        "http_method VARCHAR(10) NOT NULL DEFAULT 'GET',"
-        "auth_type VARCHAR(50) NOT NULL DEFAULT 'NONE',"
-        "auth_config JSONB,"
-        "target_db_engine VARCHAR(50) NOT NULL,"
-        "target_connection_string TEXT NOT NULL,"
-        "target_schema VARCHAR(100) NOT NULL,"
-        "target_table VARCHAR(100) NOT NULL,"
-        "request_body TEXT,"
-        "request_headers JSONB,"
-        "query_params JSONB,"
-        "status VARCHAR(50) NOT NULL DEFAULT 'PENDING',"
-        "active BOOLEAN NOT NULL DEFAULT true,"
-        "sync_interval INTEGER NOT NULL DEFAULT 3600,"
-        "last_sync_time TIMESTAMP,"
-        "last_sync_status VARCHAR(50),"
-        "mapping_config JSONB,"
-        "metadata JSONB,"
-        "created_at TIMESTAMP DEFAULT NOW(),"
-        "updated_at TIMESTAMP DEFAULT NOW()"
-        ");";
-
-    txn.exec(createTableSQL);
-
-    std::string createIndexesSQL =
-        "CREATE INDEX IF NOT EXISTS idx_api_catalog_name "
-        "ON metadata.api_catalog (api_name);"
-        "CREATE INDEX IF NOT EXISTS idx_api_catalog_active "
-        "ON metadata.api_catalog (active);"
-        "CREATE INDEX IF NOT EXISTS idx_api_catalog_status "
-        "ON metadata.api_catalog (status);"
-        "CREATE INDEX IF NOT EXISTS idx_api_catalog_target_engine "
-        "ON metadata.api_catalog (target_db_engine);";
-
-    txn.exec(createIndexesSQL);
-    txn.commit();
-
-    Logger::info(LogCategory::DATABASE, "APICatalogRepository",
-                 "API catalog table created successfully");
-
-  } catch (const std::exception &e) {
-    Logger::error(LogCategory::DATABASE, "createAPICatalogTable",
-                  "Error creating API catalog table: " + std::string(e.what()));
-  }
-}
-
 std::vector<APICatalogEntry> APICatalogRepository::getActiveAPIs() {
   std::vector<APICatalogEntry> entries;
   try {

@@ -31,6 +31,7 @@ private:
   std::string generateSessionId();
   std::string getHostname();
   void cleanExpiredLocks(pqxx::work &txn);
+  int getRetrySleepMs(pqxx::work &txn);
 };
 
 #endif

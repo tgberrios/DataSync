@@ -41,10 +41,7 @@ static std::string extractOracleSchema(const std::string &connectionString) {
 CustomJobExecutor::CustomJobExecutor(std::string metadataConnectionString)
     : metadataConnectionString_(std::move(metadataConnectionString)),
       jobsRepo_(
-          std::make_unique<CustomJobsRepository>(metadataConnectionString_)) {
-  jobsRepo_->createCustomJobsTable();
-  jobsRepo_->createJobResultsTable();
-}
+          std::make_unique<CustomJobsRepository>(metadataConnectionString_)) {}
 
 CustomJobExecutor::~CustomJobExecutor() = default;
 
@@ -1361,7 +1358,7 @@ void CustomJobExecutor::insertDataToOracle(const CustomJob &job,
 }
 
 void CustomJobExecutor::createMongoDBCollection(
-    const CustomJob &job, const std::vector<std::string> &columns) {
+    const CustomJob &job, const std::vector<std::string> &) {
   try {
     MongoDBEngine engine(job.target_connection_string);
     if (!engine.isValid()) {
@@ -1481,7 +1478,6 @@ CustomJobExecutor::executePythonScript(const std::string &script) {
   std::vector<json> results;
   std::string tempScriptPath;
   std::string tempOutputPath;
-  FILE *pipe = nullptr;
 
   try {
     char tempScriptTemplate[] = "/tmp/datasync_python_script_XXXXXX.py";

@@ -868,6 +868,7 @@ app.post(
     const status = validateEnum(
       req.body.status,
       [
+        "FULL_LOAD",
         "PENDING",
         "IN_PROGRESS",
         "LISTENING_CHANGES",
@@ -875,14 +876,14 @@ app.post(
         "ERROR",
         "SKIP",
       ],
-      "PENDING"
+      "FULL_LOAD"
     );
     const active = validateBoolean(req.body.active, true);
     const cluster_name = req.body.cluster_name || "";
     const pk_strategy = validateEnum(
       req.body.pk_strategy,
-      ["PK", "OFFSET"],
-      "OFFSET"
+      ["CDC", "PK", "OFFSET"],
+      "CDC"
     );
     if (!schema_name || !table_name || !db_engine || !connection_string) {
       return res.status(400).json({
@@ -5406,6 +5407,45 @@ app.get("/api/api-catalog/metrics", async (req, res) => {
   }
 });
 
+const extractClusterName = (connectionString, dbEngine) => {
+  if (dbEngine === "MongoDB") {
+    const srvMatch = connectionString.match(/mongodb\+srv:\/\/[^@]+@([^.]+)/);
+    if (srvMatch) {
+      return srvMatch[1];
+    }
+    const standardMatch = connectionString.match(/mongodb:\/\/[^@]+@([^:]+)/);
+    if (standardMatch) {
+      return standardMatch[1];
+    }
+  } else {
+    const parts = connectionString.split(";");
+    for (const part of parts) {
+      const [key, value] = part.split("=").map((s) => s.trim());
+      if (key && value) {
+        const keyLower = key.toLowerCase();
+        if (
+          keyLower === "host" ||
+          keyLower === "hostname" ||
+          keyLower === "server"
+        ) {
+          return value;
+        }
+      }
+    }
+    if (
+      dbEngine === "PostgreSQL" &&
+      (connectionString.includes("postgresql://") ||
+        connectionString.includes("postgres://"))
+    ) {
+      const urlMatch = connectionString.match(/:\/\/(?:[^@]+@)?([^:]+)/);
+      if (urlMatch) {
+        return urlMatch[1];
+      }
+    }
+  }
+  return null;
+};
+
 app.post("/api/test-connection", requireAuth, async (req, res) => {
   const { db_engine, connection_string } = req.body;
 
@@ -5433,6 +5473,7 @@ app.post("/api/test-connection", requireAuth, async (req, res) => {
   try {
     let testResult = false;
     let message = "";
+    let clusterName = null;
 
     switch (db_engine) {
       case "PostgreSQL": {
@@ -5659,9 +5700,11 @@ app.post("/api/test-connection", requireAuth, async (req, res) => {
     }
 
     if (testResult) {
+      clusterName = extractClusterName(connection_string, db_engine);
       res.json({
         success: true,
         message: message,
+        ...(clusterName && { cluster_name: clusterName }),
       });
     } else {
       res.status(400).json({
@@ -5676,6 +5719,587 @@ app.post("/api/test-connection", requireAuth, async (req, res) => {
       error: sanitizeError(
         err,
         "Error testing connection",
+        process.env.NODE_ENV === "production"
+      ),
+    });
+  }
+});
+
+app.post("/api/discover-schemas", requireAuth, async (req, res) => {
+  const { db_engine, connection_string } = req.body;
+
+  if (!db_engine || !connection_string) {
+    return res.status(400).json({
+      success: false,
+      error: "Missing required fields: db_engine and connection_string",
+    });
+  }
+
+  const validEngine = validateEnum(
+    db_engine,
+    ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle"],
+    null
+  );
+
+  if (!validEngine) {
+    return res.status(400).json({
+      success: false,
+      error:
+        "Invalid db_engine. Must be one of: PostgreSQL, MariaDB, MSSQL, MongoDB, Oracle",
+    });
+  }
+
+  try {
+    let schemas = [];
+
+    switch (db_engine) {
+      case "PostgreSQL": {
+        try {
+          let config;
+          if (
+            connection_string.includes("postgresql://") ||
+            connection_string.includes("postgres://")
+          ) {
+            config = {
+              connectionString: connection_string,
+              connectionTimeoutMillis: 5000,
+            };
+          } else {
+            const params = {};
+            const parts = connection_string.split(";");
+            for (const part of parts) {
+              const [key, value] = part.split("=").map((s) => s.trim());
+              if (key && value) {
+                switch (key.toLowerCase()) {
+                  case "host":
+                  case "hostname":
+                    params.host = value;
+                    break;
+                  case "user":
+                  case "username":
+                    params.user = value;
+                    break;
+                  case "password":
+                    params.password = value;
+                    break;
+                  case "db":
+                  case "database":
+                    params.database = value;
+                    break;
+                  case "port":
+                    params.port = parseInt(value, 10);
+                    break;
+                }
+              }
+            }
+            config = {
+              ...params,
+              connectionTimeoutMillis: 5000,
+            };
+          }
+
+          const testPool = new Pool(config);
+          const result = await testPool.query(
+            "SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast') ORDER BY schema_name"
+          );
+          schemas = result.rows.map((row) => row.schema_name);
+          await testPool.end();
+        } catch (err) {
+          return res.status(400).json({
+            success: false,
+            error: `Failed to discover schemas: ${err.message}`,
+          });
+        }
+        break;
+      }
+
+      case "MariaDB": {
+        try {
+          const mysql = await import("mysql2/promise").catch(() => null);
+          if (!mysql) {
+            return res.status(400).json({
+              success: false,
+              error:
+                "MariaDB driver (mysql2) is not installed. Please install it with: npm install mysql2",
+            });
+          }
+
+          const connStr = connection_string;
+          const params = {};
+          connStr.split(";").forEach((param) => {
+            const [key, value] = param.split("=");
+            if (key && value) {
+              params[key.trim().toLowerCase()] = value.trim();
+            }
+          });
+
+          const connection = await mysql.createConnection({
+            host: params.host || "localhost",
+            port: params.port ? parseInt(params.port) : 3306,
+            user: params.user || "root",
+            password: params.password || "",
+            database: params.db || params.database || "",
+            connectTimeout: 5000,
+          });
+
+          const [rows] = await connection.query("SHOW DATABASES");
+          schemas = rows
+            .map((row) => Object.values(row)[0])
+            .filter(
+              (db) =>
+                ![
+                  "information_schema",
+                  "performance_schema",
+                  "mysql",
+                  "sys",
+                ].includes(db)
+            )
+            .sort();
+          await connection.end();
+        } catch (err) {
+          return res.status(400).json({
+            success: false,
+            error: `Failed to discover schemas: ${err.message}`,
+          });
+        }
+        break;
+      }
+
+      case "MSSQL": {
+        try {
+          const sql = await import("mssql").catch(() => null);
+          if (!sql) {
+            return res.status(400).json({
+              success: false,
+              error:
+                "MSSQL driver (mssql) is not installed. Please install it with: npm install mssql",
+            });
+          }
+
+          const connStr = connection_string;
+          const config = {
+            options: {
+              encrypt: false,
+              trustServerCertificate: true,
+              connectTimeout: 5000,
+            },
+          };
+
+          const parts = connStr.split(";");
+          parts.forEach((part) => {
+            const [key, value] = part.split("=");
+            if (key && value) {
+              const k = key.trim().toUpperCase();
+              if (k === "SERVER") {
+                const [host, port] = value.split(",");
+                config.server = host.trim();
+                if (port) config.port = parseInt(port.trim());
+              } else if (k === "DATABASE") {
+                config.database = value.trim();
+              } else if (k === "UID") {
+                config.user = value.trim();
+              } else if (k === "PWD") {
+                config.password = value.trim();
+              }
+            }
+          });
+
+          const pool = await sql.connect(config);
+          const result = await pool
+            .request()
+            .query(
+              "SELECT name FROM sys.databases WHERE name NOT IN ('master', 'tempdb', 'model', 'msdb') ORDER BY name"
+            );
+          schemas = result.recordset.map((row) => row.name);
+          await pool.close();
+        } catch (err) {
+          return res.status(400).json({
+            success: false,
+            error: `Failed to discover schemas: ${err.message}`,
+          });
+        }
+        break;
+      }
+
+      case "MongoDB": {
+        try {
+          const { MongoClient } = await import("mongodb").catch(() => ({
+            MongoClient: null,
+          }));
+          if (!MongoClient) {
+            return res.status(400).json({
+              success: false,
+              error:
+                "MongoDB driver (mongodb) is not installed. Please install it with: npm install mongodb",
+            });
+          }
+
+          const client = new MongoClient(connection_string, {
+            serverSelectionTimeoutMS: 5000,
+          });
+          await client.connect();
+          const adminDb = client.db().admin();
+          const databases = await adminDb.listDatabases();
+          schemas = databases.databases
+            .map((db) => db.name)
+            .filter((name) => !["admin", "local", "config"].includes(name))
+            .sort();
+          await client.close();
+        } catch (err) {
+          return res.status(400).json({
+            success: false,
+            error: `Failed to discover schemas: ${err.message}`,
+          });
+        }
+        break;
+      }
+
+      case "Oracle": {
+        try {
+          const oracledb = await import("oracledb").catch(() => null);
+          if (!oracledb) {
+            return res.status(400).json({
+              success: false,
+              error:
+                "Oracle driver (oracledb) is not installed. Please install it with: npm install oracledb",
+            });
+          }
+
+          const connStr = connection_string;
+          const params = {};
+          connStr.split(";").forEach((param) => {
+            const [key, value] = param.split("=");
+            if (key && value) {
+              params[key.trim().toLowerCase()] = value.trim();
+            }
+          });
+
+          const connection = await oracledb.getConnection({
+            user: params.user || "",
+            password: params.password || "",
+            connectString: `${params.host || "localhost"}:${
+              params.port || 1521
+            }/${params.db || params.database || ""}`,
+            connectionTimeout: 5000,
+          });
+
+          const result = await connection.execute(
+            "SELECT username FROM all_users WHERE username NOT IN ('SYS', 'SYSTEM', 'SYSAUX') ORDER BY username"
+          );
+          schemas = result.rows.map((row) => row[0]);
+          await connection.close();
+        } catch (err) {
+          return res.status(400).json({
+            success: false,
+            error: `Failed to discover schemas: ${err.message}`,
+          });
+        }
+        break;
+      }
+
+      default:
+        return res.status(400).json({
+          success: false,
+          error: `Unsupported database engine: ${db_engine}`,
+        });
+    }
+
+    res.json({
+      success: true,
+      schemas: schemas,
+    });
+  } catch (err) {
+    console.error("Error discovering schemas:", err);
+    res.status(500).json({
+      success: false,
+      error: sanitizeError(
+        err,
+        "Error discovering schemas",
+        process.env.NODE_ENV === "production"
+      ),
+    });
+  }
+});
+
+app.post("/api/discover-tables", requireAuth, async (req, res) => {
+  const { db_engine, connection_string, schema_name } = req.body;
+
+  if (!db_engine || !connection_string || !schema_name) {
+    return res.status(400).json({
+      success: false,
+      error:
+        "Missing required fields: db_engine, connection_string, and schema_name",
+    });
+  }
+
+  const validEngine = validateEnum(
+    db_engine,
+    ["PostgreSQL", "MariaDB", "MSSQL", "MongoDB", "Oracle"],
+    null
+  );
+
+  if (!validEngine) {
+    return res.status(400).json({
+      success: false,
+      error:
+        "Invalid db_engine. Must be one of: PostgreSQL, MariaDB, MSSQL, MongoDB, Oracle",
+    });
+  }
+
+  try {
+    let tables = [];
+
+    switch (db_engine) {
+      case "PostgreSQL": {
+        try {
+          let config;
+          if (
+            connection_string.includes("postgresql://") ||
+            connection_string.includes("postgres://")
+          ) {
+            config = {
+              connectionString: connection_string,
+              connectionTimeoutMillis: 5000,
+            };
+          } else {
+            const params = {};
+            const parts = connection_string.split(";");
+            for (const part of parts) {
+              const [key, value] = part.split("=").map((s) => s.trim());
+              if (key && value) {
+                switch (key.toLowerCase()) {
+                  case "host":
+                  case "hostname":
+                    params.host = value;
+                    break;
+                  case "user":
+                  case "username":
+                    params.user = value;
+                    break;
+                  case "password":
+                    params.password = value;
+                    break;
+                  case "db":
+                  case "database":
+                    params.database = value;
+                    break;
+                  case "port":
+                    params.port = parseInt(value, 10);
+                    break;
+                }
+              }
+            }
+            config = {
+              ...params,
+              connectionTimeoutMillis: 5000,
+            };
+          }
+
+          const testPool = new Pool(config);
+          const result = await testPool.query(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = $1 AND table_type = 'BASE TABLE' ORDER BY table_name",
+            [schema_name]
+          );
+          tables = result.rows.map((row) => row.table_name);
+          await testPool.end();
+        } catch (err) {
+          return res.status(400).json({
+            success: false,
+            error: `Failed to discover tables: ${err.message}`,
+          });
+        }
+        break;
+      }
+
+      case "MariaDB": {
+        try {
+          const mysql = await import("mysql2/promise").catch(() => null);
+          if (!mysql) {
+            return res.status(400).json({
+              success: false,
+              error:
+                "MariaDB driver (mysql2) is not installed. Please install it with: npm install mysql2",
+            });
+          }
+
+          const connStr = connection_string;
+          const params = {};
+          connStr.split(";").forEach((param) => {
+            const [key, value] = param.split("=");
+            if (key && value) {
+              params[key.trim().toLowerCase()] = value.trim();
+            }
+          });
+
+          const connection = await mysql.createConnection({
+            host: params.host || "localhost",
+            port: params.port ? parseInt(params.port) : 3306,
+            user: params.user || "root",
+            password: params.password || "",
+            database: schema_name,
+            connectTimeout: 5000,
+          });
+
+          const [rows] = await connection.query("SHOW TABLES");
+          tables = rows.map((row) => Object.values(row)[0]).sort();
+          await connection.end();
+        } catch (err) {
+          return res.status(400).json({
+            success: false,
+            error: `Failed to discover tables: ${err.message}`,
+          });
+        }
+        break;
+      }
+
+      case "MSSQL": {
+        try {
+          const sql = await import("mssql").catch(() => null);
+          if (!sql) {
+            return res.status(400).json({
+              success: false,
+              error:
+                "MSSQL driver (mssql) is not installed. Please install it with: npm install mssql",
+            });
+          }
+
+          const connStr = connection_string;
+          const config = {
+            options: {
+              encrypt: false,
+              trustServerCertificate: true,
+              connectTimeout: 5000,
+            },
+          };
+
+          const parts = connStr.split(";");
+          parts.forEach((part) => {
+            const [key, value] = part.split("=");
+            if (key && value) {
+              const k = key.trim().toUpperCase();
+              if (k === "SERVER") {
+                const [host, port] = value.split(",");
+                config.server = host.trim();
+                if (port) config.port = parseInt(port.trim());
+              } else if (k === "DATABASE") {
+                config.database = value.trim();
+              } else if (k === "UID") {
+                config.user = value.trim();
+              } else if (k === "PWD") {
+                config.password = value.trim();
+              }
+            }
+          });
+
+          const pool = await sql.connect(config);
+          const result = await pool
+            .request()
+            .query(
+              `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '${schema_name}' AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME`
+            );
+          tables = result.recordset.map((row) => row.TABLE_NAME);
+          await pool.close();
+        } catch (err) {
+          return res.status(400).json({
+            success: false,
+            error: `Failed to discover tables: ${err.message}`,
+          });
+        }
+        break;
+      }
+
+      case "MongoDB": {
+        try {
+          const { MongoClient } = await import("mongodb").catch(() => ({
+            MongoClient: null,
+          }));
+          if (!MongoClient) {
+            return res.status(400).json({
+              success: false,
+              error:
+                "MongoDB driver (mongodb) is not installed. Please install it with: npm install mongodb",
+            });
+          }
+
+          const client = new MongoClient(connection_string, {
+            serverSelectionTimeoutMS: 5000,
+          });
+          await client.connect();
+          const db = client.db(schema_name);
+          const collections = await db.listCollections().toArray();
+          tables = collections.map((col) => col.name).sort();
+          await client.close();
+        } catch (err) {
+          return res.status(400).json({
+            success: false,
+            error: `Failed to discover tables: ${err.message}`,
+          });
+        }
+        break;
+      }
+
+      case "Oracle": {
+        try {
+          const oracledb = await import("oracledb").catch(() => null);
+          if (!oracledb) {
+            return res.status(400).json({
+              success: false,
+              error:
+                "Oracle driver (oracledb) is not installed. Please install it with: npm install oracledb",
+            });
+          }
+
+          const connStr = connection_string;
+          const params = {};
+          connStr.split(";").forEach((param) => {
+            const [key, value] = param.split("=");
+            if (key && value) {
+              params[key.trim().toLowerCase()] = value.trim();
+            }
+          });
+
+          const connection = await oracledb.getConnection({
+            user: params.user || "",
+            password: params.password || "",
+            connectString: `${params.host || "localhost"}:${
+              params.port || 1521
+            }/${params.db || params.database || ""}`,
+            connectionTimeout: 5000,
+          });
+
+          const result = await connection.execute(
+            "SELECT table_name FROM all_tables WHERE owner = :owner ORDER BY table_name",
+            { owner: schema_name.toUpperCase() }
+          );
+          tables = result.rows.map((row) => row[0]);
+          await connection.close();
+        } catch (err) {
+          return res.status(400).json({
+            success: false,
+            error: `Failed to discover tables: ${err.message}`,
+          });
+        }
+        break;
+      }
+
+      default:
+        return res.status(400).json({
+          success: false,
+          error: `Unsupported database engine: ${db_engine}`,
+        });
+    }
+
+    res.json({
+      success: true,
+      tables: tables,
+    });
+  } catch (err) {
+    console.error("Error discovering tables:", err);
+    res.status(500).json({
+      success: false,
+      error: sanitizeError(
+        err,
+        "Error discovering tables",
         process.env.NODE_ENV === "production"
       ),
     });

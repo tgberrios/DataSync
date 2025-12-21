@@ -362,7 +362,7 @@ const connectionStringExamples: Record<string, string> = {
   MariaDB: 'host=localhost;user=myuser;password=mypassword;db=mydatabase;port=3306',
   MSSQL: 'DRIVER={ODBC Driver 17 for SQL Server};SERVER=localhost,1433;DATABASE=mydatabase;UID=myuser;PWD=mypassword',
   Oracle: 'host=localhost;user=myuser;password=mypassword;db=mydatabase;port=1521',
-  PostgreSQL: 'host=localhost;user=myuser;password=mypassword;db=mydatabase;port=5432',
+  PostgreSQL: 'postgresql://myuser:mypassword@localhost:5432/mydatabase',
   MongoDB: 'mongodb://myuser:mypassword@localhost:27017/mydatabase',
 };
 
@@ -370,7 +370,7 @@ const connectionStringHelp: Record<string, string> = {
   MariaDB: 'Format: host=server;user=username;password=password;db=database;port=3306\n\nExample:\nhost=localhost;user=admin;password=secret123;db=production;port=3306',
   MSSQL: 'Format: DRIVER={ODBC Driver 17 for SQL Server};SERVER=server,port;DATABASE=database;UID=username;PWD=password\n\nExample:\nDRIVER={ODBC Driver 17 for SQL Server};SERVER=sqlserver.example.com,1433;DATABASE=MyDB;UID=sa;PWD=MyPassword123',
   Oracle: 'Format: host=server;user=username;password=password;db=database;port=1521\n\nExample:\nhost=oracle.example.com;user=system;password=oracle123;db=ORCL;port=1521',
-  PostgreSQL: 'Format: host=server;user=username;password=password;db=database;port=5432\n\nExample:\nhost=postgres.example.com;user=postgres;password=postgres123;db=mydb;port=5432',
+  PostgreSQL: 'Format: postgresql://user:password@host:port/database\n\nExample:\npostgresql://postgres:postgres123@postgres.example.com:5432/mydb',
   MongoDB: 'Format: mongodb://username:password@host:port/database\n\nFor MongoDB Atlas (cloud): mongodb+srv://username:password@cluster.mongodb.net/database\n\nExample:\nmongodb://admin:secret123@localhost:27017/mydb\nmongodb+srv://admin:secret123@cluster0.xxxxx.mongodb.net/mydb',
 };
 
@@ -897,6 +897,16 @@ const AddAPIModal: React.FC<AddAPIModalProps> = ({ onClose, onSave, initialData 
           !formData.target_connection_string.startsWith('mongodb+srv://')) {
         setError('MongoDB connection string must start with mongodb:// or mongodb+srv://');
         return;
+      }
+    } else if (formData.target_db_engine === 'PostgreSQL') {
+      const connStr = formData.target_connection_string.toLowerCase();
+      if (!connStr.startsWith('postgresql://') && !connStr.startsWith('postgres://')) {
+        const requiredParams = ['host', 'user', 'db'];
+        const missing = requiredParams.filter(param => !connStr.includes(`${param}=`));
+        if (missing.length > 0) {
+          setError(`PostgreSQL connection string must be in URI format (postgresql://...) or include: ${missing.join(', ')}`);
+          return;
+        }
       }
     } else {
       const requiredParams = ['host', 'user', 'db'];

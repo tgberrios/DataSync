@@ -121,3 +121,158 @@ target_link_libraries(DataSync
     stdc++fs
     curl
 )
+
+add_executable(test_api_catalog_repository
+    test/test_api_catalog_repository.cpp
+    src/catalog/api_catalog_repository.cpp
+    src/core/logger.cpp
+    src/core/database_log_writer.cpp
+    src/core/database_config.cpp
+)
+
+target_link_libraries(test_api_catalog_repository
+    pqxx
+    pq
+    pthread
+)
+
+set_target_properties(test_api_catalog_repository PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
+add_executable(test_catalog_cleaner
+    test/test_catalog_cleaner.cpp
+    src/catalog/catalog_cleaner.cpp
+    src/catalog/metadata_repository.cpp
+    src/core/logger.cpp
+    src/core/database_log_writer.cpp
+    src/core/database_config.cpp
+    src/core/sync_config.cpp
+    src/engines/postgres_engine.cpp
+    src/engines/mariadb_engine.cpp
+    src/engines/mssql_engine.cpp
+    src/engines/oracle_engine.cpp
+    src/engines/mongodb_engine.cpp
+    src/sync/DatabaseToPostgresSync.cpp
+    src/sync/MariaDBToPostgres.cpp
+    src/sync/MSSQLToPostgres.cpp
+    src/sync/OracleToPostgres.cpp
+    src/sync/MongoDBToPostgres.cpp
+    src/sync/SchemaSync.cpp
+    src/utils/table_utils.cpp
+    src/utils/connection_utils.cpp
+)
+
+target_link_libraries(test_catalog_cleaner
+    mariadb
+    mysqlclient
+    pqxx
+    pq
+    pthread
+    odbc
+    mongoc-1.0
+    bson-1.0
+    clntsh
+    curl
+)
+
+set_target_properties(test_catalog_cleaner PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
+add_executable(test_catalog_lock
+    test/test_catalog_lock.cpp
+    src/catalog/catalog_lock.cpp
+    src/core/logger.cpp
+    src/core/database_log_writer.cpp
+    src/core/database_config.cpp
+)
+
+target_link_libraries(test_catalog_lock
+    pqxx
+    pq
+    pthread
+)
+
+set_target_properties(test_catalog_lock PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
+add_executable(test_catalog_manager
+    test/test_catalog_manager.cpp
+    src/catalog/catalog_manager.cpp
+    src/catalog/catalog_cleaner.cpp
+    src/catalog/metadata_repository.cpp
+    src/catalog/catalog_lock.cpp
+    src/core/logger.cpp
+    src/core/database_log_writer.cpp
+    src/core/database_config.cpp
+    src/core/sync_config.cpp
+    src/engines/postgres_engine.cpp
+    src/engines/mariadb_engine.cpp
+    src/engines/mssql_engine.cpp
+    src/engines/oracle_engine.cpp
+    src/engines/mongodb_engine.cpp
+    src/sync/MariaDBToPostgres.cpp
+    src/sync/MSSQLToPostgres.cpp
+    src/sync/OracleToPostgres.cpp
+    src/sync/DatabaseToPostgresSync.cpp
+    src/sync/SchemaSync.cpp
+    src/utils/cluster_name_resolver.cpp
+    src/utils/MariaDBClusterNameProvider.cpp
+    src/utils/MSSQLClusterNameProvider.cpp
+    src/utils/PostgreSQLClusterNameProvider.cpp
+    src/utils/HostnamePatternMatcher.cpp
+    src/utils/connection_utils.cpp
+)
+
+target_link_libraries(test_catalog_manager
+    mariadb
+    mysqlclient
+    pqxx
+    pq
+    pthread
+    odbc
+    mongoc-1.0
+    bson-1.0
+    clntsh
+    curl
+)
+
+set_target_properties(test_catalog_manager PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
+add_executable(test_custom_jobs_repository
+    test/test_custom_jobs_repository.cpp
+    src/catalog/custom_jobs_repository.cpp
+    src/core/logger.cpp
+    src/core/database_log_writer.cpp
+    src/core/database_config.cpp
+)
+
+target_link_libraries(test_custom_jobs_repository
+    pqxx
+    pq
+)
+
+set_target_properties(test_custom_jobs_repository PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
+add_executable(test_metadata_repository
+    test/test_metadata_repository.cpp
+    src/catalog/metadata_repository.cpp
+    src/core/logger.cpp
+    src/core/database_log_writer.cpp
+    src/core/database_config.cpp
+)
+
+target_link_libraries(test_metadata_repository
+    pqxx
+    pq
+)
+
+set_target_properties(test_metadata_repository PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
