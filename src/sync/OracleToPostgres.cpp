@@ -1004,7 +1004,24 @@ void OracleToPostgres::transferDataOracleToPostgres() {
                      "CDC strategy detected - using processTableCDC for " +
                          schema_name + "." + table_name);
         processTableCDC(table, pgConn);
-        return;
+
+        size_t finalCount = 0;
+        try {
+          pqxx::work countTxn(pgConn);
+          auto res = countTxn.exec("SELECT COUNT(*) FROM \"" + lowerSchema +
+                                   "\".\"" + lowerTable + "\";");
+          if (!res.empty())
+            finalCount = res[0][0].as<size_t>();
+          countTxn.commit();
+        } catch (const std::exception &e) {
+          Logger::error(LogCategory::TRANSFER, "transferDataOracleToPostgres",
+                        "Error getting final count for CDC table: " +
+                            std::string(e.what()));
+        }
+
+        updateStatus(pgConn, schema_name, table_name, "LISTENING_CHANGES",
+                     finalCount);
+        continue;
       }
 
       std::vector<std::string> pkColumns =
@@ -1209,6 +1226,8 @@ void OracleToPostgres::processTableCDC(const TableInfo &table,
 
     bool hasMore = true;
     size_t batchNumber = 0;
+    size_t totalUpsertedCount = 0;
+    size_t totalDeletedCount = 0;
 
     while (hasMore) {
       batchNumber++;
@@ -1494,6 +1513,7 @@ void OracleToPostgres::processTableCDC(const TableInfo &table,
                               table.schema_name);
           }
           upsertedCount = recordsToUpsert.size();
+          totalUpsertedCount += upsertedCount;
         } catch (const std::exception &e) {
           Logger::error(LogCategory::TRANSFER, "processTableCDC",
                         "Failed to upsert records for " + table.schema_name +
@@ -1501,6 +1521,8 @@ void OracleToPostgres::processTableCDC(const TableInfo &table,
                             std::string(e.what()));
         }
       }
+
+      totalDeletedCount += deletedCount;
 
       if (maxChangeId > lastChangeId) {
         try {
@@ -1538,6 +1560,42 @@ void OracleToPostgres::processTableCDC(const TableInfo &table,
         hasMore = false;
       }
     }
+
+    size_t finalCount = 0;
+    try {
+      std::string lowerSchemaName = table.schema_name;
+      std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
+                     lowerSchemaName.begin(), ::tolower);
+      std::string lowerTableName = table.table_name;
+      std::transform(lowerTableName.begin(), lowerTableName.end(),
+                     lowerTableName.begin(), ::tolower);
+      pqxx::work countTxn(pgConn);
+      auto res = countTxn.exec("SELECT COUNT(*) FROM \"" + lowerSchemaName +
+                               "\".\"" + lowerTableName + "\";");
+      if (!res.empty())
+        finalCount = res[0][0].as<size_t>();
+      countTxn.commit();
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER, "processTableCDC",
+                    "Error getting final count: " + std::string(e.what()));
+    }
+
+    pqxx::work statusTxn(pgConn);
+    statusTxn.exec("UPDATE metadata.catalog SET status = 'LISTENING_CHANGES' "
+                   "WHERE schema_name = " +
+                   statusTxn.quote(table.schema_name) +
+                   " AND table_name = " + statusTxn.quote(table.table_name) +
+                   " AND db_engine = 'Oracle'");
+    statusTxn.commit();
+
+    size_t totalProcessed = totalUpsertedCount + totalDeletedCount;
+    Logger::info(LogCategory::TRANSFER, "processTableCDC",
+                 "Completed CDC processing for " + table.schema_name + "." +
+                     table.table_name + " - processed " +
+                     std::to_string(totalProcessed) + " changes (" +
+                     std::to_string(totalUpsertedCount) + " upserts, " +
+                     std::to_string(totalDeletedCount) +
+                     " deletes), status updated to LISTENING_CHANGES");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::TRANSFER, "processTableCDC",
                   "Error in CDC processing for " + table.schema_name + "." +
