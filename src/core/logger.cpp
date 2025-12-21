@@ -79,64 +79,47 @@ void Logger::loadDebugConfig() {
 
     pqxx::work txn(conn);
 
-    auto result =
-        txn.exec("SELECT value FROM metadata.config WHERE key = 'debug_level'");
-    if (!result.empty()) {
+    auto result = txn.exec(
+        "SELECT key, value FROM metadata.config WHERE key IN "
+        "('debug_level', 'debug_show_timestamps', 'debug_show_thread_id', "
+        "'debug_show_file_line')");
+
+    for (const auto &row : result) {
       try {
-        std::string levelStr = result[0][0].as<std::string>();
-        if (!levelStr.empty() && levelStr.length() <= 20) {
-          std::string upperLevelStr = levelStr;
-          std::transform(upperLevelStr.begin(), upperLevelStr.end(),
-                         upperLevelStr.begin(), ::toupper);
-          if (levelMap.find(upperLevelStr) != levelMap.end()) {
-            LogLevel newLevel = stringToLogLevel(upperLevelStr);
-            currentLogLevel = newLevel;
+        std::string key = row[0].as<std::string>();
+        std::string value = row[1].as<std::string>();
+
+        if (key == "debug_level") {
+          if (!value.empty() && value.length() <= 20) {
+            std::string upperLevelStr = value;
+            std::transform(upperLevelStr.begin(), upperLevelStr.end(),
+                           upperLevelStr.begin(), ::toupper);
+            if (levelMap.find(upperLevelStr) != levelMap.end()) {
+              LogLevel newLevel = stringToLogLevel(upperLevelStr);
+              currentLogLevel = newLevel;
+            }
           }
-        }
-      } catch (const std::exception &) {
-      }
-    }
-
-    result = txn.exec("SELECT value FROM metadata.config WHERE key = "
-                      "'debug_show_timestamps'");
-    if (!result.empty()) {
-      try {
-        std::string value = result[0][0].as<std::string>();
-        if (value.length() <= 10) {
-          std::string lowerValue = value;
-          std::transform(lowerValue.begin(), lowerValue.end(),
-                         lowerValue.begin(), ::tolower);
-          showTimestamps = (lowerValue == "true" || lowerValue == "1");
-        }
-      } catch (const std::exception &) {
-      }
-    }
-
-    result = txn.exec(
-        "SELECT value FROM metadata.config WHERE key = 'debug_show_thread_id'");
-    if (!result.empty()) {
-      try {
-        std::string value = result[0][0].as<std::string>();
-        if (value.length() <= 10) {
-          std::string lowerValue = value;
-          std::transform(lowerValue.begin(), lowerValue.end(),
-                         lowerValue.begin(), ::tolower);
-          showThreadId = (lowerValue == "true" || lowerValue == "1");
-        }
-      } catch (const std::exception &) {
-      }
-    }
-
-    result = txn.exec(
-        "SELECT value FROM metadata.config WHERE key = 'debug_show_file_line'");
-    if (!result.empty()) {
-      try {
-        std::string value = result[0][0].as<std::string>();
-        if (value.length() <= 10) {
-          std::string lowerValue = value;
-          std::transform(lowerValue.begin(), lowerValue.end(),
-                         lowerValue.begin(), ::tolower);
-          showFileLine = (lowerValue == "true" || lowerValue == "1");
+        } else if (key == "debug_show_timestamps") {
+          if (value.length() <= 10) {
+            std::string lowerValue = value;
+            std::transform(lowerValue.begin(), lowerValue.end(),
+                           lowerValue.begin(), ::tolower);
+            showTimestamps = (lowerValue == "true" || lowerValue == "1");
+          }
+        } else if (key == "debug_show_thread_id") {
+          if (value.length() <= 10) {
+            std::string lowerValue = value;
+            std::transform(lowerValue.begin(), lowerValue.end(),
+                           lowerValue.begin(), ::tolower);
+            showThreadId = (lowerValue == "true" || lowerValue == "1");
+          }
+        } else if (key == "debug_show_file_line") {
+          if (value.length() <= 10) {
+            std::string lowerValue = value;
+            std::transform(lowerValue.begin(), lowerValue.end(),
+                           lowerValue.begin(), ::tolower);
+            showFileLine = (lowerValue == "true" || lowerValue == "1");
+          }
         }
       } catch (const std::exception &) {
       }
