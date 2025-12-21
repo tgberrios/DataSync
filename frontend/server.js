@@ -5428,6 +5428,9 @@ const extractClusterName = (connectionString, dbEngine) => {
           keyLower === "hostname" ||
           keyLower === "server"
         ) {
+          if (dbEngine === "MSSQL" && value.includes(",")) {
+            return value.split(",")[0].trim();
+          }
           return value;
         }
       }
@@ -5584,12 +5587,15 @@ app.post("/api/test-connection", requireAuth, async (req, res) => {
 
       case "MSSQL": {
         try {
-          const sql = await import("mssql").catch(() => null);
-          if (!sql) {
+          const mssqlModule = await import("mssql").catch(() => null);
+          if (!mssqlModule) {
             message =
               "MSSQL driver (mssql) is not installed. Please install it with: npm install mssql";
             break;
           }
+
+          const sql = mssqlModule.default || mssqlModule;
+          const ConnectionPool = sql.ConnectionPool || sql;
 
           const connStr = connection_string;
           const config = {
@@ -5619,7 +5625,8 @@ app.post("/api/test-connection", requireAuth, async (req, res) => {
             }
           });
 
-          const pool = await sql.connect(config);
+          const pool = new ConnectionPool(config);
+          await pool.connect();
           await pool.request().query("SELECT 1");
           await pool.close();
           testResult = true;
@@ -5867,14 +5874,17 @@ app.post("/api/discover-schemas", requireAuth, async (req, res) => {
 
       case "MSSQL": {
         try {
-          const sql = await import("mssql").catch(() => null);
-          if (!sql) {
+          const mssqlModule = await import("mssql").catch(() => null);
+          if (!mssqlModule) {
             return res.status(400).json({
               success: false,
               error:
                 "MSSQL driver (mssql) is not installed. Please install it with: npm install mssql",
             });
           }
+
+          const sql = mssqlModule.default || mssqlModule;
+          const ConnectionPool = sql.ConnectionPool || sql;
 
           const connStr = connection_string;
           const config = {
@@ -5904,7 +5914,8 @@ app.post("/api/discover-schemas", requireAuth, async (req, res) => {
             }
           });
 
-          const pool = await sql.connect(config);
+          const pool = new ConnectionPool(config);
+          await pool.connect();
           const result = await pool
             .request()
             .query(
@@ -6154,14 +6165,17 @@ app.post("/api/discover-tables", requireAuth, async (req, res) => {
 
       case "MSSQL": {
         try {
-          const sql = await import("mssql").catch(() => null);
-          if (!sql) {
+          const mssqlModule = await import("mssql").catch(() => null);
+          if (!mssqlModule) {
             return res.status(400).json({
               success: false,
               error:
                 "MSSQL driver (mssql) is not installed. Please install it with: npm install mssql",
             });
           }
+
+          const sql = mssqlModule.default || mssqlModule;
+          const ConnectionPool = sql.ConnectionPool || sql;
 
           const connStr = connection_string;
           const config = {
@@ -6191,11 +6205,18 @@ app.post("/api/discover-tables", requireAuth, async (req, res) => {
             }
           });
 
-          const pool = await sql.connect(config);
+          if (config.database && config.database !== schema_name) {
+            config.database = schema_name;
+          } else if (!config.database) {
+            config.database = schema_name;
+          }
+
+          const pool = new ConnectionPool(config);
+          await pool.connect();
           const result = await pool
             .request()
             .query(
-              `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '${schema_name}' AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME`
+              `SELECT t.name AS TABLE_NAME FROM sys.tables t INNER JOIN sys.schemas s ON t.schema_id = s.schema_id WHERE s.name NOT IN ('INFORMATION_SCHEMA', 'sys', 'guest') AND t.type = 'U' ORDER BY t.name`
             );
           tables = result.recordset.map((row) => row.TABLE_NAME);
           await pool.close();

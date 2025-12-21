@@ -179,6 +179,9 @@ const extractClusterName = (connectionString: string, dbEngine: string): string 
       if (key && value) {
         const keyLower = key.toLowerCase();
         if (keyLower === 'host' || keyLower === 'hostname' || keyLower === 'server') {
+          if (dbEngine === 'MSSQL' && value.includes(',')) {
+            return value.split(',')[0].trim();
+          }
           return value;
         }
       }
@@ -257,6 +260,14 @@ const AddTableModal: React.FC<AddTableModalProps> = ({ onClose, onSave }) => {
       if (!formData.connection_string.startsWith('mongodb://') && 
           !formData.connection_string.startsWith('mongodb+srv://')) {
         setError('MongoDB connection string must start with mongodb:// or mongodb+srv://');
+        return;
+      }
+    } else if (formData.db_engine === 'MSSQL') {
+      const requiredParams = ['server', 'uid', 'pwd', 'database'];
+      const connStr = formData.connection_string.toLowerCase();
+      const missing = requiredParams.filter(param => !connStr.includes(`${param}=`));
+      if (missing.length > 0) {
+        setError(`Connection string must include: ${missing.join(', ')}`);
         return;
       }
     } else {
