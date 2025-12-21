@@ -168,9 +168,13 @@ const extractClusterName = (connectionString: string, dbEngine: string): string 
     if (srvMatch) {
       return srvMatch[1];
     }
-    const standardMatch = connectionString.match(/mongodb:\/\/[^@]+@([^:]+)/);
-    if (standardMatch) {
-      return standardMatch[1];
+    const standardMatchWithAuth = connectionString.match(/mongodb:\/\/[^@]+@([^:]+)/);
+    if (standardMatchWithAuth) {
+      return standardMatchWithAuth[1];
+    }
+    const standardMatchWithoutAuth = connectionString.match(/mongodb:\/\/([^:/]+)/);
+    if (standardMatchWithoutAuth) {
+      return standardMatchWithoutAuth[1];
     }
   } else {
     const parts = connectionString.split(';');
