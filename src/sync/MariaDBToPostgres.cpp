@@ -552,3 +552,66 @@ void MariaDBToPostgres::processTableCDC(const TableInfo &table,
     mysql_close(mariadbConn);
   }
 }
+
+std::vector<DatabaseToPostgresSync::TableInfo>
+MariaDBToPostgres::getActiveTables(pqxx::connection &pgConn) {
+  std::vector<DatabaseToPostgresSync::TableInfo> data;
+
+  try {
+    pqxx::work txn(pgConn);
+    auto results = txn.exec(
+        "SELECT schema_name, table_name, cluster_name, db_engine, "
+        "connection_string, "
+        "status, pk_strategy, "
+        "pk_columns "
+        "FROM metadata.catalog "
+        "WHERE active=true AND db_engine='MariaDB' AND status != 'NO_DATA' "
+        "ORDER BY schema_name, table_name;");
+    txn.commit();
+
+    Logger::info(LogCategory::TRANSFER, "getActiveTables",
+                 "Query returned " + std::to_string(results.size()) +
+                     " rows from catalog");
+
+    for (const auto &row : results) {
+      if (row.size() < 8) {
+        Logger::warning(LogCategory::TRANSFER, "getActiveTables",
+                        "Row has only " + std::to_string(row.size()) +
+                            " columns, expected 8 - skipping");
+        continue;
+      }
+
+      Logger::info(LogCategory::TRANSFER, "getActiveTables",
+                   "Processing table: " +
+                       (row[0].is_null() ? "" : row[0].as<std::string>()) +
+                       "." +
+                       (row[1].is_null() ? "" : row[1].as<std::string>()));
+
+      DatabaseToPostgresSync::TableInfo t;
+      t.schema_name = row[0].is_null() ? "" : row[0].as<std::string>();
+      t.table_name = row[1].is_null() ? "" : row[1].as<std::string>();
+      t.cluster_name = row[2].is_null() ? "" : row[2].as<std::string>();
+      t.db_engine = row[3].is_null() ? "" : row[3].as<std::string>();
+      t.connection_string = row[4].is_null() ? "" : row[4].as<std::string>();
+      t.status = row[5].is_null() ? "" : row[5].as<std::string>();
+      t.pk_strategy = row[6].is_null() ? "" : row[6].as<std::string>();
+      t.pk_columns = row[7].is_null() ? "" : row[7].as<std::string>();
+      std::vector<std::string> pkCols = parseJSONArray(t.pk_columns);
+      t.has_pk = !pkCols.empty();
+      data.push_back(t);
+    }
+  } catch (const pqxx::sql_error &e) {
+    Logger::error(LogCategory::TRANSFER, "getActiveTables",
+                  "SQL ERROR getting active tables: " + std::string(e.what()) +
+                      " [SQL State: " + e.sqlstate() + "]");
+  } catch (const pqxx::broken_connection &e) {
+    Logger::error(LogCategory::TRANSFER, "getActiveTables",
+                  "CONNECTION ERROR getting active tables: " +
+                      std::string(e.what()));
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "getActiveTables",
+                  "ERROR getting active tables: " + std::string(e.what()));
+  }
+
+  return data;
+}
