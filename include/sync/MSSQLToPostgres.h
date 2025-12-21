@@ -242,90 +242,6 @@ public:
     return data;
   }
 
-  void syncIndexesAndConstraints(const std::string &schema_name,
-                                 const std::string &table_name,
-                                 pqxx::connection &pgConn,
-                                 const std::string &lowerSchemaName,
-                                 const std::string &connection_string) {
-    // Validate input parameters
-    if (schema_name.empty() || table_name.empty() || lowerSchemaName.empty() ||
-        connection_string.empty()) {
-      Logger::error(LogCategory::TRANSFER, "syncIndexesAndConstraints",
-                    "Invalid parameters: schema_name, table_name, "
-                    "lowerSchemaName, or connection_string is empty");
-      return;
-    }
-
-    SQLHDBC dbc = getMSSQLConnection(connection_string);
-    if (!dbc) {
-      Logger::error(LogCategory::TRANSFER, "syncIndexesAndConstraints",
-                    "Failed to get MSSQL connection");
-      return;
-    }
-
-    std::string query = "SELECT i.name AS index_name, "
-                        "CASE WHEN i.is_unique = 1 THEN 'UNIQUE' ELSE "
-                        "'NON_UNIQUE' END AS uniqueness, "
-                        "c.name AS column_name "
-                        "FROM sys.indexes i "
-                        "INNER JOIN sys.index_columns ic ON i.object_id = "
-                        "ic.object_id AND i.index_id = ic.index_id "
-                        "INNER JOIN sys.columns c ON ic.object_id = "
-                        "c.object_id AND ic.column_id = c.column_id "
-                        "INNER JOIN sys.tables t ON i.object_id = t.object_id "
-                        "INNER JOIN sys.schemas s ON t.schema_id = s.schema_id "
-                        "WHERE s.name = '" +
-                        schema_name + "' AND t.name = '" + table_name +
-                        "' "
-                        "AND i.name IS NOT NULL AND i.is_primary_key = 0 "
-                        "ORDER BY i.name, ic.key_ordinal;";
-
-    std::vector<std::vector<std::string>> results =
-        executeQueryMSSQL(dbc, query);
-
-    for (const auto &row : results) {
-      if (row.size() < 3)
-        continue;
-
-      std::string indexName = row[0];
-      std::string uniqueness = row[1];
-      std::string columnName = row[2];
-      std::transform(columnName.begin(), columnName.end(), columnName.begin(),
-                     ::tolower);
-      std::transform(indexName.begin(), indexName.end(), indexName.begin(),
-                     ::tolower);
-      std::string lowerTableName = table_name;
-      std::transform(lowerTableName.begin(), lowerTableName.end(),
-                     lowerTableName.begin(), ::tolower);
-
-      std::string createQuery = "CREATE ";
-      if (uniqueness == "UNIQUE")
-        createQuery += "UNIQUE ";
-      createQuery += "INDEX IF NOT EXISTS \"" + indexName + "\" ON \"" +
-                     lowerSchemaName + "\".\"" + lowerTableName + "\" (\"" +
-                     columnName + "\");";
-
-      try {
-        pqxx::work txn(pgConn);
-        txn.exec(createQuery);
-        txn.commit();
-      } catch (const pqxx::sql_error &e) {
-        Logger::error(LogCategory::TRANSFER, "syncIndexesAndConstraints",
-                      "SQL ERROR creating index '" + indexName +
-                          "': " + std::string(e.what()) +
-                          " [SQL State: " + e.sqlstate() + "]");
-      } catch (const pqxx::broken_connection &e) {
-        Logger::error(LogCategory::TRANSFER, "syncIndexesAndConstraints",
-                      "CONNECTION ERROR creating index '" + indexName +
-                          "': " + std::string(e.what()));
-      } catch (const std::exception &e) {
-        Logger::error(LogCategory::TRANSFER, "syncIndexesAndConstraints",
-                      "ERROR creating index '" + indexName +
-                          "': " + std::string(e.what()));
-      }
-    }
-  }
-
   void setupTableTargetMSSQLToPostgres() {
     Logger::info(LogCategory::TRANSFER, "Starting MSSQL table target setup");
 
@@ -1005,20 +921,7 @@ public:
                            " deleted records in " + schema_name + "." +
                            table_name + " - processing deletes");
 
-          if (pkStrategy == "PK") {
-            // Para tablas con PK, usar eliminación por PK
-            try {
-              processDeletesByPrimaryKey(schema_name, table_name, dbc, pgConn);
-              Logger::info(LogCategory::TRANSFER,
-                           "Delete processing completed for " + schema_name +
-                               "." + table_name);
-            } catch (const std::exception &e) {
-              Logger::error(
-                  LogCategory::TRANSFER, "transferDataMSSQLToPostgres",
-                  "ERROR processing deletes for " + schema_name + "." +
-                      table_name + ": " + std::string(e.what()));
-            }
-          } else {
+          {
             // Para tablas OFFSET, hacer TRUNCATE + re-sincronización completa
             Logger::info(LogCategory::TRANSFER,
                          "OFFSET table with deletes detected - performing "
@@ -1843,7 +1746,43 @@ public:
         }
       }
 
-      // Handle FULL_LOAD / RESET: Always truncate to avoid duplicates
+      size_t sourceCount = 0;
+      {
+        std::string databaseName = extractDatabaseName(table.connection_string);
+        std::string useQuery = "USE [" + databaseName + "];";
+        executeQueryMSSQL(mssqlConn, useQuery);
+
+        auto countRes = executeQueryMSSQL(
+            mssqlConn, "SELECT COUNT(*) FROM [" + table.schema_name + "].[" +
+                           table.table_name + "];");
+        if (!countRes.empty() && !countRes[0][0].empty()) {
+          try {
+            sourceCount = std::stoul(countRes[0][0]);
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::TRANSFER, "processTableParallel",
+                          "Error parsing source count: " +
+                              std::string(e.what()));
+            sourceCount = 0;
+          }
+        }
+      }
+
+      size_t targetCount = 0;
+      try {
+        pqxx::work txn(pgConn);
+        auto targetResult =
+            txn.exec("SELECT COUNT(*) FROM \"" + lowerSchemaName + "\".\"" +
+                     lowerTableName + "\";");
+        if (!targetResult.empty()) {
+          targetCount = targetResult[0][0].as<size_t>();
+        }
+        txn.commit();
+      } catch (const std::exception &e) {
+        Logger::error(LogCategory::TRANSFER, "processTableParallel",
+                      "Error getting target count: " + std::string(e.what()));
+        targetCount = 0;
+      }
+
       if (table.status == "FULL_LOAD" || table.status == "RESET") {
         Logger::info(
             LogCategory::TRANSFER, "processTableParallel",
@@ -1867,10 +1806,6 @@ public:
             txn.exec("TRUNCATE TABLE \"" + lowerSchemaName + "\".\"" +
                      lowerTableName + "\" CASCADE;");
             txn.commit();
-          } else {
-            Logger::info(LogCategory::TRANSFER, "processTableParallel",
-                         "Table " + lowerSchemaName + "." + lowerTableName +
-                             " does not exist yet - skipping truncate");
           }
 
           std::string pkStrategy = getPKStrategyFromCatalog(
@@ -1878,7 +1813,6 @@ public:
 
           {
             pqxx::work updateTxn(pgConn);
-
             if (pkStrategy == "CDC") {
               updateTxn.exec(
                   "UPDATE metadata.catalog SET sync_metadata = "
@@ -1893,22 +1827,79 @@ public:
             updateTxn.commit();
           }
 
-          Logger::info(LogCategory::TRANSFER, "processTableParallel",
-                       "Successfully truncated and reset metadata for " +
-                           table.schema_name + "." + table.table_name);
-
+          targetCount = 0;
         } catch (const std::exception &e) {
           Logger::error(LogCategory::TRANSFER, "processTableParallel",
-                        "Error truncating table " + table.schema_name + "." +
-                            table.table_name + ": " + std::string(e.what()));
-        } catch (...) {
-          Logger::error(LogCategory::TRANSFER, "processTableParallel",
-                        "Unknown error truncating table " + table.schema_name +
-                            "." + table.table_name);
+                        "Error truncating table: " + std::string(e.what()));
         }
       }
 
-      // Start parallel data processing
+      std::string pkStrategy =
+          getPKStrategyFromCatalog(pgConn, table.schema_name, table.table_name);
+
+      Logger::info(LogCategory::TRANSFER, "processTableParallel",
+                   "Counts for " + table.schema_name + "." + table.table_name +
+                       ": source=" + std::to_string(sourceCount) +
+                       ", target=" + std::to_string(targetCount) +
+                       ", pkStrategy=" + pkStrategy +
+                       ", status=" + table.status);
+
+      if (pkStrategy == "CDC" && table.status != "FULL_LOAD") {
+        Logger::info(LogCategory::TRANSFER, "processTableParallel",
+                     "CDC strategy detected for " + table.schema_name + "." +
+                         table.table_name + " - processing changes only");
+        processTableCDC(tableKey, mssqlConn, table, pgConn, columnNames,
+                        columnTypes);
+
+        size_t finalCount = 0;
+        try {
+          pqxx::work txn(pgConn);
+          auto res = txn.exec("SELECT COUNT(*) FROM \"" + lowerSchemaName +
+                              "\".\"" + lowerTableName + "\";");
+          if (!res.empty())
+            finalCount = res[0][0].as<size_t>();
+          txn.commit();
+        } catch (const std::exception &e) {
+          Logger::error(LogCategory::TRANSFER, "processTableParallel",
+                        "Error getting final count for CDC table: " +
+                            std::string(e.what()));
+        }
+
+        updateStatus(pgConn, table.schema_name, table.table_name,
+                     "LISTENING_CHANGES", finalCount);
+        closeMSSQLConnection(mssqlConn);
+        removeTableProcessingState(tableKey);
+        return;
+      }
+
+      if (sourceCount == 0) {
+        if (targetCount == 0) {
+          updateStatus(pgConn, table.schema_name, table.table_name, "NO_DATA",
+                       0);
+        } else {
+          updateStatus(pgConn, table.schema_name, table.table_name,
+                       "LISTENING_CHANGES", targetCount);
+        }
+        closeMSSQLConnection(mssqlConn);
+        removeTableProcessingState(tableKey);
+        return;
+      }
+
+      if (sourceCount == targetCount && table.status != "FULL_LOAD") {
+        Logger::info(LogCategory::TRANSFER, "processTableParallel",
+                     "Counts match (" + std::to_string(sourceCount) + ") for " +
+                         table.schema_name + "." + table.table_name);
+        updateStatus(pgConn, table.schema_name, table.table_name,
+                     "LISTENING_CHANGES", targetCount);
+        closeMSSQLConnection(mssqlConn);
+        removeTableProcessingState(tableKey);
+        return;
+      }
+
+      Logger::info(LogCategory::TRANSFER, "processTableParallel",
+                   "Proceeding with FULL_LOAD for " + table.schema_name + "." +
+                       table.table_name);
+
       std::thread dataFetcher(&MSSQLToPostgres::dataFetcherThread, this,
                               tableKey, mssqlConn, table, columnNames,
                               columnTypes);
@@ -1962,11 +1953,22 @@ public:
         }
       }
 
-      Logger::info(LogCategory::TRANSFER,
-                   "Updating table status to LISTENING_CHANGES for " +
-                       tableKey);
+      size_t finalTargetCount = 0;
+      try {
+        pqxx::work txn(pgConn);
+        auto res = txn.exec("SELECT COUNT(*) FROM \"" + lowerSchemaName +
+                            "\".\"" + lowerTableName + "\";");
+        if (!res.empty())
+          finalTargetCount = res[0][0].as<size_t>();
+        txn.commit();
+      } catch (const std::exception &e) {
+        Logger::error(LogCategory::TRANSFER, "processTableParallel",
+                      "Error getting final target count: " +
+                          std::string(e.what()));
+        finalTargetCount = 0;
+      }
       updateStatus(pgConn, table.schema_name, table.table_name,
-                   "LISTENING_CHANGES", 0);
+                   "LISTENING_CHANGES", finalTargetCount);
 
       closeMSSQLConnection(mssqlConn);
       removeTableProcessingState(tableKey);
@@ -1987,148 +1989,100 @@ public:
                          const TableInfo &table,
                          const std::vector<std::string> &columnNames,
                          const std::vector<std::string> &columnTypes) {
-    Logger::info(LogCategory::TRANSFER,
-                 "Data fetcher thread started for " + tableKey);
-
     try {
       size_t chunkNumber = 0;
       const size_t CHUNK_SIZE = SyncConfig::getChunkSize();
 
       pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
-      std::string pkStrategy =
-          getPKStrategyFromCatalog(pgConn, table.schema_name, table.table_name);
 
       Logger::info(LogCategory::TRANSFER, "dataFetcherThread",
-                   "Starting data fetch for " + table.schema_name + "." +
-                       table.table_name + " - strategy=" + pkStrategy +
-                       ", status=" + table.status);
+                   "Starting FULL_LOAD data fetch for " + table.schema_name +
+                       "." + table.table_name);
 
-      if (pkStrategy == "CDC") {
-        if (table.status == "FULL_LOAD") {
-          Logger::info(LogCategory::TRANSFER, "dataFetcherThread",
-                       "CDC table in FULL_LOAD status - performing initial "
-                       "full load for " +
-                           table.schema_name + "." + table.table_name);
-        } else {
-          Logger::info(LogCategory::TRANSFER, "dataFetcherThread",
-                       "Running CDC processing (I/U/D) for " +
-                           table.schema_name + "." + table.table_name);
-          processTableCDC(tableKey, mssqlConn, table, pgConn, columnNames,
-                          columnTypes);
-          return;
-        }
-      }
+      std::vector<std::string> pkColumns =
+          getPKColumnsFromCatalog(pgConn, table.schema_name, table.table_name);
 
-      // Get actual PostgreSQL columns to filter source columns
-      std::set<std::string> pgColumnSet;
-      try {
-        std::string lowerSchema = table.schema_name;
-        std::transform(lowerSchema.begin(), lowerSchema.end(),
-                       lowerSchema.begin(), ::tolower);
-        std::string lowerTable = table.table_name;
-        std::transform(lowerTable.begin(), lowerTable.end(), lowerTable.begin(),
-                       ::tolower);
-        pqxx::work txn(pgConn);
-        auto pgColResult =
-            txn.exec("SELECT column_name FROM information_schema.columns "
-                     "WHERE table_schema = " +
-                     txn.quote(lowerSchema) + " AND table_name = " +
-                     txn.quote(lowerTable) + " ORDER BY ordinal_position");
-        txn.commit();
-        for (const auto &row : pgColResult) {
-          std::string colName = row[0].as<std::string>();
-          std::transform(colName.begin(), colName.end(), colName.begin(),
-                         ::tolower);
-          pgColumnSet.insert(colName);
-        }
-      } catch (const std::exception &e) {
-        Logger::warning(
-            LogCategory::TRANSFER, "dataFetcherThread",
-            "Error getting PostgreSQL columns, using all source columns: " +
-                std::string(e.what()));
-      }
+      std::string databaseName = extractDatabaseName(table.connection_string);
+      bool hasMoreData = true;
+      size_t lastProcessedOffset = 0;
 
-      // Filter columnNames to only include columns that exist in PostgreSQL
-      std::vector<std::string> validColumnNames;
-      for (size_t i = 0; i < columnNames.size(); ++i) {
-        if (pgColumnSet.empty() ||
-            pgColumnSet.find(columnNames[i]) != pgColumnSet.end()) {
-          validColumnNames.push_back(columnNames[i]);
-        }
-      }
-
-      if (validColumnNames.empty()) {
-        Logger::error(LogCategory::TRANSFER, "dataFetcherThread",
-                      "No valid columns found for " + table.schema_name + "." +
-                          table.table_name);
-        return;
-      }
-
-      while (isTableProcessingActive(tableKey)) {
+      while (hasMoreData) {
         chunkNumber++;
 
-        // Build select query with explicit column names that exist in
-        // PostgreSQL
+        executeQueryMSSQL(mssqlConn, "USE [" + databaseName + "];");
+
         std::string selectQuery = "SELECT ";
-        for (size_t i = 0; i < validColumnNames.size(); ++i) {
+        for (size_t i = 0; i < columnNames.size(); ++i) {
           if (i > 0)
             selectQuery += ", ";
-          selectQuery += "[" + validColumnNames[i] + "]";
+          selectQuery += "[" + columnNames[i] + "]";
         }
         selectQuery +=
             " FROM [" + table.schema_name + "].[" + table.table_name + "]";
-        selectQuery += " ORDER BY (SELECT 0) OFFSET 0 ROWS FETCH NEXT " +
-                       std::to_string(CHUNK_SIZE) + " ROWS ONLY;";
 
-        Logger::info(LogCategory::TRANSFER,
-                     "Executing MSSQL query: " + selectQuery);
+        if (!pkColumns.empty()) {
+          selectQuery += " ORDER BY ";
+          for (size_t i = 0; i < pkColumns.size(); ++i) {
+            if (i > 0)
+              selectQuery += ", ";
+            selectQuery += "[" + pkColumns[i] + "]";
+          }
+        }
 
-        // Fetch data
+        selectQuery += " OFFSET " + std::to_string(lastProcessedOffset) +
+                       " ROWS FETCH NEXT " + std::to_string(CHUNK_SIZE) +
+                       " ROWS ONLY;";
+
+        Logger::info(LogCategory::TRANSFER, "dataFetcherThread",
+                     "Executing query for chunk " +
+                         std::to_string(chunkNumber) + " on " +
+                         table.schema_name + "." + table.table_name);
+
         std::vector<std::vector<std::string>> results =
             executeQueryMSSQL(mssqlConn, selectQuery);
 
-        Logger::info(LogCategory::TRANSFER,
-                     "Query returned " + std::to_string(results.size()) +
-                         " rows for " + table.schema_name + "." +
-                         table.table_name);
+        Logger::info(LogCategory::TRANSFER, "dataFetcherThread",
+                     "Retrieved " + std::to_string(results.size()) +
+                         " rows for chunk " + std::to_string(chunkNumber) +
+                         " on " + table.schema_name + "." + table.table_name);
 
         if (results.empty()) {
-          Logger::info(LogCategory::TRANSFER, "No more data available for " +
-                                                  table.schema_name + "." +
-                                                  table.table_name);
+          Logger::info(LogCategory::TRANSFER, "dataFetcherThread",
+                       "No more data to fetch for " + table.schema_name + "." +
+                           table.table_name);
+          hasMoreData = false;
           break;
         }
 
-        // Create data chunk - results already contain only valid columns
-        DataChunk chunk;
-        chunk.rawData = std::move(results);
-        chunk.chunkNumber = chunkNumber;
-        std::string lowerSchemaForChunk = table.schema_name;
-        std::transform(lowerSchemaForChunk.begin(), lowerSchemaForChunk.end(),
-                       lowerSchemaForChunk.begin(), ::tolower);
-        std::string lowerTableForChunk = table.table_name;
-        std::transform(lowerTableForChunk.begin(), lowerTableForChunk.end(),
-                       lowerTableForChunk.begin(), ::tolower);
-        chunk.schemaName = lowerSchemaForChunk;
-        chunk.tableName = lowerTableForChunk;
-        chunk.isLastChunk = false;
+        try {
+          std::string lowerSchemaName = table.schema_name;
+          std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
+                         lowerSchemaName.begin(), ::tolower);
 
-        // Push to queue (with timeout to prevent blocking)
-        auto start = std::chrono::steady_clock::now();
-        while (isTableProcessingActive(tableKey) &&
-               std::chrono::duration_cast<std::chrono::milliseconds>(
-                   std::chrono::steady_clock::now() - start)
-                       .count() < 5000) {
-          if (rawDataQueue.size() < MAX_QUEUE_SIZE) {
-            rawDataQueue.push(std::move(chunk));
-            break;
+          performBulkUpsert(pgConn, results, columnNames, columnTypes,
+                            lowerSchemaName, table.table_name,
+                            table.schema_name);
+
+          Logger::info(LogCategory::TRANSFER,
+                       "Successfully processed chunk " +
+                           std::to_string(chunkNumber) + " with " +
+                           std::to_string(results.size()) + " rows for " +
+                           table.schema_name + "." + table.table_name);
+
+          lastProcessedOffset += results.size();
+
+          if (results.size() < CHUNK_SIZE) {
+            Logger::info(LogCategory::TRANSFER, "dataFetcherThread",
+                         "Retrieved " + std::to_string(results.size()) +
+                             " rows (less than chunk size " +
+                             std::to_string(CHUNK_SIZE) +
+                             ") - ending data transfer");
+            hasMoreData = false;
           }
-          std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-
-        // Check if we got less data than expected (end of table)
-        if (results.size() < CHUNK_SIZE) {
-          break;
+        } catch (const std::exception &e) {
+          Logger::error(LogCategory::TRANSFER, "dataFetcherThread",
+                        "Error processing chunk: " + std::string(e.what()));
+          hasMoreData = false;
         }
       }
 
@@ -2337,259 +2291,6 @@ public:
     }
   }
 
-  void processDeletesByPrimaryKey(const std::string &schema_name,
-                                  const std::string &table_name,
-                                  SQLHDBC mssqlConn, pqxx::connection &pgConn) {
-    try {
-      std::string lowerSchemaName = schema_name;
-      std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
-                     lowerSchemaName.begin(), ::tolower);
-      std::string lowerTableName = table_name;
-      std::transform(lowerTableName.begin(), lowerTableName.end(),
-                     lowerTableName.begin(), ::tolower);
-
-      // 1. Obtener columnas de primary key
-      std::vector<std::string> pkColumns =
-          getPrimaryKeyColumns(mssqlConn, schema_name, table_name);
-
-      if (pkColumns.empty()) {
-        return;
-      }
-
-      // 2. Obtener todas las PKs de PostgreSQL en batches
-      const size_t BATCH_SIZE = SyncConfig::getChunkSize();
-      size_t offset = 0;
-      size_t totalDeleted = 0;
-
-      while (true) {
-        // Construir query para obtener PKs de PostgreSQL
-        std::string pkSelectQuery = "SELECT ";
-        for (size_t i = 0; i < pkColumns.size(); ++i) {
-          if (i > 0)
-            pkSelectQuery += ", ";
-          pkSelectQuery += "\"" + pkColumns[i] + "\"";
-        }
-        pkSelectQuery +=
-            " FROM \"" + lowerSchemaName + "\".\"" + lowerTableName + "\"";
-        pkSelectQuery += " LIMIT " + std::to_string(BATCH_SIZE) + " OFFSET " +
-                         std::to_string(offset) + ";";
-
-        // Ejecutar query en PostgreSQL
-        std::vector<std::vector<std::string>> pgPKs;
-        try {
-          pqxx::work txn(pgConn);
-          auto results = txn.exec(pkSelectQuery);
-          txn.commit();
-
-          for (const auto &row : results) {
-            std::vector<std::string> pkValues;
-            for (size_t i = 0;
-                 i < pkColumns.size() && i < static_cast<size_t>(row.size());
-                 ++i) {
-              pkValues.push_back(row[i].is_null() ? "NULL"
-                                                  : row[i].as<std::string>());
-            }
-            pgPKs.push_back(pkValues);
-          }
-        } catch (const std::exception &e) {
-          Logger::error(LogCategory::TRANSFER, "processDeletesByPrimaryKey",
-                        "Error getting PKs from PostgreSQL: " +
-                            std::string(e.what()));
-          break;
-        }
-
-        if (pgPKs.empty()) {
-          break; // No more data
-        }
-
-        // 3. Verificar cuáles PKs no existen en MSSQL
-        std::vector<std::vector<std::string>> deletedPKs =
-            findDeletedPrimaryKeys(mssqlConn, schema_name, table_name, pgPKs,
-                                   pkColumns);
-
-        // 4. Eliminar registros en PostgreSQL
-        if (!deletedPKs.empty()) {
-          size_t deletedCount = deleteRecordsByPrimaryKey(
-              pgConn, lowerSchemaName, lowerTableName, deletedPKs, pkColumns);
-          totalDeleted += deletedCount;
-
-          Logger::info(LogCategory::TRANSFER,
-                       "Deleted " + std::to_string(deletedCount) +
-                           " records from batch in " + schema_name + "." +
-                           table_name);
-        }
-
-        offset += BATCH_SIZE;
-
-        // Si obtuvimos menos registros que el batch size, hemos terminado
-        if (pgPKs.size() < BATCH_SIZE) {
-          break;
-        }
-      }
-
-      if (totalDeleted > 0) {
-        Logger::info(LogCategory::TRANSFER,
-                     "Total deleted records: " + std::to_string(totalDeleted) +
-                         " from " + schema_name + "." + table_name);
-      }
-
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::TRANSFER, "processDeletesByPrimaryKey",
-                    "Error processing deletes for " + schema_name + "." +
-                        table_name + ": " + std::string(e.what()));
-    }
-  }
-
-  void processUpdatesByPrimaryKey(const std::string &schema_name,
-                                  const std::string &table_name,
-                                  SQLHDBC mssqlConn, pqxx::connection &pgConn,
-                                  const std::string &timeColumn,
-                                  const std::string &lastSyncTime) {
-    try {
-      if (timeColumn.empty() || lastSyncTime.empty()) {
-        return;
-      }
-
-      std::string lowerSchemaName = schema_name;
-      std::transform(lowerSchemaName.begin(), lowerSchemaName.end(),
-                     lowerSchemaName.begin(), ::tolower);
-
-      // 1. Obtener columnas de primary key
-      std::vector<std::string> pkColumns =
-          getPrimaryKeyColumns(mssqlConn, schema_name, table_name);
-
-      if (pkColumns.empty()) {
-        return;
-      }
-
-      Logger::info(LogCategory::TRANSFER,
-                   "Processing updates for " + schema_name + "." + table_name +
-                       " using time column: " + timeColumn +
-                       " since: " + lastSyncTime);
-
-      // 2. Obtener registros modificados desde MSSQL
-      std::string selectQuery = "SELECT * FROM [" + schema_name + "].[" +
-                                table_name + "] WHERE [" + timeColumn +
-                                "] > '" + escapeSQL(lastSyncTime) +
-                                "' ORDER BY [" + timeColumn + "]";
-
-      auto modifiedRecords = executeQueryMSSQL(mssqlConn, selectQuery);
-
-      if (modifiedRecords.empty()) {
-        return;
-      }
-
-      // 3. Obtener nombres de columnas de MSSQL
-      std::string columnQuery =
-          "SELECT c.name AS COLUMN_NAME "
-          "FROM sys.columns c "
-          "INNER JOIN sys.tables t ON c.object_id = t.object_id "
-          "INNER JOIN sys.schemas s ON t.schema_id = s.schema_id "
-          "WHERE s.name = '" +
-          escapeSQL(schema_name) + "' AND t.name = '" + escapeSQL(table_name) +
-          "' ORDER BY c.column_id";
-
-      auto columnNames = executeQueryMSSQL(mssqlConn, columnQuery);
-      if (columnNames.empty() || columnNames[0].empty()) {
-        Logger::error(LogCategory::TRANSFER, "processUpdatesByPrimaryKey",
-                      "Could not get column names for " + schema_name + "." +
-                          table_name);
-        return;
-      }
-
-      // 4. Procesar cada registro modificado con límite de seguridad
-      size_t totalUpdated = 0;
-      size_t processedRecords = 0;
-      const size_t MAX_PROCESSED_RECORDS =
-          10000; // Límite adicional de seguridad
-
-      for (const auto &record : modifiedRecords) {
-        // Verificar límite de registros procesados para evitar bucles infinitos
-        if (processedRecords >= MAX_PROCESSED_RECORDS) {
-          Logger::warning(
-              LogCategory::TRANSFER,
-              "Update processing reached maximum processed records limit (" +
-                  std::to_string(MAX_PROCESSED_RECORDS) + ") for " +
-                  schema_name + "." + table_name +
-                  " - stopping to prevent infinite loop");
-          break;
-        }
-        if (record.size() != columnNames.size()) {
-          Logger::warning(LogCategory::TRANSFER,
-                          "Record size mismatch for " + schema_name + "." +
-                              table_name + " - skipping record");
-          continue;
-        }
-
-        processedRecords++;
-
-        // Construir WHERE clause para primary key
-        std::string whereClause = "";
-        for (size_t i = 0; i < pkColumns.size(); ++i) {
-          // Encontrar el índice de la columna PK en el record
-          size_t pkIndex = 0;
-          for (size_t j = 0; j < columnNames.size(); ++j) {
-            std::string colName = columnNames[j][0];
-            std::transform(colName.begin(), colName.end(), colName.begin(),
-                           ::tolower);
-            if (colName == pkColumns[i]) {
-              pkIndex = j;
-              break;
-            }
-          }
-
-          if (i > 0)
-            whereClause += " AND ";
-          whereClause += "\"" + pkColumns[i] + "\" = " +
-                         (record[pkIndex].empty()
-                              ? "NULL"
-                              : "'" + escapeSQL(record[pkIndex]) + "'");
-        }
-
-        // Verificar si el registro existe en PostgreSQL
-        std::string lowerTableNamePG = table_name;
-        std::transform(lowerTableNamePG.begin(), lowerTableNamePG.end(),
-                       lowerTableNamePG.begin(), ::tolower);
-        std::string checkQuery = "SELECT COUNT(*) FROM \"" + lowerSchemaName +
-                                 "\".\"" + lowerTableNamePG + "\" WHERE " +
-                                 whereClause;
-
-        pqxx::work txn(pgConn);
-        auto result = txn.exec(checkQuery);
-        txn.commit();
-
-        if (result[0][0].as<int>() > 0) {
-          // El registro existe, verificar si necesita actualización
-          bool needsUpdate =
-              compareAndUpdateRecord(pgConn, lowerSchemaName, table_name,
-                                     record, columnNames, whereClause);
-
-          if (needsUpdate) {
-            totalUpdated++;
-          }
-        }
-      }
-
-      if (totalUpdated > 0) {
-        Logger::info(LogCategory::TRANSFER,
-                     "Updated " + std::to_string(totalUpdated) + " out of " +
-                         std::to_string(processedRecords) +
-                         " processed records in " + schema_name + "." +
-                         table_name);
-      } else {
-        Logger::info(
-            LogCategory::TRANSFER,
-            "No updates needed for " + std::to_string(processedRecords) +
-                " processed records in " + schema_name + "." + table_name);
-      }
-
-    } catch (const std::exception &e) {
-      Logger::error(LogCategory::TRANSFER, "processUpdatesByPrimaryKey",
-                    "Error processing updates for " + schema_name + "." +
-                        table_name + ": " + std::string(e.what()));
-    }
-  }
-
 private:
   std::string escapeSQL(const std::string &value) {
     if (value.empty()) {
@@ -2660,76 +2361,6 @@ private:
     }
 
     return pkColumns;
-  }
-
-  std::vector<std::vector<std::string>>
-  findDeletedPrimaryKeys(SQLHDBC mssqlConn, const std::string &schema_name,
-                         const std::string &table_name,
-                         const std::vector<std::vector<std::string>> &pgPKs,
-                         const std::vector<std::string> &pkColumns) {
-
-    std::vector<std::vector<std::string>> deletedPKs;
-
-    if (pgPKs.empty() || pkColumns.empty()) {
-      return deletedPKs;
-    }
-
-    // Procesar en batches para evitar consultas muy largas
-    const size_t CHECK_BATCH_SIZE = SyncConfig::getChunkSize();
-
-    for (size_t batchStart = 0; batchStart < pgPKs.size();
-         batchStart += CHECK_BATCH_SIZE) {
-      size_t batchEnd = std::min(batchStart + CHECK_BATCH_SIZE, pgPKs.size());
-
-      // Construir query para verificar existencia en MSSQL
-      std::string checkQuery = "SELECT ";
-      for (size_t i = 0; i < pkColumns.size(); ++i) {
-        if (i > 0)
-          checkQuery += ", ";
-        checkQuery += "[" + pkColumns[i] + "]";
-      }
-      checkQuery += " FROM [" + schema_name + "].[" + table_name + "] WHERE (";
-
-      for (size_t i = batchStart; i < batchEnd; ++i) {
-        if (i > batchStart)
-          checkQuery += " OR ";
-        checkQuery += "(";
-        for (size_t j = 0; j < pkColumns.size(); ++j) {
-          if (j > 0)
-            checkQuery += " AND ";
-          std::string value = pgPKs[i][j];
-          if (value == "NULL") {
-            checkQuery += "[" + pkColumns[j] + "] IS NULL";
-          } else {
-            checkQuery += "[" + pkColumns[j] + "] = '" + escapeSQL(value) + "'";
-          }
-        }
-        checkQuery += ")";
-      }
-      checkQuery += ");";
-
-      // Ejecutar query en MSSQL
-      auto existingResults = executeQueryMSSQL(mssqlConn, checkQuery);
-
-      // Crear set de PKs que SÍ existen en MSSQL
-      std::set<std::vector<std::string>> existingPKs;
-      for (const auto &row : existingResults) {
-        std::vector<std::string> pkValues;
-        for (size_t i = 0; i < pkColumns.size() && i < row.size(); ++i) {
-          pkValues.push_back(row[i]);
-        }
-        existingPKs.insert(pkValues);
-      }
-
-      // Encontrar PKs que NO existen en MSSQL (deleted)
-      for (size_t i = batchStart; i < batchEnd; ++i) {
-        if (existingPKs.find(pgPKs[i]) == existingPKs.end()) {
-          deletedPKs.push_back(pgPKs[i]);
-        }
-      }
-    }
-
-    return deletedPKs;
   }
 
   std::string extractDatabaseName(const std::string &connectionString) {

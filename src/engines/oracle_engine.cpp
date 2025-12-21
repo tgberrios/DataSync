@@ -68,10 +68,6 @@ OCIConnection::OCIConnection(const std::string &connectionString) {
     key.erase(key.find_last_not_of(" \t\r\n") + 1);
     value.erase(0, value.find_first_not_of(" \t\r\n"));
     value.erase(value.find_last_not_of(" \t\r\n") + 1);
-    if (!value.empty() && ((value.front() == '"' && value.back() == '"') ||
-                           (value.front() == '\'' && value.back() == '\''))) {
-      value = value.substr(1, value.length() - 2);
-    }
     if (key == "user" || key == "USER")
       user = value;
     else if (key == "password" || key == "PASSWORD")

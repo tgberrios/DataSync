@@ -5683,14 +5683,7 @@ app.post("/api/test-connection", requireAuth, async (req, res) => {
           connStr.split(";").forEach((param) => {
             const [key, value] = param.split("=");
             if (key && value) {
-              let cleanValue = value.trim();
-              if (
-                (cleanValue.startsWith('"') && cleanValue.endsWith('"')) ||
-                (cleanValue.startsWith("'") && cleanValue.endsWith("'"))
-              ) {
-                cleanValue = cleanValue.slice(1, -1);
-              }
-              params[key.trim().toLowerCase()] = cleanValue;
+              params[key.trim().toLowerCase()] = value.trim();
             }
           });
 
@@ -5699,7 +5692,7 @@ app.post("/api/test-connection", requireAuth, async (req, res) => {
             password: params.password || "",
             connectString: `${params.host || "localhost"}:${
               params.port || 1521
-            }/${params.service || params.db || params.database || ""}`,
+            }/${params.db || params.database || ""}`,
             connectionTimeout: 5000,
           });
 
@@ -5995,14 +5988,7 @@ app.post("/api/discover-schemas", requireAuth, async (req, res) => {
           connStr.split(";").forEach((param) => {
             const [key, value] = param.split("=");
             if (key && value) {
-              let cleanValue = value.trim();
-              if (
-                (cleanValue.startsWith('"') && cleanValue.endsWith('"')) ||
-                (cleanValue.startsWith("'") && cleanValue.endsWith("'"))
-              ) {
-                cleanValue = cleanValue.slice(1, -1);
-              }
-              params[key.trim().toLowerCase()] = cleanValue;
+              params[key.trim().toLowerCase()] = value.trim();
             }
           });
 
@@ -6011,7 +5997,7 @@ app.post("/api/discover-schemas", requireAuth, async (req, res) => {
             password: params.password || "",
             connectString: `${params.host || "localhost"}:${
               params.port || 1521
-            }/${params.service || params.db || params.database || ""}`,
+            }/${params.db || params.database || ""}`,
             connectionTimeout: 5000,
           });
 
@@ -6296,14 +6282,7 @@ app.post("/api/discover-tables", requireAuth, async (req, res) => {
           connStr.split(";").forEach((param) => {
             const [key, value] = param.split("=");
             if (key && value) {
-              let cleanValue = value.trim();
-              if (
-                (cleanValue.startsWith('"') && cleanValue.endsWith('"')) ||
-                (cleanValue.startsWith("'") && cleanValue.endsWith("'"))
-              ) {
-                cleanValue = cleanValue.slice(1, -1);
-              }
-              params[key.trim().toLowerCase()] = cleanValue;
+              params[key.trim().toLowerCase()] = value.trim();
             }
           });
 
@@ -6312,7 +6291,7 @@ app.post("/api/discover-tables", requireAuth, async (req, res) => {
             password: params.password || "",
             connectString: `${params.host || "localhost"}:${
               params.port || 1521
-            }/${params.service || params.db || params.database || ""}`,
+            }/${params.db || params.database || ""}`,
             connectionTimeout: 5000,
           });
 
