@@ -1121,6 +1121,7 @@ void CustomJobExecutor::insertDataToMSSQL(const CustomJob &job,
 
 void CustomJobExecutor::createOracleTable(
     const CustomJob &job, const std::vector<std::string> &columns) {
+  OCIStmt *stmt = nullptr;
   try {
     auto conn = std::make_unique<OCIConnection>(job.target_connection_string);
     if (!conn->isValid()) {
@@ -1159,7 +1160,6 @@ void CustomJobExecutor::createOracleTable(
                 << "END IF; "
                 << "END;";
 
-    OCIStmt *stmt = nullptr;
     sword status =
         OCIHandleAlloc(env, (void **)&stmt, OCI_HTYPE_STMT, 0, nullptr);
     if (status != OCI_SUCCESS) {
@@ -1171,6 +1171,7 @@ void CustomJobExecutor::createOracleTable(
                             OCI_NTV_SYNTAX, OCI_DEFAULT);
     if (status != OCI_SUCCESS) {
       OCIHandleFree(stmt, OCI_HTYPE_STMT);
+      stmt = nullptr;
       throw std::runtime_error("OCIStmtPrepare failed");
     }
 
@@ -1182,15 +1183,20 @@ void CustomJobExecutor::createOracleTable(
       OCIErrorGet(err, 1, nullptr, &errcode, (OraText *)errbuf, sizeof(errbuf),
                   OCI_HTYPE_ERROR);
       OCIHandleFree(stmt, OCI_HTYPE_STMT);
+      stmt = nullptr;
       throw std::runtime_error("OCIStmtExecute failed: " + std::string(errbuf));
     }
 
     OCIHandleFree(stmt, OCI_HTYPE_STMT);
+    stmt = nullptr;
 
     Logger::info(LogCategory::TRANSFER, "createOracleTable",
                  "Created/verified table " + oracleSchema + "." +
                      job.target_table);
   } catch (const std::exception &e) {
+    if (stmt != nullptr) {
+      OCIHandleFree(stmt, OCI_HTYPE_STMT);
+    }
     Logger::error(LogCategory::TRANSFER, "createOracleTable",
                   "Error creating Oracle table: " + std::string(e.what()));
     throw;
@@ -1199,6 +1205,7 @@ void CustomJobExecutor::createOracleTable(
 
 void CustomJobExecutor::insertDataToOracle(const CustomJob &job,
                                            const std::vector<json> &data) {
+  OCIStmt *stmt = nullptr;
   try {
     auto conn = std::make_unique<OCIConnection>(job.target_connection_string);
     if (!conn->isValid()) {
@@ -1317,7 +1324,7 @@ void CustomJobExecutor::insertDataToOracle(const CustomJob &job,
         insertQuery << ", SYSTIMESTAMP)";
       }
 
-      OCIStmt *stmt = nullptr;
+      stmt = nullptr;
       status = OCIHandleAlloc(env, (void **)&stmt, OCI_HTYPE_STMT, 0, nullptr);
       if (status != OCI_SUCCESS) {
         throw std::runtime_error("OCIHandleAlloc(STMT) failed");
@@ -1328,6 +1335,7 @@ void CustomJobExecutor::insertDataToOracle(const CustomJob &job,
                               query.length(), OCI_NTV_SYNTAX, OCI_DEFAULT);
       if (status != OCI_SUCCESS) {
         OCIHandleFree(stmt, OCI_HTYPE_STMT);
+        stmt = nullptr;
         throw std::runtime_error("OCIStmtPrepare failed");
       }
 
@@ -1339,11 +1347,13 @@ void CustomJobExecutor::insertDataToOracle(const CustomJob &job,
         OCIErrorGet(err, 1, nullptr, &errcode, (OraText *)errbuf,
                     sizeof(errbuf), OCI_HTYPE_ERROR);
         OCIHandleFree(stmt, OCI_HTYPE_STMT);
+        stmt = nullptr;
         throw std::runtime_error("OCIStmtExecute failed: " +
                                  std::string(errbuf));
       }
 
       OCIHandleFree(stmt, OCI_HTYPE_STMT);
+      stmt = nullptr;
       inserted += (endIdx - i);
     }
 
@@ -1351,6 +1361,9 @@ void CustomJobExecutor::insertDataToOracle(const CustomJob &job,
                  "Inserted " + std::to_string(inserted) + " rows into " +
                      oracleSchema + "." + job.target_table);
   } catch (const std::exception &e) {
+    if (stmt != nullptr) {
+      OCIHandleFree(stmt, OCI_HTYPE_STMT);
+    }
     Logger::error(LogCategory::TRANSFER, "insertDataToOracle",
                   "Error inserting data to Oracle: " + std::string(e.what()));
     throw;
@@ -1396,15 +1409,17 @@ void CustomJobExecutor::createMongoDBCollection(
 
 void CustomJobExecutor::insertDataToMongoDB(const CustomJob &job,
                                             const std::vector<json> &data) {
+  mongoc_collection_t *coll = nullptr;
+  std::vector<bson_t *> allDocPtrs;
   try {
     MongoDBEngine engine(job.target_connection_string);
     if (!engine.isValid()) {
       throw std::runtime_error("Failed to connect to MongoDB");
     }
 
-    mongoc_collection_t *coll = mongoc_client_get_collection(
-        engine.getClient(), job.target_schema.c_str(),
-        job.target_table.c_str());
+    coll = mongoc_client_get_collection(engine.getClient(),
+                                        job.target_schema.c_str(),
+                                        job.target_table.c_str());
     if (!coll) {
       throw std::runtime_error("Failed to get MongoDB collection");
     }
@@ -1439,6 +1454,7 @@ void CustomJobExecutor::insertDataToMongoDB(const CustomJob &job,
                 .count());
         bson_destroy(doc);
         docPtrs.push_back(docWithTimestamp);
+        allDocPtrs.push_back(docWithTimestamp);
         docs.push_back(docWithTimestamp);
       }
 
@@ -1449,7 +1465,9 @@ void CustomJobExecutor::insertDataToMongoDB(const CustomJob &job,
           for (auto *doc : docPtrs) {
             bson_destroy(doc);
           }
+          allDocPtrs.clear();
           mongoc_collection_destroy(coll);
+          coll = nullptr;
           throw std::runtime_error("Failed to insert into MongoDB: " +
                                    std::string(error.message));
         }
@@ -1459,14 +1477,24 @@ void CustomJobExecutor::insertDataToMongoDB(const CustomJob &job,
       for (auto *doc : docPtrs) {
         bson_destroy(doc);
       }
+      docPtrs.clear();
     }
 
-    mongoc_collection_destroy(coll);
+    if (coll) {
+      mongoc_collection_destroy(coll);
+      coll = nullptr;
+    }
 
     Logger::info(LogCategory::TRANSFER, "insertDataToMongoDB",
                  "Inserted " + std::to_string(inserted) + " documents into " +
                      job.target_schema + "." + job.target_table);
   } catch (const std::exception &e) {
+    for (auto *doc : allDocPtrs) {
+      bson_destroy(doc);
+    }
+    if (coll) {
+      mongoc_collection_destroy(coll);
+    }
     Logger::error(LogCategory::TRANSFER, "insertDataToMongoDB",
                   "Error inserting data to MongoDB: " + std::string(e.what()));
     throw;
