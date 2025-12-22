@@ -66,7 +66,8 @@ void APICatalogRepository::updateSyncStatus(const std::string &apiName,
     auto conn = getConnection();
     pqxx::work txn(conn);
     txn.exec_params(
-        "UPDATE metadata.api_catalog SET last_sync_status = $1, "
+        "UPDATE metadata.api_catalog SET status = $1, "
+        "last_sync_status = $1, "
         "last_sync_time = $2, updated_at = NOW() WHERE api_name = $3",
         status, lastSyncTime, apiName);
     txn.commit();
