@@ -8,15 +8,18 @@ Redshift — Data warehouse de AWS.
 DB2 — IBM (común en entornos legacy enterprise).
 
 
-emails
-telefonia? 
+emails esto sera mecesario ?
+telefonia?  sera necesario ? 
 
 
-que aguante webhooks ?  
+que aguante webhooks ?  esto seria en todos los ETL para tener alertas
+
 
 el monitor deberia monitorear todos los motores y que tenga charts como por ejemplo redgate
 
-Mapping Designer
+Mapping Designer esto para los ETL
+
+editar catalog para que sea un data warehouse
 
 y el de mssql de azure
 ┌─────────────────────────────────────────────────────────────────┐
