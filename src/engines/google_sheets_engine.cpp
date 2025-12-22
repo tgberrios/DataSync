@@ -1,10 +1,10 @@
 #include "engines/google_sheets_engine.h"
 #include "core/logger.h"
 #include <algorithm>
+#include <iomanip>
 #include <sstream>
 #include <thread>
 #include <unordered_set>
-
 
 std::mutex GoogleSheetsEngine::rateLimitMutex_;
 std::map<std::string, std::vector<std::chrono::steady_clock::time_point>>
@@ -24,12 +24,6 @@ GoogleSheetsEngine::GoogleSheetsEngine(const std::string &spreadsheetId,
     authConfig.type = "BEARER";
     authConfig.bearer_token = accessToken_;
     apiEngine_->setAuth(authConfig);
-  } else if (!apiKey_.empty()) {
-    AuthConfig authConfig;
-    authConfig.type = "API_KEY";
-    authConfig.api_key = apiKey_;
-    authConfig.api_key_header = "key";
-    apiEngine_->setAuth(authConfig);
   }
 
   apiEngine_->setTimeout(30);
@@ -42,7 +36,20 @@ std::string GoogleSheetsEngine::buildSheetsURL() {
   if (range_.empty()) {
     url += "Sheet1";
   } else {
-    url += range_;
+    std::ostringstream encoded;
+    encoded.fill('0');
+    encoded << std::hex;
+
+    for (char c : range_) {
+      if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+        encoded << c;
+      } else if (c == ' ') {
+        encoded << "%20";
+      } else {
+        encoded << '%' << std::setw(2) << int(static_cast<unsigned char>(c));
+      }
+    }
+    url += encoded.str();
   }
 
   return url;
