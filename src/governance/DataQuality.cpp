@@ -27,15 +27,8 @@ bool DataQuality::validateTable(pqxx::connection &conn,
     return false;
   }
 
-  // Basic SQL injection prevention
-  if (schema.find("'") != std::string::npos ||
-      schema.find(";") != std::string::npos ||
-      table.find("'") != std::string::npos ||
-      table.find(";") != std::string::npos) {
-    Logger::error(LogCategory::QUALITY, "validateTable",
-                  "Schema and table names contain invalid characters");
-    return false;
-  }
+  // Note: No need to validate characters here - quote_name() handles SQL
+  // injection protection
 
   auto start = std::chrono::high_resolution_clock::now();
 

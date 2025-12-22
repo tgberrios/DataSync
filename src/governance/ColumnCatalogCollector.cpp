@@ -612,15 +612,15 @@ void ColumnCatalogCollector::collectMSSQLColumns(
 
       SQLGetData(stmt, 1, SQL_C_CHAR, buffer, sizeof(buffer), &len);
       col.schema_name =
-          (len > 0 && len < sizeof(buffer)) ? std::string(buffer, len) : "";
+          (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer))) ? std::string(buffer, len) : "";
 
       SQLGetData(stmt, 2, SQL_C_CHAR, buffer, sizeof(buffer), &len);
       col.table_name =
-          (len > 0 && len < sizeof(buffer)) ? std::string(buffer, len) : "";
+          (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer))) ? std::string(buffer, len) : "";
 
       SQLGetData(stmt, 3, SQL_C_CHAR, buffer, sizeof(buffer), &len);
       col.column_name =
-          (len > 0 && len < sizeof(buffer)) ? std::string(buffer, len) : "";
+          (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer))) ? std::string(buffer, len) : "";
 
       col.db_engine = "MSSQL";
       col.connection_string = connectionString;
@@ -631,7 +631,7 @@ void ColumnCatalogCollector::collectMSSQLColumns(
 
       SQLGetData(stmt, 5, SQL_C_CHAR, buffer, sizeof(buffer), &len);
       col.data_type =
-          (len > 0 && len < sizeof(buffer)) ? std::string(buffer, len) : "";
+          (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer))) ? std::string(buffer, len) : "";
 
       SQLINTEGER maxLen;
       SQLGetData(stmt, 6, SQL_C_LONG, &maxLen, 0, &len);
@@ -651,7 +651,7 @@ void ColumnCatalogCollector::collectMSSQLColumns(
 
       SQLGetData(stmt, 10, SQL_C_CHAR, buffer, sizeof(buffer), &len);
       col.column_default =
-          (len > 0 && len < sizeof(buffer)) ? std::string(buffer, len) : "";
+          (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer))) ? std::string(buffer, len) : "";
 
       SQLSMALLINT isAutoInc;
       SQLGetData(stmt, 11, SQL_C_SHORT, &isAutoInc, 0, &len);

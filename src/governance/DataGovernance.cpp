@@ -352,14 +352,8 @@ DataGovernance::extractTableMetadata(const std::string &schema_name,
     throw std::invalid_argument("Schema name and table name cannot be empty");
   }
 
-  // Basic validation for SQL injection prevention
-  if (schema_name.find("'") != std::string::npos ||
-      schema_name.find(";") != std::string::npos ||
-      table_name.find("'") != std::string::npos ||
-      table_name.find(";") != std::string::npos) {
-    throw std::invalid_argument(
-        "Schema name and table name contain invalid characters");
-  }
+  // Note: No need to validate characters here - quote_name() handles SQL
+  // injection protection
 
   TableMetadata metadata;
   metadata.schema_name = schema_name;

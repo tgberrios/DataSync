@@ -1015,28 +1015,27 @@ void MaintenanceManager::executePostgreSQLMaintenance(
       throw std::runtime_error("Failed to connect to PostgreSQL");
     }
 
-    pqxx::work txn(conn);
     std::string query;
+    pqxx::nontransaction ntxn(conn);
 
     if (task.maintenance_type == "VACUUM") {
-      query = "VACUUM ANALYZE " + txn.quote_name(task.schema_name) + "." +
-              txn.quote_name(task.object_name);
+      query = "VACUUM ANALYZE " + ntxn.quote_name(task.schema_name) + "." +
+              ntxn.quote_name(task.object_name);
     } else if (task.maintenance_type == "ANALYZE") {
-      query = "ANALYZE " + txn.quote_name(task.schema_name) + "." +
-              txn.quote_name(task.object_name);
+      query = "ANALYZE " + ntxn.quote_name(task.schema_name) + "." +
+              ntxn.quote_name(task.object_name);
     } else if (task.maintenance_type == "REINDEX") {
       if (task.object_type == "INDEX") {
-        query = "REINDEX INDEX " + txn.quote_name(task.schema_name) + "." +
-                txn.quote_name(task.object_name);
+        query = "REINDEX INDEX " + ntxn.quote_name(task.schema_name) + "." +
+                ntxn.quote_name(task.object_name);
       } else {
-        query = "REINDEX TABLE " + txn.quote_name(task.schema_name) + "." +
-                txn.quote_name(task.object_name);
+        query = "REINDEX TABLE " + ntxn.quote_name(task.schema_name) + "." +
+                ntxn.quote_name(task.object_name);
       }
     }
 
     if (!query.empty()) {
-      txn.exec(query);
-      txn.commit();
+      ntxn.exec(query);
       Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
                    "Executed " + task.maintenance_type + " on " +
                        task.schema_name + "." + task.object_name);

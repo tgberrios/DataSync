@@ -15,7 +15,9 @@ using json = nlohmann::json;
 
 // Constructor initializes API sync component with PostgreSQL connection string
 StreamingData::StreamingData()
-    : apiToDb(DatabaseConfig::getPostgresConnectionString()) {}
+    : apiToDb(DatabaseConfig::getPostgresConnectionString()),
+      csvToDb(DatabaseConfig::getPostgresConnectionString()),
+      sheetsToDb(DatabaseConfig::getPostgresConnectionString()) {}
 
 // Destructor automatically shuts down the system, ensuring all threads are
 // properly joined and resources are cleaned up.
@@ -73,12 +75,14 @@ void StreamingData::run(std::function<bool()> shutdownCheck) {
 
   Logger::info(LogCategory::MONITORING,
                "Launching transfer threads (MariaDB, MSSQL, MongoDB, Oracle, "
-               "API, Custom Jobs)");
+               "API, CSV, Google Sheets, Custom Jobs)");
   threads.emplace_back(&StreamingData::mariaTransferThread, this);
   threads.emplace_back(&StreamingData::mssqlTransferThread, this);
   threads.emplace_back(&StreamingData::mongoTransferThread, this);
   threads.emplace_back(&StreamingData::oracleTransferThread, this);
   threads.emplace_back(&StreamingData::apiTransferThread, this);
+  threads.emplace_back(&StreamingData::csvTransferThread, this);
+  threads.emplace_back(&StreamingData::googleSheetsTransferThread, this);
   threads.emplace_back(&StreamingData::customJobsSchedulerThread, this);
 
   Logger::info(LogCategory::MONITORING,
@@ -882,6 +886,79 @@ void StreamingData::apiTransferThread() {
     std::this_thread::sleep_for(std::chrono::seconds(sleepSeconds));
   }
   Logger::info(LogCategory::MONITORING, "API transfer thread stopped");
+}
+
+void StreamingData::csvTransferThread() {
+  Logger::info(LogCategory::MONITORING, "CSV transfer thread started");
+  while (running) {
+    try {
+      Logger::info(LogCategory::MONITORING,
+                   "Starting CSV transfer cycle - sync interval: " +
+                       std::to_string(SyncConfig::getSyncInterval()) +
+                       " seconds");
+
+      auto startTime = std::chrono::high_resolution_clock::now();
+      csvToDb.syncAllCSVs();
+      auto endTime = std::chrono::high_resolution_clock::now();
+
+      auto duration =
+          std::chrono::duration_cast<std::chrono::seconds>(endTime - startTime);
+      Logger::info(LogCategory::MONITORING,
+                   "CSV transfer cycle completed successfully in " +
+                       std::to_string(duration.count()) + " seconds");
+    } catch (const std::exception &e) {
+      Logger::error(
+          LogCategory::MONITORING, "csvTransferThread",
+          "CRITICAL ERROR in CSV transfer cycle: " + std::string(e.what()) +
+              " - CSV data sync failed, retrying in " +
+              std::to_string(SyncConfig::getSyncInterval()) + " seconds");
+    }
+
+    size_t interval = SyncConfig::getSyncInterval();
+    size_t sleepSeconds = (interval > 0 && interval >= 4) ? (interval / 4) : 5;
+    if (sleepSeconds < 5)
+      sleepSeconds = 5;
+    std::this_thread::sleep_for(std::chrono::seconds(sleepSeconds));
+  }
+  Logger::info(LogCategory::MONITORING, "CSV transfer thread stopped");
+}
+
+void StreamingData::googleSheetsTransferThread() {
+  Logger::info(LogCategory::MONITORING,
+               "Google Sheets transfer thread started");
+  while (running) {
+    try {
+      Logger::info(LogCategory::MONITORING,
+                   "Starting Google Sheets transfer cycle - sync interval: " +
+                       std::to_string(SyncConfig::getSyncInterval()) +
+                       " seconds");
+
+      auto startTime = std::chrono::high_resolution_clock::now();
+      sheetsToDb.syncAllGoogleSheets();
+      auto endTime = std::chrono::high_resolution_clock::now();
+
+      auto duration =
+          std::chrono::duration_cast<std::chrono::seconds>(endTime - startTime);
+      Logger::info(LogCategory::MONITORING,
+                   "Google Sheets transfer cycle completed successfully in " +
+                       std::to_string(duration.count()) + " seconds");
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::MONITORING, "googleSheetsTransferThread",
+                    "CRITICAL ERROR in Google Sheets transfer cycle: " +
+                        std::string(e.what()) +
+                        " - Google Sheets data sync failed, retrying in " +
+                        std::to_string(SyncConfig::getSyncInterval()) +
+                        " seconds");
+    }
+
+    size_t interval = SyncConfig::getSyncInterval();
+    size_t sleepSeconds = (interval > 0 && interval >= 4) ? (interval / 4) : 5;
+    if (sleepSeconds < 5)
+      sleepSeconds = 5;
+    std::this_thread::sleep_for(std::chrono::seconds(sleepSeconds));
+  }
+  Logger::info(LogCategory::MONITORING,
+               "Google Sheets transfer thread stopped");
 }
 
 void StreamingData::customJobsSchedulerThread() {

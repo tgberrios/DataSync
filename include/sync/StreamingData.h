@@ -9,7 +9,9 @@
 #include "governance/MaintenanceManager.h"
 #include "metrics/MetricsCollector.h"
 #include "sync/APIToDatabaseSync.h"
+#include "sync/CSVToDatabaseSync.h"
 #include "sync/CustomJobExecutor.h"
+#include "sync/GoogleSheetsToDatabaseSync.h"
 #include "sync/MSSQLToPostgres.h"
 #include "sync/MariaDBToPostgres.h"
 #include "sync/MongoDBToPostgres.h"
@@ -45,6 +47,8 @@ private:
   MongoDBToPostgres mongoToPg;
   OracleToPostgres oracleToPg;
   APIToDatabaseSync apiToDb;
+  CSVToDatabaseSync csvToDb;
+  GoogleSheetsToDatabaseSync sheetsToDb;
   std::unique_ptr<CustomJobExecutor> customJobExecutor;
   CatalogManager catalogManager;
   DataQuality dataQuality;
@@ -57,6 +61,8 @@ private:
   void mongoTransferThread();
   void oracleTransferThread();
   void apiTransferThread();
+  void csvTransferThread();
+  void googleSheetsTransferThread();
   void customJobsSchedulerThread();
   void qualityThread();
   void maintenanceThread();

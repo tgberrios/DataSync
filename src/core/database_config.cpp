@@ -16,8 +16,8 @@ using json = nlohmann::json;
 
 std::string DatabaseConfig::postgres_host_ = "localhost";
 std::string DatabaseConfig::postgres_db_ = "DataLake";
-std::string DatabaseConfig::postgres_user_ = "postgres";
-std::string DatabaseConfig::postgres_password_ = "";
+std::string DatabaseConfig::postgres_user_ = "tomy.berrios";
+std::string DatabaseConfig::postgres_password_ = "Yucaquemada1";
 std::string DatabaseConfig::postgres_port_ = "5432";
 bool DatabaseConfig::initialized_ = false;
 std::mutex DatabaseConfig::configMutex_;

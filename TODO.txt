@@ -9,6 +9,8 @@ DB2 — IBM (común en entornos legacy enterprise).
 
 csv
 google sheets
+emails
+telefonia? 
 
 
 que aguante webhooks ?  
@@ -119,3 +121,33 @@ Contraste adecuado
 Feedback visual inmediato
 Estados claros
 La Tree View es ahora la vista por defecto y está optimizada para una navegación intuitiva.
+
+
+
+Transfer Metrics Details
+Schema:
+affiliatesservices
+Table:
+brands
+Database Engine:
+MSSQL
+Status:
+SUCCESS
+Transfer Type:
+SYNC
+Records Transferred:
+0
+Bytes Transferred:
+0.00 GB
+Memory Used:
+0.00 MB
+IO Operations/sec:
+0
+Started At:
+N/A
+Completed At:
+N/A
+Created At:
+12/31/1969, 7:00:00 PM
+Error Message:
+Unknown status: SKIP

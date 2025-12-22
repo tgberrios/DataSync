@@ -1,4 +1,5 @@
 #include "catalog/metadata_repository.h"
+#include "core/database_config.h"
 #include "core/logger.h"
 #include "engines/database_engine.h"
 #include "third_party/json.hpp"
@@ -292,6 +293,8 @@ int MetadataRepository::reactivateTablesWithData() {
     txn.commit();
 
     int reactivatedCount = 0;
+    std::string targetConnStr = DatabaseConfig::getPostgresConnectionString();
+    
     for (const auto &row : inactiveTables) {
       std::string schema = row[0].as<std::string>();
       std::string table = row[1].as<std::string>();
@@ -299,8 +302,8 @@ int MetadataRepository::reactivateTablesWithData() {
       std::string lowerSchema = StringUtils::toLower(schema);
       std::string lowerTable = StringUtils::toLower(table);
       try {
-        auto checkConn = getConnection();
-        pqxx::work checkTxn(checkConn);
+        pqxx::connection targetConn(targetConnStr);
+        pqxx::work checkTxn(targetConn);
         std::string query = "SELECT COUNT(*) FROM " +
                             checkTxn.quote_name(lowerSchema) + "." +
                             checkTxn.quote_name(lowerTable);
@@ -310,20 +313,24 @@ int MetadataRepository::reactivateTablesWithData() {
           rowCount = countResult[0][0].as<int64_t>();
         }
         if (rowCount > 0) {
-          checkTxn.exec_params(
+          auto updateConn = getConnection();
+          pqxx::work updateTxn(updateConn);
+          updateTxn.exec_params(
               "UPDATE metadata.catalog SET active = true "
               "WHERE schema_name = $1 AND table_name = $2 AND db_engine = $3",
               schema, table, dbEngine);
-          checkTxn.commit();
+          updateTxn.commit();
           reactivatedCount++;
-        } else {
-          checkTxn.commit();
         }
       } catch (const std::exception &e) {
-        Logger::warning(LogCategory::DATABASE, "MetadataRepository",
-                        "Table " + schema + "." + table +
-                            " does not exist or error checking data: " +
-                            std::string(e.what()));
+        std::string errorMsg = e.what();
+        if (errorMsg.find("does not exist") == std::string::npos &&
+            errorMsg.find("relation") == std::string::npos) {
+          Logger::warning(LogCategory::DATABASE, "MetadataRepository",
+                          "Table " + schema + "." + table +
+                              " does not exist or error checking data: " +
+                              std::string(e.what()));
+        }
       }
     }
 
