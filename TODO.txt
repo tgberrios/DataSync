@@ -16,6 +16,7 @@ que aguante webhooks ?
 
 el monitor deberia monitorear todos los motores y que tenga charts como por ejemplo redgate
 
+Mapping Designer
 
 y el de mssql de azure
 ┌─────────────────────────────────────────────────────────────────┐
