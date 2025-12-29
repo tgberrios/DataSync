@@ -504,31 +504,6 @@ CustomJobExecutor::executeQueryMongoDB(const std::string &connectionString,
   return results;
 }
 
-std::vector<json>
-CustomJobExecutor::transformData(const std::vector<json> &data,
-                                 const json &transformConfig) {
-  if (transformConfig.empty() || !transformConfig.is_object()) {
-    return data;
-  }
-
-  std::vector<json> transformed;
-  for (const auto &item : data) {
-    json transformedItem = item;
-    if (transformConfig.contains("column_mapping") &&
-        transformConfig["column_mapping"].is_object()) {
-      json newItem = json::object();
-      for (auto &element : transformConfig["column_mapping"].items()) {
-        if (item.contains(element.value().get<std::string>())) {
-          newItem[element.key()] = item[element.value().get<std::string>()];
-        }
-      }
-      transformedItem = newItem;
-    }
-    transformed.push_back(transformedItem);
-  }
-  return transformed;
-}
-
 std::vector<std::string>
 CustomJobExecutor::detectColumns(const std::vector<json> &data) {
   std::vector<std::string> columns;
@@ -607,8 +582,6 @@ void CustomJobExecutor::insertDataToPostgreSQL(const CustomJob &job,
     std::string fullTableName =
         txn.quote_name(schemaName) + "." + txn.quote_name(tableName);
 
-    txn.exec("TRUNCATE TABLE " + fullTableName);
-
     std::vector<std::string> columns = detectColumns(data);
     if (columns.empty()) {
       Logger::warning(LogCategory::TRANSFER, "insertDataToPostgreSQL",
@@ -616,6 +589,8 @@ void CustomJobExecutor::insertDataToPostgreSQL(const CustomJob &job,
       txn.commit();
       return;
     }
+
+    txn.exec("TRUNCATE TABLE " + fullTableName);
 
     size_t batchSize = 1000;
     size_t inserted = 0;
@@ -632,7 +607,10 @@ void CustomJobExecutor::insertDataToPostgreSQL(const CustomJob &job,
                        ::tolower);
         insertQuery << txn.quote_name(colName);
       }
-      insertQuery << ", _job_sync_at) VALUES ";
+
+      insertQuery << ", _job_sync_at";
+
+      insertQuery << ") VALUES ";
 
       size_t endIdx = std::min(i + batchSize, data.size());
       for (size_t j = i; j < endIdx; j++) {
@@ -656,17 +634,23 @@ void CustomJobExecutor::insertDataToPostgreSQL(const CustomJob &job,
             insertQuery << "NULL";
           }
         }
-        insertQuery << ", NOW())";
+
+        insertQuery << ", NOW()";
+
+        insertQuery << ")";
       }
 
-      txn.exec(insertQuery.str());
+      auto result = txn.exec(insertQuery.str());
       inserted += (endIdx - i);
     }
 
     txn.commit();
-    Logger::info(LogCategory::TRANSFER, "insertDataToPostgreSQL",
-                 "Inserted " + std::to_string(inserted) + " rows into " +
-                     schemaName + "." + tableName);
+
+    std::string logMsg = "Inserted " + std::to_string(inserted) +
+                         " rows into " + schemaName + "." + tableName +
+                         " (strategy: TRUNCATE)";
+
+    Logger::info(LogCategory::TRANSFER, "insertDataToPostgreSQL", logMsg);
   } catch (const std::exception &e) {
     Logger::error(LogCategory::TRANSFER, "insertDataToPostgreSQL",
                   "Error inserting data to PostgreSQL: " +
@@ -760,17 +744,17 @@ void CustomJobExecutor::insertDataToMariaDB(const CustomJob &job,
       throw std::runtime_error("Failed to connect to MariaDB: " + error);
     }
 
+    std::vector<std::string> columns = detectColumns(data);
+    if (columns.empty()) {
+      mysql_close(conn);
+      return;
+    }
+
     std::string truncateQuery = "TRUNCATE TABLE `" + job.target_table + "`";
     if (mysql_query(conn, truncateQuery.c_str())) {
       std::string error = mysql_error(conn);
       mysql_close(conn);
       throw std::runtime_error("Failed to truncate MariaDB table: " + error);
-    }
-
-    std::vector<std::string> columns = detectColumns(data);
-    if (columns.empty()) {
-      mysql_close(conn);
-      return;
     }
 
     size_t batchSize = 100;
@@ -785,7 +769,10 @@ void CustomJobExecutor::insertDataToMariaDB(const CustomJob &job,
           insertQuery << ", ";
         insertQuery << "`" << columns[j] << "`";
       }
-      insertQuery << ", `_job_sync_at`) VALUES ";
+
+      insertQuery << ", `_job_sync_at`";
+
+      insertQuery << ") VALUES ";
 
       size_t endIdx = std::min(i + batchSize, data.size());
       for (size_t j = i; j < endIdx; j++) {
@@ -829,7 +816,10 @@ void CustomJobExecutor::insertDataToMariaDB(const CustomJob &job,
             insertQuery << "NULL";
           }
         }
-        insertQuery << ", NOW())";
+
+        insertQuery << ", NOW()";
+
+        insertQuery << ")";
       }
 
       if (mysql_query(conn, insertQuery.str().c_str())) {
@@ -837,13 +827,17 @@ void CustomJobExecutor::insertDataToMariaDB(const CustomJob &job,
         mysql_close(conn);
         throw std::runtime_error("Failed to insert into MariaDB: " + error);
       }
+
       inserted += (endIdx - i);
     }
 
     mysql_close(conn);
-    Logger::info(LogCategory::TRANSFER, "insertDataToMariaDB",
-                 "Inserted " + std::to_string(inserted) + " rows into " +
-                     job.target_schema + "." + job.target_table);
+
+    std::string logMsg = "Inserted " + std::to_string(inserted) +
+                         " rows into " + job.target_schema + "." +
+                         job.target_table + " (strategy: TRUNCATE)";
+
+    Logger::info(LogCategory::TRANSFER, "insertDataToMariaDB", logMsg);
   } catch (const std::exception &e) {
     Logger::error(LogCategory::TRANSFER, "insertDataToMariaDB",
                   "Error inserting data to MariaDB: " + std::string(e.what()));
@@ -1005,6 +999,14 @@ void CustomJobExecutor::insertDataToMSSQL(const CustomJob &job,
       throw std::runtime_error("Failed to connect to MSSQL");
     }
 
+    std::vector<std::string> detectedColumns = detectColumns(data);
+    if (detectedColumns.empty()) {
+      SQLDisconnect(dbc);
+      SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+      SQLFreeHandle(SQL_HANDLE_ENV, env);
+      return;
+    }
+
     std::string truncateQuery =
         "TRUNCATE TABLE [" + job.target_schema + "].[" + job.target_table + "]";
     SQLHSTMT truncateStmt = SQL_NULL_HSTMT;
@@ -1012,14 +1014,6 @@ void CustomJobExecutor::insertDataToMSSQL(const CustomJob &job,
     if (SQL_SUCCEEDED(ret)) {
       SQLExecDirect(truncateStmt, (SQLCHAR *)truncateQuery.c_str(), SQL_NTS);
       SQLFreeHandle(SQL_HANDLE_STMT, truncateStmt);
-    }
-
-    std::vector<std::string> detectedColumns = detectColumns(data);
-    if (detectedColumns.empty()) {
-      SQLDisconnect(dbc);
-      SQLFreeHandle(SQL_HANDLE_DBC, dbc);
-      SQLFreeHandle(SQL_HANDLE_ENV, env);
-      return;
     }
 
     size_t batchSize = 100;
@@ -1035,7 +1029,8 @@ void CustomJobExecutor::insertDataToMSSQL(const CustomJob &job,
           insertQuery << ", ";
         insertQuery << "[" << detectedColumns[j] << "]";
       }
-      insertQuery << ", [_job_sync_at]) VALUES ";
+      insertQuery << ", [_job_sync_at]";
+      insertQuery << ") VALUES ";
 
       size_t endIdx = std::min(i + batchSize, data.size());
       for (size_t j = i; j < endIdx; j++) {
@@ -1085,7 +1080,9 @@ void CustomJobExecutor::insertDataToMSSQL(const CustomJob &job,
             insertQuery << "NULL";
           }
         }
-        insertQuery << ", GETDATE())";
+
+        insertQuery << ", GETDATE()";
+        insertQuery << ")";
       }
 
       SQLHSTMT stmt = SQL_NULL_HSTMT;
@@ -1109,9 +1106,11 @@ void CustomJobExecutor::insertDataToMSSQL(const CustomJob &job,
     SQLFreeHandle(SQL_HANDLE_DBC, dbc);
     SQLFreeHandle(SQL_HANDLE_ENV, env);
 
-    Logger::info(LogCategory::TRANSFER, "insertDataToMSSQL",
-                 "Inserted " + std::to_string(inserted) + " rows into " +
-                     job.target_schema + "." + job.target_table);
+    std::string logMsg = "Inserted " + std::to_string(inserted) +
+                         " rows into " + job.target_schema + "." +
+                         job.target_table + " (strategy: TRUNCATE)";
+
+    Logger::info(LogCategory::TRANSFER, "insertDataToMSSQL", logMsg);
   } catch (const std::exception &e) {
     Logger::error(LogCategory::TRANSFER, "insertDataToMSSQL",
                   "Error inserting data to MSSQL: " + std::string(e.what()));
@@ -1225,6 +1224,11 @@ void CustomJobExecutor::insertDataToOracle(const CustomJob &job,
     OCIError *err = conn->getErr();
     OCISvcCtx *svc = conn->getSvc();
 
+    std::vector<std::string> detectedColumns = detectColumns(data);
+    if (detectedColumns.empty()) {
+      return;
+    }
+
     std::string truncateQuery =
         "TRUNCATE TABLE \"" + oracleSchema + "\".\"" + job.target_table + "\"";
     OCIStmt *truncateStmt = nullptr;
@@ -1252,11 +1256,6 @@ void CustomJobExecutor::insertDataToOracle(const CustomJob &job,
       OCIHandleFree(truncateStmt, OCI_HTYPE_STMT);
     }
 
-    std::vector<std::string> detectedColumns = detectColumns(data);
-    if (detectedColumns.empty()) {
-      return;
-    }
-
     size_t batchSize = 100;
     size_t inserted = 0;
 
@@ -1273,7 +1272,8 @@ void CustomJobExecutor::insertDataToOracle(const CustomJob &job,
                        ::toupper);
         insertQuery << "\"" << colName << "\"";
       }
-      insertQuery << ", \"_JOB_SYNC_AT\") VALUES ";
+      insertQuery << ", \"_JOB_SYNC_AT\"";
+      insertQuery << ") VALUES ";
 
       size_t endIdx = std::min(i + batchSize, data.size());
       for (size_t j = i; j < endIdx; j++) {
@@ -1321,11 +1321,14 @@ void CustomJobExecutor::insertDataToOracle(const CustomJob &job,
             insertQuery << "NULL";
           }
         }
-        insertQuery << ", SYSTIMESTAMP)";
+
+        insertQuery << ", SYSTIMESTAMP";
+        insertQuery << ")";
       }
 
       stmt = nullptr;
-      status = OCIHandleAlloc(env, (void **)&stmt, OCI_HTYPE_STMT, 0, nullptr);
+      sword status =
+          OCIHandleAlloc(env, (void **)&stmt, OCI_HTYPE_STMT, 0, nullptr);
       if (status != OCI_SUCCESS) {
         throw std::runtime_error("OCIHandleAlloc(STMT) failed");
       }
@@ -1354,12 +1357,15 @@ void CustomJobExecutor::insertDataToOracle(const CustomJob &job,
 
       OCIHandleFree(stmt, OCI_HTYPE_STMT);
       stmt = nullptr;
+
       inserted += (endIdx - i);
     }
 
-    Logger::info(LogCategory::TRANSFER, "insertDataToOracle",
-                 "Inserted " + std::to_string(inserted) + " rows into " +
-                     oracleSchema + "." + job.target_table);
+    std::string logMsg = "Inserted " + std::to_string(inserted) +
+                         " rows into " + oracleSchema + "." + job.target_table +
+                         " (strategy: TRUNCATE)";
+
+    Logger::info(LogCategory::TRANSFER, "insertDataToOracle", logMsg);
   } catch (const std::exception &e) {
     if (stmt != nullptr) {
       OCIHandleFree(stmt, OCI_HTYPE_STMT);
@@ -1425,6 +1431,12 @@ void CustomJobExecutor::insertDataToMongoDB(const CustomJob &job,
     }
 
     bson_error_t error;
+    bson_t *emptyFilter = bson_new();
+    bson_t *reply = bson_new();
+    mongoc_collection_delete_many(coll, emptyFilter, nullptr, reply, &error);
+    bson_destroy(emptyFilter);
+    bson_destroy(reply);
+
     size_t inserted = 0;
     size_t batchSize = 1000;
 
@@ -1487,7 +1499,8 @@ void CustomJobExecutor::insertDataToMongoDB(const CustomJob &job,
 
     Logger::info(LogCategory::TRANSFER, "insertDataToMongoDB",
                  "Inserted " + std::to_string(inserted) + " documents into " +
-                     job.target_schema + "." + job.target_table);
+                     job.target_schema + "." + job.target_table +
+                     " (strategy: TRUNCATE)");
   } catch (const std::exception &e) {
     for (auto *doc : allDocPtrs) {
       bson_destroy(doc);
@@ -1732,7 +1745,6 @@ int64_t CustomJobExecutor::executeJobAndGetLogId(const std::string &jobName) {
                                job.source_db_engine);
     }
 
-    results = transformData(results, job.transform_config);
     totalRowsProcessed = results.size();
 
     if (!results.empty()) {
