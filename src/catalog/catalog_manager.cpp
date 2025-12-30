@@ -2,6 +2,7 @@
 #include "catalog/catalog_lock.h"
 #include "core/Config.h"
 #include "core/logger.h"
+#include "engines/db2_engine.h"
 #include "engines/mariadb_engine.h"
 #include "engines/mongodb_engine.h"
 #include "engines/mssql_engine.h"
@@ -604,6 +605,8 @@ void CatalogManager::syncCatalog(const std::string &dbEngine) {
         engine = std::make_unique<MariaDBEngine>(connStr);
       else if (dbEngine == "MSSQL")
         engine = std::make_unique<MSSQLEngine>(connStr);
+      else if (dbEngine == "DB2")
+        engine = std::make_unique<DB2Engine>(connStr);
       else if (dbEngine == "PostgreSQL")
         engine = std::make_unique<PostgreSQLEngine>(connStr);
       else if (dbEngine == "MongoDB") {
@@ -758,3 +761,7 @@ void CatalogManager::syncCatalogMongoDBToPostgres() { syncCatalog("MongoDB"); }
 // Sync catalog from Oracle to PostgreSQL. This is a convenience wrapper
 // that calls syncCatalog with "Oracle" as the database engine parameter.
 void CatalogManager::syncCatalogOracleToPostgres() { syncCatalog("Oracle"); }
+
+// Sync catalog from DB2 to PostgreSQL. This is a convenience wrapper
+// that calls syncCatalog with "DB2" as the database engine parameter.
+void CatalogManager::syncCatalogDB2ToPostgres() { syncCatalog("DB2"); }

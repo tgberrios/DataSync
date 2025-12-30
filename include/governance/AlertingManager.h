@@ -62,6 +62,7 @@ private:
   bool evaluateRule(const AlertRule &rule);
   void sendNotification(const Alert &alert, const std::string &channels);
   std::string buildAlertMessage(const Alert &alert);
+  void triggerWebhooks(const Alert &alert);
 
 public:
   explicit AlertingManager(const std::string &connectionString);

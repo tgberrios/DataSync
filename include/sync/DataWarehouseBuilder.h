@@ -4,6 +4,7 @@
 #include "catalog/data_warehouse_repository.h"
 #include "core/logger.h"
 #include "engines/postgres_engine.h"
+#include "engines/warehouse_engine.h"
 #include "third_party/json.hpp"
 #include <memory>
 #include <pqxx/pqxx>
@@ -15,6 +16,10 @@ using json = nlohmann::json;
 class DataWarehouseBuilder {
   std::string metadataConnectionString_;
   std::unique_ptr<DataWarehouseRepository> warehouseRepo_;
+
+  std::unique_ptr<IWarehouseEngine>
+  createWarehouseEngine(const std::string &targetDbEngine,
+                        const std::string &targetConnectionString);
 
   void buildDimensionTable(const DataWarehouseModel &warehouse,
                            const DimensionTable &dimension);

@@ -1,5 +1,6 @@
 #include "governance/AlertingManager.h"
 #include "core/logger.h"
+#include "governance/WebhookManager.h"
 #include "third_party/json.hpp"
 #include <algorithm>
 #include <ctime>
@@ -573,6 +574,8 @@ void AlertingManager::sendNotification(const Alert &alert,
                   "ALERT [" + severityToString(alert.severity) +
                       "]: " + message);
 
+  triggerWebhooks(alert);
+
   if (channels.find("email") != std::string::npos) {
     Logger::info(LogCategory::GOVERNANCE, "AlertingManager",
                  "Email notification would be sent: " + message);
@@ -581,6 +584,16 @@ void AlertingManager::sendNotification(const Alert &alert,
   if (channels.find("slack") != std::string::npos) {
     Logger::info(LogCategory::GOVERNANCE, "AlertingManager",
                  "Slack notification would be sent: " + message);
+  }
+}
+
+void AlertingManager::triggerWebhooks(const Alert &alert) {
+  try {
+    WebhookManager webhookManager(connectionString_);
+    webhookManager.triggerAlertEvent(alert);
+  } catch (const std::exception &e) {
+    Logger::warning(LogCategory::GOVERNANCE, "AlertingManager",
+                    "Failed to trigger webhooks: " + std::string(e.what()));
   }
 }
 

@@ -3,6 +3,7 @@
 #include "core/database_config.h"
 #include "governance/QueryActivityLogger.h"
 #include "governance/QueryStoreCollector.h"
+#include "governance/WebhookManager.h"
 #include "third_party/json.hpp"
 #include <chrono>
 #include <ctime>
@@ -82,6 +83,7 @@ void StreamingData::run(std::function<bool()> shutdownCheck) {
   threads.emplace_back(&StreamingData::monitoringThread, this);
   threads.emplace_back(&StreamingData::qualityThread, this);
   threads.emplace_back(&StreamingData::maintenanceThread, this);
+  threads.emplace_back(&StreamingData::webhookMonitorThread, this);
   Logger::info(LogCategory::MONITORING, "Core threads launched successfully");
 
   Logger::info(LogCategory::MONITORING,
@@ -94,6 +96,7 @@ void StreamingData::run(std::function<bool()> shutdownCheck) {
   threads.emplace_back(&StreamingData::mongoTransferThread, this);
   threads.emplace_back(&StreamingData::oracleTransferThread, this);
   threads.emplace_back(&StreamingData::postgresTransferThread, this);
+  threads.emplace_back(&StreamingData::db2TransferThread, this);
   threads.emplace_back(&StreamingData::apiTransferThread, this);
   threads.emplace_back(&StreamingData::csvTransferThread, this);
   threads.emplace_back(&StreamingData::googleSheetsTransferThread, this);
@@ -431,6 +434,7 @@ void StreamingData::initializationThread() {
                  "Starting system initialization thread");
 
     initializeDataGovernance();
+    initializeWebhooks();
     initializeMetricsCollector();
     initializeQueryStoreCollector();
     initializeQueryActivityLogger();
@@ -443,6 +447,19 @@ void StreamingData::initializationThread() {
         LogCategory::MONITORING, "initializationThread",
         "CRITICAL ERROR in initializationThread: " + std::string(e.what()) +
             " - System initialization failed completely");
+  }
+}
+
+void StreamingData::initializeWebhooks() {
+  try {
+    std::string connStr = DatabaseConfig::getPostgresConnectionString();
+    WebhookManager webhookManager(connStr);
+    webhookManager.createWebhookTable();
+    Logger::info(LogCategory::GOVERNANCE, "initializeWebhooks",
+                 "Webhook table initialized successfully");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::GOVERNANCE, "initializeWebhooks",
+                  "Error initializing webhooks: " + std::string(e.what()));
   }
 }
 
@@ -538,6 +555,15 @@ void StreamingData::initializeDatabaseTables() {
     mssqlToPg.setupTableTargetMSSQLToPostgres();
     Logger::info(LogCategory::MONITORING,
                  "MSSQL target tables setup completed");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::MONITORING, "initializeDatabaseTables",
+                  "CRITICAL ERROR in MSSQL table setup: " +
+                      std::string(e.what()));
+  }
+
+  try {
+    db2ToPg.setupTableTargetDB2ToPostgres();
+    Logger::info(LogCategory::MONITORING, "DB2 target tables setup completed");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::MONITORING, "initializeDatabaseTables",
                   "CRITICAL ERROR in MSSQL table setup: " +
@@ -886,6 +912,46 @@ void StreamingData::postgresTransferThread() {
         std::chrono::seconds(SyncConfig::getSyncInterval()));
   }
   Logger::info(LogCategory::MONITORING, "PostgreSQL transfer thread stopped");
+}
+
+void StreamingData::db2TransferThread() {
+  Logger::info(LogCategory::MONITORING, "DB2 transfer thread started");
+  while (running) {
+    try {
+      Logger::info(LogCategory::MONITORING,
+                   "Starting DB2 transfer cycle - sync interval: " +
+                       std::to_string(SyncConfig::getSyncInterval()) +
+                       " seconds");
+
+      auto startTime = std::chrono::high_resolution_clock::now();
+      db2ToPg.transferDataDB2ToPostgresParallel();
+      auto endTime = std::chrono::high_resolution_clock::now();
+
+      auto duration =
+          std::chrono::duration_cast<std::chrono::seconds>(endTime - startTime);
+      Logger::info(LogCategory::MONITORING,
+                   "DB2 transfer cycle completed successfully in " +
+                       std::to_string(duration.count()) + " seconds");
+    } catch (const std::exception &e) {
+      Logger::error(
+          LogCategory::MONITORING, "db2TransferThread",
+          "CRITICAL ERROR in DB2 transfer cycle: " + std::string(e.what()) +
+              " - DB2 data sync failed, retrying in " +
+              std::to_string(SyncConfig::getSyncInterval()) + " seconds");
+    }
+
+    size_t interval = SyncConfig::getSyncInterval();
+    size_t sleepSeconds = (interval > 0 && interval >= 4) ? (interval / 4) : 5;
+    if (sleepSeconds < 5)
+      sleepSeconds = 5;
+    if (sleepSeconds > 60)
+      sleepSeconds = 60;
+
+    for (size_t i = 0; i < sleepSeconds && running; ++i) {
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+  }
+  Logger::info(LogCategory::MONITORING, "DB2 transfer thread stopped");
 }
 
 // API transfer thread that runs continuously while the system is running.
@@ -1461,6 +1527,19 @@ void StreamingData::maintenanceThread() {
 
       try {
         Logger::info(LogCategory::MONITORING,
+                     "Performing DB2 catalog sync maintenance");
+        catalogManager.syncCatalogDB2ToPostgres();
+        Logger::info(LogCategory::MONITORING,
+                     "DB2 catalog sync maintenance completed");
+      } catch (const std::exception &e) {
+        Logger::error(
+            LogCategory::MONITORING, "maintenanceThread",
+            "ERROR in DB2 catalog sync maintenance: " + std::string(e.what()) +
+                " - DB2 catalog may be out of sync");
+      }
+
+      try {
+        Logger::info(LogCategory::MONITORING,
                      "Performing catalog cleanup maintenance");
         catalogManager.cleanCatalog();
         Logger::info(LogCategory::MONITORING,
@@ -1612,6 +1691,24 @@ void StreamingData::monitoringThread() {
         std::chrono::seconds(SyncConfig::getSyncInterval()));
   }
   Logger::info(LogCategory::MONITORING, "Monitoring thread stopped");
+}
+
+void StreamingData::webhookMonitorThread() {
+  Logger::info(LogCategory::GOVERNANCE, "Webhook monitor thread started");
+  std::string connStr = DatabaseConfig::getPostgresConnectionString();
+  WebhookManager webhookManager(connStr);
+
+  while (running) {
+    try {
+      webhookManager.monitorLogsAndTriggerWebhooks();
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::GOVERNANCE, "webhookMonitorThread",
+                    "Error in webhook monitoring: " + std::string(e.what()));
+    }
+
+    std::this_thread::sleep_for(std::chrono::seconds(5));
+  }
+  Logger::info(LogCategory::GOVERNANCE, "Webhook monitor thread stopped");
 }
 
 // Validates tables for a specific database engine by querying metadata.catalog

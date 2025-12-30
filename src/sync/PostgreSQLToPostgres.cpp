@@ -508,13 +508,16 @@ void PostgreSQLToPostgres::transferDataPostgreSQLToPostgresParallel() {
       }
 
       try {
-        PostgreSQLEngine engine(table.connection_string);
-        std::vector<ColumnInfo> sourceColumns =
-            engine.getTableColumns(table.schema_name, table.table_name);
+        auto sourceConn = getPostgreSQLConnection(table.connection_string);
+        if (sourceConn) {
+          std::vector<ColumnInfo> sourceColumns =
+              SchemaSync::getTableColumnsPostgres(
+                  *sourceConn, table.schema_name, table.table_name);
 
-        if (!sourceColumns.empty()) {
-          SchemaSync::syncSchema(pgConn, table.schema_name, table.table_name,
-                                 sourceColumns, "PostgreSQL");
+          if (!sourceColumns.empty()) {
+            SchemaSync::syncSchema(pgConn, table.schema_name, table.table_name,
+                                   sourceColumns, "PostgreSQL");
+          }
         }
       } catch (const std::exception &e) {
         Logger::warning(LogCategory::TRANSFER,
@@ -940,6 +943,53 @@ void PostgreSQLToPostgres::dataFetcherThread(
   } catch (const std::exception &e) {
     Logger::error(LogCategory::TRANSFER, "dataFetcherThread",
                   "Error: " + std::string(e.what()));
+  }
+}
+
+void PostgreSQLToPostgres::processTableCDC(const TableInfo &table,
+                                           pqxx::connection &pgConn) {
+  std::string tableKey = table.schema_name + "." + table.table_name;
+  auto sourceConn = getPostgreSQLConnection(table.connection_string);
+  if (!sourceConn) {
+    Logger::error(LogCategory::TRANSFER, "processTableCDC",
+                  "Failed to get PostgreSQL connection for " + tableKey);
+    return;
+  }
+
+  try {
+    pqxx::work metaTxn(*sourceConn);
+    std::string query = "SELECT column_name, data_type, is_nullable "
+                        "FROM information_schema.columns "
+                        "WHERE table_schema = " +
+                        metaTxn.quote(table.schema_name) +
+                        " AND table_name = " + metaTxn.quote(table.table_name) +
+                        " ORDER BY ordinal_position";
+
+    auto colResult = metaTxn.exec(query);
+    metaTxn.commit();
+
+    if (colResult.empty()) {
+      Logger::error(LogCategory::TRANSFER, "processTableCDC",
+                    "No columns found for " + tableKey);
+      return;
+    }
+
+    std::vector<std::string> columnNames;
+    std::vector<std::string> columnTypes;
+    for (const auto &col : colResult) {
+      std::string colName = col[0].as<std::string>();
+      std::transform(colName.begin(), colName.end(), colName.begin(),
+                     ::tolower);
+      columnNames.push_back(colName);
+      columnTypes.push_back(col[1].as<std::string>());
+    }
+
+    processTableCDC(tableKey, sourceConn.get(), table, pgConn, columnNames,
+                    columnTypes);
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "processTableCDC",
+                  "Error in processTableCDC for " + tableKey + ": " +
+                      std::string(e.what()));
   }
 }
 

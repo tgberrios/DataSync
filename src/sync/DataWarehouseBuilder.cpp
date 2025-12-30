@@ -1,6 +1,10 @@
 #include "sync/DataWarehouseBuilder.h"
+#include "engines/bigquery_engine.h"
 #include "engines/mongodb_engine.h"
 #include "engines/oracle_engine.h"
+#include "engines/postgres_warehouse_engine.h"
+#include "engines/redshift_engine.h"
+#include "engines/snowflake_engine.h"
 #include "utils/connection_utils.h"
 #include "utils/engine_factory.h"
 #include <algorithm>
@@ -184,6 +188,23 @@ DataWarehouseBuilder::getWarehouse(const std::string &warehouseName) {
   return warehouseRepo_->getWarehouse(warehouseName);
 }
 
+std::unique_ptr<IWarehouseEngine> DataWarehouseBuilder::createWarehouseEngine(
+    const std::string &targetDbEngine,
+    const std::string &targetConnectionString) {
+  if (targetDbEngine == "PostgreSQL") {
+    return std::make_unique<PostgresWarehouseEngine>(targetConnectionString);
+  } else if (targetDbEngine == "Redshift") {
+    return std::make_unique<RedshiftEngine>(targetConnectionString);
+  } else if (targetDbEngine == "Snowflake") {
+    return std::make_unique<SnowflakeEngine>(targetConnectionString);
+  } else if (targetDbEngine == "BigQuery") {
+    return std::make_unique<BigQueryEngine>(targetConnectionString);
+  } else {
+    throw std::runtime_error("Unsupported target database engine: " +
+                             targetDbEngine);
+  }
+}
+
 void DataWarehouseBuilder::validateWarehouseModel(
     const DataWarehouseModel &warehouse) {
   if (warehouse.warehouse_name.empty()) {
@@ -315,24 +336,11 @@ void DataWarehouseBuilder::createDimensionTableStructure(
   }
 
   try {
-    pqxx::connection conn(warehouse.target_connection_string);
-    pqxx::work txn(conn);
+    auto engine = createWarehouseEngine(warehouse.target_db_engine,
+                                        warehouse.target_connection_string);
 
     std::string schemaName = dimension.target_schema;
-    std::transform(schemaName.begin(), schemaName.end(), schemaName.begin(),
-                   ::tolower);
-
-    txn.exec("CREATE SCHEMA IF NOT EXISTS " + txn.quote_name(schemaName));
-    txn.commit();
-
-    pqxx::work txn2(conn);
-
-    std::string tableName = dimension.target_table;
-    std::transform(tableName.begin(), tableName.end(), tableName.begin(),
-                   ::tolower);
-
-    std::string fullTableName =
-        txn2.quote_name(schemaName) + "." + txn2.quote_name(tableName);
+    engine->createSchema(schemaName);
 
     std::unordered_set<std::string> columnsSet(columns.begin(), columns.end());
 
@@ -348,27 +356,27 @@ void DataWarehouseBuilder::createDimensionTableStructure(
       }
     }
 
-    std::string createTableSQL =
-        "CREATE TABLE IF NOT EXISTS " + fullTableName + " (";
-
-    bool first = true;
+    std::vector<WarehouseColumnInfo> columnInfos;
     for (const auto &col : columns) {
-      if (!first)
-        createTableSQL += ", ";
-      std::string lowerCol = col;
-      std::transform(lowerCol.begin(), lowerCol.end(), lowerCol.begin(),
-                     ::tolower);
-      createTableSQL += txn2.quote_name(lowerCol) + " TEXT";
-      first = false;
+      WarehouseColumnInfo colInfo;
+      colInfo.name = col;
+      colInfo.data_type = "TEXT";
+      colInfo.is_nullable = true;
+      colInfo.default_value = "";
+      columnInfos.push_back(colInfo);
     }
 
-    createTableSQL += ")";
+    std::vector<std::string> primaryKeys;
+    if (!dimension.business_keys.empty()) {
+      primaryKeys = dimension.business_keys;
+    }
 
-    txn2.exec(createTableSQL);
-    txn2.commit();
+    engine->createTable(schemaName, dimension.target_table, columnInfos,
+                        primaryKeys);
 
     Logger::info(LogCategory::TRANSFER, "createDimensionTableStructure",
-                 "Created/verified schema and table: " + fullTableName);
+                 "Created/verified schema and table: " + schemaName + "." +
+                     dimension.target_table);
   } catch (const std::exception &e) {
     Logger::error(LogCategory::TRANSFER, "createDimensionTableStructure",
                   "Error creating dimension table structure: " +
@@ -406,46 +414,30 @@ void DataWarehouseBuilder::createFactTableStructure(
   }
 
   try {
-    pqxx::connection conn(warehouse.target_connection_string);
-    pqxx::work txn(conn);
+    auto engine = createWarehouseEngine(warehouse.target_db_engine,
+                                        warehouse.target_connection_string);
 
     std::string schemaName = fact.target_schema;
-    std::transform(schemaName.begin(), schemaName.end(), schemaName.begin(),
-                   ::tolower);
+    engine->createSchema(schemaName);
 
-    txn.exec("CREATE SCHEMA IF NOT EXISTS " + txn.quote_name(schemaName));
-    txn.commit();
-
-    pqxx::work txn2(conn);
-
-    std::string tableName = fact.target_table;
-    std::transform(tableName.begin(), tableName.end(), tableName.begin(),
-                   ::tolower);
-
-    std::string fullTableName =
-        txn2.quote_name(schemaName) + "." + txn2.quote_name(tableName);
-
-    std::string createTableSQL =
-        "CREATE TABLE IF NOT EXISTS " + fullTableName + " (";
-
-    bool first = true;
+    std::vector<WarehouseColumnInfo> columnInfos;
     for (const auto &col : columns) {
-      if (!first)
-        createTableSQL += ", ";
-      std::string lowerCol = col;
-      std::transform(lowerCol.begin(), lowerCol.end(), lowerCol.begin(),
-                     ::tolower);
-      createTableSQL += txn2.quote_name(lowerCol) + " TEXT";
-      first = false;
+      WarehouseColumnInfo colInfo;
+      colInfo.name = col;
+      colInfo.data_type = "TEXT";
+      colInfo.is_nullable = true;
+      colInfo.default_value = "";
+      columnInfos.push_back(colInfo);
     }
 
-    createTableSQL += ")";
+    std::vector<std::string> primaryKeys;
 
-    txn2.exec(createTableSQL);
-    txn2.commit();
+    engine->createTable(schemaName, fact.target_table, columnInfos,
+                        primaryKeys);
 
     Logger::info(LogCategory::TRANSFER, "createFactTableStructure",
-                 "Created/verified schema and table: " + fullTableName);
+                 "Created/verified schema and table: " + schemaName + "." +
+                     fact.target_table);
   } catch (const std::exception &e) {
     Logger::error(LogCategory::TRANSFER, "createFactTableStructure",
                   "Error creating fact table structure: " +
@@ -1057,23 +1049,13 @@ DataWarehouseBuilder::executeQueryMongoDB(const std::string &connectionString,
 void DataWarehouseBuilder::applySCDType1(const DataWarehouseModel &warehouse,
                                          const DimensionTable &dimension,
                                          const std::vector<json> &sourceData) {
-
-  pqxx::connection conn(warehouse.target_connection_string);
-  pqxx::work txn(conn);
+  auto engine = createWarehouseEngine(warehouse.target_db_engine,
+                                      warehouse.target_connection_string);
 
   std::string schemaName = dimension.target_schema;
-  std::transform(schemaName.begin(), schemaName.end(), schemaName.begin(),
-                 ::tolower);
   std::string tableName = dimension.target_table;
-  std::transform(tableName.begin(), tableName.end(), tableName.begin(),
-                 ::tolower);
-  std::string fullTableName =
-      txn.quote_name(schemaName) + "." + txn.quote_name(tableName);
-
-  txn.exec("TRUNCATE TABLE " + fullTableName);
 
   if (sourceData.empty()) {
-    txn.commit();
     return;
   }
 
@@ -1087,63 +1069,39 @@ void DataWarehouseBuilder::applySCDType1(const DataWarehouseModel &warehouse,
 
   size_t batchSize = 1000;
   for (size_t i = 0; i < sourceData.size(); i += batchSize) {
-    std::string insertSQL = "INSERT INTO " + fullTableName + " (";
-    bool first = true;
-    for (const auto &col : columns) {
-      if (!first)
-        insertSQL += ", ";
-      std::string lowerCol = col;
-      std::transform(lowerCol.begin(), lowerCol.end(), lowerCol.begin(),
-                     ::tolower);
-      insertSQL += txn.quote_name(lowerCol);
-      first = false;
-    }
-    insertSQL += ") VALUES ";
-
-    bool firstRow = true;
+    std::vector<std::vector<std::string>> batchRows;
     for (size_t j = i; j < std::min(i + batchSize, sourceData.size()); ++j) {
-      if (!firstRow)
-        insertSQL += ", ";
-      insertSQL += "(";
-      bool firstCol = true;
+      std::vector<std::string> row;
       for (const auto &col : columns) {
-        if (!firstCol)
-          insertSQL += ", ";
         if (sourceData[j].contains(col) && !sourceData[j][col].is_null()) {
           std::string value = sourceData[j][col].is_string()
                                   ? sourceData[j][col].get<std::string>()
                                   : sourceData[j][col].dump();
-          insertSQL += txn.quote(value);
+          row.push_back(value);
         } else {
-          insertSQL += "NULL";
+          row.push_back("");
         }
-        firstCol = false;
       }
-      insertSQL += ")";
-      firstRow = false;
+      batchRows.push_back(row);
     }
 
-    txn.exec(insertSQL);
+    if (!dimension.business_keys.empty()) {
+      engine->upsertData(schemaName, tableName, columns,
+                         dimension.business_keys, batchRows);
+    } else {
+      engine->insertData(schemaName, tableName, columns, batchRows);
+    }
   }
-
-  txn.commit();
 }
 
 void DataWarehouseBuilder::applySCDType2(const DataWarehouseModel &warehouse,
                                          const DimensionTable &dimension,
                                          const std::vector<json> &sourceData) {
-
-  pqxx::connection conn(warehouse.target_connection_string);
-  pqxx::work txn(conn);
+  auto engine = createWarehouseEngine(warehouse.target_db_engine,
+                                      warehouse.target_connection_string);
 
   std::string schemaName = dimension.target_schema;
-  std::transform(schemaName.begin(), schemaName.end(), schemaName.begin(),
-                 ::tolower);
   std::string tableName = dimension.target_table;
-  std::transform(tableName.begin(), tableName.end(), tableName.begin(),
-                 ::tolower);
-  std::string fullTableName =
-      txn.quote_name(schemaName) + "." + txn.quote_name(tableName);
 
   auto now = std::chrono::system_clock::now();
   auto timeT = std::chrono::system_clock::to_time_t(now);
@@ -1151,7 +1109,6 @@ void DataWarehouseBuilder::applySCDType2(const DataWarehouseModel &warehouse,
   timeStr << std::put_time(std::gmtime(&timeT), "%Y-%m-%d %H:%M:%S");
 
   if (sourceData.empty()) {
-    txn.commit();
     return;
   }
 
@@ -1163,38 +1120,56 @@ void DataWarehouseBuilder::applySCDType2(const DataWarehouseModel &warehouse,
   }
   std::vector<std::string> columns(columnsSet.begin(), columnsSet.end());
 
+  std::vector<std::vector<std::string>> rowsToInsert;
+
   for (const auto &row : sourceData) {
     std::string businessKeyWhere = "";
     for (size_t i = 0; i < dimension.business_keys.size(); ++i) {
       if (i > 0)
         businessKeyWhere += " AND ";
       std::string key = dimension.business_keys[i];
-      std::string lowerKey = key;
-      std::transform(lowerKey.begin(), lowerKey.end(), lowerKey.begin(),
-                     ::tolower);
       std::string value =
           row.contains(key) && !row[key].is_null()
               ? (row[key].is_string() ? row[key].get<std::string>()
                                       : row[key].dump())
               : "NULL";
-      businessKeyWhere += txn.quote_name(lowerKey) + " = " + txn.quote(value);
+      businessKeyWhere +=
+          engine->quoteIdentifier(key) + " = " + engine->quoteValue(value);
     }
 
     std::string checkQuery =
-        "SELECT COUNT(*) FROM " + fullTableName + " WHERE " + businessKeyWhere +
-        " AND " + txn.quote_name(dimension.is_current_column) + " = true";
+        "SELECT COUNT(*) as count FROM " + engine->quoteIdentifier(schemaName) +
+        "." + engine->quoteIdentifier(tableName) + " WHERE " +
+        businessKeyWhere + " AND " +
+        engine->quoteIdentifier(dimension.is_current_column) + " = true";
 
-    auto result = txn.exec(checkQuery);
-    int existingCount = result[0][0].as<int>();
+    auto result = engine->executeQuery(checkQuery);
+    int existingCount = 0;
+    if (!result.empty()) {
+      json firstRow = result[0];
+      if (firstRow.contains("count")) {
+        if (firstRow["count"].is_number()) {
+          existingCount = firstRow["count"].get<int>();
+        } else if (firstRow["count"].is_string()) {
+          try {
+            existingCount = std::stoi(firstRow["count"].get<std::string>());
+          } catch (...) {
+            existingCount = 0;
+          }
+        }
+      }
+    }
 
     if (existingCount > 0) {
       std::string updateQuery =
-          "UPDATE " + fullTableName + " SET " +
-          txn.quote_name(dimension.is_current_column) + " = false, " +
-          txn.quote_name(dimension.valid_to_column) + " = " +
-          txn.quote(timeStr.str()) + " WHERE " + businessKeyWhere + " AND " +
-          txn.quote_name(dimension.is_current_column) + " = true";
-      txn.exec(updateQuery);
+          "UPDATE " + engine->quoteIdentifier(schemaName) + "." +
+          engine->quoteIdentifier(tableName) + " SET " +
+          engine->quoteIdentifier(dimension.is_current_column) + " = false, " +
+          engine->quoteIdentifier(dimension.valid_to_column) + " = " +
+          engine->quoteValue(timeStr.str()) + " WHERE " + businessKeyWhere +
+          " AND " + engine->quoteIdentifier(dimension.is_current_column) +
+          " = true";
+      engine->executeStatement(updateQuery);
     }
 
     json newRow = row;
@@ -1202,53 +1177,37 @@ void DataWarehouseBuilder::applySCDType2(const DataWarehouseModel &warehouse,
     newRow[dimension.valid_to_column] = "9999-12-31 23:59:59";
     newRow[dimension.is_current_column] = "true";
 
-    std::string insertSQL = "INSERT INTO " + fullTableName + " (";
-    bool first = true;
+    std::vector<std::string> rowData;
     for (const auto &col : columns) {
-      if (!first)
-        insertSQL += ", ";
-      std::string lowerCol = col;
-      std::transform(lowerCol.begin(), lowerCol.end(), lowerCol.begin(),
-                     ::tolower);
-      insertSQL += txn.quote_name(lowerCol);
-      first = false;
-    }
-    std::string lowerValidFrom = dimension.valid_from_column;
-    std::transform(lowerValidFrom.begin(), lowerValidFrom.end(),
-                   lowerValidFrom.begin(), ::tolower);
-    std::string lowerValidTo = dimension.valid_to_column;
-    std::transform(lowerValidTo.begin(), lowerValidTo.end(),
-                   lowerValidTo.begin(), ::tolower);
-    std::string lowerIsCurrent = dimension.is_current_column;
-    std::transform(lowerIsCurrent.begin(), lowerIsCurrent.end(),
-                   lowerIsCurrent.begin(), ::tolower);
-    insertSQL += ", " + txn.quote_name(lowerValidFrom);
-    insertSQL += ", " + txn.quote_name(lowerValidTo);
-    insertSQL += ", " + txn.quote_name(lowerIsCurrent);
-    insertSQL += ") VALUES (";
-
-    first = true;
-    for (const auto &col : columns) {
-      if (!first)
-        insertSQL += ", ";
       if (newRow.contains(col) && !newRow[col].is_null()) {
         std::string value = newRow[col].is_string()
                                 ? newRow[col].get<std::string>()
                                 : newRow[col].dump();
-        insertSQL += txn.quote(value);
+        rowData.push_back(value);
       } else {
-        insertSQL += "NULL";
+        rowData.push_back("");
       }
-      first = false;
     }
-    insertSQL += ", " + txn.quote(timeStr.str());
-    insertSQL += ", '9999-12-31 23:59:59'";
-    insertSQL += ", true)";
-
-    txn.exec(insertSQL);
+    rowData.push_back(timeStr.str());
+    rowData.push_back("9999-12-31 23:59:59");
+    rowData.push_back("true");
+    rowsToInsert.push_back(rowData);
   }
 
-  txn.commit();
+  if (!rowsToInsert.empty()) {
+    std::vector<std::string> allColumns = columns;
+    allColumns.push_back(dimension.valid_from_column);
+    allColumns.push_back(dimension.valid_to_column);
+    allColumns.push_back(dimension.is_current_column);
+
+    size_t batchSize = 1000;
+    for (size_t i = 0; i < rowsToInsert.size(); i += batchSize) {
+      std::vector<std::vector<std::string>> batch(
+          rowsToInsert.begin() + i,
+          rowsToInsert.begin() + std::min(i + batchSize, rowsToInsert.size()));
+      engine->insertData(schemaName, tableName, allColumns, batch);
+    }
+  }
 }
 
 void DataWarehouseBuilder::applySCDType3(const DataWarehouseModel &warehouse,
@@ -1261,23 +1220,13 @@ void DataWarehouseBuilder::applySCDType3(const DataWarehouseModel &warehouse,
 void DataWarehouseBuilder::loadFactFullLoad(
     const DataWarehouseModel &warehouse, const FactTable &fact,
     const std::vector<json> &sourceData) {
-
-  pqxx::connection conn(warehouse.target_connection_string);
-  pqxx::work txn(conn);
+  auto engine = createWarehouseEngine(warehouse.target_db_engine,
+                                      warehouse.target_connection_string);
 
   std::string schemaName = fact.target_schema;
-  std::transform(schemaName.begin(), schemaName.end(), schemaName.begin(),
-                 ::tolower);
   std::string tableName = fact.target_table;
-  std::transform(tableName.begin(), tableName.end(), tableName.begin(),
-                 ::tolower);
-  std::string fullTableName =
-      txn.quote_name(schemaName) + "." + txn.quote_name(tableName);
-
-  txn.exec("TRUNCATE TABLE " + fullTableName);
 
   if (sourceData.empty()) {
-    txn.commit();
     return;
   }
 
@@ -1291,46 +1240,24 @@ void DataWarehouseBuilder::loadFactFullLoad(
 
   size_t batchSize = 1000;
   for (size_t i = 0; i < sourceData.size(); i += batchSize) {
-    std::string insertSQL = "INSERT INTO " + fullTableName + " (";
-    bool first = true;
-    for (const auto &col : columns) {
-      if (!first)
-        insertSQL += ", ";
-      std::string lowerCol = col;
-      std::transform(lowerCol.begin(), lowerCol.end(), lowerCol.begin(),
-                     ::tolower);
-      insertSQL += txn.quote_name(lowerCol);
-      first = false;
-    }
-    insertSQL += ") VALUES ";
-
-    bool firstRow = true;
+    std::vector<std::vector<std::string>> batchRows;
     for (size_t j = i; j < std::min(i + batchSize, sourceData.size()); ++j) {
-      if (!firstRow)
-        insertSQL += ", ";
-      insertSQL += "(";
-      bool firstCol = true;
+      std::vector<std::string> row;
       for (const auto &col : columns) {
-        if (!firstCol)
-          insertSQL += ", ";
         if (sourceData[j].contains(col) && !sourceData[j][col].is_null()) {
           std::string value = sourceData[j][col].is_string()
                                   ? sourceData[j][col].get<std::string>()
                                   : sourceData[j][col].dump();
-          insertSQL += txn.quote(value);
+          row.push_back(value);
         } else {
-          insertSQL += "NULL";
+          row.push_back("");
         }
-        firstCol = false;
       }
-      insertSQL += ")";
-      firstRow = false;
+      batchRows.push_back(row);
     }
 
-    txn.exec(insertSQL);
+    engine->insertData(schemaName, tableName, columns, batchRows);
   }
-
-  txn.commit();
 }
 
 void DataWarehouseBuilder::createIndexes(
@@ -1343,31 +1270,12 @@ void DataWarehouseBuilder::createIndexes(
   }
 
   try {
-    pqxx::connection conn(warehouse.target_connection_string);
-    pqxx::work txn(conn);
-
-    std::string lowerSchema = schemaName;
-    std::transform(lowerSchema.begin(), lowerSchema.end(), lowerSchema.begin(),
-                   ::tolower);
-    std::string lowerTable = tableName;
-    std::transform(lowerTable.begin(), lowerTable.end(), lowerTable.begin(),
-                   ::tolower);
-
-    std::string fullTableName =
-        txn.quote_name(lowerSchema) + "." + txn.quote_name(lowerTable);
-
+    auto engine = createWarehouseEngine(warehouse.target_db_engine,
+                                        warehouse.target_connection_string);
     for (const auto &col : indexColumns) {
-      std::string lowerCol = col;
-      std::transform(lowerCol.begin(), lowerCol.end(), lowerCol.begin(),
-                     ::tolower);
-      std::string indexName = "idx_" + lowerTable + "_" + lowerCol;
-      std::string createIndexSQL =
-          "CREATE INDEX IF NOT EXISTS " + txn.quote_name(indexName) + " ON " +
-          fullTableName + " (" + txn.quote_name(lowerCol) + ")";
-      txn.exec(createIndexSQL);
+      std::string idxName = "idx_" + tableName + "_" + col;
+      engine->createIndex(schemaName, tableName, {col}, idxName);
     }
-
-    txn.commit();
   } catch (const std::exception &e) {
     Logger::warning(LogCategory::TRANSFER, "createIndexes",
                     "Error creating indexes: " + std::string(e.what()));
@@ -1375,16 +1283,21 @@ void DataWarehouseBuilder::createIndexes(
 }
 
 void DataWarehouseBuilder::createPartitions(
-    const DataWarehouseModel & /*warehouse*/,
-    const std::string & /*schemaName*/, const std::string &tableName,
-    const std::string &partitionColumn) {
+    const DataWarehouseModel &warehouse, const std::string &schemaName,
+    const std::string &tableName, const std::string &partitionColumn) {
 
   if (partitionColumn.empty()) {
     return;
   }
 
-  Logger::info(LogCategory::TRANSFER, "createPartitions",
-               "Partitioning not yet implemented for: " + tableName);
+  try {
+    auto engine = createWarehouseEngine(warehouse.target_db_engine,
+                                        warehouse.target_connection_string);
+    engine->createPartition(schemaName, tableName, partitionColumn);
+  } catch (const std::exception &e) {
+    Logger::warning(LogCategory::TRANSFER, "createPartitions",
+                    "Error creating partitions: " + std::string(e.what()));
+  }
 }
 
 int64_t DataWarehouseBuilder::logToProcessLog(const std::string &warehouseName,

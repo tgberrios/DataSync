@@ -4,6 +4,7 @@
 #include "catalog/catalog_cleaner.h"
 #include "catalog/metadata_repository.h"
 #include "core/Config.h"
+#include "engines/db2_engine.h"
 #include "engines/mariadb_engine.h"
 #include "engines/mongodb_engine.h"
 #include "engines/mssql_engine.h"
@@ -37,6 +38,7 @@ public:
   void syncCatalogPostgresToPostgres();
   void syncCatalogMongoDBToPostgres();
   void syncCatalogOracleToPostgres();
+  void syncCatalogDB2ToPostgres();
 
 private:
   void syncCatalog(const std::string &dbEngine);

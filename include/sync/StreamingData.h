@@ -11,6 +11,7 @@
 #include "sync/APIToDatabaseSync.h"
 #include "sync/CSVToDatabaseSync.h"
 #include "sync/CustomJobExecutor.h"
+#include "sync/DB2ToPostgres.h"
 #include "sync/DataWarehouseBuilder.h"
 #include "sync/GoogleSheetsToDatabaseSync.h"
 #include "sync/MSSQLToPostgres.h"
@@ -49,6 +50,7 @@ private:
   MongoDBToPostgres mongoToPg;
   OracleToPostgres oracleToPg;
   PostgreSQLToPostgres postgresToPg;
+  DB2ToPostgres db2ToPg;
   APIToDatabaseSync apiToDb;
   CSVToDatabaseSync csvToDb;
   GoogleSheetsToDatabaseSync sheetsToDb;
@@ -65,6 +67,7 @@ private:
   void mongoTransferThread();
   void oracleTransferThread();
   void postgresTransferThread();
+  void db2TransferThread();
   void apiTransferThread();
   void csvTransferThread();
   void googleSheetsTransferThread();
@@ -74,10 +77,12 @@ private:
   void maintenanceThread();
   void monitoringThread();
   void datalakeSchedulerThread();
+  void webhookMonitorThread();
   void validateTablesForEngine(pqxx::connection &pgConn,
                                const std::string &dbEngine);
 
   void initializeDataGovernance();
+  void initializeWebhooks();
   void initializeMetricsCollector();
   void initializeQueryStoreCollector();
   void initializeQueryActivityLogger();

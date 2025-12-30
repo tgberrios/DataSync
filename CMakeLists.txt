@@ -70,6 +70,7 @@ add_executable(DataSync
     src/governance/DataRetentionManager.cpp
     src/governance/BusinessGlossaryManager.cpp
     src/governance/AlertingManager.cpp
+    src/governance/WebhookManager.cpp
     src/metrics/MetricsCollector.cpp
     src/utils/connection_utils.cpp
     src/utils/cluster_name_resolver.cpp
@@ -83,6 +84,7 @@ add_executable(DataSync
     src/engines/postgres_engine.cpp
     src/engines/mongodb_engine.cpp
     src/engines/oracle_engine.cpp
+    src/engines/db2_engine.cpp
     src/catalog/metadata_repository.cpp
     src/catalog/catalog_cleaner.cpp
     src/catalog/catalog_manager.cpp
@@ -92,6 +94,7 @@ add_executable(DataSync
     src/sync/MSSQLToPostgres.cpp
     src/sync/MongoDBToPostgres.cpp
     src/sync/OracleToPostgres.cpp
+    src/sync/DB2ToPostgres.cpp
     src/sync/SchemaSync.cpp
     src/sync/StreamingData.cpp
     src/sync/TableProcessorThreadPool.cpp
@@ -108,6 +111,11 @@ add_executable(DataSync
     src/sync/CSVToDatabaseSync.cpp
     src/engines/google_sheets_engine.cpp
     src/sync/GoogleSheetsToDatabaseSync.cpp
+    src/sync/PostgreSQLToPostgres.cpp
+    src/engines/redshift_engine.cpp
+    src/engines/snowflake_engine.cpp
+    src/engines/bigquery_engine.cpp
+    src/engines/postgres_warehouse_engine.cpp
 )
 
 # Configure executable output directory to project root
