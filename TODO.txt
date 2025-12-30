@@ -14,12 +14,7 @@ telefonia?  sera necesario ?
 
 que aguante webhooks ?  esto seria en todos los ETL para tener alertas
 
-
-el monitor deberia monitorear todos los motores y que tenga charts como por ejemplo redgate
-
-Mapping Designer esto para los ETL
-
-editar catalog para que sea un data warehouse
+Mapping Designer esto para los ETL para datalake
 
 y el de mssql de azure
 ┌─────────────────────────────────────────────────────────────────┐
@@ -193,3 +188,7 @@ Integración en:
 EngineFactory
 Modales de la UI (AddCSVModal, AddAPIModal, etc.)
 Constraints de base de datos
+
+modo oscuro en la ui 
+
+estandarizar todas las animaciones en la ui
