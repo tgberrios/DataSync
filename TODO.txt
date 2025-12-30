@@ -295,3 +295,6 @@ v2.0.0 - Enterprise (6+ meses)
 ├── Multi-tenant
 ├── Advanced streaming
 └── ML integration
+
+
+first selling version
