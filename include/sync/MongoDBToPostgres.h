@@ -36,6 +36,8 @@ public:
 
   void transferDataMongoDBToPostgresParallel();
   void setupTableTargetMongoDBToPostgres();
+  void processTableCDC(const DatabaseToPostgresSync::TableInfo &table,
+                       pqxx::connection &pgConn) override;
 
 private:
   bool shouldSyncCollection(pqxx::connection &pgConn,
@@ -61,8 +63,6 @@ private:
   void updateLastSyncTime(pqxx::connection &pgConn,
                           const std::string &schema_name,
                           const std::string &table_name);
-  void processTableCDC(const DatabaseToPostgresSync::TableInfo &table,
-                       pqxx::connection &pgConn) override;
 
   bool supportsCDC() const override { return true; }
   std::string getCDCMechanism() const override {

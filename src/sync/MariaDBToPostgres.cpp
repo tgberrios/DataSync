@@ -566,6 +566,7 @@ MariaDBToPostgres::getActiveTables(pqxx::connection &pgConn) {
         "pk_columns "
         "FROM metadata.catalog "
         "WHERE active=true AND db_engine='MariaDB' AND status != 'NO_DATA' "
+        "AND (cron_schedule IS NULL OR cron_schedule = '') "
         "ORDER BY schema_name, table_name;");
     txn.commit();
 

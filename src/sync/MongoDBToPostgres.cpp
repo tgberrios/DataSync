@@ -761,7 +761,8 @@ void MongoDBToPostgres::transferDataMongoDBToPostgresParallel() {
     auto result = txn.exec("SELECT schema_name, table_name, connection_string, "
                            "status "
                            "FROM metadata.catalog "
-                           "WHERE db_engine = 'MongoDB' AND active = true");
+                           "WHERE db_engine = 'MongoDB' AND active = true "
+                           "AND (cron_schedule IS NULL OR cron_schedule = '')");
 
     txn.commit();
 

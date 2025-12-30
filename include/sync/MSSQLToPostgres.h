@@ -197,6 +197,7 @@ public:
           "FROM metadata.catalog "
           "WHERE active=true AND db_engine='MSSQL' AND status != 'NO_DATA' "
           "AND schema_name != 'datasync_metadata' "
+          "AND (cron_schedule IS NULL OR cron_schedule = '') "
           "ORDER BY schema_name, table_name;");
       txn.commit();
 

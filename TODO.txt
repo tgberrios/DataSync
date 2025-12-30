@@ -14,8 +14,6 @@ telefonia?  sera necesario ?
 
 que aguante webhooks ?  esto seria en todos los ETL para tener alertas
 
-Mapping Designer esto para los ETL para datalake
-
 y el de mssql de azure
 ┌─────────────────────────────────────────────────────────────────┐
 │ PRIORITY 5: HIGH PRIORITY + HIGH COMPLEXITY                     │

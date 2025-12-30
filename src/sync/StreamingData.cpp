@@ -86,7 +86,8 @@ void StreamingData::run(std::function<bool()> shutdownCheck) {
 
   Logger::info(LogCategory::MONITORING,
                "Launching transfer threads (MariaDB, MSSQL, MongoDB, Oracle, "
-               "API, CSV, Google Sheets, Custom Jobs, Data Warehouse)");
+               "API, CSV, Google Sheets, Custom Jobs, Data Warehouse, Datalake "
+               "Scheduler)");
   threads.emplace_back(&StreamingData::mariaTransferThread, this);
   threads.emplace_back(&StreamingData::mssqlTransferThread, this);
   threads.emplace_back(&StreamingData::mongoTransferThread, this);
@@ -96,6 +97,7 @@ void StreamingData::run(std::function<bool()> shutdownCheck) {
   threads.emplace_back(&StreamingData::googleSheetsTransferThread, this);
   threads.emplace_back(&StreamingData::customJobsSchedulerThread, this);
   threads.emplace_back(&StreamingData::warehouseBuilderThread, this);
+  threads.emplace_back(&StreamingData::datalakeSchedulerThread, this);
 
   Logger::info(LogCategory::MONITORING,
                "Transfer threads launched successfully");
@@ -1634,4 +1636,307 @@ void StreamingData::validateTablesForEngine(pqxx::connection &pgConn,
                       " table validation: " + std::string(e.what()) + " - " +
                       dbEngine + " data quality checks failed");
   }
+}
+
+void StreamingData::datalakeSchedulerThread() {
+  Logger::info(LogCategory::MONITORING, "Datalake scheduler thread started");
+  while (running) {
+    try {
+      Logger::info(LogCategory::MONITORING,
+                   "Starting datalake scheduled tables check cycle");
+
+      processScheduledTables("MariaDB");
+      processScheduledTables("MSSQL");
+      processScheduledTables("MongoDB");
+      processScheduledTables("Oracle");
+
+      Logger::info(LogCategory::MONITORING,
+                   "Datalake scheduled tables check cycle completed");
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::MONITORING, "datalakeSchedulerThread",
+                    "CRITICAL ERROR in datalake scheduler cycle: " +
+                        std::string(e.what()) +
+                        " - Scheduled table processing failed");
+    }
+
+    std::this_thread::sleep_for(std::chrono::seconds(60));
+  }
+  Logger::info(LogCategory::MONITORING, "Datalake scheduler thread stopped");
+}
+
+void StreamingData::processScheduledTables(const std::string &dbEngine) {
+  try {
+    pqxx::connection pgConn(DatabaseConfig::getPostgresConnectionString());
+    if (!pgConn.is_open()) {
+      Logger::error(LogCategory::MONITORING, "processScheduledTables",
+                    "Cannot establish PostgreSQL connection for " + dbEngine);
+      return;
+    }
+
+    pqxx::work txn(pgConn);
+    std::string query =
+        "SELECT schema_name, table_name, connection_string, "
+        "COALESCE(pk_strategy, '') as pk_strategy, "
+        "COALESCE(status, '') as status, cron_schedule "
+        "FROM metadata.catalog "
+        "WHERE db_engine = $1 "
+        "AND active = true "
+        "AND cron_schedule IS NOT NULL "
+        "AND cron_schedule != '' "
+        "AND (next_sync_time IS NULL OR next_sync_time <= NOW()) "
+        "AND status IN ('FULL_LOAD', 'SYNC', 'IN_PROGRESS', "
+        "'LISTENING_CHANGES') "
+        "ORDER BY next_sync_time NULLS FIRST "
+        "LIMIT 50";
+
+    auto result = txn.exec_params(query, dbEngine);
+    txn.commit();
+
+    if (result.empty()) {
+      return;
+    }
+
+    Logger::info(LogCategory::MONITORING, "processScheduledTables",
+                 "Found " + std::to_string(result.size()) + " scheduled " +
+                     dbEngine + " tables to process");
+
+    auto currentTime = std::chrono::system_clock::now();
+    auto timeT = std::chrono::system_clock::to_time_t(currentTime);
+    std::tm *tm = std::gmtime(&timeT);
+    int currentMinute = tm->tm_min;
+    int currentHour = tm->tm_hour;
+    int currentDay = tm->tm_mday;
+    int currentMonth = tm->tm_mon + 1;
+    int currentDow = tm->tm_wday;
+
+    for (const auto &row : result) {
+      std::string schema = row[0].as<std::string>();
+      std::string table = row[1].as<std::string>();
+      std::string connStr = row[2].as<std::string>();
+      std::string pkStrategy = row[3].is_null() ? "" : row[3].as<std::string>();
+      std::string status = row[4].is_null() ? "" : row[4].as<std::string>();
+      std::string cronSchedule = row[5].as<std::string>();
+
+      std::istringstream cronStream(cronSchedule);
+      std::string minute, hour, day, month, dow;
+      cronStream >> minute >> hour >> day >> month >> dow;
+
+      bool shouldRun = matchesCronField(minute, currentMinute) &&
+                       matchesCronField(hour, currentHour) &&
+                       matchesCronField(day, currentDay) &&
+                       matchesCronField(month, currentMonth) &&
+                       matchesCronField(dow, currentDow);
+
+      if (!shouldRun) {
+        continue;
+      }
+
+      Logger::info(LogCategory::MONITORING, "processScheduledTables",
+                   "Processing scheduled table: " + schema + "." + table +
+                       " (cron: " + cronSchedule + ")");
+
+      try {
+        DatabaseToPostgresSync::TableInfo tableInfo;
+        tableInfo.schema_name = schema;
+        tableInfo.table_name = table;
+        tableInfo.connection_string = connStr;
+        tableInfo.db_engine = dbEngine;
+        tableInfo.status = status;
+        tableInfo.pk_strategy = pkStrategy;
+
+        pqxx::connection tablePgConn(
+            DatabaseConfig::getPostgresConnectionString());
+
+        try {
+          if (dbEngine == "MariaDB") {
+            mariaToPg.processTableParallel(tableInfo, tablePgConn);
+          } else if (dbEngine == "MSSQL") {
+            mssqlToPg.processTableParallel(tableInfo, tablePgConn);
+          } else if (dbEngine == "MongoDB") {
+            std::string effectiveStrategy =
+                pkStrategy.empty() ? "CDC" : pkStrategy;
+            if (effectiveStrategy == "CDC" && status != "FULL_LOAD") {
+              mongoToPg.processTableCDC(tableInfo, tablePgConn);
+            } else {
+              Logger::warning(LogCategory::MONITORING, "processScheduledTables",
+                              "MongoDB table " + schema + "." + table +
+                                  " requires full sync, skipping scheduled "
+                                  "processing (use regular transfer thread)");
+              continue;
+            }
+          } else if (dbEngine == "Oracle") {
+            oracleToPg.processTableParallel(tableInfo, tablePgConn);
+          }
+        } catch (const std::exception &e) {
+          Logger::error(LogCategory::MONITORING, "processScheduledTables",
+                        "Error processing table " + schema + "." + table +
+                            ": " + std::string(e.what()));
+          throw;
+        }
+
+        auto nextSync = calculateNextSyncTime(cronSchedule);
+        auto nextSyncTimeT = std::chrono::system_clock::to_time_t(nextSync);
+
+        pqxx::work updateTxn(pgConn);
+        std::string updateQuery =
+            "UPDATE metadata.catalog "
+            "SET next_sync_time = TO_TIMESTAMP(" +
+            std::to_string(nextSyncTimeT) +
+            ") "
+            "WHERE schema_name = " +
+            updateTxn.quote(schema) +
+            " AND table_name = " + updateTxn.quote(table) +
+            " AND db_engine = " + updateTxn.quote(dbEngine);
+        updateTxn.exec(updateQuery);
+        updateTxn.commit();
+
+        Logger::info(LogCategory::MONITORING, "processScheduledTables",
+                     "Successfully processed and scheduled next sync for " +
+                         schema + "." + table);
+
+      } catch (const std::exception &e) {
+        Logger::error(LogCategory::MONITORING, "processScheduledTables",
+                      "Error processing scheduled table " + schema + "." +
+                          table + ": " + std::string(e.what()));
+      }
+    }
+
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::MONITORING, "processScheduledTables",
+                  "Error processing scheduled tables for " + dbEngine + ": " +
+                      std::string(e.what()));
+  }
+}
+
+bool StreamingData::matchesCronField(const std::string &field,
+                                     int currentValue) {
+  if (field == "*") {
+    return true;
+  }
+
+  size_t dashPos = field.find('-');
+  size_t commaPos = field.find(',');
+  size_t slashPos = field.find('/');
+
+  if (dashPos != std::string::npos) {
+    try {
+      int start = std::stoi(field.substr(0, dashPos));
+      int end = std::stoi(field.substr(dashPos + 1));
+      return currentValue >= start && currentValue <= end;
+    } catch (...) {
+      return false;
+    }
+  }
+
+  if (commaPos != std::string::npos) {
+    std::istringstream listStream(field);
+    std::string item;
+    while (std::getline(listStream, item, ',')) {
+      try {
+        if (std::stoi(item) == currentValue) {
+          return true;
+        }
+      } catch (...) {
+        continue;
+      }
+    }
+    return false;
+  }
+
+  if (slashPos != std::string::npos) {
+    try {
+      std::string base = field.substr(0, slashPos);
+      int step = std::stoi(field.substr(slashPos + 1));
+      if (base == "*") {
+        return (currentValue % step) == 0;
+      } else {
+        int start = std::stoi(base);
+        return ((currentValue - start) % step) == 0 && currentValue >= start;
+      }
+    } catch (...) {
+      return false;
+    }
+  }
+
+  try {
+    return std::stoi(field) == currentValue;
+  } catch (...) {
+    return false;
+  }
+}
+
+std::chrono::system_clock::time_point
+StreamingData::calculateNextSyncTime(const std::string &cronSchedule) {
+  auto now = std::chrono::system_clock::now();
+  auto timeT = std::chrono::system_clock::to_time_t(now);
+  std::tm *tm = std::gmtime(&timeT);
+  std::tm nextTm = *tm;
+  nextTm.tm_sec = 0;
+  nextTm.tm_min++;
+
+  std::istringstream cronStream(cronSchedule);
+  std::string minute, hour, day, month, dow;
+  cronStream >> minute >> hour >> day >> month >> dow;
+
+  bool found = false;
+  int maxIterations = 366 * 24 * 60;
+  int iterations = 0;
+
+  while (!found && iterations < maxIterations) {
+    iterations++;
+
+    bool minuteMatch = matchesCronField(minute, nextTm.tm_min);
+    bool hourMatch = matchesCronField(hour, nextTm.tm_hour);
+    bool dayMatch = matchesCronField(day, nextTm.tm_mday);
+    bool monthMatch = matchesCronField(month, nextTm.tm_mon + 1);
+    bool dowMatch = matchesCronField(dow, nextTm.tm_wday);
+
+    if (minuteMatch && hourMatch && dayMatch && monthMatch && dowMatch) {
+      std::time_t nextTimeT = std::mktime(&nextTm);
+      if (nextTimeT > timeT) {
+        found = true;
+        break;
+      }
+    }
+
+    nextTm.tm_min++;
+    if (nextTm.tm_min >= 60) {
+      nextTm.tm_min = 0;
+      nextTm.tm_hour++;
+      if (nextTm.tm_hour >= 24) {
+        nextTm.tm_hour = 0;
+        nextTm.tm_mday++;
+        int daysInMonth = 31;
+        if (nextTm.tm_mon == 1) {
+          daysInMonth = 28;
+        } else if (nextTm.tm_mon == 3 || nextTm.tm_mon == 5 ||
+                   nextTm.tm_mon == 8 || nextTm.tm_mon == 10) {
+          daysInMonth = 30;
+        }
+        if (nextTm.tm_mday > daysInMonth) {
+          nextTm.tm_mday = 1;
+          nextTm.tm_mon++;
+          if (nextTm.tm_mon >= 12) {
+            nextTm.tm_mon = 0;
+            nextTm.tm_year++;
+          }
+        }
+      }
+    }
+  }
+
+  if (!found) {
+    nextTm.tm_min += 60;
+    if (nextTm.tm_min >= 60) {
+      nextTm.tm_min -= 60;
+      nextTm.tm_hour++;
+      if (nextTm.tm_hour >= 24) {
+        nextTm.tm_hour = 0;
+        nextTm.tm_mday++;
+      }
+    }
+  }
+
+  std::time_t nextTimeT = std::mktime(&nextTm);
+  return std::chrono::system_clock::from_time_t(nextTimeT);
 }

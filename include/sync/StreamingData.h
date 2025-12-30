@@ -70,6 +70,7 @@ private:
   void qualityThread();
   void maintenanceThread();
   void monitoringThread();
+  void datalakeSchedulerThread();
   void validateTablesForEngine(pqxx::connection &pgConn,
                                const std::string &dbEngine);
 
@@ -83,6 +84,10 @@ private:
   void processCatalogSyncExceptions(
       const std::vector<std::exception_ptr> &exceptions);
   void performCatalogMaintenance();
+  void processScheduledTables(const std::string &dbEngine);
+  std::chrono::system_clock::time_point
+  calculateNextSyncTime(const std::string &cronSchedule);
+  bool matchesCronField(const std::string &field, int currentValue);
 };
 
 #endif
