@@ -1131,27 +1131,187 @@ void StreamingData::warehouseBuilderThread() {
   while (running) {
     try {
       if (!warehouseBuilder) {
-        std::this_thread::sleep_for(std::chrono::hours(1));
+        std::this_thread::sleep_for(std::chrono::seconds(60));
         continue;
       }
 
-      Logger::info(LogCategory::MONITORING, "Starting warehouse build cycle");
-      auto startTime = std::chrono::high_resolution_clock::now();
+      std::string connStr = DatabaseConfig::getPostgresConnectionString();
+      pqxx::connection conn(connStr);
+      pqxx::work txn(conn);
 
-      warehouseBuilder->buildAllActiveWarehouses();
+      auto warehousesResult = txn.exec(
+          "SELECT warehouse_name, schedule_cron, metadata, active, enabled "
+          "FROM metadata.data_warehouse_catalog "
+          "WHERE active = true AND enabled = true");
 
-      auto endTime = std::chrono::high_resolution_clock::now();
-      auto duration =
-          std::chrono::duration_cast<std::chrono::seconds>(endTime - startTime);
-      Logger::info(LogCategory::MONITORING,
-                   "Warehouse build cycle completed in " +
-                       std::to_string(duration.count()) + " seconds");
+      std::vector<DataWarehouseModel> manualBuilds;
+      std::vector<DataWarehouseModel> scheduledBuilds;
+
+      auto now = std::chrono::system_clock::now();
+      auto timeT = std::chrono::system_clock::to_time_t(now);
+      struct tm *tm = std::gmtime(&timeT);
+      int currentMinute = tm->tm_min;
+      int currentHour = tm->tm_hour;
+      int currentDay = tm->tm_mday;
+      int currentMonth = tm->tm_mon + 1;
+      int currentDow = tm->tm_wday;
+
+      for (const auto &row : warehousesResult) {
+        std::string warehouseName = row["warehouse_name"].as<std::string>();
+        std::string scheduleCron = row["schedule_cron"].is_null()
+                                       ? ""
+                                       : row["schedule_cron"].as<std::string>();
+        std::string metadataStr = row["metadata"].is_null()
+                                      ? "{}"
+                                      : row["metadata"].as<std::string>();
+
+        json metadata = json::parse(metadataStr);
+
+        if (metadata.contains("build_now") &&
+            metadata["build_now"].get<bool>()) {
+          try {
+            DataWarehouseModel warehouse =
+                warehouseBuilder->getWarehouse(warehouseName);
+            manualBuilds.push_back(warehouse);
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::MONITORING, "warehouseBuilderThread",
+                          "Error getting warehouse " + warehouseName + ": " +
+                              std::string(e.what()));
+          }
+        } else if (!scheduleCron.empty()) {
+          try {
+            DataWarehouseModel warehouse =
+                warehouseBuilder->getWarehouse(warehouseName);
+            scheduledBuilds.push_back(warehouse);
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::MONITORING, "warehouseBuilderThread",
+                          "Error getting warehouse " + warehouseName + ": " +
+                              std::string(e.what()));
+          }
+        }
+      }
+
+      txn.commit();
+
+      for (const auto &warehouse : manualBuilds) {
+        Logger::info(LogCategory::MONITORING, "warehouseBuilderThread",
+                     "Executing manual build: " + warehouse.warehouse_name);
+        try {
+          warehouseBuilder->buildWarehouse(warehouse.warehouse_name);
+          pqxx::connection conn2(connStr);
+          pqxx::work txn2(conn2);
+          json updatedMetadata = warehouse.metadata;
+          updatedMetadata["build_now"] = false;
+          updatedMetadata.erase("build_timestamp");
+          txn2.exec_params(
+              "UPDATE metadata.data_warehouse_catalog SET metadata = "
+              "$1::jsonb WHERE warehouse_name = $2",
+              updatedMetadata.dump(), warehouse.warehouse_name);
+          txn2.commit();
+        } catch (const std::exception &e) {
+          Logger::error(LogCategory::MONITORING, "warehouseBuilderThread",
+                        "Error building warehouse " + warehouse.warehouse_name +
+                            ": " + std::string(e.what()));
+        }
+      }
+
+      auto matchesCronField = [](const std::string &field,
+                                 int currentValue) -> bool {
+        if (field == "*") {
+          return true;
+        }
+
+        size_t dashPos = field.find('-');
+        size_t commaPos = field.find(',');
+        size_t slashPos = field.find('/');
+
+        if (dashPos != std::string::npos) {
+          try {
+            int start = std::stoi(field.substr(0, dashPos));
+            int end = std::stoi(field.substr(dashPos + 1));
+            return currentValue >= start && currentValue <= end;
+          } catch (...) {
+            return false;
+          }
+        }
+
+        if (commaPos != std::string::npos) {
+          std::istringstream listStream(field);
+          std::string item;
+          while (std::getline(listStream, item, ',')) {
+            try {
+              if (std::stoi(item) == currentValue) {
+                return true;
+              }
+            } catch (...) {
+              continue;
+            }
+          }
+          return false;
+        }
+
+        if (slashPos != std::string::npos) {
+          try {
+            std::string base = field.substr(0, slashPos);
+            int step = std::stoi(field.substr(slashPos + 1));
+            if (base == "*") {
+              return currentValue % step == 0;
+            }
+            int baseValue = std::stoi(base);
+            return (currentValue - baseValue) % step == 0;
+          } catch (...) {
+            return false;
+          }
+        }
+
+        try {
+          return std::stoi(field) == currentValue;
+        } catch (...) {
+          return false;
+        }
+      };
+
+      for (const auto &warehouse : scheduledBuilds) {
+        if (warehouse.schedule_cron.empty()) {
+          continue;
+        }
+
+        if (warehouse.metadata.contains("build_now") &&
+            warehouse.metadata["build_now"].get<bool>()) {
+          continue;
+        }
+
+        std::istringstream cronStream(warehouse.schedule_cron);
+        std::string minute, hour, day, month, dow;
+        cronStream >> minute >> hour >> day >> month >> dow;
+
+        bool shouldRun = matchesCronField(minute, currentMinute) &&
+                         matchesCronField(hour, currentHour) &&
+                         matchesCronField(day, currentDay) &&
+                         matchesCronField(month, currentMonth) &&
+                         matchesCronField(dow, currentDow);
+
+        if (shouldRun) {
+          Logger::info(LogCategory::MONITORING, "warehouseBuilderThread",
+                       "Executing scheduled build: " +
+                           warehouse.warehouse_name);
+          try {
+            warehouseBuilder->buildWarehouse(warehouse.warehouse_name);
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::MONITORING, "warehouseBuilderThread",
+                          "Error building warehouse " +
+                              warehouse.warehouse_name + ": " +
+                              std::string(e.what()));
+          }
+        }
+      }
+
     } catch (const std::exception &e) {
       Logger::error(LogCategory::MONITORING, "warehouseBuilderThread",
                     "Error in warehouse build cycle: " + std::string(e.what()));
     }
 
-    std::this_thread::sleep_for(std::chrono::hours(1));
+    std::this_thread::sleep_for(std::chrono::seconds(60));
   }
   Logger::info(LogCategory::MONITORING, "Warehouse builder thread stopped");
 }

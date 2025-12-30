@@ -42,6 +42,10 @@ class DataWarehouseBuilder {
   std::vector<json> executeQueryMongoDB(const std::string &connectionString,
                                         const std::string &query);
 
+  std::vector<std::string>
+  getQueryColumnNames(const DataWarehouseModel &warehouse,
+                      const std::string &query);
+
   void applySCDType1(const DataWarehouseModel &warehouse,
                      const DimensionTable &dimension,
                      const std::vector<json> &sourceData);
@@ -83,6 +87,7 @@ public:
   void buildWarehouse(const std::string &warehouseName);
   int64_t buildWarehouseAndGetLogId(const std::string &warehouseName);
   void buildAllActiveWarehouses();
+  DataWarehouseModel getWarehouse(const std::string &warehouseName);
 
   void validateWarehouseModel(const DataWarehouseModel &warehouse);
 };

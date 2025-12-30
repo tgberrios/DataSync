@@ -179,6 +179,11 @@ void DataWarehouseBuilder::buildAllActiveWarehouses() {
   }
 }
 
+DataWarehouseModel
+DataWarehouseBuilder::getWarehouse(const std::string &warehouseName) {
+  return warehouseRepo_->getWarehouse(warehouseName);
+}
+
 void DataWarehouseBuilder::validateWarehouseModel(
     const DataWarehouseModel &warehouse) {
   if (warehouse.warehouse_name.empty()) {
@@ -285,11 +290,28 @@ void DataWarehouseBuilder::createDimensionTableStructure(
   std::vector<json> sampleData =
       executeSourceQuery(warehouse, dimension.source_query);
 
+  std::vector<std::string> columns;
+
   if (sampleData.empty()) {
-    Logger::warning(LogCategory::TRANSFER, "createDimensionTableStructure",
-                    "No sample data for dimension: " +
+    Logger::warning(
+        LogCategory::TRANSFER, "createDimensionTableStructure",
+        "No sample data for dimension: " + dimension.dimension_name +
+            ", attempting to get schema from query");
+    columns = getQueryColumnNames(warehouse, dimension.source_query);
+    if (columns.empty()) {
+      Logger::error(LogCategory::TRANSFER, "createDimensionTableStructure",
+                    "Could not determine columns for dimension: " +
                         dimension.dimension_name);
-    return;
+      return;
+    }
+  } else {
+    std::unordered_set<std::string> columnsSet;
+    for (const auto &row : sampleData) {
+      for (const auto &[key, value] : row.items()) {
+        columnsSet.insert(key);
+      }
+    }
+    columns = std::vector<std::string>(columnsSet.begin(), columnsSet.end());
   }
 
   try {
@@ -312,14 +334,7 @@ void DataWarehouseBuilder::createDimensionTableStructure(
     std::string fullTableName =
         txn2.quote_name(schemaName) + "." + txn2.quote_name(tableName);
 
-    std::unordered_set<std::string> columnsSet;
-    for (const auto &row : sampleData) {
-      for (const auto &[key, value] : row.items()) {
-        columnsSet.insert(key);
-      }
-    }
-
-    std::vector<std::string> columns(columnsSet.begin(), columnsSet.end());
+    std::unordered_set<std::string> columnsSet(columns.begin(), columns.end());
 
     if (dimension.scd_type == DimensionType::TYPE_2) {
       if (columnsSet.find(dimension.valid_from_column) == columnsSet.end()) {
@@ -368,10 +383,26 @@ void DataWarehouseBuilder::createFactTableStructure(
   std::vector<json> sampleData =
       executeSourceQuery(warehouse, fact.source_query);
 
+  std::vector<std::string> columns;
+
   if (sampleData.empty()) {
     Logger::warning(LogCategory::TRANSFER, "createFactTableStructure",
-                    "No sample data for fact: " + fact.fact_name);
-    return;
+                    "No sample data for fact: " + fact.fact_name +
+                        ", attempting to get schema from query");
+    columns = getQueryColumnNames(warehouse, fact.source_query);
+    if (columns.empty()) {
+      Logger::error(LogCategory::TRANSFER, "createFactTableStructure",
+                    "Could not determine columns for fact: " + fact.fact_name);
+      return;
+    }
+  } else {
+    std::unordered_set<std::string> columnsSet;
+    for (const auto &row : sampleData) {
+      for (const auto &[key, value] : row.items()) {
+        columnsSet.insert(key);
+      }
+    }
+    columns = std::vector<std::string>(columnsSet.begin(), columnsSet.end());
   }
 
   try {
@@ -393,15 +424,6 @@ void DataWarehouseBuilder::createFactTableStructure(
 
     std::string fullTableName =
         txn2.quote_name(schemaName) + "." + txn2.quote_name(tableName);
-
-    std::unordered_set<std::string> columnsSet;
-    for (const auto &row : sampleData) {
-      for (const auto &[key, value] : row.items()) {
-        columnsSet.insert(key);
-      }
-    }
-
-    std::vector<std::string> columns(columnsSet.begin(), columnsSet.end());
 
     std::string createTableSQL =
         "CREATE TABLE IF NOT EXISTS " + fullTableName + " (";
@@ -450,6 +472,141 @@ DataWarehouseBuilder::executeSourceQuery(const DataWarehouseModel &warehouse,
     throw std::runtime_error("Unsupported source database engine: " +
                              warehouse.source_db_engine);
   }
+}
+
+std::vector<std::string>
+DataWarehouseBuilder::getQueryColumnNames(const DataWarehouseModel &warehouse,
+                                          const std::string &query) {
+  std::vector<std::string> columnNames;
+
+  try {
+    if (warehouse.source_db_engine == "PostgreSQL") {
+      pqxx::connection conn(warehouse.source_connection_string);
+      pqxx::work txn(conn);
+      pqxx::result result = txn.exec(query + " LIMIT 0");
+      if (result.columns() > 0) {
+        for (int i = 0; i < result.columns(); ++i) {
+          columnNames.push_back(result.column_name(i));
+        }
+      }
+      txn.commit();
+    } else if (warehouse.source_db_engine == "MariaDB") {
+      auto params =
+          ConnectionStringParser::parse(warehouse.source_connection_string);
+      if (!params) {
+        throw std::runtime_error("Failed to parse MariaDB connection string");
+      }
+      MYSQL *conn = mysql_init(nullptr);
+      if (!conn) {
+        throw std::runtime_error("Failed to initialize MySQL connection");
+      }
+      if (!mysql_real_connect(conn, params->host.c_str(), params->user.c_str(),
+                              params->password.c_str(), params->db.c_str(),
+                              std::stoi(params->port), nullptr, 0)) {
+        std::string error = mysql_error(conn);
+        mysql_close(conn);
+        throw std::runtime_error("Failed to connect to MariaDB: " + error);
+      }
+      std::string queryWithLimit = query;
+      if (query.find("LIMIT") == std::string::npos) {
+        queryWithLimit += " LIMIT 0";
+      }
+      if (mysql_query(conn, queryWithLimit.c_str())) {
+        std::string error = mysql_error(conn);
+        mysql_close(conn);
+        throw std::runtime_error("Failed to execute MariaDB query: " + error);
+      }
+      MYSQL_RES *result = mysql_store_result(conn);
+      if (result) {
+        int numFields = mysql_num_fields(result);
+        MYSQL_FIELD *fields = mysql_fetch_fields(result);
+        for (int i = 0; i < numFields; ++i) {
+          columnNames.push_back(std::string(fields[i].name));
+        }
+        mysql_free_result(result);
+      }
+      mysql_close(conn);
+    } else if (warehouse.source_db_engine == "MSSQL") {
+      SQLHENV env = SQL_NULL_HENV;
+      SQLHDBC dbc = SQL_NULL_HDBC;
+      SQLHSTMT stmt = SQL_NULL_HSTMT;
+      SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env);
+      if (!SQL_SUCCEEDED(ret)) {
+        throw std::runtime_error("Failed to allocate ODBC environment");
+      }
+      ret = SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION, (void *)SQL_OV_ODBC3, 0);
+      if (!SQL_SUCCEEDED(ret)) {
+        SQLFreeHandle(SQL_HANDLE_ENV, env);
+        throw std::runtime_error("Failed to set ODBC version");
+      }
+      ret = SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc);
+      if (!SQL_SUCCEEDED(ret)) {
+        SQLFreeHandle(SQL_HANDLE_ENV, env);
+        throw std::runtime_error("Failed to allocate ODBC connection");
+      }
+      std::vector<SQLCHAR> connStr(warehouse.source_connection_string.begin(),
+                                   warehouse.source_connection_string.end());
+      connStr.push_back('\0');
+      SQLSMALLINT connStrLen = 0;
+      ret = SQLDriverConnect(dbc, nullptr, connStr.data(), SQL_NTS, nullptr, 0,
+                             &connStrLen, SQL_DRIVER_NOPROMPT);
+      if (!SQL_SUCCEEDED(ret)) {
+        SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+        SQLFreeHandle(SQL_HANDLE_ENV, env);
+        throw std::runtime_error("Failed to connect to MSSQL");
+      }
+      ret = SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt);
+      if (!SQL_SUCCEEDED(ret)) {
+        SQLDisconnect(dbc);
+        SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+        SQLFreeHandle(SQL_HANDLE_ENV, env);
+        throw std::runtime_error("Failed to allocate ODBC statement");
+      }
+      std::string queryWithLimit = query;
+      if (query.find("TOP") == std::string::npos &&
+          query.find("LIMIT") == std::string::npos) {
+        size_t selectPos = query.find("SELECT");
+        if (selectPos != std::string::npos) {
+          queryWithLimit = query.substr(0, selectPos + 6) + " TOP 0 " +
+                           query.substr(selectPos + 6);
+        }
+      }
+      std::vector<SQLCHAR> queryVec(queryWithLimit.begin(),
+                                    queryWithLimit.end());
+      queryVec.push_back('\0');
+      ret = SQLExecDirect(stmt, queryVec.data(), SQL_NTS);
+      if (!SQL_SUCCEEDED(ret)) {
+        SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+        SQLDisconnect(dbc);
+        SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+        SQLFreeHandle(SQL_HANDLE_ENV, env);
+        throw std::runtime_error("Failed to execute MSSQL query");
+      }
+      SQLSMALLINT numCols = 0;
+      SQLNumResultCols(stmt, &numCols);
+      for (SQLSMALLINT i = 1; i <= numCols; ++i) {
+        SQLCHAR colName[256];
+        SQLSMALLINT nameLen, dataType, decimalDigits, nullable;
+        SQLULEN colSize;
+        SQLDescribeCol(stmt, i, colName, sizeof(colName), &nameLen, &dataType,
+                       &colSize, &decimalDigits, &nullable);
+        columnNames.push_back(std::string((char *)colName, nameLen));
+      }
+      SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+      SQLDisconnect(dbc);
+      SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+      SQLFreeHandle(SQL_HANDLE_ENV, env);
+    } else {
+      Logger::warning(LogCategory::TRANSFER, "getQueryColumnNames",
+                      "Getting column names not yet implemented for: " +
+                          warehouse.source_db_engine);
+    }
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "getQueryColumnNames",
+                  "Error getting column names: " + std::string(e.what()));
+  }
+
+  return columnNames;
 }
 
 std::vector<json> DataWarehouseBuilder::executeQueryPostgreSQL(
