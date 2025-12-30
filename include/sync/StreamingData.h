@@ -11,6 +11,7 @@
 #include "sync/APIToDatabaseSync.h"
 #include "sync/CSVToDatabaseSync.h"
 #include "sync/CustomJobExecutor.h"
+#include "sync/DataWarehouseBuilder.h"
 #include "sync/GoogleSheetsToDatabaseSync.h"
 #include "sync/MSSQLToPostgres.h"
 #include "sync/MariaDBToPostgres.h"
@@ -50,6 +51,7 @@ private:
   CSVToDatabaseSync csvToDb;
   GoogleSheetsToDatabaseSync sheetsToDb;
   std::unique_ptr<CustomJobExecutor> customJobExecutor;
+  std::unique_ptr<DataWarehouseBuilder> warehouseBuilder;
   CatalogManager catalogManager;
   DataQuality dataQuality;
 
@@ -64,6 +66,7 @@ private:
   void csvTransferThread();
   void googleSheetsTransferThread();
   void customJobsSchedulerThread();
+  void warehouseBuilderThread();
   void qualityThread();
   void maintenanceThread();
   void monitoringThread();

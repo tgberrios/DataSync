@@ -1711,6 +1711,21 @@ int64_t CustomJobExecutor::executeJobAndGetLogId(const std::string &jobName) {
     throw std::runtime_error("Job is not active or enabled: " + jobName);
   }
 
+  if (job.schedule_cron.empty()) {
+    bool isManualExecution = false;
+    if (job.metadata.contains("execute_now") &&
+        job.metadata["execute_now"].get<bool>()) {
+      isManualExecution = true;
+    }
+
+    if (!isManualExecution) {
+      throw std::runtime_error(
+          "Manual job (without schedule) can only be executed when explicitly "
+          "triggered via execute button. Job: " +
+          jobName);
+    }
+  }
+
   auto startTime = std::chrono::high_resolution_clock::now();
   int64_t processLogId = 0;
   std::string errorMessage;

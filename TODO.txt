@@ -154,3 +154,42 @@ Created At:
 12/31/1969, 7:00:00 PM
 Error Message:
 Unknown status: SKIP
+
+Correcto: no hay implementaciones específicas para data warehouses.
+Situación actual
+Engines existentes:
+PostgreSQL
+MariaDB
+MSSQL
+MongoDB
+Oracle
+Tipos de sync existentes:
+CSVToDatabaseSync
+GoogleSheetsToDatabaseSync
+APIToDatabaseSync
+DatabaseToPostgresSync (genérico)
+MSSQLToPostgres
+MariaDBToPostgres
+MongoDBToPostgres
+OracleToPostgres
+CustomJobExecutor
+Data warehouses faltantes
+Según TODO.txt, están pendientes:
+Alta prioridad:
+Snowflake
+BigQuery
+Media prioridad:
+Redshift
+Lo que falta
+Engines:
+SnowflakeEngine
+BigQueryEngine
+RedshiftEngine
+Syncs:
+SnowflakeToPostgresSync / ToSnowflakeSync
+BigQueryToPostgresSync / ToBigQuerySync
+RedshiftToPostgresSync / ToRedshiftSync
+Integración en:
+EngineFactory
+Modales de la UI (AddCSVModal, AddAPIModal, etc.)
+Constraints de base de datos

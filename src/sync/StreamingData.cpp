@@ -49,6 +49,17 @@ void StreamingData::initialize() {
                       std::string(e.what()));
   }
 
+  try {
+    std::string connStr = DatabaseConfig::getPostgresConnectionString();
+    warehouseBuilder = std::make_unique<DataWarehouseBuilder>(connStr);
+    Logger::info(LogCategory::MONITORING,
+                 "Data warehouse builder initialized successfully");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::MONITORING, "initialize",
+                  "Error initializing data warehouse builder: " +
+                      std::string(e.what()));
+  }
+
   Logger::info(LogCategory::MONITORING,
                "System initialization completed successfully");
 }
@@ -75,7 +86,7 @@ void StreamingData::run(std::function<bool()> shutdownCheck) {
 
   Logger::info(LogCategory::MONITORING,
                "Launching transfer threads (MariaDB, MSSQL, MongoDB, Oracle, "
-               "API, CSV, Google Sheets, Custom Jobs)");
+               "API, CSV, Google Sheets, Custom Jobs, Data Warehouse)");
   threads.emplace_back(&StreamingData::mariaTransferThread, this);
   threads.emplace_back(&StreamingData::mssqlTransferThread, this);
   threads.emplace_back(&StreamingData::mongoTransferThread, this);
@@ -84,6 +95,7 @@ void StreamingData::run(std::function<bool()> shutdownCheck) {
   threads.emplace_back(&StreamingData::csvTransferThread, this);
   threads.emplace_back(&StreamingData::googleSheetsTransferThread, this);
   threads.emplace_back(&StreamingData::customJobsSchedulerThread, this);
+  threads.emplace_back(&StreamingData::warehouseBuilderThread, this);
 
   Logger::info(LogCategory::MONITORING,
                "Transfer threads launched successfully");
@@ -986,8 +998,14 @@ void StreamingData::customJobsSchedulerThread() {
       for (const auto &job : activeJobs) {
         if (job.metadata.contains("execute_now") &&
             job.metadata["execute_now"].get<bool>()) {
-          Logger::info(LogCategory::MONITORING, "customJobsSchedulerThread",
-                       "Executing manual job: " + job.job_name);
+          if (job.schedule_cron.empty()) {
+            Logger::info(LogCategory::MONITORING, "customJobsSchedulerThread",
+                         "Executing manual job: " + job.job_name);
+          } else {
+            Logger::info(LogCategory::MONITORING, "customJobsSchedulerThread",
+                         "Executing scheduled job manually triggered: " +
+                             job.job_name);
+          }
           try {
             customJobExecutor->executeJob(job.job_name);
             pqxx::connection conn(
@@ -1002,7 +1020,7 @@ void StreamingData::customJobsSchedulerThread() {
             txn.commit();
           } catch (const std::exception &e) {
             Logger::error(LogCategory::MONITORING, "customJobsSchedulerThread",
-                          "Error executing manual job " + job.job_name + ": " +
+                          "Error executing job " + job.job_name + ": " +
                               std::string(e.what()));
           }
         }
@@ -1010,6 +1028,11 @@ void StreamingData::customJobsSchedulerThread() {
 
       for (const auto &job : scheduledJobs) {
         if (job.schedule_cron.empty()) {
+          continue;
+        }
+
+        if (job.metadata.contains("execute_now") &&
+            job.metadata["execute_now"].get<bool>()) {
           continue;
         }
 
@@ -1101,6 +1124,36 @@ void StreamingData::customJobsSchedulerThread() {
     std::this_thread::sleep_for(std::chrono::minutes(1));
   }
   Logger::info(LogCategory::MONITORING, "Custom jobs scheduler thread stopped");
+}
+
+void StreamingData::warehouseBuilderThread() {
+  Logger::info(LogCategory::MONITORING, "Warehouse builder thread started");
+  while (running) {
+    try {
+      if (!warehouseBuilder) {
+        std::this_thread::sleep_for(std::chrono::hours(1));
+        continue;
+      }
+
+      Logger::info(LogCategory::MONITORING, "Starting warehouse build cycle");
+      auto startTime = std::chrono::high_resolution_clock::now();
+
+      warehouseBuilder->buildAllActiveWarehouses();
+
+      auto endTime = std::chrono::high_resolution_clock::now();
+      auto duration =
+          std::chrono::duration_cast<std::chrono::seconds>(endTime - startTime);
+      Logger::info(LogCategory::MONITORING,
+                   "Warehouse build cycle completed in " +
+                       std::to_string(duration.count()) + " seconds");
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::MONITORING, "warehouseBuilderThread",
+                    "Error in warehouse build cycle: " + std::string(e.what()));
+    }
+
+    std::this_thread::sleep_for(std::chrono::hours(1));
+  }
+  Logger::info(LogCategory::MONITORING, "Warehouse builder thread stopped");
 }
 
 void StreamingData::executeJob(const std::string &jobName) {
