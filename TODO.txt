@@ -37,117 +37,6 @@ y el de mssql de azure
     ANADIR FORMA DE HACER FIRST SETUP DIGAMOS DE LA DB eso seria con un backup de la db de solo la estructura pero tambien, con la data de config
 
 
-12/20/2025, 10:17:23 AM[ERROR][TRANSFER][processAPIFullLoad]Error processing API Cats: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
-12/20/2025, 10:17:23 AM[ERROR][TRANSFER][createPostgreSQLTable]Error creating PostgreSQL table: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
-12/20/2025, 10:17:23 AM[ERROR][QUALITY][validateTable]Schema and table names contain invalid characters
-12/20/2025, 10:17:23 AM[ERROR][QUALITY][validateTable]Schema and table names contain invalid characters
-12/20/2025, 10:16:53 AM[ERROR][TRANSFER][processAPIFullLoad]Error processing API Cats: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
-12/20/2025, 10:16:53 AM[ERROR][TRANSFER][createPostgreSQLTable]Error creating PostgreSQL table: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
-12/20/2025, 10:16:22 AM[ERROR][TRANSFER][processAPIFullLoad]Error processing API Cats: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
-12/20/2025, 10:16:22 AM[ERROR][TRANSFER][createPostgreSQLTable]Error creating PostgreSQL table: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
-12/20/2025, 10:15:51 AM[ERROR][TRANSFER][processAPIFullLoad]Error processing API Cats: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
-12/20/2025, 10:15:51 AM[ERROR][TRANSFER][createPostgreSQLTable]Error creating PostgreSQL table: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
-12/20/2025, 10:15:21 AM[ERROR][TRANSFER][processAPIFullLoad]Error processing API Cats: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
-12/20/2025, 10:15:21 AM[ERROR][TRANSFER][createPostgreSQLTable]Error creating PostgreSQL table: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
-12/20/2025, 10:14:50 AM[ERROR][TRANSFER][processAPIFullLoad]Error processing API Cats: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
-12/20/2025, 10:14:50 AM[ERROR][TRANSFER][createPostgreSQLTable]Error creating PostgreSQL table: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
-12/20/2025, 10:14:19 AM[ERROR][TRANSFER][processAPIFullLoad]Error processing API Cats: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
-12/20/2025, 10:14:19 AM[ERROR][TRANSFER][createPostgreSQLTable]Error creating PostgreSQL table: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
-12/20/2025, 10:13:49 AM[ERROR][TRANSFER][processAPIFullLoad]Error processing API Cats: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
-12/20/2025, 10:13:49 AM[ERROR][TRANSFER][createPostgreSQLTable]Error creating PostgreSQL table: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
-12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error executing maintenance task 319: PostgreSQL maintenance failed: ERROR: schema "test_source" does not exist
-12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error collecting metrics before: ERROR: relation "test_source.json_types" does not exist CONTEXT: unnamed portal parameter $1 = '...'
-12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error executing maintenance task 317: PostgreSQL maintenance failed: ERROR: schema "sportbook" does not exist
-12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error collecting metrics before: ERROR: relation "sportbook.event_schedules" does not exist CONTEXT: unnamed portal parameter $1 = '...'
-12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error executing maintenance task 316: PostgreSQL maintenance failed: ERROR: schema "domain_specific" does not exist
-12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error collecting metrics before: ERROR: relation "domain_specific.crypto_wallets" does not exist CONTEXT: unnamed portal parameter $1 = '...'
-12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error executing maintenance task 315: PostgreSQL maintenance failed: ERROR: schema "testing_demo" does not exist
-12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error collecting metrics before: ERROR: relation "testing_demo.edge_cases" does not exist CONTEXT: unnamed portal parameter $1 = '...'
-12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error executing maintenance task 312: PostgreSQL maintenance failed: ERROR: schema "constraints_demo" does not exist
-12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error collecting metrics before: ERROR: relation "constraints_demo.orders_defaults" does not exist CONTEXT: unnamed portal parameter $1 = '...'
-12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error executing maintenance task 310: PostgreSQL maintenance failed: ERROR: schema "social_media" does not exist
-12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error collecting metrics before: ERROR: relation "social_media.posts" does not exist CONTEXT: unnamed portal parameter $1 = '...'
-12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error executing maintenance task 308: PostgreSQL maintenance failed: ERROR: schema "distributions_demo" does not exist
-12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error collecting metrics before: ERROR: relation "distributions_demo.call_arrivals" does not exist CONTEXT: unnamed portal parameter $1 = '...'
-12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error executing maintenance task 314: PostgreSQL maintenance failed: ERROR: schema "localization_demo" does not exist
-12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error collecting metrics before: ERROR: relation "localization_demo.users_mexico" does not exist CONTEXT: unnamed portal parameter $1 = '...'
-12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error executing maintenance task 311: PostgreSQL maintenance failed: ERROR: schema "banking" does not exist
-12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error collecting metrics before: ERROR: relation "banking.accounts" does not exist CONTEXT: unnamed portal parameter $1 = '...'
-12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error executing maintenance task 309: PostgreSQL maintenance failed: ERROR: schema "test_source" does not exist
-12/20/2025, 10:13:31 AM[ERROR][GOVERNANCE][MaintenanceManager]Error collecting metrics before: ERROR: relation "test_source.products" does not exist CONTEXT: unnamed portal parameter $1 = '...'
-12/20/2025, 10:13:23 AM[ERROR][GOVERNANCE][discoverTables]Error discovering tables: Schema name and table name contain invalid characters
-12/20/2025, 10:13:22 AM[ERROR][QUALITY][validateTable]Schema and table names contain invalid characters
-12/20/2025, 10:13:22 AM[ERROR][QUALITY][validateTable]Schema and table names contain invalid characters
-12/20/2025, 10:13:18 AM[ERROR][TRANSFER][processAPIFullLoad]Error processing API Cats: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known
-12/20/2025, 10:13:16 AM[ERROR][TRANSFER][createPostgreSQLTable]Error creating PostgreSQL table: could not translate host name "localhost;user=tomy.berrios;password=Yucaquemada1;db=DataLake;port=5432" to address: Name or service not known 
-
-verificar en todos los lugares donde se use el status PENDING
-    Mejoras implementadas
-Animaciones
-Fade-in al cargar nodos
-Slide down/up al expandir/colapsar
-Transiciones en hover y clics
-Animaciones escalonadas por nivel
-Diseño visual
-Iconos SVG por nivel (Schema, Table, Column)
-Gradientes en schemas
-Bordes de colores por nivel
-Sombras sutiles
-Scrollbar personalizado
-Interactividad
-Botones de expansión con gradientes
-Hover con desplazamiento y sombra
-Feedback visual en clics
-Estados visuales claros (expandido/colapsado)
-UX/UI
-Tipografía mejorada (sans-serif)
-Espaciado consistente
-Badges con colores semánticos
-Contadores de elementos
-Detalles expandibles con grid responsive
-Empty state con emoji
-Navegación
-Estructura jerárquica clara
-Líneas de conexión estilo consola
-Indicadores visuales por nivel
-Transiciones suaves
-Accesibilidad
-Contraste adecuado
-Áreas de clic amplias
-Feedback visual inmediato
-Estados claros
-La Tree View es ahora la vista por defecto y está optimizada para una navegación intuitiva.
-
-
-
-Transfer Metrics Details
-Schema:
-affiliatesservices
-Table:
-brands
-Database Engine:
-MSSQL
-Status:
-SUCCESS
-Transfer Type:
-SYNC
-Records Transferred:
-0
-Bytes Transferred:
-0.00 GB
-Memory Used:
-0.00 MB
-IO Operations/sec:
-0
-Started At:
-N/A
-Completed At:
-N/A
-Created At:
-12/31/1969, 7:00:00 PM
-Error Message:
-Unknown status: SKIP
-
 Correcto: no hay implementaciones específicas para data warehouses.
 Situación actual
 Engines existentes:
@@ -187,6 +76,222 @@ EngineFactory
 Modales de la UI (AddCSVModal, AddAPIModal, etc.)
 Constraints de base de datos
 
-modo oscuro en la ui 
 
-estandarizar todas las animaciones en la ui
+Funcionalidades faltantes importantes
+Alta prioridad
+Transformaciones visuales drag-and-drop
+Editor visual tipo PowerCenter/Talend
+Componentes pre-construidos (joins, aggregations, lookups)
+Múltiples destinos
+Actualmente solo PostgreSQL como destino
+Agregar: Snowflake, BigQuery, Redshift, otros PostgreSQL
+Webhooks y notificaciones
+Integración con Slack, Teams, email
+Webhooks para eventos (sync completado, errores, alertas)
+API REST más completa
+Endpoints para todas las funcionalidades
+Swagger/OpenAPI documentation
+API versioning
+Versionado de configuraciones
+Git-like versioning de sync configs
+Rollback de configuraciones
+Comparación de versiones
+Media prioridad
+Data profiling avanzado
+Análisis estadístico de columnas
+Detección de patrones
+Distribuciones de valores
+Data masking/encryption
+Enmascaramiento de datos sensibles
+Encryption at rest y in transit
+Tokenization
+Backup y restore
+Backup de configuraciones
+Restore de catálogos
+Disaster recovery
+Multi-tenant
+Soporte para múltiples organizaciones
+Aislamiento de datos
+Billing por tenant
+Real-time streaming
+Kafka-like streaming
+Event sourcing
+Stream processing
+Baja prioridad
+Machine Learning integration
+Auto-tuning de performance
+Anomaly detection con ML
+Predictive maintenance
+GraphQL API
+Alternativa a REST
+Queries flexibles
+Real-time subscriptions
+Mobile app
+App móvil para monitoreo
+Push notifications
+Quick actions
+
+
+Faltante en DataSync:
+Transformaciones visuales drag-and-drop
+Componentes pre-construidos extensos
+Marketplace de componentes
+Soporte para más formatos de archivo
+
+
+Faltante en DataSync:
+Event streaming platform
+High-throughput message queuing
+Event sourcing patterns
+Replay de eventos históricos
+
+
+Faltante en DataSync:
+Procesamiento distribuido a gran escala
+Machine Learning integrado
+Streaming processing avanzado
+Transformaciones complejas (joins, aggregations masivas)
+
+
+Faltante en DataSync:
+Workflow DAGs visuales
+Task dependencies visuales
+Extensibilidad con plugins
+Comunidad y ecosistema
+
+
+Faltante en DataSync:
+Transformaciones visuales drag-and-drop (tienes Custom Jobs pero no visual)
+Múltiples destinos simultáneos (solo PostgreSQL como destino)
+Workflow orchestration visual
+Metadata exchange estándar (CWM)
+
+
+Funcionalidades faltantes importantes
+Alta prioridad
+Transformaciones visuales drag-and-drop
+Editor visual tipo PowerCenter/Talend
+Componentes pre-construidos (joins, aggregations, lookups)
+Múltiples destinos
+Actualmente solo PostgreSQL como destino
+Agregar: Snowflake, BigQuery, Redshift, otros PostgreSQL
+Webhooks y notificaciones
+Integración con Slack, Teams, email
+Webhooks para eventos (sync completado, errores, alertas)
+API REST más completa
+Endpoints para todas las funcionalidades
+Swagger/OpenAPI documentation
+API versioning
+Versionado de configuraciones
+Git-like versioning de sync configs
+Rollback de configuraciones
+Comparación de versiones
+Media prioridad
+Data profiling avanzado
+Análisis estadístico de columnas
+Detección de patrones
+Distribuciones de valores
+Data masking/encryption
+Enmascaramiento de datos sensibles
+Encryption at rest y in transit
+Tokenization
+Backup y restore
+Backup de configuraciones
+Restore de catálogos
+Disaster recovery
+Multi-tenant
+Soporte para múltiples organizaciones
+Aislamiento de datos
+Billing por tenant
+Real-time streaming
+Kafka-like streaming
+Event sourcing
+Stream processing
+Baja prioridad
+Machine Learning integration
+Auto-tuning de performance
+Anomaly detection con ML
+Predictive maintenance
+GraphQL API
+Alternativa a REST
+Queries flexibles
+Real-time subscriptions
+Mobile app
+App móvil para monitoreo
+Push notifications
+Quick actions
+
+
+Recomendaciones para el landing page
+Agregar estas secciones:
+"Enterprise Alerting & Monitoring"
+10 tipos de alertas configurables
+4 niveles de severidad
+Notificaciones en tiempo real
+"Compliance & GDPR Ready"
+Right to be Forgotten
+Data Portability
+Consent Management
+Breach Notification
+"Advanced Query Analytics"
+Real-time query monitoring
+Performance analysis
+Anomaly detection
+"Automated Schema Evolution"
+Detección automática de cambios
+Sincronización sin downtime
+"Data Retention & Archival"
+Políticas configurables
+Legal Holds
+Archivado automático
+"Business Glossary & Data Dictionary"
+Glosario de términos de negocio
+Diccionario de datos
+Vinculación automática
+
+
+eso no se si lo tengo realmente y si lo tengo, no lo tengo en la ui 
+
+Recomendación: lanzar ahora
+Fase 1: Lanzamiento (ahora)
+Desplegar landing page
+Buscar primeros clientes (beta/early adopters)
+Hacer demos y pruebas piloto
+Recolectar feedback real
+Fase 2: Iteración basada en feedback (próximos 3-6 meses)
+Priorizar features según demanda real
+Agregar destinos según necesidad (Snowflake, BigQuery, etc.)
+Mejorar API según integraciones requeridas
+Agregar webhooks si hay demanda
+Fase 3: Expansión (6-12 meses)
+Transformaciones visuales (si hay demanda)
+Multi-tenant (si escalas)
+Features avanzadas según roadmap
+
+
+
+v1.0.0 - MVP Launch (AHORA)
+├── Multi-database sync (5 engines)
+├── CDC nativo
+├── Data Governance completo
+├── Data Warehouse Builder
+├── Custom Jobs
+└── Monitoring & Alerting
+
+v1.1.0 - Quick Wins (1-2 meses)
+├── Webhooks básicos
+├── API REST mejorada
+├── Soporte Snowflake (si hay demanda)
+└── Mejoras de UX basadas en feedback
+
+v1.2.0 - Expansión (3-4 meses)
+├── BigQuery support
+├── Redshift support
+├── Versionado de configs
+└── Data profiling avanzado
+
+v2.0.0 - Enterprise (6+ meses)
+├── Transformaciones visuales
+├── Multi-tenant
+├── Advanced streaming
+└── ML integration
