@@ -86,12 +86,14 @@ void StreamingData::run(std::function<bool()> shutdownCheck) {
 
   Logger::info(LogCategory::MONITORING,
                "Launching transfer threads (MariaDB, MSSQL, MongoDB, Oracle, "
-               "API, CSV, Google Sheets, Custom Jobs, Data Warehouse, Datalake "
+               "PostgreSQL, API, CSV, Google Sheets, Custom Jobs, Data "
+               "Warehouse, Datalake "
                "Scheduler)");
   threads.emplace_back(&StreamingData::mariaTransferThread, this);
   threads.emplace_back(&StreamingData::mssqlTransferThread, this);
   threads.emplace_back(&StreamingData::mongoTransferThread, this);
   threads.emplace_back(&StreamingData::oracleTransferThread, this);
+  threads.emplace_back(&StreamingData::postgresTransferThread, this);
   threads.emplace_back(&StreamingData::apiTransferThread, this);
   threads.emplace_back(&StreamingData::csvTransferThread, this);
   threads.emplace_back(&StreamingData::googleSheetsTransferThread, this);
@@ -842,23 +844,48 @@ void StreamingData::oracleTransferThread() {
       auto duration =
           std::chrono::duration_cast<std::chrono::seconds>(endTime - startTime);
       Logger::info(LogCategory::MONITORING,
-                   "Oracle transfer cycle completed successfully in " +
+                   "Oracle transfer cycle completed in " +
                        std::to_string(duration.count()) + " seconds");
+
     } catch (const std::exception &e) {
-      Logger::error(
-          LogCategory::MONITORING, "oracleTransferThread",
-          "CRITICAL ERROR in Oracle transfer cycle: " + std::string(e.what()) +
-              " - Oracle data sync failed, retrying in " +
-              std::to_string(SyncConfig::getSyncInterval()) + " seconds");
+      Logger::error(LogCategory::MONITORING, "oracleTransferThread",
+                    "Error in Oracle transfer cycle: " + std::string(e.what()));
     }
 
-    size_t interval = SyncConfig::getSyncInterval();
-    size_t sleepSeconds = (interval > 0 && interval >= 4) ? (interval / 4) : 5;
-    if (sleepSeconds < 5)
-      sleepSeconds = 5;
-    std::this_thread::sleep_for(std::chrono::seconds(sleepSeconds));
+    std::this_thread::sleep_for(
+        std::chrono::seconds(SyncConfig::getSyncInterval()));
   }
   Logger::info(LogCategory::MONITORING, "Oracle transfer thread stopped");
+}
+
+void StreamingData::postgresTransferThread() {
+  Logger::info(LogCategory::MONITORING, "PostgreSQL transfer thread started");
+  while (running) {
+    try {
+      Logger::info(LogCategory::MONITORING,
+                   "Starting PostgreSQL transfer cycle - sync interval: " +
+                       std::to_string(SyncConfig::getSyncInterval()) +
+                       " seconds");
+
+      auto startTime = std::chrono::high_resolution_clock::now();
+      postgresToPg.transferDataPostgreSQLToPostgresParallel();
+      auto endTime = std::chrono::high_resolution_clock::now();
+
+      auto duration =
+          std::chrono::duration_cast<std::chrono::seconds>(endTime - startTime);
+      Logger::info(LogCategory::MONITORING,
+                   "PostgreSQL transfer cycle completed successfully in " +
+                       std::to_string(duration.count()) + " seconds");
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::MONITORING, "postgresTransferThread",
+                    "Error in PostgreSQL transfer cycle: " +
+                        std::string(e.what()));
+    }
+
+    std::this_thread::sleep_for(
+        std::chrono::seconds(SyncConfig::getSyncInterval()));
+  }
+  Logger::info(LogCategory::MONITORING, "PostgreSQL transfer thread stopped");
 }
 
 // API transfer thread that runs continuously while the system is running.

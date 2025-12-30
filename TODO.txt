@@ -1,15 +1,10 @@
 Alta prioridad (si hay casos de uso)
-PostgreSQL como fuente — Ya existe el engine; falta la sincronización desde PostgreSQL hacia PostgreSQL (útil para replicación entre instancias).
 Snowflake — Data warehouse en la nube (muy usado en analytics).
 BigQuery — Data warehouse de Google Cloud.
 
 Media prioridad
 Redshift — Data warehouse de AWS.
 DB2 — IBM (común en entornos legacy enterprise).
-
-
-emails esto sera mecesario ?
-telefonia?  sera necesario ? 
 
 
 que aguante webhooks ?  esto seria en todos los ETL para tener alertas

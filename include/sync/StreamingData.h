@@ -17,6 +17,7 @@
 #include "sync/MariaDBToPostgres.h"
 #include "sync/MongoDBToPostgres.h"
 #include "sync/OracleToPostgres.h"
+#include "sync/PostgreSQLToPostgres.h"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -47,6 +48,7 @@ private:
   MSSQLToPostgres mssqlToPg;
   MongoDBToPostgres mongoToPg;
   OracleToPostgres oracleToPg;
+  PostgreSQLToPostgres postgresToPg;
   APIToDatabaseSync apiToDb;
   CSVToDatabaseSync csvToDb;
   GoogleSheetsToDatabaseSync sheetsToDb;
@@ -62,6 +64,7 @@ private:
   void mssqlTransferThread();
   void mongoTransferThread();
   void oracleTransferThread();
+  void postgresTransferThread();
   void apiTransferThread();
   void csvTransferThread();
   void googleSheetsTransferThread();
