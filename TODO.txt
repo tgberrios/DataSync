@@ -28,13 +28,7 @@
    - Encryption at rest y in transit
    - Tokenization
    - Políticas de enmascaramiento configurables
-
-6. BACKUP Y RESTORE
-   - Backup de configuraciones
-   - Restore de catálogos
-   - Disaster recovery
-   - Export/Import de configuraciones completas
-
+   
 7. FIRST SETUP DE LA DB
    - Backup de la DB con solo estructura
    - Backup de data de config
