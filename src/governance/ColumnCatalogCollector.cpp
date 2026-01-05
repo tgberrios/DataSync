@@ -9,8 +9,10 @@
 #include "utils/connection_utils.h"
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <iomanip>
+#include <map>
 #include <mysql/mysql.h>
 #include <pqxx/pqxx>
 #include <regex>
@@ -230,6 +232,11 @@ void ColumnCatalogCollector::collectPostgreSQLColumns(
 
       analyzeColumnStatistics(col, connectionString);
       classifyColumn(col);
+      calculateAdvancedStatistics(col, connectionString);
+      detectPatterns(col, connectionString);
+      analyzeDistribution(col, connectionString);
+      detectOutliers(col, connectionString);
+      calculateProfilingQualityScore(col);
       columnData_.push_back(col);
     }
 
@@ -475,6 +482,11 @@ void ColumnCatalogCollector::collectMariaDBColumns(
 
       analyzeColumnStatistics(col, connectionString);
       classifyColumn(col);
+      calculateAdvancedStatistics(col, connectionString);
+      detectPatterns(col, connectionString);
+      analyzeDistribution(col, connectionString);
+      detectOutliers(col, connectionString);
+      calculateProfilingQualityScore(col);
       columnData_.push_back(col);
       count++;
     }
@@ -611,16 +623,19 @@ void ColumnCatalogCollector::collectMSSQLColumns(
       SQLLEN len;
 
       SQLGetData(stmt, 1, SQL_C_CHAR, buffer, sizeof(buffer), &len);
-      col.schema_name =
-          (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer))) ? std::string(buffer, len) : "";
+      col.schema_name = (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer)))
+                            ? std::string(buffer, len)
+                            : "";
 
       SQLGetData(stmt, 2, SQL_C_CHAR, buffer, sizeof(buffer), &len);
-      col.table_name =
-          (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer))) ? std::string(buffer, len) : "";
+      col.table_name = (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer)))
+                           ? std::string(buffer, len)
+                           : "";
 
       SQLGetData(stmt, 3, SQL_C_CHAR, buffer, sizeof(buffer), &len);
-      col.column_name =
-          (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer))) ? std::string(buffer, len) : "";
+      col.column_name = (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer)))
+                            ? std::string(buffer, len)
+                            : "";
 
       col.db_engine = "MSSQL";
       col.connection_string = connectionString;
@@ -630,8 +645,9 @@ void ColumnCatalogCollector::collectMSSQLColumns(
       col.ordinal_position = (len > 0) ? ordinalPos : 0;
 
       SQLGetData(stmt, 5, SQL_C_CHAR, buffer, sizeof(buffer), &len);
-      col.data_type =
-          (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer))) ? std::string(buffer, len) : "";
+      col.data_type = (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer)))
+                          ? std::string(buffer, len)
+                          : "";
 
       SQLINTEGER maxLen;
       SQLGetData(stmt, 6, SQL_C_LONG, &maxLen, 0, &len);
@@ -651,7 +667,9 @@ void ColumnCatalogCollector::collectMSSQLColumns(
 
       SQLGetData(stmt, 10, SQL_C_CHAR, buffer, sizeof(buffer), &len);
       col.column_default =
-          (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer))) ? std::string(buffer, len) : "";
+          (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer)))
+              ? std::string(buffer, len)
+              : "";
 
       SQLSMALLINT isAutoInc;
       SQLGetData(stmt, 11, SQL_C_SHORT, &isAutoInc, 0, &len);
@@ -702,6 +720,11 @@ void ColumnCatalogCollector::collectMSSQLColumns(
 
       analyzeColumnStatistics(col, connectionString);
       classifyColumn(col);
+      calculateAdvancedStatistics(col, connectionString);
+      detectPatterns(col, connectionString);
+      analyzeDistribution(col, connectionString);
+      detectOutliers(col, connectionString);
+      calculateProfilingQualityScore(col);
       columnData_.push_back(col);
       count++;
     }
@@ -1235,7 +1258,15 @@ void ColumnCatalogCollector::storeColumnMetadata() {
             << "pii_detection_method, pii_confidence_score, pii_category, "
             << "phi_detection_method, phi_confidence_score, "
             << "masking_applied, encryption_applied, tokenization_applied, "
-            << "last_pii_scan, last_seen_at, last_analyzed_at"
+            << "last_pii_scan, last_seen_at, last_analyzed_at, "
+            << "median_value, std_deviation, mode_value, mode_frequency, "
+            << "percentile_25, percentile_75, percentile_90, percentile_95, "
+               "percentile_99, "
+            << "value_distribution, top_values, outlier_count, "
+               "outlier_percentage, "
+            << "detected_pattern, pattern_confidence, pattern_examples, "
+            << "anomalies, has_anomalies, profiling_quality_score, "
+               "last_profiled_at"
             << ") VALUES (" << txn.quote(col.schema_name) << ", "
             << txn.quote(col.table_name) << ", " << txn.quote(col.column_name)
             << ", " << txn.quote(col.db_engine) << ", "
@@ -1307,7 +1338,69 @@ void ColumnCatalogCollector::storeColumnMetadata() {
             << ", " << (col.masking_applied ? "true" : "false") << ", "
             << (col.encryption_applied ? "true" : "false") << ", "
             << (col.tokenization_applied ? "true" : "false") << ", "
-            << "NOW(), NOW(), NOW()"
+            << "NOW(), NOW(), NOW(), "
+            << (col.median_value != 0.0 ? std::to_string(col.median_value)
+                                        : "NULL")
+            << ", "
+            << (col.std_deviation != 0.0 ? std::to_string(col.std_deviation)
+                                         : "NULL")
+            << ", "
+            << (col.mode_value.empty() ? "NULL" : txn.quote(col.mode_value))
+            << ", "
+            << (col.mode_frequency > 0.0 ? std::to_string(col.mode_frequency)
+                                         : "NULL")
+            << ", "
+            << (col.percentile_25 != 0.0 ? std::to_string(col.percentile_25)
+                                         : "NULL")
+            << ", "
+            << (col.percentile_75 != 0.0 ? std::to_string(col.percentile_75)
+                                         : "NULL")
+            << ", "
+            << (col.percentile_90 != 0.0 ? std::to_string(col.percentile_90)
+                                         : "NULL")
+            << ", "
+            << (col.percentile_95 != 0.0 ? std::to_string(col.percentile_95)
+                                         : "NULL")
+            << ", "
+            << (col.percentile_99 != 0.0 ? std::to_string(col.percentile_99)
+                                         : "NULL")
+            << ", "
+            << (col.value_distribution.is_null() ||
+                        col.value_distribution.empty()
+                    ? "NULL"
+                    : txn.quote(col.value_distribution.dump()) + "::jsonb")
+            << ", "
+            << (col.top_values.is_null() || col.top_values.empty()
+                    ? "NULL"
+                    : txn.quote(col.top_values.dump()) + "::jsonb")
+            << ", "
+            << (col.outlier_count > 0 ? std::to_string(col.outlier_count)
+                                      : "NULL")
+            << ", "
+            << (col.outlier_percentage > 0.0
+                    ? std::to_string(col.outlier_percentage)
+                    : "NULL")
+            << ", "
+            << (col.detected_pattern.empty() ? "NULL"
+                                             : txn.quote(col.detected_pattern))
+            << ", "
+            << (col.pattern_confidence > 0.0
+                    ? std::to_string(col.pattern_confidence)
+                    : "NULL")
+            << ", "
+            << (col.pattern_examples.is_null() || col.pattern_examples.empty()
+                    ? "NULL"
+                    : txn.quote(col.pattern_examples.dump()) + "::jsonb")
+            << ", "
+            << (col.anomalies.is_null() || col.anomalies.empty()
+                    ? "NULL"
+                    : txn.quote(col.anomalies.dump()) + "::jsonb")
+            << ", " << (col.has_anomalies ? "true" : "false") << ", "
+            << (col.profiling_quality_score > 0.0
+                    ? std::to_string(col.profiling_quality_score)
+                    : "NULL")
+            << ", "
+            << "NOW()"
             << ") "
             << "ON CONFLICT (schema_name, table_name, column_name, db_engine, "
                "connection_string) "
@@ -1339,6 +1432,26 @@ void ColumnCatalogCollector::storeColumnMetadata() {
             << "encryption_applied = EXCLUDED.encryption_applied, "
             << "tokenization_applied = EXCLUDED.tokenization_applied, "
             << "last_pii_scan = EXCLUDED.last_pii_scan, "
+            << "median_value = EXCLUDED.median_value, "
+            << "std_deviation = EXCLUDED.std_deviation, "
+            << "mode_value = EXCLUDED.mode_value, "
+            << "mode_frequency = EXCLUDED.mode_frequency, "
+            << "percentile_25 = EXCLUDED.percentile_25, "
+            << "percentile_75 = EXCLUDED.percentile_75, "
+            << "percentile_90 = EXCLUDED.percentile_90, "
+            << "percentile_95 = EXCLUDED.percentile_95, "
+            << "percentile_99 = EXCLUDED.percentile_99, "
+            << "value_distribution = EXCLUDED.value_distribution, "
+            << "top_values = EXCLUDED.top_values, "
+            << "outlier_count = EXCLUDED.outlier_count, "
+            << "outlier_percentage = EXCLUDED.outlier_percentage, "
+            << "detected_pattern = EXCLUDED.detected_pattern, "
+            << "pattern_confidence = EXCLUDED.pattern_confidence, "
+            << "pattern_examples = EXCLUDED.pattern_examples, "
+            << "anomalies = EXCLUDED.anomalies, "
+            << "has_anomalies = EXCLUDED.has_anomalies, "
+            << "profiling_quality_score = EXCLUDED.profiling_quality_score, "
+            << "last_profiled_at = EXCLUDED.last_profiled_at, "
             << "last_seen_at = NOW(), "
             << "updated_at = NOW()";
 
@@ -1399,4 +1512,396 @@ void ColumnCatalogCollector::generateReport() {
     Logger::error(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
                   "Error generating report: " + std::string(e.what()));
   }
+}
+
+std::vector<double>
+ColumnCatalogCollector::getNumericValues(const std::string &connectionString,
+                                         const ColumnMetadata &column,
+                                         int maxSamples) {
+  std::vector<double> values;
+  try {
+    if (column.db_engine == "PostgreSQL") {
+      pqxx::connection conn(connectionString);
+      if (!conn.is_open()) {
+        return values;
+      }
+      pqxx::work txn(conn);
+      std::string fullTableName = txn.quote_name(column.schema_name) + "." +
+                                  txn.quote_name(column.table_name);
+      std::string columnName = txn.quote_name(column.column_name);
+
+      std::string query = "SELECT " + columnName + " FROM " + fullTableName +
+                          " WHERE " + columnName + " IS NOT NULL LIMIT " +
+                          std::to_string(maxSamples);
+      auto result = txn.exec(query);
+      for (const auto &row : result) {
+        if (!row[0].is_null()) {
+          try {
+            values.push_back(row[0].as<double>());
+          } catch (...) {
+          }
+        }
+      }
+    }
+  } catch (const std::exception &e) {
+    Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                    "Error getting numeric values: " + std::string(e.what()));
+  }
+  return values;
+}
+
+std::vector<std::string>
+ColumnCatalogCollector::getSampleValues(const std::string &connectionString,
+                                        const ColumnMetadata &column,
+                                        int sampleSize) {
+  std::vector<std::string> values;
+  try {
+    if (column.db_engine == "PostgreSQL") {
+      pqxx::connection conn(connectionString);
+      if (!conn.is_open()) {
+        return values;
+      }
+      pqxx::work txn(conn);
+      std::string fullTableName = txn.quote_name(column.schema_name) + "." +
+                                  txn.quote_name(column.table_name);
+      std::string columnName = txn.quote_name(column.column_name);
+
+      std::string query = "SELECT " + columnName + "::text FROM " +
+                          fullTableName + " WHERE " + columnName +
+                          " IS NOT NULL LIMIT " + std::to_string(sampleSize);
+      auto result = txn.exec(query);
+      for (const auto &row : result) {
+        if (!row[0].is_null()) {
+          values.push_back(row[0].as<std::string>());
+        }
+      }
+    }
+  } catch (const std::exception &e) {
+    Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                    "Error getting sample values: " + std::string(e.what()));
+  }
+  return values;
+}
+
+double
+ColumnCatalogCollector::calculatePercentile(const std::vector<double> &values,
+                                            double percentile) {
+  if (values.empty()) {
+    return 0.0;
+  }
+  std::vector<double> sorted = values;
+  std::sort(sorted.begin(), sorted.end());
+  double index = (percentile / 100.0) * (sorted.size() - 1);
+  int lower = static_cast<int>(index);
+  int upper = lower + 1;
+  double weight = index - lower;
+
+  if (upper >= static_cast<int>(sorted.size())) {
+    return sorted.back();
+  }
+  return sorted[lower] * (1 - weight) + sorted[upper] * weight;
+}
+
+double
+ColumnCatalogCollector::calculateMedian(const std::vector<double> &values) {
+  return calculatePercentile(values, 50.0);
+}
+
+double
+ColumnCatalogCollector::calculateStdDeviation(const std::vector<double> &values,
+                                              double mean) {
+  if (values.empty() || values.size() == 1) {
+    return 0.0;
+  }
+  double sumSquaredDiff = 0.0;
+  for (double value : values) {
+    double diff = value - mean;
+    sumSquaredDiff += diff * diff;
+  }
+  return std::sqrt(sumSquaredDiff / values.size());
+}
+
+bool ColumnCatalogCollector::matchesPattern(const std::string &value,
+                                            const std::string &pattern) {
+  try {
+    if (pattern == "EMAIL") {
+      std::regex emailRegex(
+          R"([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})");
+      return std::regex_match(value, emailRegex);
+    } else if (pattern == "PHONE") {
+      std::regex phoneRegex(R"(\+?[\d\s\-\(\)]{10,})");
+      return std::regex_match(value, phoneRegex);
+    } else if (pattern == "DATE") {
+      std::regex dateRegex(R"(\d{4}[-/]\d{1,2}[-/]\d{1,2})");
+      return std::regex_match(value, dateRegex);
+    } else if (pattern == "UUID") {
+      std::regex uuidRegex(
+          R"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})");
+      return std::regex_match(value, uuidRegex);
+    } else if (pattern == "URL") {
+      std::regex urlRegex(R"(https?://[^\s]+)");
+      return std::regex_match(value, urlRegex);
+    } else if (pattern == "IP") {
+      std::regex ipRegex(R"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})");
+      return std::regex_match(value, ipRegex);
+    }
+  } catch (...) {
+  }
+  return false;
+}
+
+void ColumnCatalogCollector::calculateAdvancedStatistics(
+    ColumnMetadata &column, const std::string &connectionString) {
+  try {
+    if (column.data_type.find("int") == std::string::npos &&
+        column.data_type.find("numeric") == std::string::npos &&
+        column.data_type.find("decimal") == std::string::npos &&
+        column.data_type.find("real") == std::string::npos &&
+        column.data_type.find("double") == std::string::npos &&
+        column.data_type.find("float") == std::string::npos) {
+      return;
+    }
+
+    std::vector<double> values = getNumericValues(connectionString, column);
+    if (values.empty()) {
+      return;
+    }
+
+    column.median_value = calculateMedian(values);
+    column.std_deviation = calculateStdDeviation(values, column.avg_value);
+    column.percentile_25 = calculatePercentile(values, 25.0);
+    column.percentile_75 = calculatePercentile(values, 75.0);
+    column.percentile_90 = calculatePercentile(values, 90.0);
+    column.percentile_95 = calculatePercentile(values, 95.0);
+    column.percentile_99 = calculatePercentile(values, 99.0);
+
+    std::map<double, int> frequencyMap;
+    for (double value : values) {
+      frequencyMap[value]++;
+    }
+
+    int maxFreq = 0;
+    double modeVal = 0.0;
+    for (const auto &pair : frequencyMap) {
+      if (pair.second > maxFreq) {
+        maxFreq = pair.second;
+        modeVal = pair.first;
+      }
+    }
+    if (maxFreq > 0) {
+      column.mode_value = std::to_string(modeVal);
+      column.mode_frequency = (maxFreq * 100.0) / values.size();
+    }
+  } catch (const std::exception &e) {
+    Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                    "Error calculating advanced statistics: " +
+                        std::string(e.what()));
+  }
+}
+
+void ColumnCatalogCollector::detectPatterns(
+    ColumnMetadata &column, const std::string &connectionString) {
+  try {
+    if (column.data_type.find("char") == std::string::npos &&
+        column.data_type.find("text") == std::string::npos &&
+        column.data_type.find("varchar") == std::string::npos) {
+      return;
+    }
+
+    std::vector<std::string> samples =
+        getSampleValues(connectionString, column, 100);
+    if (samples.empty()) {
+      return;
+    }
+
+    std::vector<std::string> patterns = {"EMAIL", "PHONE", "DATE",
+                                         "UUID",  "URL",   "IP"};
+    std::map<std::string, int> patternMatches;
+
+    for (const std::string &pattern : patterns) {
+      int matches = 0;
+      for (const std::string &value : samples) {
+        if (matchesPattern(value, pattern)) {
+          matches++;
+        }
+      }
+      patternMatches[pattern] = matches;
+    }
+
+    std::string bestPattern;
+    int maxMatches = 0;
+    for (const auto &pair : patternMatches) {
+      if (pair.second > maxMatches) {
+        maxMatches = pair.second;
+        bestPattern = pair.first;
+      }
+    }
+
+    if (maxMatches > 0 && maxMatches >= samples.size() * 0.7) {
+      column.detected_pattern = bestPattern;
+      column.pattern_confidence = (maxMatches * 100.0) / samples.size();
+
+      json examples = json::array();
+      int exampleCount = 0;
+      for (const std::string &value : samples) {
+        if (matchesPattern(value, bestPattern) && exampleCount < 5) {
+          examples.push_back(value);
+          exampleCount++;
+        }
+      }
+      column.pattern_examples = examples;
+    }
+  } catch (const std::exception &e) {
+    Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                    "Error detecting patterns: " + std::string(e.what()));
+  }
+}
+
+void ColumnCatalogCollector::analyzeDistribution(
+    ColumnMetadata &column, const std::string &connectionString) {
+  try {
+    if (column.data_type.find("int") == std::string::npos &&
+        column.data_type.find("numeric") == std::string::npos &&
+        column.data_type.find("decimal") == std::string::npos &&
+        column.data_type.find("real") == std::string::npos &&
+        column.data_type.find("double") == std::string::npos &&
+        column.data_type.find("float") == std::string::npos) {
+      return;
+    }
+
+    std::vector<double> values =
+        getNumericValues(connectionString, column, 10000);
+    if (values.empty()) {
+      return;
+    }
+
+    double minVal = *std::min_element(values.begin(), values.end());
+    double maxVal = *std::max_element(values.begin(), values.end());
+    double range = maxVal - minVal;
+    if (range == 0) {
+      return;
+    }
+
+    int bins = 20;
+    std::vector<int> histogram(bins, 0);
+    for (double value : values) {
+      int bin = static_cast<int>(((value - minVal) / range) * (bins - 1));
+      bin = std::max(0, std::min(bins - 1, bin));
+      histogram[bin]++;
+    }
+
+    json distribution = json::array();
+    for (size_t i = 0; i < histogram.size(); i++) {
+      json bin;
+      bin["bin"] = i;
+      bin["min"] = minVal + (i * range / bins);
+      bin["max"] = minVal + ((i + 1) * range / bins);
+      bin["count"] = histogram[i];
+      bin["percentage"] = (histogram[i] * 100.0) / values.size();
+      distribution.push_back(bin);
+    }
+    column.value_distribution = distribution;
+
+    std::map<double, int> valueCounts;
+    for (double value : values) {
+      valueCounts[value]++;
+    }
+
+    std::vector<std::pair<double, int>> sortedCounts(valueCounts.begin(),
+                                                     valueCounts.end());
+    std::sort(
+        sortedCounts.begin(), sortedCounts.end(),
+        [](const std::pair<double, int> &a, const std::pair<double, int> &b) {
+          return a.second > b.second;
+        });
+
+    json topVals = json::array();
+    int topCount = std::min(10, static_cast<int>(sortedCounts.size()));
+    for (int i = 0; i < topCount; i++) {
+      json item;
+      item["value"] = sortedCounts[i].first;
+      item["count"] = sortedCounts[i].second;
+      item["percentage"] = (sortedCounts[i].second * 100.0) / values.size();
+      topVals.push_back(item);
+    }
+    column.top_values = topVals;
+  } catch (const std::exception &e) {
+    Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                    "Error analyzing distribution: " + std::string(e.what()));
+  }
+}
+
+void ColumnCatalogCollector::detectOutliers(
+    ColumnMetadata &column, const std::string &connectionString) {
+  try {
+    if (column.percentile_25 == 0.0 && column.percentile_75 == 0.0) {
+      return;
+    }
+
+    double iqr = column.percentile_75 - column.percentile_25;
+    double lowerBound = column.percentile_25 - (1.5 * iqr);
+    double upperBound = column.percentile_75 + (1.5 * iqr);
+
+    std::vector<double> values =
+        getNumericValues(connectionString, column, 10000);
+    if (values.empty()) {
+      return;
+    }
+
+    int outlierCount = 0;
+    json anomalyList = json::array();
+    for (double value : values) {
+      if (value < lowerBound || value > upperBound) {
+        outlierCount++;
+        if (anomalyList.size() < 10) {
+          json anomaly;
+          anomaly["value"] = value;
+          anomaly["reason"] =
+              value < lowerBound ? "below_lower_bound" : "above_upper_bound";
+          anomaly["bound"] = value < lowerBound ? lowerBound : upperBound;
+          anomalyList.push_back(anomaly);
+        }
+      }
+    }
+
+    column.outlier_count = outlierCount;
+    if (values.size() > 0) {
+      column.outlier_percentage = (outlierCount * 100.0) / values.size();
+    }
+    column.anomalies = anomalyList;
+    column.has_anomalies = (outlierCount > 0);
+  } catch (const std::exception &e) {
+    Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                    "Error detecting outliers: " + std::string(e.what()));
+  }
+}
+
+void ColumnCatalogCollector::calculateProfilingQualityScore(
+    ColumnMetadata &column) {
+  double score = 100.0;
+
+  if (column.null_percentage > 0) {
+    score -= column.null_percentage * 0.3;
+  }
+
+  if (column.outlier_percentage > 0) {
+    score -= column.outlier_percentage * 0.2;
+  }
+
+  if (column.distinct_percentage < 1.0 && column.distinct_percentage > 0) {
+    score -= (1.0 - column.distinct_percentage) * 0.1;
+  }
+
+  if (column.has_anomalies) {
+    score -= 5.0;
+  }
+
+  if (column.std_deviation > 0 && column.avg_value != 0) {
+    double cv = column.std_deviation / std::abs(column.avg_value);
+    if (cv > 2.0) {
+      score -= 10.0;
+    }
+  }
+
+  column.profiling_quality_score = std::max(0.0, std::min(100.0, score));
 }

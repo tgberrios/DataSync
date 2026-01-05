@@ -2,24 +2,13 @@
 │ PRIORIDAD ALTA - Quick Wins (1-2 meses)                        │
 └─────────────────────────────────────────────────────────────────┘
 
-1. WEBHOOKS Y NOTIFICACIONES
-   - Webhooks para eventos (sync completado, errores, alertas)
-   - Integración con Slack, Teams, email
-   - Notificaciones en tiempo real para todos los ETLs
-   - Configuración de webhooks por tipo de evento y severidad
-
-2. API REST MÁS COMPLETA
+1. API REST MÁS COMPLETA
    - Endpoints para todas las funcionalidades
    - Swagger/OpenAPI documentation
    - API versioning
    - Autenticación mejorada (API keys, OAuth2)
 
-3. MSSQL DE AZURE
-   - Soporte específico para Azure SQL Database
-   - Connection string optimizado para Azure
-   - Manejo de firewalls y reglas de red de Azure
-
-4. MÚLTIPLES DESTINOS PARA SYNCs NORMALES
+2. MÚLTIPLES DESTINOS PARA SYNCs NORMALES
    - Actualmente solo PostgreSQL como destino para syncs
    - Agregar: Snowflake, BigQuery, Redshift como destinos alternativos
    - Permitir elegir destino al crear sync (no solo DataWarehouseBuilder)
@@ -28,37 +17,31 @@
 │ PRIORIDAD MEDIA - Expansión (3-6 meses)                        │
 └─────────────────────────────────────────────────────────────────┘
 
-5. VERSIONADO DE CONFIGURACIONES
+3. VERSIONADO DE CONFIGURACIONES
    - Git-like versioning de sync configs
    - Rollback de configuraciones
    - Comparación de versiones
    - Historial de cambios
 
-6. DATA PROFILING AVANZADO
-   - Análisis estadístico de columnas
-   - Detección de patrones
-   - Distribuciones de valores
-   - Quality score automático
-
-7. DATA MASKING/ENCRYPTION
+5. DATA MASKING/ENCRYPTION
    - Enmascaramiento de datos sensibles
    - Encryption at rest y in transit
    - Tokenization
    - Políticas de enmascaramiento configurables
 
-8. BACKUP Y RESTORE
+6. BACKUP Y RESTORE
    - Backup de configuraciones
    - Restore de catálogos
    - Disaster recovery
    - Export/Import de configuraciones completas
 
-9. FIRST SETUP DE LA DB
+7. FIRST SETUP DE LA DB
    - Backup de la DB con solo estructura
    - Backup de data de config
    - Script de inicialización automática
    - Restore desde backup
 
-10. TRANSFORMACIONES VISUALES DRAG-AND-DROP
+8. TRANSFORMACIONES VISUALES DRAG-AND-DROP
     - Editor visual tipo PowerCenter/Talend
     - Componentes pre-construidos (joins, aggregations, lookups)
     - Pipeline visual para Custom Jobs
@@ -67,77 +50,25 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │ PRIORIDAD BAJA - Enterprise Features (6+ meses)                │
 └─────────────────────────────────────────────────────────────────┘
-
-11. SISTEMA DE MIGRACIONES DE ESQUEMA (LIQUIBASE-LIKE)
-    - Sistema propio de migraciones
-    - Versionado de esquemas
-    - Rollback de migraciones
-    - Detección automática de cambios de esquema
-    [FUNCIONALIDAD COMPLEJA - Requiere análisis profundo]
-
-12. MULTI-TENANT
+10. MULTI-TENANT
     - Soporte para múltiples organizaciones
     - Aislamiento de datos
     - Billing por tenant
     - Roles y permisos por tenant
 
-13. REAL-TIME STREAMING
-    - Kafka-like streaming
-    - Event sourcing
-    - Stream processing
-    - Replay de eventos históricos
-
-14. MACHINE LEARNING INTEGRATION
+12. MACHINE LEARNING INTEGRATION
     - Auto-tuning de performance
     - Anomaly detection con ML
     - Predictive maintenance
     - Recomendaciones automáticas
 
-15. GRAPHQL API
-    - Alternativa a REST
-    - Queries flexibles
-    - Real-time subscriptions
-    - Integración con frontend moderno
-
-16. MOBILE APP
+14. MOBILE APP
     - App móvil para monitoreo
     - Push notifications
     - Quick actions
     - Dashboard móvil
 
-┌─────────────────────────────────────────────────────────────────┐
-│ NOTAS Y OBSERVACIONES                                           │
-└─────────────────────────────────────────────────────────────────┘
-
-- Proyecto de backups: Ese es otro proyecto separado
-
-- Features implementadas pero sin UI:
-  * Enterprise Alerting & Monitoring (10 tipos, 4 severidades)
-  * Compliance & GDPR (Right to be Forgotten, Data Portability, etc.)
-  * Advanced Query Analytics
-  * Automated Schema Evolution
-  * Data Retention & Archival
-  * Business Glossary & Data Dictionary
-  → Revisar e implementar UI para estas funcionalidades
-
-- Roadmap sugerido:
-  v1.1.0 - Quick Wins (1-2 meses)
-  ├── Webhooks básicos
-  ├── API REST mejorada
-  ├── MSSQL Azure support
-  └── Múltiples destinos para syncs
-
-  v1.2.0 - Expansión (3-4 meses)
-  ├── Versionado de configs
-  ├── Data profiling avanzado
-  ├── Data masking/encryption
-  └── Transformaciones visuales básicas
-
-  v2.0.0 - Enterprise (6+ meses)
-  ├── Sistema de migraciones
-  ├── Multi-tenant
-  ├── Advanced streaming
-  └── ML integration
-
-
 NORMALIZAR LA DB
+
+
+revisar lo de config

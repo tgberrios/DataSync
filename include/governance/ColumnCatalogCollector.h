@@ -51,6 +51,31 @@ struct ColumnMetadata {
   bool tokenization_applied = false;
 
   json column_metadata_json;
+
+  double median_value = 0.0;
+  double std_deviation = 0.0;
+  std::string mode_value;
+  double mode_frequency = 0.0;
+
+  double percentile_25 = 0.0;
+  double percentile_75 = 0.0;
+  double percentile_90 = 0.0;
+  double percentile_95 = 0.0;
+  double percentile_99 = 0.0;
+
+  json value_distribution;
+  json top_values;
+  long long outlier_count = 0;
+  double outlier_percentage = 0.0;
+
+  std::string detected_pattern;
+  double pattern_confidence = 0.0;
+  json pattern_examples;
+
+  json anomalies;
+  bool has_anomalies = false;
+
+  double profiling_quality_score = 0.0;
 };
 
 class ColumnCatalogCollector {
@@ -80,6 +105,28 @@ private:
   json buildColumnMetadataJSON(const ColumnMetadata &column,
                                const std::string &engine);
   std::string escapeSQL(const std::string &str);
+
+  void calculateAdvancedStatistics(ColumnMetadata &column,
+                                   const std::string &connectionString);
+  void detectPatterns(ColumnMetadata &column,
+                      const std::string &connectionString);
+  void analyzeDistribution(ColumnMetadata &column,
+                           const std::string &connectionString);
+  void detectOutliers(ColumnMetadata &column,
+                      const std::string &connectionString);
+  void calculateProfilingQualityScore(ColumnMetadata &column);
+
+  std::vector<double> getNumericValues(const std::string &connectionString,
+                                       const ColumnMetadata &column,
+                                       int maxSamples = 10000);
+  std::vector<std::string> getSampleValues(const std::string &connectionString,
+                                           const ColumnMetadata &column,
+                                           int sampleSize = 1000);
+  bool matchesPattern(const std::string &value, const std::string &pattern);
+  double calculatePercentile(const std::vector<double> &values,
+                             double percentile);
+  double calculateMedian(const std::vector<double> &values);
+  double calculateStdDeviation(const std::vector<double> &values, double mean);
 
 public:
   explicit ColumnCatalogCollector(const std::string &metadataConnectionString);
