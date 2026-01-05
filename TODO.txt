@@ -41,11 +41,36 @@
    - Script de inicialización automática
    - Restore desde backup
 
-8. TRANSFORMACIONES VISUALES DRAG-AND-DROP
-    - Editor visual tipo PowerCenter/Talend
-    - Componentes pre-construidos (joins, aggregations, lookups)
+
+        - Editor visual tipo PowerCenter/Talend
+           - Componentes pre-construidos (joins, aggregations, lookups)
     - Pipeline visual para Custom Jobs
-    - Marketplace de componentes (futuro)
+
+    que otras cosas de powercenter y latend mi programan o tieen que deberiamos implementar ? 
+
+
+✅ Completado:
+Editor visual tipo PowerCenter/Talend
+VisualPipelineEditor con reactflow
+Drag & drop de nodos
+Conexiones entre nodos
+MiniMap, Controls, Background
+Componentes pre-construidos
+✅ Source - Fuentes de datos (tablas/queries)
+✅ Join - Joins (INNER, LEFT, RIGHT, FULL)
+✅ Filter - Filtros con condiciones múltiples
+✅ Aggregate - Agregaciones (SUM, COUNT, AVG, MIN, MAX) con GROUP BY
+✅ Transform - Transformaciones de columnas
+✅ Lookup - Lookups a otras tablas
+✅ Target - Destinos con estrategias de carga (TRUNCATE, APPEND, UPSERT)
+Pipeline visual para Custom Jobs
+Integrado en CustomJobs.tsx
+Toggle SQL/VISUAL
+Auto-generación de SQL desde el grafo visual
+Auto-generación de transform_config desde el grafo
+Parser SQL → Grafo visual (preview automático
+
+eso podria ser tambien para otros componentes ! 
 
 ┌─────────────────────────────────────────────────────────────────┐
 │ PRIORIDAD BAJA - Enterprise Features (6+ meses)                │
