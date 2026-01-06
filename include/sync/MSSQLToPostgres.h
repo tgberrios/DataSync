@@ -2028,6 +2028,8 @@ public:
               selectQuery += ", ";
             selectQuery += "[" + pkColumns[i] + "]";
           }
+        } else {
+          selectQuery += " ORDER BY (SELECT 0)";
         }
 
         selectQuery += " OFFSET " + std::to_string(lastProcessedOffset) +

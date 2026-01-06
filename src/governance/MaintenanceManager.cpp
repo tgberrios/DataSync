@@ -1248,7 +1248,29 @@ void MaintenanceManager::executeMSSQLMaintenance(const MaintenanceTask &task) {
           "UPDATE STATISTICS [" + escapedSchema + "].[" + escapedObject + "]";
     } else if (task.maintenance_type == "REBUILD INDEX") {
       if (task.object_type == "INDEX") {
-        std::string tableName = task.object_name;
+        std::string tableName;
+        std::string getTableQuery = 
+            "SELECT OBJECT_NAME(object_id) FROM sys.indexes "
+            "WHERE name = '" + escapeSQLMSSQL(task.object_name) + "' "
+            "AND OBJECT_SCHEMA_NAME(object_id) = '" + escapedSchema + "'";
+        
+        SQLRETURN ret2 = SQLExecDirect(stmt, (SQLCHAR *)getTableQuery.c_str(), SQL_NTS);
+        if (ret2 == SQL_SUCCESS || ret2 == SQL_SUCCESS_WITH_INFO) {
+          char buffer[256];
+          SQLLEN len;
+          if (SQLFetch(stmt) == SQL_SUCCESS) {
+            if (SQLGetData(stmt, 1, SQL_C_CHAR, buffer, sizeof(buffer), &len) == SQL_SUCCESS) {
+              tableName = (len > 0 && len < 256) ? std::string(buffer, len) : "";
+            }
+          }
+        }
+        SQLFreeStmt(stmt, SQL_CLOSE);
+        
+        if (tableName.empty()) {
+          SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+          throw std::runtime_error("Could not find table for index: " + task.object_name);
+        }
+        
         query = "ALTER INDEX [" + escapedObject + "] ON [" + escapedSchema +
                 "].[" + escapeSQLMSSQL(tableName) + "] REBUILD";
       } else {
@@ -1258,7 +1280,29 @@ void MaintenanceManager::executeMSSQLMaintenance(const MaintenanceTask &task) {
       }
     } else if (task.maintenance_type == "REORGANIZE INDEX") {
       if (task.object_type == "INDEX") {
-        std::string tableName = task.object_name;
+        std::string tableName;
+        std::string getTableQuery = 
+            "SELECT OBJECT_NAME(object_id) FROM sys.indexes "
+            "WHERE name = '" + escapeSQLMSSQL(task.object_name) + "' "
+            "AND OBJECT_SCHEMA_NAME(object_id) = '" + escapedSchema + "'";
+        
+        SQLRETURN ret2 = SQLExecDirect(stmt, (SQLCHAR *)getTableQuery.c_str(), SQL_NTS);
+        if (ret2 == SQL_SUCCESS || ret2 == SQL_SUCCESS_WITH_INFO) {
+          char buffer[256];
+          SQLLEN len;
+          if (SQLFetch(stmt) == SQL_SUCCESS) {
+            if (SQLGetData(stmt, 1, SQL_C_CHAR, buffer, sizeof(buffer), &len) == SQL_SUCCESS) {
+              tableName = (len > 0 && len < 256) ? std::string(buffer, len) : "";
+            }
+          }
+        }
+        SQLFreeStmt(stmt, SQL_CLOSE);
+        
+        if (tableName.empty()) {
+          SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+          throw std::runtime_error("Could not find table for index: " + task.object_name);
+        }
+        
         query = "ALTER INDEX [" + escapedObject + "] ON [" + escapedSchema +
                 "].[" + escapeSQLMSSQL(tableName) + "] REORGANIZE";
       } else {
