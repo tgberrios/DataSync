@@ -2,7 +2,9 @@
 #include "engines/mariadb_engine.h"
 #include "engines/mongodb_engine.h"
 #include "engines/mssql_engine.h"
+#ifdef HAVE_ORACLE
 #include "engines/oracle_engine.h"
+#endif
 #include "engines/postgres_engine.h"
 #include "utils/connection_utils.h"
 #include <algorithm>
@@ -13,12 +15,15 @@
 #include <memory>
 #include <mongoc/mongoc.h>
 #include <mysql/mysql.h>
+#ifdef HAVE_ORACLE
 #include <oci.h>
+#endif
 #include <sql.h>
 #include <sqlext.h>
 #include <sstream>
 #include <unordered_set>
 
+#ifdef HAVE_ORACLE
 static std::string extractOracleSchema(const std::string &connectionString) {
   std::istringstream ss(connectionString);
   std::string token;
@@ -37,6 +42,7 @@ static std::string extractOracleSchema(const std::string &connectionString) {
   }
   return "";
 }
+#endif
 
 GoogleSheetsToDatabaseSync::GoogleSheetsToDatabaseSync(
     std::string metadataConnectionString)
@@ -171,9 +177,11 @@ void GoogleSheetsToDatabaseSync::processGoogleSheetFullLoad(
     } else if (entry.target_db_engine == "MongoDB") {
       createMongoDBCollection(entry, columns);
       insertDataToMongoDB(entry, data);
+#ifdef HAVE_ORACLE
     } else if (entry.target_db_engine == "Oracle") {
       createOracleTable(entry, columns, columnTypes);
       insertDataToOracle(entry, data);
+#endif
     } else {
       throw std::runtime_error("Unsupported target database engine: " +
                                entry.target_db_engine);
@@ -1048,6 +1056,7 @@ void GoogleSheetsToDatabaseSync::insertDataToMongoDB(
   }
 }
 
+#ifdef HAVE_ORACLE
 void GoogleSheetsToDatabaseSync::createOracleTable(
     const APICatalogEntry &entry, const std::vector<std::string> &columns,
     const std::vector<std::string> &columnTypes) {
@@ -1323,6 +1332,7 @@ void GoogleSheetsToDatabaseSync::insertDataToOracle(
     throw;
   }
 }
+#endif
 
 void GoogleSheetsToDatabaseSync::logToProcessLog(
     const std::string &processName, const std::string &status,
@@ -1340,15 +1350,26 @@ void GoogleSheetsToDatabaseSync::logToProcessLog(
 
     std::string metadataStr = metadata.dump();
 
-    txn.exec_params(
-        "INSERT INTO metadata.process_log (process_type, process_name, status, "
+    pqxx::params params;
+    params.append(std::string("GOOGLE_SHEETS_SYNC"));
+    params.append(processName);
+    params.append(status);
+    params.append(nowStr.str());
+    params.append(nowStr.str());
+    params.append(targetSchema);
+    params.append(tablesProcessed);
+    params.append(totalRowsProcessed);
+    params.append(tablesSuccess);
+    params.append(tablesFailed);
+    params.append(errorMessage);
+    params.append(metadataStr);
+    txn.exec(
+        pqxx::zview("INSERT INTO metadata.process_log (process_type, process_name, status, "
         "start_time, end_time, target_schema, tables_processed, "
         "total_rows_processed, tables_success, tables_failed, error_message, "
         "metadata) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, "
-        "$12::jsonb)",
-        std::string("GOOGLE_SHEETS_SYNC"), processName, status, nowStr.str(),
-        nowStr.str(), targetSchema, tablesProcessed, totalRowsProcessed,
-        tablesSuccess, tablesFailed, errorMessage, metadataStr);
+        "$12::jsonb)"),
+        params);
 
     txn.commit();
   } catch (const std::exception &e) {

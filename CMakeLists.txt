@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 project(DataSync)
 
+include(CheckIncludeFile)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -11,6 +13,38 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR NOT CMAKE_BUILD_TYPE)
 else()
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2")
   message(STATUS "Building in RELEASE mode")
+endif()
+
+set(ORACLE_FILES "")
+
+set(ORACLE_INCLUDE_PATHS
+    /usr/include/oracle/21/client64
+    /usr/include/oracle/19/client64
+    /usr/include/oracle/18/client64
+    /opt/oracle/instantclient_21_1/sdk/include
+    /opt/oracle/instantclient_19_8/sdk/include
+    /opt/oracle/instantclient_18_5/sdk/include
+)
+
+set(HAVE_ORACLE_HEADER FALSE)
+foreach(path ${ORACLE_INCLUDE_PATHS})
+  if(EXISTS "${path}/oci.h")
+    set(HAVE_ORACLE_HEADER TRUE)
+    break()
+  endif()
+endforeach()
+
+if(HAVE_ORACLE_HEADER)
+  add_definitions(-DHAVE_ORACLE)
+  message(STATUS "Oracle support: ENABLED")
+  set(ORACLE_FILES
+    src/governance/DataGovernanceOracle.cpp
+    src/governance/LineageExtractorOracle.cpp
+    src/engines/oracle_engine.cpp
+    src/sync/OracleToPostgres.cpp
+  )
+else()
+  message(STATUS "Oracle support: DISABLED (oci.h not found)")
 endif()
 
 include_directories(
@@ -54,7 +88,7 @@ add_executable(DataSync
     src/governance/DataGovernanceMSSQL.cpp
     src/governance/DataGovernanceMariaDB.cpp
     src/governance/DataGovernanceMongoDB.cpp
-    src/governance/DataGovernanceOracle.cpp
+    ${ORACLE_FILES}
     src/governance/DataQuality.cpp
     src/governance/data_classifier.cpp
     src/governance/QueryStoreCollector.cpp
@@ -63,7 +97,6 @@ add_executable(DataSync
     src/governance/LineageExtractorMSSQL.cpp
     src/governance/LineageExtractorMariaDB.cpp
     src/governance/LineageExtractorMongoDB.cpp
-    src/governance/LineageExtractorOracle.cpp
     src/governance/ColumnCatalogCollector.cpp
     src/governance/ComplianceManager.cpp
     src/governance/AccessControlManager.cpp
@@ -83,7 +116,6 @@ add_executable(DataSync
     src/engines/mssql_engine.cpp
     src/engines/postgres_engine.cpp
     src/engines/mongodb_engine.cpp
-    src/engines/oracle_engine.cpp
     src/engines/db2_engine.cpp
     src/catalog/metadata_repository.cpp
     src/catalog/catalog_cleaner.cpp
@@ -93,7 +125,6 @@ add_executable(DataSync
     src/sync/MariaDBToPostgres.cpp
     src/sync/MSSQLToPostgres.cpp
     src/sync/MongoDBToPostgres.cpp
-    src/sync/OracleToPostgres.cpp
     src/sync/DB2ToPostgres.cpp
     src/sync/SchemaSync.cpp
     src/sync/StreamingData.cpp
@@ -126,6 +157,11 @@ set_target_properties(DataSync PROPERTIES
 # Add JSON library
 add_definitions(-DJSON_USE_IMPLICIT_CONVERSIONS=1)
 
+set(ORACLE_LIBS "")
+if(HAVE_ORACLE_HEADER)
+    set(ORACLE_LIBS clntsh)
+endif()
+
 target_link_libraries(DataSync
     mariadb
     mysqlclient
@@ -135,7 +171,7 @@ target_link_libraries(DataSync
     odbc
     mongoc-1.0
     bson-1.0
-    clntsh
+    ${ORACLE_LIBS}
     stdc++fs
     curl
 )

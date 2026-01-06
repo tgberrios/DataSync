@@ -1,7 +1,9 @@
 #include "sync/DataWarehouseBuilder.h"
 #include "engines/bigquery_engine.h"
 #include "engines/mongodb_engine.h"
+#ifdef HAVE_ORACLE
 #include "engines/oracle_engine.h"
+#endif
 #include "engines/postgres_warehouse_engine.h"
 #include "engines/redshift_engine.h"
 #include "engines/snowflake_engine.h"
@@ -13,7 +15,9 @@
 #include <iomanip>
 #include <mongoc/mongoc.h>
 #include <mysql/mysql.h>
+#ifdef HAVE_ORACLE
 #include <oci.h>
+#endif
 #include <sql.h>
 #include <sqlext.h>
 #include <sstream>
@@ -457,7 +461,11 @@ DataWarehouseBuilder::executeSourceQuery(const DataWarehouseModel &warehouse,
   } else if (warehouse.source_db_engine == "MSSQL") {
     return executeQueryMSSQL(warehouse.source_connection_string, query);
   } else if (warehouse.source_db_engine == "Oracle") {
+#ifdef HAVE_ORACLE
     return executeQueryOracle(warehouse.source_connection_string, query);
+#else
+    throw std::runtime_error("Oracle support not compiled in");
+#endif
   } else if (warehouse.source_db_engine == "MongoDB") {
     return executeQueryMongoDB(warehouse.source_connection_string, query);
   } else {
@@ -872,6 +880,7 @@ DataWarehouseBuilder::executeQueryMSSQL(const std::string &connectionString,
   return results;
 }
 
+#ifdef HAVE_ORACLE
 std::vector<json>
 DataWarehouseBuilder::executeQueryOracle(const std::string &connectionString,
                                          const std::string &query) {
@@ -978,6 +987,7 @@ DataWarehouseBuilder::executeQueryOracle(const std::string &connectionString,
   }
   return results;
 }
+#endif
 
 std::vector<json>
 DataWarehouseBuilder::executeQueryMongoDB(const std::string &connectionString,
@@ -1317,13 +1327,21 @@ int64_t DataWarehouseBuilder::logToProcessLog(const std::string &warehouseName,
 
     std::string metadataStr = metadata.dump();
 
-    auto result = txn.exec_params(
-        "INSERT INTO metadata.process_log "
+    pqxx::params params;
+    params.append(std::string("DATA_WAREHOUSE"));
+    params.append(warehouseName);
+    params.append(status);
+    params.append(timeStr.str());
+    params.append(timeStr.str());
+    params.append(totalRowsProcessed);
+    params.append(errorMessage);
+    params.append(metadataStr);
+    auto result = txn.exec(
+        pqxx::zview("INSERT INTO metadata.process_log "
         "(process_type, process_name, status, "
         "start_time, end_time, total_rows_processed, error_message, metadata) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb) RETURNING id",
-        std::string("DATA_WAREHOUSE"), warehouseName, status, timeStr.str(),
-        timeStr.str(), totalRowsProcessed, errorMessage, metadataStr);
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb) RETURNING id"),
+        params);
 
     int64_t logId = result[0][0].as<int64_t>();
     txn.commit();

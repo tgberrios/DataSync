@@ -17,7 +17,9 @@
 #include "sync/MSSQLToPostgres.h"
 #include "sync/MariaDBToPostgres.h"
 #include "sync/MongoDBToPostgres.h"
+#ifdef HAVE_ORACLE
 #include "sync/OracleToPostgres.h"
+#endif
 #include "sync/PostgreSQLToPostgres.h"
 #include <atomic>
 #include <chrono>
@@ -48,7 +50,9 @@ private:
   MariaDBToPostgres mariaToPg;
   MSSQLToPostgres mssqlToPg;
   MongoDBToPostgres mongoToPg;
+#ifdef HAVE_ORACLE
   OracleToPostgres oracleToPg;
+#endif
   PostgreSQLToPostgres postgresToPg;
   DB2ToPostgres db2ToPg;
   APIToDatabaseSync apiToDb;

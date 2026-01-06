@@ -83,10 +83,13 @@ bool MongoDBToPostgres::shouldSyncCollection(pqxx::connection &pgConn,
                                              const std::string &table_name) {
   try {
     pqxx::work txn(pgConn);
-    auto result = txn.exec_params(
-        "SELECT status, mongo_last_sync_time FROM metadata.catalog "
-        "WHERE schema_name = $1 AND table_name = $2 AND db_engine = 'MongoDB'",
-        schema_name, table_name);
+    pqxx::params params;
+    params.append(schema_name);
+    params.append(table_name);
+    auto result = txn.exec(
+        pqxx::zview("SELECT status, mongo_last_sync_time FROM metadata.catalog "
+        "WHERE schema_name = $1 AND table_name = $2 AND db_engine = 'MongoDB'"),
+        params);
     txn.commit();
 
     if (result.empty()) {

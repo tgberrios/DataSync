@@ -1,5 +1,7 @@
 #include "sync/CustomJobExecutor.h"
+#ifdef HAVE_ORACLE
 #include "engines/oracle_engine.h"
+#endif
 #include "utils/connection_utils.h"
 #include <algorithm>
 #include <bson/bson.h>
@@ -11,7 +13,9 @@
 #include <iomanip>
 #include <mongoc/mongoc.h>
 #include <mysql/mysql.h>
+#ifdef HAVE_ORACLE
 #include <oci.h>
+#endif
 #include <sql.h>
 #include <sqlext.h>
 #include <sstream>
@@ -19,6 +23,7 @@
 #include <unistd.h>
 #include <unordered_set>
 
+#ifdef HAVE_ORACLE
 static std::string extractOracleSchema(const std::string &connectionString) {
   std::istringstream ss(connectionString);
   std::string token;
@@ -37,6 +42,7 @@ static std::string extractOracleSchema(const std::string &connectionString) {
   }
   return "";
 }
+#endif
 
 CustomJobExecutor::CustomJobExecutor(std::string metadataConnectionString)
     : metadataConnectionString_(std::move(metadataConnectionString)),
@@ -330,6 +336,7 @@ CustomJobExecutor::executeQueryMSSQL(const std::string &connectionString,
   return results;
 }
 
+#ifdef HAVE_ORACLE
 std::vector<json>
 CustomJobExecutor::executeQueryOracle(const std::string &connectionString,
                                       const std::string &query) {
@@ -436,6 +443,7 @@ CustomJobExecutor::executeQueryOracle(const std::string &connectionString,
   }
   return results;
 }
+#endif
 
 std::vector<json>
 CustomJobExecutor::executeQueryMongoDB(const std::string &connectionString,
@@ -1118,6 +1126,7 @@ void CustomJobExecutor::insertDataToMSSQL(const CustomJob &job,
   }
 }
 
+#ifdef HAVE_ORACLE
 void CustomJobExecutor::createOracleTable(
     const CustomJob &job, const std::vector<std::string> &columns) {
   OCIStmt *stmt = nullptr;
@@ -1375,6 +1384,7 @@ void CustomJobExecutor::insertDataToOracle(const CustomJob &job,
     throw;
   }
 }
+#endif
 
 void CustomJobExecutor::createMongoDBCollection(
     const CustomJob &job, const std::vector<std::string> &) {
@@ -1654,11 +1664,17 @@ void CustomJobExecutor::saveJobResult(const std::string &jobName,
       sampleJson.push_back(sample[i]);
     }
 
-    txn.exec_params(
-        "INSERT INTO metadata.job_results (job_name, process_log_id, "
+    pqxx::params params;
+    params.append(jobName);
+    params.append(processLogId);
+    params.append(rowCount);
+    params.append(sampleJson.dump());
+    params.append(true);
+    txn.exec(
+        pqxx::zview("INSERT INTO metadata.job_results (job_name, process_log_id, "
         "row_count, "
-        "result_sample, full_result_stored) VALUES ($1, $2, $3, $4::jsonb, $5)",
-        jobName, processLogId, rowCount, sampleJson.dump(), true);
+        "result_sample, full_result_stored) VALUES ($1, $2, $3, $4::jsonb, $5)"),
+        params);
 
     txn.commit();
   } catch (const std::exception &e) {
@@ -1683,12 +1699,20 @@ int64_t CustomJobExecutor::logToProcessLog(const std::string &jobName,
 
     std::string metadataStr = metadata.dump();
 
-    auto result = txn.exec_params(
-        "INSERT INTO metadata.process_log (process_type, process_name, status, "
+    pqxx::params params;
+    params.append(std::string("CUSTOM_JOB"));
+    params.append(jobName);
+    params.append(status);
+    params.append(nowStr.str());
+    params.append(nowStr.str());
+    params.append(totalRowsProcessed);
+    params.append(errorMessage);
+    params.append(metadataStr);
+    auto result = txn.exec(
+        pqxx::zview("INSERT INTO metadata.process_log (process_type, process_name, status, "
         "start_time, end_time, total_rows_processed, error_message, metadata) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb) RETURNING id",
-        std::string("CUSTOM_JOB"), jobName, status, nowStr.str(), nowStr.str(),
-        totalRowsProcessed, errorMessage, metadataStr);
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb) RETURNING id"),
+        params);
 
     txn.commit();
     if (!result.empty()) {
@@ -1750,8 +1774,10 @@ int64_t CustomJobExecutor::executeJobAndGetLogId(const std::string &jobName) {
           executeQueryMariaDB(job.source_connection_string, job.query_sql);
     } else if (job.source_db_engine == "MSSQL") {
       results = executeQueryMSSQL(job.source_connection_string, job.query_sql);
+#ifdef HAVE_ORACLE
     } else if (job.source_db_engine == "Oracle") {
       results = executeQueryOracle(job.source_connection_string, job.query_sql);
+#endif
     } else if (job.source_db_engine == "MongoDB") {
       results =
           executeQueryMongoDB(job.source_connection_string, job.query_sql);
@@ -1774,9 +1800,11 @@ int64_t CustomJobExecutor::executeJobAndGetLogId(const std::string &jobName) {
       } else if (job.target_db_engine == "MSSQL") {
         createMSSQLTable(job, columns);
         insertDataToMSSQL(job, results);
+#ifdef HAVE_ORACLE
       } else if (job.target_db_engine == "Oracle") {
         createOracleTable(job, columns);
         insertDataToOracle(job, results);
+#endif
       } else if (job.target_db_engine == "MongoDB") {
         createMongoDBCollection(job, columns);
         insertDataToMongoDB(job, results);

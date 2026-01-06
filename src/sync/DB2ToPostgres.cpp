@@ -672,10 +672,14 @@ void DB2ToPostgres::processTableCDCInternal(
         pqxx::work txn(pgConn);
         json metadata;
         metadata["last_change_id"] = std::to_string(maxChangeId);
-        txn.exec_params(
-            "UPDATE metadata.catalog SET sync_metadata = $1 WHERE "
-            "schema_name = $2 AND table_name = $3 AND db_engine = 'DB2'",
-            metadata.dump(), table.schema_name, table.table_name);
+        pqxx::params params;
+        params.append(metadata.dump());
+        params.append(table.schema_name);
+        params.append(table.table_name);
+        txn.exec(
+            pqxx::zview("UPDATE metadata.catalog SET sync_metadata = $1 WHERE "
+            "schema_name = $2 AND table_name = $3 AND db_engine = 'DB2'"),
+            params);
         txn.commit();
       } catch (const std::exception &e) {
         Logger::error(LogCategory::TRANSFER, "processTableCDCInternal",

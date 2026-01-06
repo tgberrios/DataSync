@@ -572,7 +572,9 @@ void StreamingData::initializeDatabaseTables() {
 
   try {
     Logger::info(LogCategory::MONITORING, "Setting up Oracle target tables");
+#ifdef HAVE_ORACLE
     oracleToPg.setupTableTargetOracleToPostgres();
+#endif
     Logger::info(LogCategory::MONITORING,
                  "Oracle target tables setup completed");
   } catch (const std::exception &e) {
@@ -864,7 +866,9 @@ void StreamingData::oracleTransferThread() {
                        " seconds");
 
       auto startTime = std::chrono::high_resolution_clock::now();
+#ifdef HAVE_ORACLE
       oracleToPg.transferDataOracleToPostgresParallel();
+#endif
       auto endTime = std::chrono::high_resolution_clock::now();
 
       auto duration =
@@ -1109,9 +1113,12 @@ void StreamingData::customJobsSchedulerThread() {
             json updatedMetadata = job.metadata;
             updatedMetadata["execute_now"] = false;
             updatedMetadata.erase("execute_timestamp");
-            txn.exec_params("UPDATE metadata.custom_jobs SET metadata = "
-                            "$1::jsonb WHERE job_name = $2",
-                            updatedMetadata.dump(), job.job_name);
+            pqxx::params params;
+            params.append(updatedMetadata.dump());
+            params.append(job.job_name);
+            txn.exec(pqxx::zview("UPDATE metadata.custom_jobs SET metadata = "
+                            "$1::jsonb WHERE job_name = $2"),
+                            params);
             txn.commit();
           } catch (const std::exception &e) {
             Logger::error(LogCategory::MONITORING, "customJobsSchedulerThread",
@@ -1298,10 +1305,13 @@ void StreamingData::warehouseBuilderThread() {
           json updatedMetadata = warehouse.metadata;
           updatedMetadata["build_now"] = false;
           updatedMetadata.erase("build_timestamp");
-          txn2.exec_params(
-              "UPDATE metadata.data_warehouse_catalog SET metadata = "
-              "$1::jsonb WHERE warehouse_name = $2",
-              updatedMetadata.dump(), warehouse.warehouse_name);
+          pqxx::params params;
+          params.append(updatedMetadata.dump());
+          params.append(warehouse.warehouse_name);
+          txn2.exec(
+              pqxx::zview("UPDATE metadata.data_warehouse_catalog SET metadata = "
+              "$1::jsonb WHERE warehouse_name = $2"),
+              params);
           txn2.commit();
         } catch (const std::exception &e) {
           Logger::error(LogCategory::MONITORING, "warehouseBuilderThread",
@@ -1813,7 +1823,9 @@ void StreamingData::processScheduledTables(const std::string &dbEngine) {
         "ORDER BY next_sync_time NULLS FIRST "
         "LIMIT 50";
 
-    auto result = txn.exec_params(query, dbEngine);
+    pqxx::params params;
+    params.append(dbEngine);
+    auto result = txn.exec(pqxx::zview(query), params);
     txn.commit();
 
     if (result.empty()) {
@@ -1889,7 +1901,9 @@ void StreamingData::processScheduledTables(const std::string &dbEngine) {
               continue;
             }
           } else if (dbEngine == "Oracle") {
+#ifdef HAVE_ORACLE
             oracleToPg.processTableParallel(tableInfo, tablePgConn);
+#endif
           }
         } catch (const std::exception &e) {
           Logger::error(LogCategory::MONITORING, "processScheduledTables",

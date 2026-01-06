@@ -3,14 +3,12 @@
 
 #include "catalog/catalog_manager.h"
 #include "engines/database_engine.h"
-#include "engines/oracle_engine.h"
 #include "sync/DatabaseToPostgresSync.h"
 #include "sync/ICDCHandler.h"
 #include "sync/TableProcessorThreadPool.h"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
-#include <oci.h>
 #include <pqxx/pqxx>
 #include <set>
 #include <sstream>
@@ -19,8 +17,14 @@
 #include <unordered_set>
 #include <vector>
 
+#ifdef HAVE_ORACLE
+#include "engines/oracle_engine.h"
+#include <oci.h>
+#endif
+
 using namespace ParallelProcessing;
 
+#ifdef HAVE_ORACLE
 class OracleToPostgres : public DatabaseToPostgresSync, public ICDCHandler {
 public:
   OracleToPostgres() = default;
@@ -66,5 +70,21 @@ private:
   static std::string escapeOracleValue(const std::string &value);
   static bool isValidOracleIdentifier(const std::string &identifier);
 };
+#else
+class OracleToPostgres : public DatabaseToPostgresSync, public ICDCHandler {
+public:
+  OracleToPostgres() = default;
+  ~OracleToPostgres() {}
+  std::string cleanValueForPostgres(const std::string &, const std::string &) override { return ""; }
+  std::vector<TableInfo> getActiveTables(pqxx::connection &) { return {}; }
+  void setupTableTargetOracleToPostgres() {}
+  void transferDataOracleToPostgres() {}
+  void transferDataOracleToPostgresParallel() {}
+  void processTableParallel(const TableInfo &, pqxx::connection &) {}
+  void processTableCDC(const DatabaseToPostgresSync::TableInfo &, pqxx::connection &) override {}
+  bool supportsCDC() const override { return false; }
+  std::string getCDCMechanism() const override { return ""; }
+};
+#endif
 
 #endif

@@ -7,6 +7,8 @@
 #include "sync/SchemaSync.h"
 #include "utils/connection_utils.h"
 #include <memory>
+
+#ifdef HAVE_ORACLE
 #include <oci.h>
 
 struct OCIHandles {
@@ -64,5 +66,22 @@ private:
                                                      const std::string &query);
   std::string extractSchemaName(const std::string &connectionString);
 };
+
+#else
+
+class OracleEngine : public IDatabaseEngine {
+  std::string connectionString_;
+
+public:
+  explicit OracleEngine(std::string connectionString) : connectionString_(std::move(connectionString)) {}
+
+  std::vector<CatalogTableInfo> discoverTables() override { return {}; }
+  std::vector<std::string> detectPrimaryKey(const std::string &, const std::string &) override { return {}; }
+  std::string detectTimeColumn(const std::string &, const std::string &) override { return ""; }
+  std::pair<int, int> getColumnCounts(const std::string &, const std::string &, const std::string &) override { return {0, 0}; }
+  std::vector<ColumnInfo> getTableColumns(const std::string &, const std::string &) { return {}; }
+};
+
+#endif
 
 #endif

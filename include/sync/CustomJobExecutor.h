@@ -6,7 +6,9 @@
 #include "engines/mariadb_engine.h"
 #include "engines/mongodb_engine.h"
 #include "engines/mssql_engine.h"
+#ifdef HAVE_ORACLE
 #include "engines/oracle_engine.h"
+#endif
 #include "engines/postgres_engine.h"
 #include "third_party/json.hpp"
 #include <bson/bson.h>

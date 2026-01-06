@@ -410,6 +410,7 @@ int64_t CatalogManager::getTableSize(const std::string &schema,
         return 0;
       }
     } else if (db_engine == "Oracle") {
+#ifdef HAVE_ORACLE
       try {
         OCIConnection conn(connStr);
         if (!conn.isValid()) {
@@ -562,6 +563,11 @@ int64_t CatalogManager::getTableSize(const std::string &schema,
                           schema + "." + table);
         return 0;
       }
+#else
+      Logger::warning(LogCategory::DATABASE, "CatalogManager",
+                      "Oracle support not compiled in");
+      return 0;
+#endif
     }
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "CatalogManager",

@@ -6,11 +6,15 @@
 #include "governance/DataGovernanceMSSQL.h"
 #include "governance/DataGovernanceMariaDB.h"
 #include "governance/DataGovernanceMongoDB.h"
+#ifdef HAVE_ORACLE
 #include "governance/DataGovernanceOracle.h"
+#endif
 #include "governance/LineageExtractorMSSQL.h"
 #include "governance/LineageExtractorMariaDB.h"
 #include "governance/LineageExtractorMongoDB.h"
+#ifdef HAVE_ORACLE
 #include "governance/LineageExtractorOracle.h"
+#endif
 #include "utils/string_utils.h"
 #include "utils/time_utils.h"
 #include <algorithm>
@@ -244,10 +248,15 @@ void DataGovernance::runDiscovery() {
           try {
             Logger::info(LogCategory::GOVERNANCE, "runDiscovery",
                          "Collecting Oracle governance data for connection");
+#ifdef HAVE_ORACLE
             DataGovernanceOracle oracleGov(connStr);
             oracleGov.collectGovernanceData();
             oracleGov.storeGovernanceData();
             oracleGov.generateReport();
+#else
+            Logger::warning(LogCategory::GOVERNANCE, "DataGovernance",
+                            "Oracle support not compiled in");
+#endif
           } catch (const std::exception &e) {
             Logger::error(LogCategory::GOVERNANCE, "runDiscovery",
                           "Error collecting Oracle governance data: " +
@@ -257,9 +266,14 @@ void DataGovernance::runDiscovery() {
           try {
             Logger::info(LogCategory::GOVERNANCE, "runDiscovery",
                          "Extracting Oracle lineage for connection");
+#ifdef HAVE_ORACLE
             LineageExtractorOracle lineageExtractor(connStr);
             lineageExtractor.extractLineage();
             lineageExtractor.storeLineage();
+#else
+            Logger::warning(LogCategory::GOVERNANCE, "DataGovernance",
+                            "Oracle support not compiled in");
+#endif
             Logger::info(LogCategory::GOVERNANCE, "runDiscovery",
                          "Oracle lineage extraction completed");
           } catch (const std::exception &e) {
@@ -375,8 +389,11 @@ DataGovernance::extractTableMetadata(const std::string &schema_name,
         "WHERE table_schema = $1 "
         "AND table_name = $2";
 
+    pqxx::params params;
+    params.append(lowerSchema);
+    params.append(lowerTable);
     auto checkResult =
-        checkTxn.exec_params(checkTableQuery, lowerSchema, lowerTable);
+        checkTxn.exec(pqxx::zview(checkTableQuery), params);
     checkTxn.commit();
 
     if (checkResult.empty() || checkResult[0][0].as<int>() == 0) {
@@ -436,8 +453,11 @@ void DataGovernance::analyzeTableStructure(pqxx::connection &conn,
     std::string columnCountQuery =
         "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = "
         "$1 AND table_name = $2";
+    pqxx::params params;
+    params.append(lowerSchema);
+    params.append(lowerTable);
     auto columnResult =
-        txn.exec_params(columnCountQuery, lowerSchema, lowerTable);
+        txn.exec(pqxx::zview(columnCountQuery), params);
     if (!columnResult.empty()) {
       metadata.total_columns = columnResult[0][0].as<int>();
     }
@@ -482,14 +502,20 @@ void DataGovernance::analyzeTableStructure(pqxx::connection &conn,
                           "WHERE tc.table_schema = $1 "
                           "AND tc.table_name = $2 "
                           "AND tc.constraint_type = 'PRIMARY KEY'";
-    auto pkResult = txn.exec_params(pkQuery, lowerSchema, lowerTable);
+    params = pqxx::params();
+    params.append(lowerSchema);
+    params.append(lowerTable);
+    auto pkResult = txn.exec(pqxx::zview(pkQuery), params);
     if (!pkResult.empty() && !pkResult[0][0].is_null()) {
       metadata.primary_key_columns = pkResult[0][0].as<std::string>();
     }
 
     std::string indexQuery = "SELECT COUNT(*) FROM pg_indexes WHERE schemaname "
                              "= $1 AND tablename = $2";
-    auto indexResult = txn.exec_params(indexQuery, lowerSchema, lowerTable);
+    params = pqxx::params();
+    params.append(lowerSchema);
+    params.append(lowerTable);
+    auto indexResult = txn.exec(pqxx::zview(indexQuery), params);
     if (!indexResult.empty()) {
       metadata.index_count = indexResult[0][0].as<int>();
     }
@@ -497,8 +523,11 @@ void DataGovernance::analyzeTableStructure(pqxx::connection &conn,
     std::string constraintQuery =
         "SELECT COUNT(*) FROM information_schema.table_constraints WHERE "
         "table_schema = $1 AND table_name = $2";
+    params = pqxx::params();
+    params.append(lowerSchema);
+    params.append(lowerTable);
     auto constraintResult =
-        txn.exec_params(constraintQuery, lowerSchema, lowerTable);
+        txn.exec(pqxx::zview(constraintQuery), params);
     if (!constraintResult.empty()) {
       metadata.constraint_count = constraintResult[0][0].as<int>();
     }
@@ -531,7 +560,10 @@ void DataGovernance::analyzeDataQuality(pqxx::connection &conn,
                             "AND table_name = $2 "
                             "ORDER BY ordinal_position;";
 
-    auto nullResult = txn.exec_params(nullQuery, schema_name, table_name);
+    pqxx::params params;
+    params.append(schema_name);
+    params.append(table_name);
+    auto nullResult = txn.exec(pqxx::zview(nullQuery), params);
     if (!nullResult.empty()) {
       int totalColumns = nullResult.size();
       int nullableColumns = 0;
@@ -652,7 +684,10 @@ void DataGovernance::analyzeUsageStatistics(pqxx::connection &conn,
                              "AND relname = $2 "
                              "LIMIT 1;";
 
-    auto usageResult = txn.exec_params(usageQuery, schema_name, table_name);
+    pqxx::params params;
+    params.append(schema_name);
+    params.append(table_name);
+    auto usageResult = txn.exec(pqxx::zview(usageQuery), params);
     if (!usageResult.empty()) {
       if (!usageResult[0][0].is_null()) {
         metadata.last_accessed = usageResult[0][0].as<std::string>();
@@ -712,7 +747,10 @@ void DataGovernance::analyzeHealthStatus(pqxx::connection &conn,
                               "AND relname = $2 "
                               "LIMIT 1;";
 
-    auto healthResult = txn.exec_params(healthQuery, schema_name, table_name);
+    pqxx::params params;
+    params.append(schema_name);
+    params.append(table_name);
+    auto healthResult = txn.exec(pqxx::zview(healthQuery), params);
     if (!healthResult.empty()) {
       long long deadTuples = healthResult[0][0].as<long long>();
       long long liveTuples = healthResult[0][1].as<long long>();
@@ -780,7 +818,9 @@ void DataGovernance::inferSourceEngine(TableMetadata &metadata) {
     std::string query =
         "SELECT db_engine FROM metadata.catalog WHERE schema_name = $1 LIMIT 1";
 
-    auto result = txn.exec_params(query, metadata.schema_name);
+    pqxx::params params;
+    params.append(metadata.schema_name);
+    auto result = txn.exec(pqxx::zview(query), params);
     txn.commit();
 
     if (!result.empty()) {
@@ -808,8 +848,11 @@ void DataGovernance::storeMetadata(const TableMetadata &metadata) {
     std::string checkQuery =
         "SELECT COUNT(*) FROM metadata.data_governance_catalog WHERE "
         "schema_name = $1 AND table_name = $2";
+    pqxx::params params;
+    params.append(metadata.schema_name);
+    params.append(metadata.table_name);
     auto checkResult =
-        txn.exec_params(checkQuery, metadata.schema_name, metadata.table_name);
+        txn.exec(pqxx::zview(checkQuery), params);
 
     if (!checkResult.empty() && checkResult[0][0].as<int>() > 0) {
       updateExistingMetadata(metadata);
@@ -1080,7 +1123,10 @@ void DataGovernance::updateExistingMetadata(const TableMetadata &metadata) {
         "WHERE schema_name = $1 "
         "AND table_name = $2";
 
-    txn.exec_params(updateQuery, metadata.schema_name, metadata.table_name);
+    pqxx::params params;
+    params.append(metadata.schema_name);
+    params.append(metadata.table_name);
+    txn.exec(pqxx::zview(updateQuery), params);
     txn.commit();
 
   } catch (const std::exception &e) {
@@ -1393,7 +1439,10 @@ void DataGovernance::calculatePIIMetrics(pqxx::connection &conn,
       WHERE schema_name = $1 AND table_name = $2
     )";
 
-    auto result = txn.exec_params(query, schema_name, table_name);
+    pqxx::params params;
+    params.append(schema_name);
+    params.append(table_name);
+    auto result = txn.exec(pqxx::zview(query), params);
     if (!result.empty()) {
       metadata.sensitive_data_count =
           result[0][0].is_null() ? 0 : result[0][0].as<int>();

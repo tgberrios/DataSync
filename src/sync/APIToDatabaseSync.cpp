@@ -2,7 +2,9 @@
 #include "engines/mariadb_engine.h"
 #include "engines/mongodb_engine.h"
 #include "engines/mssql_engine.h"
+#ifdef HAVE_ORACLE
 #include "engines/oracle_engine.h"
+#endif
 #include "engines/postgres_engine.h"
 #include "utils/connection_utils.h"
 #include <algorithm>
@@ -13,12 +15,15 @@
 #include <memory>
 #include <mongoc/mongoc.h>
 #include <mysql/mysql.h>
+#ifdef HAVE_ORACLE
 #include <oci.h>
+#endif
 #include <sql.h>
 #include <sqlext.h>
 #include <sstream>
 #include <unordered_set>
 
+#ifdef HAVE_ORACLE
 static std::string extractOracleSchema(const std::string &connectionString) {
   std::istringstream ss(connectionString);
   std::string token;
@@ -37,6 +42,7 @@ static std::string extractOracleSchema(const std::string &connectionString) {
   }
   return "";
 }
+#endif
 
 APIToDatabaseSync::APIToDatabaseSync(std::string metadataConnectionString)
     : metadataConnectionString_(std::move(metadataConnectionString)) {
@@ -160,9 +166,11 @@ void APIToDatabaseSync::processAPIFullLoad(const APICatalogEntry &entry) {
     } else if (entry.target_db_engine == "MongoDB") {
       createMongoDBCollection(entry, columns);
       insertDataToMongoDB(entry, data);
+#ifdef HAVE_ORACLE
     } else if (entry.target_db_engine == "Oracle") {
       createOracleTable(entry, columns, columnTypes);
       insertDataToOracle(entry, data);
+#endif
     } else {
       throw std::runtime_error("Unsupported target database engine: " +
                                entry.target_db_engine);
@@ -182,7 +190,6 @@ void APIToDatabaseSync::processAPIFullLoad(const APICatalogEntry &entry) {
                      std::to_string(duration.count()) + " seconds)");
 
   } catch (const std::exception &e) {
-    auto endTime = std::chrono::system_clock::now();
     logToProcessLog(entry.api_name, "ERROR", entry.target_schema, 1, 0, 0, 1,
                     std::string(e.what()), metadata);
     apiRepo_->updateSyncStatus(entry.api_name, "ERROR", startTimeStr.str());
@@ -234,7 +241,7 @@ APIToDatabaseSync::detectColumnTypes(const std::vector<json> &data,
 
 std::string
 APIToDatabaseSync::convertJSONValueToString(const json &value,
-                                            const std::string &sqlType) {
+                                            const std::string & /* sqlType */) {
   if (value.is_null()) {
     return "NULL";
   } else if (value.is_number_integer()) {
@@ -908,7 +915,7 @@ void APIToDatabaseSync::insertDataToMSSQL(const APICatalogEntry &entry,
 }
 
 void APIToDatabaseSync::createMongoDBCollection(
-    const APICatalogEntry &entry, const std::vector<std::string> &columns) {
+    const APICatalogEntry &entry, const std::vector<std::string> & /* columns */) {
   try {
     MongoDBEngine engine(entry.target_connection_string);
     if (!engine.isValid()) {
@@ -947,7 +954,10 @@ void APIToDatabaseSync::createMongoDBCollection(
 void APIToDatabaseSync::insertDataToMongoDB(const APICatalogEntry &entry,
                                             const std::vector<json> &data) {
   mongoc_collection_t *coll = nullptr;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wignored-attributes"
   std::vector<bson_t *> allDocPtrs;
+#pragma GCC diagnostic pop
   try {
     MongoDBEngine engine(entry.target_connection_string);
     if (!engine.isValid()) {
@@ -966,8 +976,11 @@ void APIToDatabaseSync::insertDataToMongoDB(const APICatalogEntry &entry,
     size_t batchSize = 1000;
 
     for (size_t i = 0; i < data.size(); i += batchSize) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wignored-attributes"
       std::vector<const bson_t *> docs;
       std::vector<bson_t *> docPtrs;
+#pragma GCC diagnostic pop
 
       size_t endIdx = std::min(i + batchSize, data.size());
       for (size_t j = i; j < endIdx; j++) {
@@ -999,9 +1012,12 @@ void APIToDatabaseSync::insertDataToMongoDB(const APICatalogEntry &entry,
         bool ret = mongoc_collection_insert_many(coll, docs.data(), docs.size(),
                                                  nullptr, nullptr, &error);
         if (!ret) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wignored-attributes"
           for (auto *doc : docPtrs) {
             bson_destroy(doc);
           }
+#pragma GCC diagnostic pop
           allDocPtrs.clear();
           mongoc_collection_destroy(coll);
           coll = nullptr;
@@ -1011,9 +1027,12 @@ void APIToDatabaseSync::insertDataToMongoDB(const APICatalogEntry &entry,
         inserted += docs.size();
       }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wignored-attributes"
       for (auto *doc : docPtrs) {
         bson_destroy(doc);
       }
+#pragma GCC diagnostic pop
       docPtrs.clear();
     }
 
@@ -1038,6 +1057,7 @@ void APIToDatabaseSync::insertDataToMongoDB(const APICatalogEntry &entry,
   }
 }
 
+#ifdef HAVE_ORACLE
 void APIToDatabaseSync::createOracleTable(
     const APICatalogEntry &entry, const std::vector<std::string> &columns,
     const std::vector<std::string> &columnTypes) {
@@ -1312,6 +1332,7 @@ void APIToDatabaseSync::insertDataToOracle(const APICatalogEntry &entry,
     throw;
   }
 }
+#endif
 
 void APIToDatabaseSync::logToProcessLog(
     const std::string &processName, const std::string &status,
@@ -1329,15 +1350,26 @@ void APIToDatabaseSync::logToProcessLog(
 
     std::string metadataStr = metadata.dump();
 
-    txn.exec_params(
-        "INSERT INTO metadata.process_log (process_type, process_name, status, "
+    pqxx::params params;
+    params.append(std::string("API_SYNC"));
+    params.append(processName);
+    params.append(status);
+    params.append(nowStr.str());
+    params.append(nowStr.str());
+    params.append(targetSchema);
+    params.append(tablesProcessed);
+    params.append(totalRowsProcessed);
+    params.append(tablesSuccess);
+    params.append(tablesFailed);
+    params.append(errorMessage);
+    params.append(metadataStr);
+    txn.exec(
+        pqxx::zview("INSERT INTO metadata.process_log (process_type, process_name, status, "
         "start_time, end_time, target_schema, tables_processed, "
         "total_rows_processed, tables_success, tables_failed, error_message, "
         "metadata) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, "
-        "$12::jsonb)",
-        std::string("API_SYNC"), processName, status, nowStr.str(),
-        nowStr.str(), targetSchema, tablesProcessed, totalRowsProcessed,
-        tablesSuccess, tablesFailed, errorMessage, metadataStr);
+        "$12::jsonb)"),
+        params);
 
     txn.commit();
   } catch (const std::exception &e) {

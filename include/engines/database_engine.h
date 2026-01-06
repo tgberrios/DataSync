@@ -27,7 +27,7 @@ public:
 };
 
 inline std::string
-determinePKStrategy(const std::vector<std::string> &pkColumns) {
+determinePKStrategy(const std::vector<std::string> & /* pkColumns */) {
   return "CDC";
 }
 

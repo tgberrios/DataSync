@@ -553,14 +553,20 @@ void MetricsCollector::saveMetricsToDatabase() {
         continue;
       }
 
-      txn.exec_params(
-          insertQuery, metric.schema_name, metric.table_name, metric.db_engine,
-          metric.records_transferred, metric.bytes_transferred,
-          metric.memory_used_mb, metric.io_operations_per_second,
-          metric.transfer_type, metric.status,
-          metric.error_message.empty() ? nullptr : metric.error_message.c_str(),
-          metric.started_at.empty() ? nullptr : metric.started_at.c_str(),
-          metric.completed_at.empty() ? nullptr : metric.completed_at.c_str());
+      pqxx::params params;
+      params.append(metric.schema_name);
+      params.append(metric.table_name);
+      params.append(metric.db_engine);
+      params.append(metric.records_transferred);
+      params.append(metric.bytes_transferred);
+      params.append(metric.memory_used_mb);
+      params.append(metric.io_operations_per_second);
+      params.append(metric.transfer_type);
+      params.append(metric.status);
+      params.append(metric.error_message.empty() ? nullptr : metric.error_message.c_str());
+      params.append(metric.started_at.empty() ? nullptr : metric.started_at.c_str());
+      params.append(metric.completed_at.empty() ? nullptr : metric.completed_at.c_str());
+      txn.exec(pqxx::zview(insertQuery), params);
     }
 
     txn.commit();

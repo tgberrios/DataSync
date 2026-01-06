@@ -28,10 +28,13 @@ bool TableUtils::tableExistsInPostgres(pqxx::connection &conn,
     std::string lowerSchema = StringUtils::toLower(schema);
     std::string lowerTable = StringUtils::toLower(table);
 
+    pqxx::params params;
+    params.append(lowerSchema);
+    params.append(lowerTable);
     auto result =
-        txn.exec_params("SELECT COUNT(*) FROM information_schema.tables "
-                        "WHERE table_schema = $1 AND table_name = $2",
-                        lowerSchema, lowerTable);
+        txn.exec(pqxx::zview("SELECT COUNT(*) FROM information_schema.tables "
+                        "WHERE table_schema = $1 AND table_name = $2"),
+                        params);
 
     bool exists = !result.empty() && result[0][0].as<int>() > 0;
     txn.commit();

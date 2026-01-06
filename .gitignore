@@ -16,6 +16,7 @@ DataSync
 .vscode
 .vscode/
 .idea/
+*.code-workspace
 *.swp
 *.swo
 *~

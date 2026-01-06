@@ -185,8 +185,11 @@ void MaintenanceManager::detectVacuumNeeds(pqxx::connection &conn,
         )
     )";
 
-    auto results = txn.exec_params(query, deadTuplesThreshold, deadTuplesPct,
-                                   daysSinceVacuum);
+    pqxx::params params;
+    params.append(deadTuplesThreshold);
+    params.append(deadTuplesPct);
+    params.append(daysSinceVacuum);
+    auto results = txn.exec(pqxx::zview(query), params);
     txn.commit();
 
     for (const auto &row : results) {
@@ -247,7 +250,9 @@ void MaintenanceManager::detectAnalyzeNeeds(pqxx::connection &conn,
         )
     )";
 
-    auto results = txn.exec_params(query, daysSinceAnalyze);
+    pqxx::params params;
+    params.append(daysSinceAnalyze);
+    auto results = txn.exec(pqxx::zview(query), params);
     txn.commit();
 
     for (const auto &row : results) {
@@ -324,7 +329,10 @@ void MaintenanceManager::detectReindexNeeds(pqxx::connection &conn,
             0.0
           ) as fragmentation
       )";
-      auto fragResult = txn2.exec_params(fragQuery, schema, index);
+      pqxx::params params;
+      params.append(schema);
+      params.append(index);
+      auto fragResult = txn2.exec(pqxx::zview(fragQuery), params);
       txn2.commit();
 
       if (!fragResult.empty()) {
@@ -936,7 +944,9 @@ bool MaintenanceManager::validatePostgreSQLObject(const MaintenanceTask &task) {
       )
     )";
 
-    auto schemaResult = txn.exec_params(schemaCheckQuery, task.schema_name);
+    pqxx::params params;
+    params.append(task.schema_name);
+    auto schemaResult = txn.exec(pqxx::zview(schemaCheckQuery), params);
     if (schemaResult.empty() || !schemaResult[0][0].as<bool>()) {
       txn.commit();
       return false;
@@ -949,8 +959,11 @@ bool MaintenanceManager::validatePostgreSQLObject(const MaintenanceTask &task) {
           WHERE table_schema = $1 AND table_name = $2
         )
       )";
+      pqxx::params params;
+      params.append(task.schema_name);
+      params.append(task.object_name);
       auto tableResult =
-          txn.exec_params(tableCheckQuery, task.schema_name, task.object_name);
+          txn.exec(pqxx::zview(tableCheckQuery), params);
       txn.commit();
       return !tableResult.empty() && tableResult[0][0].as<bool>();
     } else if (task.object_type == "INDEX") {
@@ -960,8 +973,11 @@ bool MaintenanceManager::validatePostgreSQLObject(const MaintenanceTask &task) {
           WHERE schemaname = $1 AND indexname = $2
         )
       )";
+      pqxx::params params;
+      params.append(task.schema_name);
+      params.append(task.object_name);
       auto indexResult =
-          txn.exec_params(indexCheckQuery, task.schema_name, task.object_name);
+          txn.exec(pqxx::zview(indexCheckQuery), params);
       txn.commit();
       return !indexResult.empty() && indexResult[0][0].as<bool>();
     }
@@ -987,7 +1003,9 @@ void MaintenanceManager::cleanupNonExistentTask(int taskId,
       WHERE id = $1
     )";
 
-    txn.exec_params(query, taskId);
+    pqxx::params params;
+    params.append(taskId);
+    txn.exec(pqxx::zview(query), params);
     txn.commit();
 
     Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
@@ -1312,8 +1330,11 @@ MaintenanceManager::collectMetricsBefore(const MaintenanceTask &task) {
           WHERE schemaname = $2 AND relname = $3
         )";
         std::string fullName = task.schema_name + "." + task.object_name;
-        auto results = txn.exec_params(query, fullName, task.schema_name,
-                                       task.object_name);
+        pqxx::params params;
+        params.append(fullName);
+        params.append(task.schema_name);
+        params.append(task.object_name);
+        auto results = txn.exec(pqxx::zview(query), params);
         txn.commit();
 
         if (!results.empty()) {
@@ -1452,13 +1473,22 @@ void MaintenanceManager::storeTask(const MaintenanceTask &task) {
         updated_at = NOW()
     )";
 
-    txn.exec_params(
-        query, task.maintenance_type, task.db_engine, task.connection_string,
-        task.schema_name, task.object_name, task.object_type, task.auto_execute,
-        task.enabled, task.priority, task.status, nowStr,
-        task.thresholds.dump(),
-        task.server_name.empty() ? nullptr : task.server_name.c_str(),
-        task.database_name.empty() ? nullptr : task.database_name.c_str());
+    pqxx::params params;
+    params.append(task.maintenance_type);
+    params.append(task.db_engine);
+    params.append(task.connection_string);
+    params.append(task.schema_name);
+    params.append(task.object_name);
+    params.append(task.object_type);
+    params.append(task.auto_execute);
+    params.append(task.enabled);
+    params.append(task.priority);
+    params.append(task.status);
+    params.append(nowStr);
+    params.append(task.thresholds.dump());
+    params.append(task.server_name.empty() ? nullptr : task.server_name.c_str());
+    params.append(task.database_name.empty() ? nullptr : task.database_name.c_str());
+    txn.exec(pqxx::zview(query), params);
     txn.commit();
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
@@ -1482,7 +1512,12 @@ void MaintenanceManager::updateTaskStatus(int taskId, const std::string &status,
       WHERE id = $4
     )";
 
-    txn.exec_params(query, status, resultMessage, errorDetails, taskId);
+    pqxx::params params;
+    params.append(status);
+    params.append(resultMessage);
+    params.append(errorDetails);
+    params.append(taskId);
+    txn.exec(pqxx::zview(query), params);
     txn.commit();
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
@@ -1536,11 +1571,20 @@ void MaintenanceManager::storeExecutionMetrics(
     ss << std::put_time(std::gmtime(&nextDate), "%Y-%m-%d %H:%M:%S");
     std::string nextDateStr = ss.str();
 
-    txn.exec_params(query, metricsBeforeJson.dump(), metricsAfterJson.dump(),
-                    task.space_reclaimed_mb, task.performance_improvement_pct,
-                    task.fragmentation_before, task.fragmentation_after,
-                    before.dead_tuples, after.dead_tuples, before.table_size_mb,
-                    after.table_size_mb, nextDateStr, task.id);
+    pqxx::params params;
+    params.append(metricsBeforeJson.dump());
+    params.append(metricsAfterJson.dump());
+    params.append(task.space_reclaimed_mb);
+    params.append(task.performance_improvement_pct);
+    params.append(task.fragmentation_before);
+    params.append(task.fragmentation_after);
+    params.append(before.dead_tuples);
+    params.append(after.dead_tuples);
+    params.append(before.table_size_mb);
+    params.append(after.table_size_mb);
+    params.append(nextDateStr);
+    params.append(task.id);
+    txn.exec(pqxx::zview(query), params);
     txn.commit();
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
@@ -1740,7 +1784,9 @@ void MaintenanceManager::executeManual(int maintenanceId) {
       WHERE id = $1
     )";
 
-    auto results = txn.exec_params(query, maintenanceId);
+    pqxx::params params;
+    params.append(maintenanceId);
+    auto results = txn.exec(pqxx::zview(query), params);
     txn.commit();
 
     if (results.empty()) {
