@@ -3,6 +3,7 @@
 #include <atomic>
 #include <csignal>
 #include <iostream>
+#include <cstdlib>
 
 namespace {
 constexpr int EXIT_SUCCESS_CODE = 0;
@@ -16,16 +17,38 @@ constexpr int EXIT_SIGNAL_ERROR = 7;
 std::atomic<bool> g_shutdownRequested{false};
 std::atomic<StreamingData *> g_streamingData{nullptr};
 
-void signalHandler(int signal) {
-  if (signal == SIGINT || signal == SIGTERM) {
-    g_shutdownRequested.store(true);
-  }
-}
-
 void cleanupLogger() {
   try {
     Logger::shutdown();
   } catch (...) {
+  }
+}
+
+void signalHandler(int signal) {
+  if (signal == SIGINT || signal == SIGTERM) {
+    static std::atomic<bool> shutdownInProgress{false};
+    if (shutdownInProgress.exchange(true)) {
+      std::cerr << "\nForce shutdown requested, exiting immediately...\n";
+      cleanupLogger();
+      std::exit(EXIT_SUCCESS_CODE);
+      return;
+    }
+    
+    std::cerr << "\n\nShutdown signal received (Ctrl+C). Initiating graceful shutdown...\n";
+    g_shutdownRequested.store(true);
+    
+    StreamingData *sd = g_streamingData.load();
+    if (sd != nullptr) {
+      Logger::info(LogCategory::SYSTEM, "signalHandler",
+                   "Shutdown signal received, initiating graceful shutdown...");
+      try {
+        sd->shutdown();
+      } catch (...) {
+        std::cerr << "Error during shutdown, forcing exit...\n";
+        cleanupLogger();
+        std::exit(EXIT_SUCCESS_CODE);
+      }
+    }
   }
 }
 } // namespace
@@ -84,7 +107,7 @@ int main() {
     std::cout << "\n";
     std::cout
         << "          Enterprise Data Synchronization & Replication System\n";
-    std::cout << "                            Version 1.0.0\n";
+    std::cout << "                            Version 2.0.0\n";
     std::cout << "\n";
 
     StreamingData sd;
@@ -114,13 +137,28 @@ int main() {
 
     try {
       sd.run([&]() { return g_shutdownRequested.load(); });
-      Logger::info(LogCategory::SYSTEM, "main",
-                   "DataSync completed successfully");
+      
+      if (g_shutdownRequested.load()) {
+        Logger::info(LogCategory::SYSTEM, "main",
+                     "DataSync shutdown requested, cleaning up...");
+        sd.shutdown();
+        Logger::info(LogCategory::SYSTEM, "main",
+                     "DataSync shutdown completed successfully");
+      } else {
+        Logger::info(LogCategory::SYSTEM, "main",
+                     "DataSync completed successfully");
+      }
     } catch (const std::exception &e) {
       Logger::error(LogCategory::SYSTEM, "main",
                     "Exception during DataSync execution: " +
                         std::string(e.what()));
       std::cerr << "Execution error: " << e.what() << std::endl;
+      if (g_shutdownRequested.load()) {
+        try {
+          sd.shutdown();
+        } catch (...) {
+        }
+      }
       g_streamingData.store(nullptr);
       cleanupLogger();
       return EXIT_EXECUTION_ERROR;
