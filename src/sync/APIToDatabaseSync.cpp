@@ -299,7 +299,10 @@ void APIToDatabaseSync::createPostgreSQLTable(
       createTable << txn.quote_name(colName) << " " << columnTypes[i];
     }
 
-    createTable << ", _api_sync_at TIMESTAMP DEFAULT NOW()";
+    if (!columns.empty()) {
+      createTable << ", ";
+    }
+    createTable << "_api_sync_at TIMESTAMP DEFAULT NOW()";
     createTable << ")";
 
     txn.exec(createTable.str());
@@ -471,7 +474,10 @@ void APIToDatabaseSync::createMariaDBTable(
       createTable << "`" << colName << "` " << colType;
     }
 
-    createTable << ", `_api_sync_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP)";
+    if (!columns.empty()) {
+      createTable << ", ";
+    }
+    createTable << "`_api_sync_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP)";
 
     if (mysql_query(conn, createTable.str().c_str())) {
       std::string error = mysql_error(conn);
@@ -709,7 +715,10 @@ void APIToDatabaseSync::createMSSQLTable(
       createTable << "[" << colName << "] " << colType;
     }
 
-    createTable << ", [_api_sync_at] DATETIME DEFAULT GETDATE())";
+    if (!columns.empty()) {
+      createTable << ", ";
+    }
+    createTable << "[_api_sync_at] DATETIME DEFAULT GETDATE())";
 
     ret = SQLExecDirect(stmt, (SQLCHAR *)createTable.str().c_str(), SQL_NTS);
     if (!SQL_SUCCEEDED(ret)) {
@@ -1107,7 +1116,10 @@ void APIToDatabaseSync::createOracleTable(
       createTable << "\"" << colName << "\" " << colType;
     }
 
-    createTable << ", \"_API_SYNC_AT\" TIMESTAMP DEFAULT SYSTIMESTAMP)'; "
+    if (!columns.empty()) {
+      createTable << ", ";
+    }
+    createTable << "\"_API_SYNC_AT\" TIMESTAMP DEFAULT SYSTIMESTAMP)'; "
                 << "EXCEPTION WHEN OTHERS THEN IF SQLCODE != -955 THEN RAISE; "
                 << "END IF; "
                 << "END;";

@@ -209,21 +209,6 @@ size_t DatabaseToPostgresSync::deleteRecordsByPrimaryKey(
     }
     deleteQuery += ")";
 
-    Logger::error(LogCategory::TRANSFER, "deleteRecordsByPrimaryKey",
-                  "[FLOW] DELETE query: " + deleteQuery);
-    Logger::error(LogCategory::TRANSFER, "deleteRecordsByPrimaryKey",
-                  "[FLOW] deletedPKs.size()=" + std::to_string(deletedPKs.size()) + 
-                  ", pkColumns.size()=" + std::to_string(pkColumns.size()));
-    for (size_t i = 0; i < deletedPKs.size() && i < 3; ++i) {
-      std::string pkDebug = "PK[" + std::to_string(i) + "]: ";
-      for (size_t j = 0; j < deletedPKs[i].size(); ++j) {
-        if (j > 0) pkDebug += ", ";
-        pkDebug += pkColumns[j] + "=" + deletedPKs[i][j];
-      }
-      Logger::error(LogCategory::TRANSFER, "deleteRecordsByPrimaryKey",
-                    "[FLOW] " + pkDebug);
-    }
-
     std::string checkQuery = "SELECT COUNT(*) FROM " + txn.quote_name(lowerSchemaName) +
                              "." + txn.quote_name(lowerTableName) + " WHERE (";
     for (size_t i = 0; i < deletedPKs.size() && i < 3; ++i) {
@@ -247,17 +232,10 @@ size_t DatabaseToPostgresSync::deleteRecordsByPrimaryKey(
     }
     checkQuery += ")";
     
-    Logger::error(LogCategory::TRANSFER, "deleteRecordsByPrimaryKey",
-                  "[FLOW] CHECK query: " + checkQuery);
-    Logger::error(LogCategory::TRANSFER, "deleteRecordsByPrimaryKey",
-                  "[FLOW] Table: " + lowerSchemaName + "." + lowerTableName);
-    
     try {
       auto checkResult = txn.exec(checkQuery);
       if (!checkResult.empty()) {
         size_t existingCount = checkResult[0][0].as<size_t>();
-        Logger::error(LogCategory::TRANSFER, "deleteRecordsByPrimaryKey",
-                      "[FLOW] Records found before DELETE: " + std::to_string(existingCount));
         
         if (existingCount == 0 && deletedPKs.size() > 0) {
           std::string simpleCheck = "SELECT COUNT(*) FROM " + txn.quote_name(lowerSchemaName) +
@@ -265,36 +243,26 @@ size_t DatabaseToPostgresSync::deleteRecordsByPrimaryKey(
           auto simpleResult = txn.exec(simpleCheck);
           if (!simpleResult.empty()) {
             size_t totalCount = simpleResult[0][0].as<size_t>();
-            Logger::error(LogCategory::TRANSFER, "deleteRecordsByPrimaryKey",
-                          "[FLOW] Total records in table: " + std::to_string(totalCount));
             
             std::string sampleQuery = "SELECT " + txn.quote_name(pkColumns[0]) + 
                                       " FROM " + txn.quote_name(lowerSchemaName) +
                                       "." + txn.quote_name(lowerTableName) +
                                       " LIMIT 5";
             auto sampleResult = txn.exec(sampleQuery);
-            Logger::error(LogCategory::TRANSFER, "deleteRecordsByPrimaryKey",
-                          "[FLOW] Sample PK values in table:");
             for (size_t i = 0; i < sampleResult.size() && i < 5; ++i) {
               if (!sampleResult[i][0].is_null()) {
                 std::string sampleValue = sampleResult[i][0].as<std::string>();
-                Logger::error(LogCategory::TRANSFER, "deleteRecordsByPrimaryKey",
-                              "[FLOW]   - " + sampleValue);
               }
             }
           }
         }
       }
     } catch (const std::exception &e) {
-      Logger::error(LogCategory::TRANSFER, "deleteRecordsByPrimaryKey",
-                    "[FLOW] Error checking existing records: " + std::string(e.what()));
     }
 
     try {
       auto result = txn.exec(deleteQuery);
       deletedCount = result.affected_rows();
-      Logger::error(LogCategory::TRANSFER, "deleteRecordsByPrimaryKey",
-                    "[FLOW] DELETE executed, affected_rows=" + std::to_string(deletedCount));
       txn.commit();
     } catch (...) {
       try {
