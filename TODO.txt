@@ -91,3 +91,27 @@ NORMALIZAR LA DB
 
 
 revisar lo de config
+
+
+
+creo que digamos quality y governance datalake no estan recogiendo data
+
+
+quality si recoge data pero dura demasiado en cargar, es posible que pase lo mismo para governance
+pero veo que digamos de vez en cuando carga
+
+
+
+hacer algo en la pagina de sucurity para que tambien digamos capture la security de otras bases de datos
+
+
+arreglar config
+
+
+mejorar dashboard
+
+
+quiero hacerme un canal de brainrot para ninos 
+
+
+el error de quality es que se esta actualizando demasiado rapido y se borra y empieza y asi muchas veces
