@@ -1,33 +1,13 @@
-┌─────────────────────────────────────────────────────────────────┐
-│ PRIORIDAD ALTA - Quick Wins (1-2 meses)                        │
-└─────────────────────────────────────────────────────────────────┘
-
+NICE TO HAVE IT MAYBE AT THE END
 1. API REST MÁS COMPLETA
    - Endpoints para todas las funcionalidades
    - Swagger/OpenAPI documentation
    - API versioning
    - Autenticación mejorada (API keys, OAuth2)
 
-2. MÚLTIPLES DESTINOS PARA SYNCs NORMALES
-   - Actualmente solo PostgreSQL como destino para syncs
-   - Agregar: Snowflake, BigQuery, Redshift como destinos alternativos
-   - Permitir elegir destino al crear sync (no solo DataWarehouseBuilder)
-
 ┌─────────────────────────────────────────────────────────────────┐
 │ PRIORIDAD MEDIA - Expansión (3-6 meses)                        │
 └─────────────────────────────────────────────────────────────────┘
-
-3. VERSIONADO DE CONFIGURACIONES
-   - Git-like versioning de sync configs
-   - Rollback de configuraciones
-   - Comparación de versiones
-   - Historial de cambios
-
-5. DATA MASKING/ENCRYPTION
-   - Enmascaramiento de datos sensibles
-   - Encryption at rest y in transit
-   - Tokenization
-   - Políticas de enmascaramiento configurables
    
 7. FIRST SETUP DE LA DB
    - Backup de la DB con solo estructura
@@ -35,45 +15,8 @@
    - Script de inicialización automática
    - Restore desde backup
 
-
-        - Editor visual tipo PowerCenter/Talend
-           - Componentes pre-construidos (joins, aggregations, lookups)
-    - Pipeline visual para Custom Jobs
-
     que otras cosas de powercenter y latend mi programan o tieen que deberiamos implementar ? 
 
-
-✅ Completado:
-Editor visual tipo PowerCenter/Talend
-VisualPipelineEditor con reactflow
-Drag & drop de nodos
-Conexiones entre nodos
-MiniMap, Controls, Background
-Componentes pre-construidos
-✅ Source - Fuentes de datos (tablas/queries)
-✅ Join - Joins (INNER, LEFT, RIGHT, FULL)
-✅ Filter - Filtros con condiciones múltiples
-✅ Aggregate - Agregaciones (SUM, COUNT, AVG, MIN, MAX) con GROUP BY
-✅ Transform - Transformaciones de columnas
-✅ Lookup - Lookups a otras tablas
-✅ Target - Destinos con estrategias de carga (TRUNCATE, APPEND, UPSERT)
-Pipeline visual para Custom Jobs
-Integrado en CustomJobs.tsx
-Toggle SQL/VISUAL
-Auto-generación de SQL desde el grafo visual
-Auto-generación de transform_config desde el grafo
-Parser SQL → Grafo visual (preview automático
-
-eso podria ser tambien para otros componentes ! 
-
-┌─────────────────────────────────────────────────────────────────┐
-│ PRIORIDAD BAJA - Enterprise Features (6+ meses)                │
-└─────────────────────────────────────────────────────────────────┘
-10. MULTI-TENANT
-    - Soporte para múltiples organizaciones
-    - Aislamiento de datos
-    - Billing por tenant
-    - Roles y permisos por tenant
 
 12. MACHINE LEARNING INTEGRATION
     - Auto-tuning de performance
@@ -81,12 +24,7 @@ eso podria ser tambien para otros componentes !
     - Predictive maintenance
     - Recomendaciones automáticas
 
-14. MOBILE APP
-    - App móvil para monitoreo
-    - Push notifications
-    - Quick actions
-    - Dashboard móvil
-
+ALERTAS CUSTOM BASED ON METRICS QUERIES ETC ETC ETC WEBHOOKS
 NORMALIZAR LA DB
 
 
@@ -115,3 +53,271 @@ quiero hacerme un canal de brainrot para ninos
 
 
 el error de quality es que se esta actualizando demasiado rapido y se borra y empieza y asi muchas veces
+
+
+Revisando el código para explicar el flujo completo:
+
+
+[3 tools called]
+
+
+Flujo completo del enmascaramiento a nivel de base de datos:
+
+## Flujo completo del enmascaramiento
+
+### 1. Mapeo usuario PostgreSQL → rol aplicación
+
+Cuando te conectas a PostgreSQL como `tomy.berrios`:
+
+```sql
+-- PostgreSQL identifica tu usuario
+current_user = 'tomy.berrios'
+session_user = 'tomy.berrios'
+```
+
+La función `metadata.get_user_role_from_db()` hace esto:
+
+```sql
+-- 1. Obtiene el usuario actual de PostgreSQL
+v_db_user := current_user;  -- 'tomy.berrios'
+
+-- 2. Busca en metadata.users
+SELECT role FROM metadata.users 
+WHERE username = 'tomy.berrios';
+-- Resultado: 'admin'
+
+-- 3. Retorna el rol
+RETURN 'admin';
+```
+
+### 2. Verificación de políticas
+
+Cuando consultas una columna, `metadata.should_mask_column()` verifica:
+
+```sql
+-- Para cada columna, verifica:
+1. ¿El usuario es admin?
+   → Si SÍ: RETURN false (NO enmascarar)
+   → Si NO: continúa
+
+2. ¿Existe una política activa para esta columna?
+   → Si NO: RETURN false (NO enmascarar)
+   → Si SÍ: continúa
+
+3. ¿El rol está en el whitelist?
+   → Si SÍ: RETURN false (NO enmascarar)
+   → Si NO: RETURN true (SÍ enmascarar)
+```
+
+### 3. Vista "Smart" - redirección automática
+
+La vista `saleslt_smart_customer` se crea así:
+
+```sql
+CREATE VIEW saleslt_smart_customer AS
+SELECT 
+  customerid,
+  
+  -- Para emailaddress (tiene política EMAIL)
+  CASE 
+    WHEN (SELECT role FROM metadata.users WHERE username = session_user) = 'admin' 
+         OR session_user = 'tomy.berrios'
+    THEN emailaddress  -- Admin ve original
+    ELSE metadata.mask_value(emailaddress::TEXT, 'EMAIL', '{}'::jsonb)  -- User ve enmascarado
+  END as emailaddress,
+  
+  -- Para phone (tiene política PHONE)
+  CASE 
+    WHEN (SELECT role FROM metadata.users WHERE username = session_user) = 'admin' 
+         OR session_user = 'tomy.berrios'
+    THEN phone  -- Admin ve original
+    ELSE metadata.mask_value(phone::TEXT, 'PHONE', '{}'::jsonb)  -- User ve enmascarado
+  END as phone,
+  
+  -- Para passwordhash (tiene política FULL)
+  CASE 
+    WHEN (SELECT role FROM metadata.users WHERE username = session_user) = 'admin' 
+         OR session_user = 'tomy.berrios'
+    THEN passwordhash  -- Admin ve original
+    ELSE metadata.mask_value(passwordhash::TEXT, 'FULL', '{}'::jsonb)  -- User ve ***MASKED***
+  END as passwordhash
+  
+FROM saleslt.customer;
+```
+
+### 4. Flujo de ejecución
+
+Cuando ejecutas:
+
+```sql
+-- Como tomy.berrios (admin)
+SELECT emailaddress, phone, passwordhash 
+FROM saleslt.saleslt_smart_customer;
+```
+
+PostgreSQL ejecuta:
+
+```
+1. Lee la vista saleslt_smart_customer
+2. Para cada fila, evalúa los CASE WHEN:
+   
+   Para emailaddress:
+   - session_user = 'tomy.berrios'
+   - Consulta: SELECT role FROM metadata.users WHERE username = 'tomy.berrios'
+   - Resultado: 'admin'
+   - Condición: 'admin' = 'admin' → TRUE
+   - Retorna: emailaddress (valor original)
+   
+   Para phone:
+   - Mismo proceso → Retorna: phone (valor original)
+   
+   Para passwordhash:
+   - Mismo proceso → Retorna: passwordhash (valor original)
+```
+
+Cuando `testuser` ejecuta la misma consulta:
+
+```
+1. Lee la vista saleslt_smart_customer
+2. Para cada fila, evalúa los CASE WHEN:
+   
+   Para emailaddress:
+   - session_user = 'testuser'
+   - Consulta: SELECT role FROM metadata.users WHERE username = 'testuser'
+   - Resultado: 'user'
+   - Condición: 'user' = 'admin' → FALSE
+   - Ejecuta: metadata.mask_value(emailaddress, 'EMAIL', '{}')
+   - Retorna: 'orl***@adventure-works.com' (enmascarado)
+   
+   Para phone:
+   - Mismo proceso → Retorna: '245-****-0173' (enmascarado)
+   
+   Para passwordhash:
+   - Mismo proceso → Retorna: '***MASKED***' (enmascarado)
+```
+
+## Requisitos
+
+Para que funcione:
+
+1. Usuario de PostgreSQL debe existir:
+   ```sql
+   CREATE USER tomy.berrios WITH PASSWORD 'tu_password';
+   ```
+
+2. Usuario debe estar en `metadata.users`:
+   ```sql
+   INSERT INTO metadata.users (username, email, password_hash, role, active)
+   VALUES ('tomy.berrios', 'tu@email.com', 'hash', 'admin', true);
+   ```
+
+3. Permisos necesarios:
+   ```sql
+   GRANT CONNECT ON DATABASE DataLake TO tomy.berrios;
+   GRANT USAGE ON SCHEMA saleslt TO tomy.berrios;
+   GRANT SELECT ON saleslt.saleslt_smart_customer TO tomy.berrios;
+   GRANT SELECT ON metadata.users TO tomy.berrios;  -- Para que la vista pueda consultar roles
+   ```
+
+## Resumen del flujo
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ 1. Usuario se conecta a PostgreSQL                     │
+│    psql -U tomy.berrios -d DataLake                     │
+└─────────────────┬───────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────┐
+│ 2. PostgreSQL identifica: session_user = 'tomy.berrios' │
+└─────────────────┬───────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────┐
+│ 3. Usuario ejecuta query:                               │
+│    SELECT * FROM saleslt_smart_customer                 │
+└─────────────────┬───────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────┐
+│ 4. Vista evalúa CASE WHEN para cada columna:            │
+│    - Consulta metadata.users WHERE username = session_user│
+│    - Obtiene role = 'admin'                             │
+└─────────────────┬───────────────────────────────────────┘
+                  │
+        ┌─────────┴─────────┐
+        │                   │
+        ▼                   ▼
+┌───────────────┐   ┌───────────────┐
+│ role = admin  │   │ role = user    │
+│               │   │               │
+│ Retorna:      │   │ Retorna:      │
+│ - Original    │   │ - Enmascarado │
+└───────────────┘   └───────────────┘
+```
+
+## Importante
+
+- El mapeo es: `username` en `metadata.users` = `session_user` de PostgreSQL
+- Si `tomy.berrios` existe en PostgreSQL pero no en `metadata.users`, la función retorna 'admin' por defecto (hardcoded)
+- Si existe en `metadata.users`, usa el rol de esa tabla
+- La vista consulta `metadata.users` en tiempo de ejecución, no en tiempo de creación
+
+¿Quieres que verifique que `tomy.berrios` esté correctamente configurado en ambos lugares?
+
+
+’m excited to share my latest project: a fully encrypted, audit-ready data platform built on AWS, Snowflake, dbt, Airflow, Spark, Docker, Terraform, and Kubernetes.
+
+🔴current issue: Many data platforms fail not due to scale, but because of fragmented design. Pipelines grow organically, logic is scattered, and data layers are unclear leading to platforms that are hard to change, costly to maintain, and difficult to trust.
+
+💡The solution
+This platform demonstrates how modern data engineering and DevOps practices can solve these challenges by combining scalable tools with proven architectural patterns not by adding complexity.
+
+✨ Key differentiators
+• Data Vault 2.0 for full history, auditability, and compliance
+• Medallion architecture: Bronze (raw), Silver (cleaned), Gold (business-ready)
+• Modular dbt models & ELT pipelines with testing, lineage, and documentation
+• Big Data processing via Spark for millions of events per hour
+• Cloud-native & reproducible using Terraform, Docker, and Kubernetes
+• Security & governance: encrypted data, RBAC, column-level masking, SOC compliance
+
+📈 Outcome
+An exclusive, enterprise-grade platform that is scalable, maintainable, and trusted capable of handling massive transaction volumes, regulatory requirements, and growing analytics teams.
+
+🔗 Check it out: https://lnkd.in/gSh9e4PK
+
+hashtag#DataEngineering hashtag#Banking hashtag#AWS hashtag#Snowflake hashtag#dbt hashtag#Airflow hashtag#Terraform hashtag#ModernDataStack hashtag#CloudArchitecture
+
+
+
+I’m excited to share my latest project: a fully encrypted, audit-ready data platform built on AWS, Snowflake, dbt, Airflow, Spark, Docker, Terraform, and Kubernetes.
+
+🔴current issue: Many data platforms fail not due to scale, but because of fragmented design. Pipelines grow organically, logic is scattered, and data layers are unclear leading to platforms that are hard to change, costly to maintain, and difficult to trust.
+
+💡The solution
+This platform demonstrates how modern data engineering and DevOps practices can solve these challenges by combining scalable tools with proven architectural patterns not by adding complexity.
+
+✨ Key differentiators
+• Data Vault 2.0 for full history, auditability, and compliance
+• Medallion architecture: Bronze (raw), Silver (cleaned), Gold (business-ready)
+• Modular dbt models & ELT pipelines with testing, lineage, and documentation
+• Big Data processing via Spark for millions of events per hour
+• Cloud-native & reproducible using Terraform, Docker, and Kubernetes
+• Security & governance: encrypted data, RBAC, column-level masking, SOC compliance
+
+📈 Outcome
+An exclusive, enterprise-grade platform that is scalable, maintainable, and trusted capable of handling massive transaction volumes, regulatory requirements, and growing analytics teams.
+
+🔗 Check it out: https://lnkd.in/gSh9e4PK
+
+hashtag#DataEngineering hashtag#Banking hashtag#AWS hashtag#Snowflake hashtag#dbt hashtag#Airflow hashtag#Terraform hashtag#ModernDataStack hashtag#CloudArchitecture
+
+
+Data Vault 2.0: modelo de datos histórico/auditable
+Medallion (Bronze/Silver/Gold): capas de datos estructuradas
+dbt: transformaciones como código
+Spark: procesamiento de big data a gran escalazz
+
+
+
+la misma funcion de encryptar y todo eso debe crear roles ahora pero lo veremos despues 
