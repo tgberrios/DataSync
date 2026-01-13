@@ -17,7 +17,6 @@ NICE TO HAVE IT MAYBE AT THE END
 
     que otras cosas de powercenter y latend mi programan o tieen que deberiamos implementar ? 
 
-ALERTAS CUSTOM BASED ON METRICS QUERIES ETC ETC ETC WEBHOOKS
 NORMALIZAR LA DB
 
 
@@ -33,12 +32,13 @@ pero veo que digamos de vez en cuando carga
 
 
 
-hacer algo en la pagina de sucurity para que tambien digamos capture la security de otras bases de datos
+hacer algo en la pagina de sucurity para que tambien digamos capture la security de otras bases de datos con las conexiones de catalog
+
 
 
 arreglar config
 
-
+postgresql://tomy.berrios:Yucaquemada1@localhost:5432/DataLake
 
 
 el error de quality es que se esta actualizando demasiado rapido y se borra y empieza y asi muchas veces
