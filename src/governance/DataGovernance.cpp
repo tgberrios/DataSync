@@ -845,120 +845,110 @@ void DataGovernance::storeMetadata(const TableMetadata &metadata) {
     pqxx::connection conn(DatabaseConfig::getPostgresConnectionString());
     pqxx::work txn(conn);
 
-    std::string checkQuery =
-        "SELECT COUNT(*) FROM metadata.data_governance_catalog WHERE "
-        "schema_name = $1 AND table_name = $2";
-    pqxx::params params;
-    params.append(metadata.schema_name);
-    params.append(metadata.table_name);
-    auto checkResult =
-        txn.exec(pqxx::zview(checkQuery), params);
+    // Always insert a new snapshot (similar to quality data)
+    // The unique constraint on (schema_name, table_name, snapshot_date) ensures no duplicates
+    std::string insertQuery =
+        "INSERT INTO metadata.data_governance_catalog ("
+        "schema_name, table_name, total_columns, total_rows, table_size_mb,"
+        "primary_key_columns, index_count, constraint_count,"
+        "data_quality_score, null_percentage, duplicate_percentage,"
+        "inferred_source_engine, last_analyzed,"
+        "last_accessed, access_frequency, query_count_daily,"
+        "data_category, business_domain, sensitivity_level,"
+        "health_status, last_vacuum, fragmentation_percentage,"
+        "data_owner, data_steward, data_custodian, owner_email, "
+        "steward_email,"
+        "business_glossary_term, data_dictionary_description,"
+        "encryption_at_rest, encryption_in_transit, masking_policy_applied,"
+        "row_level_security_enabled, column_level_security_enabled,"
+        "consent_required, legal_basis, retention_enforced,"
+        "pii_detection_method, pii_confidence_score, sensitive_data_count,"
+        "snapshot_date"
+        ") VALUES (" +
+        txn.quote(metadata.schema_name) + ", " +
+        txn.quote(metadata.table_name) + ", " +
+        std::to_string(metadata.total_columns) + ", " +
+        std::to_string(metadata.total_rows) + ", " +
+        std::to_string(metadata.table_size_mb) + ", " +
+        (metadata.primary_key_columns.empty()
+             ? "NULL"
+             : txn.quote(metadata.primary_key_columns)) +
+        ", " + std::to_string(metadata.index_count) + ", " +
+        std::to_string(metadata.constraint_count) + ", " +
+        std::to_string(metadata.data_quality_score) + ", " +
+        std::to_string(metadata.null_percentage) + ", " +
+        std::to_string(metadata.duplicate_percentage) + ", " +
+        (metadata.inferred_source_engine.empty()
+             ? "NULL"
+             : txn.quote(metadata.inferred_source_engine)) +
+        ", NOW(), " +
+        (metadata.last_accessed.empty() ? "NULL"
+                                        : txn.quote(metadata.last_accessed)) +
+        ", " +
+        (metadata.access_frequency.empty()
+             ? "NULL"
+             : txn.quote(metadata.access_frequency)) +
+        ", " + std::to_string(metadata.query_count_daily) + ", " +
+        (metadata.data_category.empty() ? "NULL"
+                                        : txn.quote(metadata.data_category)) +
+        ", " +
+        (metadata.business_domain.empty()
+             ? "NULL"
+             : txn.quote(metadata.business_domain)) +
+        ", " +
+        (metadata.sensitivity_level.empty()
+             ? "NULL"
+             : txn.quote(metadata.sensitivity_level)) +
+        ", " +
+        (metadata.health_status.empty() ? "NULL"
+                                        : txn.quote(metadata.health_status)) +
+        ", " +
+        (metadata.last_vacuum.empty() ? "NULL"
+                                      : txn.quote(metadata.last_vacuum)) +
+        ", " + std::to_string(metadata.fragmentation_percentage) + ", " +
+        (metadata.data_owner.empty() ? "NULL"
+                                     : txn.quote(metadata.data_owner)) +
+        ", " +
+        (metadata.data_steward.empty() ? "NULL"
+                                       : txn.quote(metadata.data_steward)) +
+        ", " +
+        (metadata.data_custodian.empty()
+             ? "NULL"
+             : txn.quote(metadata.data_custodian)) +
+        ", " +
+        (metadata.owner_email.empty() ? "NULL"
+                                      : txn.quote(metadata.owner_email)) +
+        ", " +
+        (metadata.steward_email.empty() ? "NULL"
+                                         : txn.quote(metadata.steward_email)) +
+        ", " +
+        (metadata.business_glossary_term.empty()
+             ? "NULL"
+             : txn.quote(metadata.business_glossary_term)) +
+        ", " +
+        (metadata.data_dictionary_description.empty()
+             ? "NULL"
+             : txn.quote(metadata.data_dictionary_description)) +
+        ", " + (metadata.encryption_at_rest ? "true" : "false") + ", " +
+        (metadata.encryption_in_transit ? "true" : "false") + ", " +
+        (metadata.masking_policy_applied ? "true" : "false") + ", " +
+        (metadata.row_level_security_enabled ? "true" : "false") + ", " +
+        (metadata.column_level_security_enabled ? "true" : "false") + ", " +
+        (metadata.consent_required ? "true" : "false") + ", " +
+        (metadata.legal_basis.empty() ? "NULL"
+                                      : txn.quote(metadata.legal_basis)) +
+        ", " + (metadata.retention_enforced ? "true" : "false") + ", " +
+        (metadata.pii_detection_method.empty()
+             ? "NULL"
+             : txn.quote(metadata.pii_detection_method)) +
+        ", " +
+        (metadata.pii_confidence_score > 0.0
+             ? std::to_string(metadata.pii_confidence_score)
+             : "NULL") +
+        ", " + std::to_string(metadata.sensitive_data_count) + ", NOW()) "
+        "ON CONFLICT (schema_name, table_name, snapshot_date) DO NOTHING";
 
-    if (!checkResult.empty() && checkResult[0][0].as<int>() > 0) {
-      updateExistingMetadata(metadata);
-    } else {
-      std::string insertQuery =
-          "INSERT INTO metadata.data_governance_catalog ("
-          "schema_name, table_name, total_columns, total_rows, table_size_mb,"
-          "primary_key_columns, index_count, constraint_count,"
-          "data_quality_score, null_percentage, duplicate_percentage,"
-          "inferred_source_engine, last_analyzed,"
-          "last_accessed, access_frequency, query_count_daily,"
-          "data_category, business_domain, sensitivity_level,"
-          "health_status, last_vacuum, fragmentation_percentage,"
-          "data_owner, data_steward, data_custodian, owner_email, "
-          "steward_email,"
-          "business_glossary_term, data_dictionary_description,"
-          "encryption_at_rest, encryption_in_transit, masking_policy_applied,"
-          "row_level_security_enabled, column_level_security_enabled,"
-          "consent_required, legal_basis, retention_enforced,"
-          "pii_detection_method, pii_confidence_score, sensitive_data_count,"
-          "snapshot_date"
-          ") VALUES (" +
-          txn.quote(metadata.schema_name) + ", " +
-          txn.quote(metadata.table_name) + ", " +
-          std::to_string(metadata.total_columns) + ", " +
-          std::to_string(metadata.total_rows) + ", " +
-          std::to_string(metadata.table_size_mb) + ", " +
-          (metadata.primary_key_columns.empty()
-               ? "NULL"
-               : txn.quote(metadata.primary_key_columns)) +
-          ", " + std::to_string(metadata.index_count) + ", " +
-          std::to_string(metadata.constraint_count) + ", " +
-          std::to_string(metadata.data_quality_score) + ", " +
-          std::to_string(metadata.null_percentage) + ", " +
-          std::to_string(metadata.duplicate_percentage) + ", " +
-          (metadata.inferred_source_engine.empty()
-               ? "NULL"
-               : txn.quote(metadata.inferred_source_engine)) +
-          ", NOW(), " +
-          (metadata.last_accessed.empty() ? "NULL"
-                                          : txn.quote(metadata.last_accessed)) +
-          ", " +
-          (metadata.access_frequency.empty()
-               ? "NULL"
-               : txn.quote(metadata.access_frequency)) +
-          ", " + std::to_string(metadata.query_count_daily) + ", " +
-          (metadata.data_category.empty() ? "NULL"
-                                          : txn.quote(metadata.data_category)) +
-          ", " +
-          (metadata.business_domain.empty()
-               ? "NULL"
-               : txn.quote(metadata.business_domain)) +
-          ", " +
-          (metadata.sensitivity_level.empty()
-               ? "NULL"
-               : txn.quote(metadata.sensitivity_level)) +
-          ", " +
-          (metadata.health_status.empty() ? "NULL"
-                                          : txn.quote(metadata.health_status)) +
-          ", " +
-          (metadata.last_vacuum.empty() ? "NULL"
-                                        : txn.quote(metadata.last_vacuum)) +
-          ", " + std::to_string(metadata.fragmentation_percentage) + ", " +
-          (metadata.data_owner.empty() ? "NULL"
-                                       : txn.quote(metadata.data_owner)) +
-          ", " +
-          (metadata.data_steward.empty() ? "NULL"
-                                         : txn.quote(metadata.data_steward)) +
-          ", " +
-          (metadata.data_custodian.empty()
-               ? "NULL"
-               : txn.quote(metadata.data_custodian)) +
-          ", " +
-          (metadata.owner_email.empty() ? "NULL"
-                                        : txn.quote(metadata.owner_email)) +
-          ", " +
-          (metadata.steward_email.empty() ? "NULL"
-                                          : txn.quote(metadata.steward_email)) +
-          ", " +
-          (metadata.business_glossary_term.empty()
-               ? "NULL"
-               : txn.quote(metadata.business_glossary_term)) +
-          ", " +
-          (metadata.data_dictionary_description.empty()
-               ? "NULL"
-               : txn.quote(metadata.data_dictionary_description)) +
-          ", " + (metadata.encryption_at_rest ? "true" : "false") + ", " +
-          (metadata.encryption_in_transit ? "true" : "false") + ", " +
-          (metadata.masking_policy_applied ? "true" : "false") + ", " +
-          (metadata.row_level_security_enabled ? "true" : "false") + ", " +
-          (metadata.column_level_security_enabled ? "true" : "false") + ", " +
-          (metadata.consent_required ? "true" : "false") + ", " +
-          (metadata.legal_basis.empty() ? "NULL"
-                                        : txn.quote(metadata.legal_basis)) +
-          ", " + (metadata.retention_enforced ? "true" : "false") + ", " +
-          (metadata.pii_detection_method.empty()
-               ? "NULL"
-               : txn.quote(metadata.pii_detection_method)) +
-          ", " +
-          (metadata.pii_confidence_score > 0.0
-               ? std::to_string(metadata.pii_confidence_score)
-               : "NULL") +
-          ", " + std::to_string(metadata.sensitive_data_count) + ", NOW())";
-
-      txn.exec(insertQuery);
-    }
+    txn.exec(insertQuery);
 
     txn.commit();
   } catch (const std::exception &e) {

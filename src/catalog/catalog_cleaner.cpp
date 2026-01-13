@@ -199,71 +199,102 @@ void CatalogCleaner::cleanOrphanedGovernanceData() {
     pqxx::connection conn(metadataConnStr_);
     pqxx::work txn(conn);
 
-    std::string deleteMainGov = R"(
-      DELETE FROM metadata.data_governance_catalog
-      WHERE (schema_name, table_name) NOT IN (
-        SELECT schema_name, table_name FROM metadata.catalog
-      )
-    )";
-    auto result1 = txn.exec(deleteMainGov);
-    size_t deleted1 = result1.affected_rows();
+    auto countBefore1 = txn.exec("SELECT COUNT(*) FROM metadata.data_governance_catalog");
+    int recordsBefore1 = countBefore1[0][0].as<int>();
 
-    std::string deleteMariaDBGov = R"(
-      DELETE FROM metadata.data_governance_catalog_mariadb
-      WHERE (schema_name, table_name) NOT IN (
-        SELECT schema_name, table_name FROM metadata.catalog
-        WHERE db_engine = 'MariaDB'
-      )
-    )";
-    auto result2 = txn.exec(deleteMariaDBGov);
-    size_t deleted2 = result2.affected_rows();
+    if (recordsBefore1 == 0) {
+      // Skip if no data
+    } else {
+      auto result1 = txn.exec("DELETE FROM metadata.data_governance_catalog "
+                              "WHERE snapshot_date < NOW() - INTERVAL '8 months'");
+      size_t deleted1 = result1.affected_rows();
+      auto countAfter1 = txn.exec("SELECT COUNT(*) FROM metadata.data_governance_catalog");
+      int recordsAfter1 = countAfter1[0][0].as<int>();
 
-    std::string deleteMSSQLGov = R"(
-      DELETE FROM metadata.data_governance_catalog_mssql
-      WHERE (schema_name, table_name) NOT IN (
-        SELECT schema_name, table_name FROM metadata.catalog
-        WHERE db_engine = 'MSSQL'
-      )
-    )";
-    auto result3 = txn.exec(deleteMSSQLGov);
-    size_t deleted3 = result3.affected_rows();
+      if (deleted1 > 0) {
+        Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                     "Deleted " + std::to_string(deleted1) +
+                         " old governance data records (8 months retention). "
+                         "Remaining: " + std::to_string(recordsAfter1));
+      }
+    }
 
-    std::string deleteMongoDBGov = R"(
-      DELETE FROM metadata.data_governance_catalog_mongodb
-      WHERE (database_name, collection_name) NOT IN (
-        SELECT schema_name, table_name FROM metadata.catalog
-        WHERE db_engine = 'MongoDB'
-      )
-    )";
-    auto result4 = txn.exec(deleteMongoDBGov);
-    size_t deleted4 = result4.affected_rows();
+    auto countBefore2 = txn.exec("SELECT COUNT(*) FROM metadata.data_governance_catalog_mariadb");
+    int recordsBefore2 = countBefore2[0][0].as<int>();
 
-    std::string deleteOracleGov = R"(
-      DELETE FROM metadata.data_governance_catalog_oracle
-      WHERE (schema_name, table_name) NOT IN (
-        SELECT schema_name, table_name FROM metadata.catalog
-        WHERE db_engine = 'Oracle'
-      )
-    )";
-    auto result5 = txn.exec(deleteOracleGov);
-    size_t deleted5 = result5.affected_rows();
+    if (recordsBefore2 > 0) {
+      auto result2 = txn.exec("DELETE FROM metadata.data_governance_catalog_mariadb "
+                              "WHERE snapshot_date < NOW() - INTERVAL '8 months'");
+      size_t deleted2 = result2.affected_rows();
+      auto countAfter2 = txn.exec("SELECT COUNT(*) FROM metadata.data_governance_catalog_mariadb");
+      int recordsAfter2 = countAfter2[0][0].as<int>();
+
+      if (deleted2 > 0) {
+        Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                     "Deleted " + std::to_string(deleted2) +
+                         " old MariaDB governance data records (8 months retention). "
+                         "Remaining: " + std::to_string(recordsAfter2));
+      }
+    }
+
+    auto countBefore3 = txn.exec("SELECT COUNT(*) FROM metadata.data_governance_catalog_mssql");
+    int recordsBefore3 = countBefore3[0][0].as<int>();
+
+    if (recordsBefore3 > 0) {
+      auto result3 = txn.exec("DELETE FROM metadata.data_governance_catalog_mssql "
+                              "WHERE snapshot_date < NOW() - INTERVAL '8 months'");
+      size_t deleted3 = result3.affected_rows();
+      auto countAfter3 = txn.exec("SELECT COUNT(*) FROM metadata.data_governance_catalog_mssql");
+      int recordsAfter3 = countAfter3[0][0].as<int>();
+
+      if (deleted3 > 0) {
+        Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                     "Deleted " + std::to_string(deleted3) +
+                         " old MSSQL governance data records (8 months retention). "
+                         "Remaining: " + std::to_string(recordsAfter3));
+      }
+    }
+
+    auto countBefore4 = txn.exec("SELECT COUNT(*) FROM metadata.data_governance_catalog_mongodb");
+    int recordsBefore4 = countBefore4[0][0].as<int>();
+
+    if (recordsBefore4 > 0) {
+      auto result4 = txn.exec("DELETE FROM metadata.data_governance_catalog_mongodb "
+                              "WHERE snapshot_date < NOW() - INTERVAL '8 months'");
+      size_t deleted4 = result4.affected_rows();
+      auto countAfter4 = txn.exec("SELECT COUNT(*) FROM metadata.data_governance_catalog_mongodb");
+      int recordsAfter4 = countAfter4[0][0].as<int>();
+
+      if (deleted4 > 0) {
+        Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                     "Deleted " + std::to_string(deleted4) +
+                         " old MongoDB governance data records (8 months retention). "
+                         "Remaining: " + std::to_string(recordsAfter4));
+      }
+    }
+
+    auto countBefore5 = txn.exec("SELECT COUNT(*) FROM metadata.data_governance_catalog_oracle");
+    int recordsBefore5 = countBefore5[0][0].as<int>();
+
+    if (recordsBefore5 > 0) {
+      auto result5 = txn.exec("DELETE FROM metadata.data_governance_catalog_oracle "
+                              "WHERE snapshot_date < NOW() - INTERVAL '8 months'");
+      size_t deleted5 = result5.affected_rows();
+      auto countAfter5 = txn.exec("SELECT COUNT(*) FROM metadata.data_governance_catalog_oracle");
+      int recordsAfter5 = countAfter5[0][0].as<int>();
+
+      if (deleted5 > 0) {
+        Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                     "Deleted " + std::to_string(deleted5) +
+                         " old Oracle governance data records (8 months retention). "
+                         "Remaining: " + std::to_string(recordsAfter5));
+      }
+    }
 
     txn.commit();
-
-    size_t totalDeleted = deleted1 + deleted2 + deleted3 + deleted4 + deleted5;
-    if (totalDeleted > 0) {
-      Logger::info(LogCategory::DATABASE, "CatalogCleaner",
-                   "Orphaned governance data cleanup completed: " +
-                       std::to_string(totalDeleted) +
-                       " entries removed (main=" + std::to_string(deleted1) +
-                       ", mariadb=" + std::to_string(deleted2) +
-                       ", mssql=" + std::to_string(deleted3) +
-                       ", mongodb=" + std::to_string(deleted4) +
-                       ", oracle=" + std::to_string(deleted5) + ")");
-    }
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "CatalogCleaner",
-                  "Error cleaning orphaned governance data: " +
+                  "Error cleaning old governance data: " +
                       std::string(e.what()));
   }
 }
@@ -336,61 +367,83 @@ void CatalogCleaner::cleanOrphanedLineageData() {
     pqxx::connection conn(metadataConnStr_);
     pqxx::work txn(conn);
 
-    std::string deleteMDBLineage = R"(
-      DELETE FROM metadata.mdb_lineage
-      WHERE (schema_name, object_name) NOT IN (
-        SELECT schema_name, table_name FROM metadata.catalog
-        WHERE db_engine = 'MariaDB'
-      )
-    )";
-    auto result1 = txn.exec(deleteMDBLineage);
-    size_t deleted1 = result1.affected_rows();
+    auto countBefore1 = txn.exec("SELECT COUNT(*) FROM metadata.mdb_lineage");
+    int recordsBefore1 = countBefore1[0][0].as<int>();
 
-    std::string deleteMSSQLLineage = R"(
-      DELETE FROM metadata.mssql_lineage
-      WHERE (schema_name, object_name) NOT IN (
-        SELECT schema_name, table_name FROM metadata.catalog
-        WHERE db_engine = 'MSSQL'
-      )
-    )";
-    auto result2 = txn.exec(deleteMSSQLLineage);
-    size_t deleted2 = result2.affected_rows();
+    if (recordsBefore1 > 0) {
+      auto result1 = txn.exec("DELETE FROM metadata.mdb_lineage "
+                              "WHERE last_seen_at < NOW() - INTERVAL '8 months'");
+      size_t deleted1 = result1.affected_rows();
+      auto countAfter1 = txn.exec("SELECT COUNT(*) FROM metadata.mdb_lineage");
+      int recordsAfter1 = countAfter1[0][0].as<int>();
 
-    std::string deleteMongoLineage = R"(
-      DELETE FROM metadata.mongo_lineage
-      WHERE (database_name, source_collection) NOT IN (
-        SELECT schema_name, table_name FROM metadata.catalog
-        WHERE db_engine = 'MongoDB'
-      )
-    )";
-    auto result3 = txn.exec(deleteMongoLineage);
-    size_t deleted3 = result3.affected_rows();
+      if (deleted1 > 0) {
+        Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                     "Deleted " + std::to_string(deleted1) +
+                         " old MariaDB lineage data records (8 months retention). "
+                         "Remaining: " + std::to_string(recordsAfter1));
+      }
+    }
 
-    std::string deleteOracleLineage = R"(
-      DELETE FROM metadata.oracle_lineage
-      WHERE (schema_name, object_name) NOT IN (
-        SELECT schema_name, table_name FROM metadata.catalog
-        WHERE db_engine = 'Oracle'
-      )
-    )";
-    auto result4 = txn.exec(deleteOracleLineage);
-    size_t deleted4 = result4.affected_rows();
+    auto countBefore2 = txn.exec("SELECT COUNT(*) FROM metadata.mssql_lineage");
+    int recordsBefore2 = countBefore2[0][0].as<int>();
+
+    if (recordsBefore2 > 0) {
+      auto result2 = txn.exec("DELETE FROM metadata.mssql_lineage "
+                              "WHERE last_seen_at < NOW() - INTERVAL '8 months'");
+      size_t deleted2 = result2.affected_rows();
+      auto countAfter2 = txn.exec("SELECT COUNT(*) FROM metadata.mssql_lineage");
+      int recordsAfter2 = countAfter2[0][0].as<int>();
+
+      if (deleted2 > 0) {
+        Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                     "Deleted " + std::to_string(deleted2) +
+                         " old MSSQL lineage data records (8 months retention). "
+                         "Remaining: " + std::to_string(recordsAfter2));
+      }
+    }
+
+    auto countBefore3 = txn.exec("SELECT COUNT(*) FROM metadata.mongo_lineage");
+    int recordsBefore3 = countBefore3[0][0].as<int>();
+
+    if (recordsBefore3 > 0) {
+      // mongo_lineage has snapshot_date
+      auto result3 = txn.exec("DELETE FROM metadata.mongo_lineage "
+                              "WHERE COALESCE(snapshot_date, last_seen_at) < NOW() - INTERVAL '8 months'");
+      size_t deleted3 = result3.affected_rows();
+      auto countAfter3 = txn.exec("SELECT COUNT(*) FROM metadata.mongo_lineage");
+      int recordsAfter3 = countAfter3[0][0].as<int>();
+
+      if (deleted3 > 0) {
+        Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                     "Deleted " + std::to_string(deleted3) +
+                         " old MongoDB lineage data records (8 months retention). "
+                         "Remaining: " + std::to_string(recordsAfter3));
+      }
+    }
+
+    auto countBefore4 = txn.exec("SELECT COUNT(*) FROM metadata.oracle_lineage");
+    int recordsBefore4 = countBefore4[0][0].as<int>();
+
+    if (recordsBefore4 > 0) {
+      auto result4 = txn.exec("DELETE FROM metadata.oracle_lineage "
+                              "WHERE last_seen_at < NOW() - INTERVAL '8 months'");
+      size_t deleted4 = result4.affected_rows();
+      auto countAfter4 = txn.exec("SELECT COUNT(*) FROM metadata.oracle_lineage");
+      int recordsAfter4 = countAfter4[0][0].as<int>();
+
+      if (deleted4 > 0) {
+        Logger::info(LogCategory::DATABASE, "CatalogCleaner",
+                     "Deleted " + std::to_string(deleted4) +
+                         " old Oracle lineage data records (8 months retention). "
+                         "Remaining: " + std::to_string(recordsAfter4));
+      }
+    }
 
     txn.commit();
-
-    size_t totalDeleted = deleted1 + deleted2 + deleted3 + deleted4;
-    if (totalDeleted > 0) {
-      Logger::info(LogCategory::DATABASE, "CatalogCleaner",
-                   "Orphaned lineage data cleanup completed: " +
-                       std::to_string(totalDeleted) +
-                       " entries removed (mdb=" + std::to_string(deleted1) +
-                       ", mssql=" + std::to_string(deleted2) +
-                       ", mongo=" + std::to_string(deleted3) +
-                       ", oracle=" + std::to_string(deleted4) + ")");
-    }
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "CatalogCleaner",
-                  "Error cleaning orphaned lineage data: " +
+                  "Error cleaning old lineage data: " +
                       std::string(e.what()));
   }
 }

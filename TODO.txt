@@ -20,16 +20,12 @@ NICE TO HAVE IT MAYBE AT THE END
 NORMALIZAR LA DB
 
 
+poner como sensores en otra tab de webhooks y alertas y esas varas como prtg 
+
+
+
 
 hacer algo en la pagina de sucurity para que tambien digamos capture la security de otras bases de datos con las conexiones de catalog
-
-
-
-
-usar el mismo enfoque de quality en governance y lineage
-
-el error de quality es que se esta actualizando demasiado rapido y se borra y empieza y asi muchas veces
-
 
 ’m excited to share my latest project: a fully encrypted, audit-ready data platform built on AWS, Snowflake, dbt, Airflow, Spark, Docker, Terraform, and Kubernetes.
 
