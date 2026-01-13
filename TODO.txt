@@ -20,10 +20,6 @@ NICE TO HAVE IT MAYBE AT THE END
 NORMALIZAR LA DB
 
 
-revisar lo de config
-
-
-
 creo que digamos quality y governance datalake no estan recogiendo data
 
 
@@ -36,9 +32,7 @@ hacer algo en la pagina de sucurity para que tambien digamos capture la security
 
 
 
-arreglar config
 
-postgresql://tomy.berrios:Yucaquemada1@localhost:5432/DataLake
 
 
 el error de quality es que se esta actualizando demasiado rapido y se borra y empieza y asi muchas veces
@@ -103,3 +97,5 @@ la misma funcion de encryptar y todo eso debe crear roles ahora pero lo veremos 
 
 
 quiero hacerme un canal de brainrot para ninos 
+
+eliminar los logs de la api 

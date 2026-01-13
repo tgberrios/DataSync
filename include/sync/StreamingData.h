@@ -64,6 +64,7 @@ private:
   DataQuality dataQuality;
 
   void loadConfigFromDatabase(pqxx::connection &pgConn);
+  void initializeConfigDefaults(pqxx::connection &pgConn);
   void initializationThread();
   void catalogSyncThread();
   void mariaTransferThread();

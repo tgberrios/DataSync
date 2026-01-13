@@ -428,10 +428,71 @@ void StreamingData::loadConfigFromDatabase(pqxx::connection &pgConn) {
   }
 }
 
+void StreamingData::initializeConfigDefaults(pqxx::connection &pgConn) {
+  try {
+    if (!pgConn.is_open()) {
+      Logger::error(LogCategory::CONFIG, "initializeConfigDefaults",
+                    "Database connection is not open");
+      return;
+    }
+
+    pqxx::work txn(pgConn);
+
+    std::vector<std::tuple<std::string, std::string, std::string>> defaultConfigs = {
+      {"chunk_size", "25000", "Chunk size for data synchronization"},
+      {"sync_interval", "30", "Synchronization interval in seconds"},
+      {"max_workers", "4", "Maximum number of parallel workers"},
+      {"max_tables_per_cycle", "1000", "Maximum number of tables per cycle"},
+      {"debug_level", "INFO", "Logging level (DEBUG, INFO, WARN, ERROR, CRITICAL)"},
+      {"debug_show_timestamps", "true", "Show timestamps in logs"},
+      {"debug_show_thread_id", "false", "Show thread ID in logs"},
+      {"debug_show_file_line", "false", "Show file and line in logs"},
+      {"lock_retry_sleep_ms", "500", "Wait time between lock retries in milliseconds"},
+      {"maintenance_thresholds", "{}", "Maintenance thresholds in JSON format"},
+      {"mongodb_cdc_max_changes", "10000", "Maximum number of CDC changes for MongoDB"},
+      {"mongodb_cdc_max_duration_seconds", "300", "Maximum duration in seconds for MongoDB CDC"}
+    };
+
+    for (const auto &[key, value, description] : defaultConfigs) {
+      try {
+        txn.exec_params(
+          "INSERT INTO metadata.config (key, value, description) "
+          "VALUES ($1, $2, $3) "
+          "ON CONFLICT (key) DO NOTHING",
+          key, value, description
+        );
+        Logger::info(LogCategory::CONFIG, "initializeConfigDefaults",
+                     "Initialized config key: " + key);
+      } catch (const std::exception &e) {
+        Logger::warning(LogCategory::CONFIG, "initializeConfigDefaults",
+                        "Failed to initialize config key '" + key + "': " +
+                        std::string(e.what()));
+      }
+    }
+
+    txn.commit();
+    Logger::info(LogCategory::CONFIG, "initializeConfigDefaults",
+                 "Configuration defaults initialization completed");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::CONFIG, "initializeConfigDefaults",
+                  "Error initializing config defaults: " + std::string(e.what()));
+  }
+}
+
 void StreamingData::initializationThread() {
   try {
     Logger::info(LogCategory::MONITORING,
                  "Starting system initialization thread");
+
+    std::string connStr = DatabaseConfig::getPostgresConnectionString();
+    pqxx::connection pgConn(connStr);
+
+    if (pgConn.is_open()) {
+      initializeConfigDefaults(pgConn);
+    } else {
+      Logger::warning(LogCategory::MONITORING,
+                      "Cannot initialize config defaults: database connection failed");
+    }
 
     initializeDataGovernance();
     initializeWebhooks();
