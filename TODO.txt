@@ -39,7 +39,6 @@ hacer algo en la pagina de sucurity para que tambien digamos capture la security
 arreglar config
 
 
-quiero hacerme un canal de brainrot para ninos 
 
 
 el error de quality es que se esta actualizando demasiado rapido y se borra y empieza y asi muchas veces
@@ -99,4 +98,8 @@ Spark: procesamiento de big data a gran escalazz
 
 
 
-la misma funcion de encryptar y todo eso debe crear roles ahora pero lo veremos despues 
+la misma funcion de encryptar y todo eso debe crear roles ahora pero lo veremos despues pero a nivel de la db como roles como ANALITICS O REPORTING ETC ETC ? ME EXPLICO CREAR UN PRESET DE ROLES O QUE SEA UNA FUNCION DIFERENTE PERO ANALITICS DEBE TENER ACCESO A LAS VISTAS que son las que estan encryptadas  yeso ? 
+
+
+
+quiero hacerme un canal de brainrot para ninos 
