@@ -33,15 +33,11 @@ bool DataQuality::validateTable(pqxx::connection &conn,
   auto start = std::chrono::high_resolution_clock::now();
 
   try {
-    QualityMetrics metrics;
     std::string lowerSchema = StringUtils::sanitizeForSQL(schema);
     std::string lowerTable = StringUtils::toLower(table);
-    metrics.schema_name = lowerSchema;
-    metrics.table_name = lowerTable;
-    metrics.source_db_engine = engine;
 
-    // Collect all metrics
-    metrics = collectMetrics(conn, lowerSchema, lowerTable);
+    // Collect all metrics (pass engine to preserve it)
+    QualityMetrics metrics = collectMetrics(conn, lowerSchema, lowerTable, engine);
 
     // Calculate duration
     auto end = std::chrono::high_resolution_clock::now();
@@ -83,12 +79,13 @@ bool DataQuality::tableExists(pqxx::work &txn, const std::string &schema,
 // returns metrics with FAILED status and error details.
 DataQuality::QualityMetrics
 DataQuality::collectMetrics(pqxx::connection &conn, const std::string &schema,
-                            const std::string &table) {
+                            const std::string &table, const std::string &engine) {
   QualityMetrics metrics;
   std::string lowerSchema = StringUtils::sanitizeForSQL(schema);
   std::string lowerTable = StringUtils::toLower(table);
   metrics.schema_name = lowerSchema;
   metrics.table_name = lowerTable;
+  metrics.source_db_engine = engine;
 
   try {
     // Check data types and collect type-related metrics

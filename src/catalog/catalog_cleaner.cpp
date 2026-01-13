@@ -273,25 +273,32 @@ void CatalogCleaner::cleanOrphanedQualityData() {
     pqxx::connection conn(metadataConnStr_);
     pqxx::work txn(conn);
 
-    std::string deleteQuality = R"(
-      DELETE FROM metadata.data_quality
-      WHERE (schema_name, table_name) NOT IN (
-        SELECT schema_name, table_name FROM metadata.catalog
-      )
-    )";
-    auto result = txn.exec(deleteQuality);
-    size_t deleted = result.affected_rows();
+    auto countBefore = txn.exec("SELECT COUNT(*) FROM metadata.data_quality");
+    int recordsBefore = countBefore[0][0].as<int>();
+
+    if (recordsBefore == 0) {
+      txn.commit();
+      return;
+    }
+
+    auto result = txn.exec("DELETE FROM metadata.data_quality "
+                           "WHERE check_timestamp < NOW() - INTERVAL '8 months'");
+    int deletedRecords = result.affected_rows();
+
+    auto countAfter = txn.exec("SELECT COUNT(*) FROM metadata.data_quality");
+    int recordsAfter = countAfter[0][0].as<int>();
 
     txn.commit();
 
-    if (deleted > 0) {
+    if (deletedRecords > 0) {
       Logger::info(LogCategory::DATABASE, "CatalogCleaner",
-                   "Orphaned quality data cleanup completed: " +
-                       std::to_string(deleted) + " entries removed");
+                   "Deleted " + std::to_string(deletedRecords) +
+                       " old quality data records (8 months retention). "
+                       "Remaining: " + std::to_string(recordsAfter));
     }
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "CatalogCleaner",
-                  "Error cleaning orphaned quality data: " +
+                  "Error cleaning old quality data: " +
                       std::string(e.what()));
   }
 }

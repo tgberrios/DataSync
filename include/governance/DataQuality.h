@@ -50,7 +50,8 @@ public:
                      const std::string &table, const std::string &engine);
   QualityMetrics collectMetrics(pqxx::connection &conn,
                                 const std::string &schema,
-                                const std::string &table);
+                                const std::string &table,
+                                const std::string &engine = "");
   bool saveMetrics(pqxx::connection &conn, const QualityMetrics &metrics);
   std::vector<QualityMetrics> getLatestMetrics(pqxx::connection &conn,
                                                const std::string &status = "");
