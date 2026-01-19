@@ -138,6 +138,8 @@ add_executable(DataSync
     src/catalog/data_warehouse_repository.cpp
     src/catalog/data_vault_repository.cpp
     src/catalog/workflow_repository.cpp
+    src/catalog/dbt_repository.cpp
+    src/sync/DBTExecutor.cpp
     src/sync/CustomJobExecutor.cpp
     src/sync/DataWarehouseBuilder.cpp
     src/sync/DataVaultBuilder.cpp
