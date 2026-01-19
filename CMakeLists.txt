@@ -136,8 +136,10 @@ add_executable(DataSync
     src/engines/api_engine.cpp
     src/catalog/custom_jobs_repository.cpp
     src/catalog/data_warehouse_repository.cpp
+    src/catalog/data_vault_repository.cpp
     src/sync/CustomJobExecutor.cpp
     src/sync/DataWarehouseBuilder.cpp
+    src/sync/DataVaultBuilder.cpp
     src/engines/csv_engine.cpp
     src/sync/CSVToDatabaseSync.cpp
     src/engines/google_sheets_engine.cpp
@@ -174,4 +176,5 @@ target_link_libraries(DataSync
     ${ORACLE_LIBS}
     stdc++fs
     curl
+    crypto
 )

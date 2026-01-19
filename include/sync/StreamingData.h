@@ -13,6 +13,7 @@
 #include "sync/CustomJobExecutor.h"
 #include "sync/DB2ToPostgres.h"
 #include "sync/DataWarehouseBuilder.h"
+#include "sync/DataVaultBuilder.h"
 #include "sync/GoogleSheetsToDatabaseSync.h"
 #include "sync/MSSQLToPostgres.h"
 #include "sync/MariaDBToPostgres.h"
@@ -60,6 +61,7 @@ private:
   GoogleSheetsToDatabaseSync sheetsToDb;
   std::unique_ptr<CustomJobExecutor> customJobExecutor;
   std::unique_ptr<DataWarehouseBuilder> warehouseBuilder;
+  std::unique_ptr<DataVaultBuilder> vaultBuilder;
   CatalogManager catalogManager;
   DataQuality dataQuality;
 
@@ -78,6 +80,7 @@ private:
   void googleSheetsTransferThread();
   void customJobsSchedulerThread();
   void warehouseBuilderThread();
+  void vaultBuilderThread();
   void qualityThread();
   void maintenanceThread();
   void monitoringThread();
