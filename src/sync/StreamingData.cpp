@@ -1303,7 +1303,7 @@ void StreamingData::warehouseBuilderThread() {
       pqxx::work txn(conn);
 
       auto warehousesResult = txn.exec(
-          "SELECT warehouse_name, schedule_cron, metadata, active, enabled "
+          "SELECT warehouse_name, schedule_cron, metadata, active, enabled, target_layer "
           "FROM metadata.data_warehouse_catalog "
           "WHERE active = true AND enabled = true");
 
@@ -1469,6 +1469,69 @@ void StreamingData::warehouseBuilderThread() {
                               warehouse.warehouse_name + ": " +
                               std::string(e.what()));
           }
+        }
+      }
+
+      // Create a new transaction for promotion checks (previous txn was committed)
+      pqxx::connection connPromotion(connStr);
+      pqxx::work txnPromotion(connPromotion);
+      
+      auto promotionCheckResult = txnPromotion.exec(
+          "SELECT warehouse_name, target_layer, last_build_status, last_build_time "
+          "FROM metadata.data_warehouse_catalog "
+          "WHERE active = true AND enabled = true "
+          "AND (target_layer = 'BRONZE' OR target_layer = 'SILVER') "
+          "AND last_build_status = 'SUCCESS'");
+
+      for (const auto &row : promotionCheckResult) {
+        std::string warehouseName = row["warehouse_name"].as<std::string>();
+        std::string targetLayer = row["target_layer"].is_null()
+                                      ? "BRONZE"
+                                      : row["target_layer"].as<std::string>();
+
+        try {
+          DataWarehouseModel warehouse =
+              warehouseBuilder->getWarehouse(warehouseName);
+
+          if (targetLayer == "BRONZE") {
+            Logger::info(LogCategory::MONITORING, "warehouseBuilderThread",
+                         "Checking if warehouse can be promoted to SILVER: " +
+                             warehouseName);
+            try {
+              if (warehouseBuilder->validateDataQuality(warehouse)) {
+                warehouseBuilder->promoteToSilver(warehouseName);
+                Logger::info(LogCategory::MONITORING, "warehouseBuilderThread",
+                             "Auto-promoted warehouse to SILVER: " +
+                                 warehouseName);
+              } else {
+                Logger::warning(LogCategory::MONITORING, "warehouseBuilderThread",
+                              "Warehouse quality validation failed, cannot "
+                              "promote to SILVER: " +
+                                  warehouseName);
+              }
+            } catch (const std::exception &e) {
+              Logger::warning(LogCategory::MONITORING, "warehouseBuilderThread",
+                              "Could not promote warehouse to SILVER: " +
+                                  warehouseName + ": " + std::string(e.what()));
+            }
+          } else if (targetLayer == "SILVER") {
+            Logger::info(LogCategory::MONITORING, "warehouseBuilderThread",
+                         "Checking if warehouse can be promoted to GOLD: " +
+                             warehouseName);
+            try {
+              warehouseBuilder->promoteToGold(warehouseName);
+              Logger::info(LogCategory::MONITORING, "warehouseBuilderThread",
+                           "Auto-promoted warehouse to GOLD: " + warehouseName);
+            } catch (const std::exception &e) {
+              Logger::warning(LogCategory::MONITORING, "warehouseBuilderThread",
+                              "Could not promote warehouse to GOLD: " +
+                                  warehouseName + ": " + std::string(e.what()));
+            }
+          }
+        } catch (const std::exception &e) {
+          Logger::error(LogCategory::MONITORING, "warehouseBuilderThread",
+                        "Error checking promotion for warehouse " +
+                            warehouseName + ": " + std::string(e.what()));
         }
       }
 

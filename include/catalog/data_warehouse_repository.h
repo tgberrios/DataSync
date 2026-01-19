@@ -12,6 +12,8 @@ enum class SchemaType { STAR_SCHEMA, SNOWFLAKE_SCHEMA };
 
 enum class DimensionType { TYPE_1, TYPE_2, TYPE_3 };
 
+enum class DataLayer { BRONZE, SILVER, GOLD };
+
 struct DimensionTable {
   std::string dimension_name;
   std::string target_schema;
@@ -42,6 +44,7 @@ struct DataWarehouseModel {
   std::string warehouse_name;
   std::string description;
   SchemaType schema_type;
+  DataLayer target_layer;
   std::string source_db_engine;
   std::string source_connection_string;
   std::string target_db_engine;
@@ -86,6 +89,8 @@ private:
   SchemaType stringToSchemaType(const std::string &str);
   std::string dimensionTypeToString(DimensionType type);
   DimensionType stringToDimensionType(const std::string &str);
+  std::string dataLayerToString(DataLayer layer);
+  DataLayer stringToDataLayer(const std::string &str);
 };
 
 #endif

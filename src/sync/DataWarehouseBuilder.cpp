@@ -7,6 +7,7 @@
 #include "engines/postgres_warehouse_engine.h"
 #include "engines/redshift_engine.h"
 #include "engines/snowflake_engine.h"
+#include "governance/DataQuality.h"
 #include "utils/connection_utils.h"
 #include "utils/engine_factory.h"
 #include <algorithm>
@@ -48,19 +49,31 @@ void DataWarehouseBuilder::buildWarehouse(const std::string &warehouseName) {
 
     validateWarehouseModel(warehouse);
 
+    std::string layerStr = (warehouse.target_layer == DataLayer::BRONZE)
+                               ? "BRONZE"
+                               : (warehouse.target_layer == DataLayer::SILVER)
+                                     ? "SILVER"
+                                     : "GOLD";
+
     Logger::info(LogCategory::TRANSFER, "buildWarehouse",
-                 "Starting warehouse build: " + warehouseName);
+                 "Starting warehouse build: " + warehouseName +
+                     " (Layer: " + layerStr + ")");
 
     json logMetadata;
     logMetadata["warehouse_name"] = warehouseName;
+    logMetadata["target_layer"] = layerStr;
     logToProcessLog(warehouseName, "IN_PROGRESS", 0, "", logMetadata);
 
-    for (const auto &dimension : warehouse.dimensions) {
-      buildDimensionTable(warehouse, dimension);
-    }
-
-    for (const auto &fact : warehouse.facts) {
-      buildFactTable(warehouse, fact);
+    switch (warehouse.target_layer) {
+    case DataLayer::BRONZE:
+      buildBronzeLayer(warehouse);
+      break;
+    case DataLayer::SILVER:
+      buildSilverLayer(warehouse);
+      break;
+    case DataLayer::GOLD:
+      buildGoldLayer(warehouse);
+      break;
     }
 
     auto endTime = std::chrono::system_clock::now();
@@ -1351,4 +1364,653 @@ int64_t DataWarehouseBuilder::logToProcessLog(const std::string &warehouseName,
                   "Error logging to process log: " + std::string(e.what()));
     return 0;
   }
+}
+
+bool DataWarehouseBuilder::validateDataQuality(
+    const DataWarehouseModel &warehouse) {
+  try {
+    pqxx::connection targetConn(warehouse.target_connection_string);
+    DataQuality dataQuality;
+
+    // Use the layer schema name instead of target_schema from dimensions/facts
+    // This ensures we validate the correct layer (bronze/silver/gold)
+    std::string layerSchema = getLayerSchemaName(warehouse);
+    std::transform(layerSchema.begin(), layerSchema.end(), layerSchema.begin(),
+                   ::tolower);
+
+    for (const auto &dimension : warehouse.dimensions) {
+      std::string tableName = dimension.target_table;
+      std::transform(tableName.begin(), tableName.end(), tableName.begin(),
+                     ::tolower);
+
+      auto metrics = dataQuality.collectMetrics(
+          targetConn, layerSchema, tableName, warehouse.target_db_engine);
+
+      if (metrics.quality_score < 70.0 ||
+          metrics.validation_status == "FAILED") {
+        Logger::warning(LogCategory::TRANSFER, "validateDataQuality",
+                        "Data quality check failed for " + layerSchema + "." +
+                            tableName + ": score=" +
+                            std::to_string(metrics.quality_score) +
+                            ", status=" + metrics.validation_status);
+        return false;
+      }
+    }
+
+    for (const auto &fact : warehouse.facts) {
+      std::string tableName = fact.target_table;
+      std::transform(tableName.begin(), tableName.end(), tableName.begin(),
+                     ::tolower);
+
+      auto metrics = dataQuality.collectMetrics(
+          targetConn, layerSchema, tableName, warehouse.target_db_engine);
+
+      if (metrics.quality_score < 70.0 ||
+          metrics.validation_status == "FAILED") {
+        Logger::warning(LogCategory::TRANSFER, "validateDataQuality",
+                        "Data quality check failed for " + layerSchema + "." +
+                            tableName + ": score=" +
+                            std::to_string(metrics.quality_score) +
+                            ", status=" + metrics.validation_status);
+        return false;
+      }
+    }
+
+    return true;
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "validateDataQuality",
+                  "Error validating data quality: " + std::string(e.what()));
+    return false;
+  }
+}
+
+void DataWarehouseBuilder::promoteToSilver(const std::string &warehouseName) {
+  try {
+    DataWarehouseModel warehouse = warehouseRepo_->getWarehouse(warehouseName);
+    if (warehouse.warehouse_name.empty()) {
+      throw std::runtime_error("Warehouse not found: " + warehouseName);
+    }
+
+    if (warehouse.target_layer != DataLayer::BRONZE) {
+      std::string layerStr = (warehouse.target_layer == DataLayer::SILVER)
+                                 ? "SILVER"
+                                 : (warehouse.target_layer == DataLayer::GOLD)
+                                       ? "GOLD"
+                                       : "BRONZE";
+      throw std::runtime_error(
+          "Can only promote from BRONZE layer. Current layer: " + layerStr);
+    }
+
+    Logger::info(LogCategory::TRANSFER, "promoteToSilver",
+                 "Promoting warehouse to SILVER: " + warehouseName);
+
+    if (!validateDataQuality(warehouse)) {
+      throw std::runtime_error(
+          "Data quality validation failed. Cannot promote to SILVER.");
+    }
+
+    // Update target_layer to SILVER before building, so buildWarehouse calls buildSilverLayer
+    warehouse.target_layer = DataLayer::SILVER;
+    warehouseRepo_->insertOrUpdateWarehouse(warehouse);
+
+    // Now build the SILVER layer
+    buildWarehouse(warehouseName);
+
+    Logger::info(LogCategory::TRANSFER, "promoteToSilver",
+                 "Warehouse promoted to SILVER successfully: " +
+                     warehouseName);
+
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "promoteToSilver",
+                  "Error promoting warehouse to SILVER: " +
+                      std::string(e.what()));
+    throw;
+  }
+}
+
+void DataWarehouseBuilder::promoteToGold(const std::string &warehouseName) {
+  try {
+    DataWarehouseModel warehouse = warehouseRepo_->getWarehouse(warehouseName);
+    if (warehouse.warehouse_name.empty()) {
+      throw std::runtime_error("Warehouse not found: " + warehouseName);
+    }
+
+    if (warehouse.target_layer != DataLayer::SILVER) {
+      std::string layerStr = (warehouse.target_layer == DataLayer::BRONZE)
+                                 ? "BRONZE"
+                                 : (warehouse.target_layer == DataLayer::GOLD)
+                                       ? "GOLD"
+                                       : "SILVER";
+      throw std::runtime_error(
+          "Can only promote from SILVER layer. Current layer: " + layerStr);
+    }
+
+    Logger::info(LogCategory::TRANSFER, "promoteToGold",
+                 "Promoting warehouse to GOLD: " + warehouseName);
+
+    // Update target_layer to GOLD before building, so buildWarehouse calls buildGoldLayer
+    warehouse.target_layer = DataLayer::GOLD;
+    warehouseRepo_->insertOrUpdateWarehouse(warehouse);
+
+    // Now build the GOLD layer
+    buildWarehouse(warehouseName);
+
+    Logger::info(LogCategory::TRANSFER, "promoteToGold",
+                 "Warehouse promoted to GOLD successfully: " + warehouseName);
+
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "promoteToGold",
+                  "Error promoting warehouse to GOLD: " +
+                      std::string(e.what()));
+    throw;
+  }
+}
+
+std::string DataWarehouseBuilder::getLayerSchemaName(
+    const DataWarehouseModel &warehouse) {
+  std::string layerPrefix;
+  switch (warehouse.target_layer) {
+  case DataLayer::BRONZE:
+    layerPrefix = "bronze";
+    break;
+  case DataLayer::SILVER:
+    layerPrefix = "silver";
+    break;
+  case DataLayer::GOLD:
+    layerPrefix = "gold";
+    break;
+  }
+  std::string schemaName = warehouse.warehouse_name + "_" + layerPrefix;
+  std::transform(schemaName.begin(), schemaName.end(), schemaName.begin(),
+                 ::tolower);
+  // Replace spaces with underscores to avoid SQL syntax errors
+  std::replace(schemaName.begin(), schemaName.end(), ' ', '_');
+  return schemaName;
+}
+
+std::string DataWarehouseBuilder::getSourceSchemaName(
+    const DataWarehouseModel &warehouse) {
+  std::string sourceLayer;
+  switch (warehouse.target_layer) {
+  case DataLayer::BRONZE:
+    return "";
+  case DataLayer::SILVER:
+    sourceLayer = "bronze";
+    break;
+  case DataLayer::GOLD:
+    sourceLayer = "silver";
+    break;
+  }
+  std::string schemaName = warehouse.warehouse_name + "_" + sourceLayer;
+  std::transform(schemaName.begin(), schemaName.end(), schemaName.begin(),
+                 ::tolower);
+  // Replace spaces with underscores to avoid SQL syntax errors
+  std::replace(schemaName.begin(), schemaName.end(), ' ', '_');
+  return schemaName;
+}
+
+void DataWarehouseBuilder::buildBronzeLayer(
+    const DataWarehouseModel &warehouse) {
+  Logger::info(LogCategory::TRANSFER, "buildBronzeLayer",
+               "Building BRONZE layer (raw data) for warehouse: " +
+                   warehouse.warehouse_name);
+
+  auto engine = createWarehouseEngine(warehouse.target_db_engine,
+                                      warehouse.target_connection_string);
+  std::string layerSchema = getLayerSchemaName(warehouse);
+  engine->createSchema(layerSchema);
+
+  int64_t totalRows = 0;
+
+  for (const auto &dimension : warehouse.dimensions) {
+    Logger::info(LogCategory::TRANSFER, "buildBronzeLayer",
+                 "Processing dimension: " + dimension.dimension_name);
+
+    std::vector<json> rawData =
+        executeSourceQuery(warehouse, dimension.source_query);
+
+    if (rawData.empty()) {
+      Logger::warning(LogCategory::TRANSFER, "buildBronzeLayer",
+                      "No data returned for dimension: " +
+                          dimension.dimension_name);
+      continue;
+    }
+
+    std::unordered_set<std::string> columnsSet;
+    for (const auto &row : rawData) {
+      for (const auto &[key, value] : row.items()) {
+        columnsSet.insert(key);
+      }
+    }
+    std::vector<std::string> columns(columnsSet.begin(), columnsSet.end());
+
+    buildBronzeTable(warehouse, dimension.target_table,
+                     dimension.source_query, columns);
+    totalRows += static_cast<int64_t>(rawData.size());
+  }
+
+  for (const auto &fact : warehouse.facts) {
+    Logger::info(LogCategory::TRANSFER, "buildBronzeLayer",
+                 "Processing fact: " + fact.fact_name);
+
+    std::vector<json> rawData =
+        executeSourceQuery(warehouse, fact.source_query);
+
+    if (rawData.empty()) {
+      Logger::warning(LogCategory::TRANSFER, "buildBronzeLayer",
+                      "No data returned for fact: " + fact.fact_name);
+      continue;
+    }
+
+    std::unordered_set<std::string> columnsSet;
+    for (const auto &row : rawData) {
+      for (const auto &[key, value] : row.items()) {
+        columnsSet.insert(key);
+      }
+    }
+    std::vector<std::string> columns(columnsSet.begin(), columnsSet.end());
+
+    buildBronzeTable(warehouse, fact.target_table, fact.source_query, columns);
+    totalRows += static_cast<int64_t>(rawData.size());
+  }
+
+  Logger::info(LogCategory::TRANSFER, "buildBronzeLayer",
+               "BRONZE layer build completed. Total rows: " +
+                   std::to_string(totalRows));
+}
+
+void DataWarehouseBuilder::buildBronzeTable(
+    const DataWarehouseModel &warehouse, const std::string &tableName,
+    const std::string &sourceQuery, const std::vector<std::string> &columns) {
+  auto engine = createWarehouseEngine(warehouse.target_db_engine,
+                                      warehouse.target_connection_string);
+  std::string layerSchema = getLayerSchemaName(warehouse);
+  engine->createSchema(layerSchema);
+
+  std::vector<WarehouseColumnInfo> columnInfos;
+  for (const auto &col : columns) {
+    WarehouseColumnInfo colInfo;
+    colInfo.name = col;
+    colInfo.data_type = "TEXT";
+    colInfo.is_nullable = true;
+    colInfo.default_value = "";
+    columnInfos.push_back(colInfo);
+  }
+
+  engine->createTable(layerSchema, tableName, columnInfos, {});
+
+  std::vector<json> rawData = executeSourceQuery(warehouse, sourceQuery);
+
+  if (rawData.empty()) {
+    return;
+  }
+
+  size_t batchSize = 1000;
+  for (size_t i = 0; i < rawData.size(); i += batchSize) {
+    std::vector<std::vector<std::string>> batchRows;
+    for (size_t j = i; j < std::min(i + batchSize, rawData.size()); ++j) {
+      std::vector<std::string> row;
+      for (const auto &col : columns) {
+        if (rawData[j].contains(col) && !rawData[j][col].is_null()) {
+          std::string value = rawData[j][col].is_string()
+                                  ? rawData[j][col].get<std::string>()
+                                  : rawData[j][col].dump();
+          row.push_back(value);
+        } else {
+          row.push_back("");
+        }
+      }
+      batchRows.push_back(row);
+    }
+    engine->insertData(layerSchema, tableName, columns, batchRows);
+  }
+}
+
+std::vector<json> DataWarehouseBuilder::cleanAndValidateData(
+    const std::vector<json> &rawData, const std::vector<std::string> &columns) {
+  std::vector<json> cleanedData;
+  std::unordered_set<std::string> seenHashes;
+
+  for (const auto &row : rawData) {
+    json cleanedRow = row;
+
+    for (const auto &col : columns) {
+      if (cleanedRow.contains(col)) {
+        if (cleanedRow[col].is_string()) {
+          std::string value = cleanedRow[col].get<std::string>();
+          std::string trimmed = value;
+          trimmed.erase(0, trimmed.find_first_not_of(" \t\r\n"));
+          trimmed.erase(trimmed.find_last_not_of(" \t\r\n") + 1);
+          if (trimmed != value) {
+            cleanedRow[col] = trimmed;
+          }
+        }
+      }
+    }
+
+    std::string rowHash = cleanedRow.dump();
+    if (seenHashes.find(rowHash) == seenHashes.end()) {
+      seenHashes.insert(rowHash);
+      cleanedData.push_back(cleanedRow);
+    }
+  }
+
+  return cleanedData;
+}
+
+void DataWarehouseBuilder::buildSilverLayer(
+    const DataWarehouseModel &warehouse) {
+  Logger::info(LogCategory::TRANSFER, "buildSilverLayer",
+               "Building SILVER layer (cleaned & validated) for warehouse: " +
+                   warehouse.warehouse_name);
+
+  std::string sourceSchema = getSourceSchemaName(warehouse);
+  if (sourceSchema.empty()) {
+    throw std::runtime_error(
+        "SILVER layer requires BRONZE layer to exist. Please build BRONZE "
+        "layer first.");
+  }
+
+  auto engine = createWarehouseEngine(warehouse.target_db_engine,
+                                      warehouse.target_connection_string);
+  std::string layerSchema = getLayerSchemaName(warehouse);
+  engine->createSchema(layerSchema);
+
+  pqxx::connection targetConn(warehouse.target_connection_string);
+  DataQuality dataQuality;
+
+  int64_t totalRows = 0;
+
+  for (const auto &dimension : warehouse.dimensions) {
+    Logger::info(LogCategory::TRANSFER, "buildSilverLayer",
+                 "Processing dimension: " + dimension.dimension_name);
+
+    try {
+      std::string sourceTable = sourceSchema + "." + dimension.target_table;
+      std::string lowerSourceTable = sourceTable;
+      std::transform(lowerSourceTable.begin(), lowerSourceTable.end(),
+                     lowerSourceTable.begin(), ::tolower);
+      std::string selectQuery = "SELECT * FROM " + lowerSourceTable;
+
+      std::vector<json> rawData;
+      try {
+        rawData = engine->executeQuery(selectQuery);
+      } catch (const std::exception &e) {
+        Logger::error(LogCategory::TRANSFER, "buildSilverLayer",
+                      "Error reading from BRONZE layer for dimension " +
+                          dimension.dimension_name + ": " + std::string(e.what()));
+        continue;
+      }
+
+      if (rawData.empty()) {
+        Logger::warning(LogCategory::TRANSFER, "buildSilverLayer",
+                        "No data in BRONZE layer for dimension: " +
+                            dimension.dimension_name);
+        continue;
+      }
+
+      std::unordered_set<std::string> columnsSet;
+      for (const auto &row : rawData) {
+        for (const auto &[key, value] : row.items()) {
+          columnsSet.insert(key);
+        }
+      }
+      std::vector<std::string> columns(columnsSet.begin(), columnsSet.end());
+
+      std::vector<json> cleanedData = cleanAndValidateData(rawData, columns);
+
+      try {
+        buildSilverTable(warehouse, dimension.target_table, columns, cleanedData);
+      } catch (const std::exception &e) {
+        Logger::error(LogCategory::TRANSFER, "buildSilverLayer",
+                      "Error building SILVER table for dimension " +
+                          dimension.dimension_name + ": " + std::string(e.what()));
+        continue;
+      }
+
+      std::string schemaName = layerSchema;
+      std::string tableName = dimension.target_table;
+      std::transform(schemaName.begin(), schemaName.end(), schemaName.begin(),
+                     ::tolower);
+      std::transform(tableName.begin(), tableName.end(), tableName.begin(),
+                     ::tolower);
+
+      try {
+        auto metrics = dataQuality.collectMetrics(targetConn, schemaName, tableName,
+                                                   warehouse.target_db_engine);
+
+        if (metrics.quality_score < 70.0) {
+          Logger::warning(LogCategory::TRANSFER, "buildSilverLayer",
+                          "Data quality score below threshold for dimension: " +
+                              dimension.dimension_name +
+                              " (score: " + std::to_string(metrics.quality_score) +
+                              ")");
+        }
+      } catch (const std::exception &e) {
+        Logger::warning(LogCategory::TRANSFER, "buildSilverLayer",
+                        "Could not validate data quality for dimension: " +
+                            dimension.dimension_name + ": " + std::string(e.what()));
+      }
+
+      totalRows += static_cast<int64_t>(cleanedData.size());
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER, "buildSilverLayer",
+                    "Unexpected error processing dimension " +
+                        dimension.dimension_name + ": " + std::string(e.what()));
+      continue;
+    }
+  }
+
+  for (const auto &fact : warehouse.facts) {
+    Logger::info(LogCategory::TRANSFER, "buildSilverLayer",
+                 "Processing fact: " + fact.fact_name);
+
+    try {
+      std::string sourceTable = sourceSchema + "." + fact.target_table;
+      std::string lowerSourceTable = sourceTable;
+      std::transform(lowerSourceTable.begin(), lowerSourceTable.end(),
+                     lowerSourceTable.begin(), ::tolower);
+      std::string selectQuery = "SELECT * FROM " + lowerSourceTable;
+
+      std::vector<json> rawData;
+      try {
+        rawData = engine->executeQuery(selectQuery);
+      } catch (const std::exception &e) {
+        Logger::error(LogCategory::TRANSFER, "buildSilverLayer",
+                      "Error reading from BRONZE layer for fact " +
+                          fact.fact_name + ": " + std::string(e.what()));
+        continue;
+      }
+
+      if (rawData.empty()) {
+        Logger::warning(LogCategory::TRANSFER, "buildSilverLayer",
+                        "No data in BRONZE layer for fact: " + fact.fact_name);
+        continue;
+      }
+
+      std::unordered_set<std::string> columnsSet;
+      for (const auto &row : rawData) {
+        for (const auto &[key, value] : row.items()) {
+          columnsSet.insert(key);
+        }
+      }
+      std::vector<std::string> columns(columnsSet.begin(), columnsSet.end());
+
+      std::vector<json> cleanedData = cleanAndValidateData(rawData, columns);
+
+      try {
+        buildSilverTable(warehouse, fact.target_table, columns, cleanedData);
+      } catch (const std::exception &e) {
+        Logger::error(LogCategory::TRANSFER, "buildSilverLayer",
+                      "Error building SILVER table for fact " +
+                          fact.fact_name + ": " + std::string(e.what()));
+        continue;
+      }
+
+      totalRows += static_cast<int64_t>(cleanedData.size());
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::TRANSFER, "buildSilverLayer",
+                    "Unexpected error processing fact " +
+                        fact.fact_name + ": " + std::string(e.what()));
+      continue;
+    }
+  }
+
+  Logger::info(LogCategory::TRANSFER, "buildSilverLayer",
+               "SILVER layer build completed. Total rows: " +
+                   std::to_string(totalRows));
+}
+
+void DataWarehouseBuilder::buildSilverTable(
+    const DataWarehouseModel &warehouse, const std::string &tableName,
+    const std::vector<std::string> &columns,
+    const std::vector<json> &cleanedData) {
+  auto engine = createWarehouseEngine(warehouse.target_db_engine,
+                                      warehouse.target_connection_string);
+  std::string layerSchema = getLayerSchemaName(warehouse);
+
+  engine->createSchema(layerSchema);
+
+  std::vector<WarehouseColumnInfo> columnInfos;
+  for (const auto &col : columns) {
+    WarehouseColumnInfo colInfo;
+    colInfo.name = col;
+    colInfo.data_type = "TEXT";
+    colInfo.is_nullable = true;
+    colInfo.default_value = "";
+    columnInfos.push_back(colInfo);
+  }
+
+  engine->createTable(layerSchema, tableName, columnInfos, {});
+
+  if (cleanedData.empty()) {
+    return;
+  }
+
+  size_t batchSize = 1000;
+  for (size_t i = 0; i < cleanedData.size(); i += batchSize) {
+    std::vector<std::vector<std::string>> batchRows;
+    for (size_t j = i; j < std::min(i + batchSize, cleanedData.size()); ++j) {
+      std::vector<std::string> row;
+      for (const auto &col : columns) {
+        if (cleanedData[j].contains(col) && !cleanedData[j][col].is_null()) {
+          std::string value = cleanedData[j][col].is_string()
+                                  ? cleanedData[j][col].get<std::string>()
+                                  : cleanedData[j][col].dump();
+          row.push_back(value);
+        } else {
+          row.push_back("");
+        }
+      }
+      batchRows.push_back(row);
+    }
+    engine->insertData(layerSchema, tableName, columns, batchRows);
+  }
+}
+
+bool DataWarehouseBuilder::tableExistsInSchema(
+    const std::string &connectionString, const std::string &schemaName,
+    const std::string &tableName) {
+  try {
+    pqxx::connection conn(connectionString);
+    pqxx::work txn(conn);
+
+    std::string lowerSchema = schemaName;
+    std::string lowerTable = tableName;
+    std::transform(lowerSchema.begin(), lowerSchema.end(), lowerSchema.begin(),
+                   ::tolower);
+    std::transform(lowerTable.begin(), lowerTable.end(), lowerTable.begin(),
+                   ::tolower);
+
+    std::string query =
+        "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+        "WHERE table_schema = $1 AND table_name = $2)";
+    pqxx::result result = txn.exec_params(query, lowerSchema, lowerTable);
+
+    if (!result.empty()) {
+      return result[0][0].as<bool>();
+    }
+    return false;
+  } catch (const std::exception &e) {
+    Logger::warning(LogCategory::TRANSFER, "tableExistsInSchema",
+                    "Error checking table existence: " + std::string(e.what()));
+    return false;
+  }
+}
+
+void DataWarehouseBuilder::buildGoldLayer(
+    const DataWarehouseModel &warehouse) {
+  Logger::info(LogCategory::TRANSFER, "buildGoldLayer",
+               "Building GOLD layer (business-ready) for warehouse: " +
+                   warehouse.warehouse_name);
+
+  std::string sourceSchema = getSourceSchemaName(warehouse);
+  if (sourceSchema.empty()) {
+    throw std::runtime_error(
+        "GOLD layer requires SILVER layer to exist. Please build SILVER "
+        "layer first.");
+  }
+
+  auto engine = createWarehouseEngine(warehouse.target_db_engine,
+                                      warehouse.target_connection_string);
+  std::string layerSchema = getLayerSchemaName(warehouse);
+  engine->createSchema(layerSchema);
+
+  DataWarehouseModel modifiedWarehouse = warehouse;
+  modifiedWarehouse.target_schema = layerSchema;
+
+  for (const auto &dimension : warehouse.dimensions) {
+    std::string lowerTableName = dimension.target_table;
+    std::transform(lowerTableName.begin(), lowerTableName.end(),
+                   lowerTableName.begin(), ::tolower);
+
+    if (!tableExistsInSchema(warehouse.target_connection_string, sourceSchema,
+                             lowerTableName)) {
+      Logger::warning(
+          LogCategory::TRANSFER, "buildGoldLayer",
+          "Table " + sourceSchema + "." + lowerTableName +
+              " does not exist in SILVER layer. Skipping dimension: " +
+              dimension.dimension_name);
+      continue;
+    }
+
+    DimensionTable modifiedDimension = dimension;
+    modifiedDimension.target_schema = layerSchema;
+    std::string sourceTable = sourceSchema + "." + dimension.target_table;
+    std::string lowerSourceTable = sourceTable;
+    std::transform(lowerSourceTable.begin(), lowerSourceTable.end(),
+                   lowerSourceTable.begin(), ::tolower);
+    modifiedDimension.source_query = "SELECT * FROM " + lowerSourceTable;
+
+    buildDimensionTable(modifiedWarehouse, modifiedDimension);
+  }
+
+  for (const auto &fact : warehouse.facts) {
+    std::string lowerTableName = fact.target_table;
+    std::transform(lowerTableName.begin(), lowerTableName.end(),
+                   lowerTableName.begin(), ::tolower);
+
+    if (!tableExistsInSchema(warehouse.target_connection_string, sourceSchema,
+                             lowerTableName)) {
+      Logger::warning(
+          LogCategory::TRANSFER, "buildGoldLayer",
+          "Table " + sourceSchema + "." + lowerTableName +
+              " does not exist in SILVER layer. Skipping fact: " +
+              fact.fact_name);
+      continue;
+    }
+
+    FactTable modifiedFact = fact;
+    modifiedFact.target_schema = layerSchema;
+    std::string sourceTable = sourceSchema + "." + fact.target_table;
+    std::string lowerSourceTable = sourceTable;
+    std::transform(lowerSourceTable.begin(), lowerSourceTable.end(),
+                   lowerSourceTable.begin(), ::tolower);
+    modifiedFact.source_query = "SELECT * FROM " + lowerSourceTable;
+
+    buildFactTable(modifiedWarehouse, modifiedFact);
+  }
+
+  Logger::info(LogCategory::TRANSFER, "buildGoldLayer",
+               "GOLD layer build completed (Star/Snowflake Schema applied)");
 }

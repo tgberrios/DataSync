@@ -19,6 +19,8 @@ void DataWarehouseRepository::createTables() {
              "description TEXT,"
              "schema_type VARCHAR(20) NOT NULL CHECK (schema_type IN "
              "('STAR_SCHEMA', 'SNOWFLAKE_SCHEMA')),"
+             "target_layer VARCHAR(20) DEFAULT 'BRONZE' CHECK (target_layer IN "
+             "('BRONZE', 'SILVER', 'GOLD')),"
              "source_db_engine VARCHAR(50) NOT NULL,"
              "source_connection_string TEXT NOT NULL,"
              "target_db_engine VARCHAR(50) NOT NULL,"
@@ -169,15 +171,18 @@ void DataWarehouseRepository::insertOrUpdateWarehouse(
       if (scheduleCron.empty()) {
         txn.exec_params(
             "INSERT INTO metadata.data_warehouse_catalog "
-            "(warehouse_name, description, schema_type, source_db_engine, "
+            "(warehouse_name, description, schema_type, target_layer, "
+            "source_db_engine, "
             "source_connection_string, target_db_engine, "
             "target_connection_string, "
             "target_schema, dimensions, facts, schedule_cron, active, enabled, "
             "metadata) "
-            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, "
-            "NULL, $11, $12, $13::jsonb)",
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, "
+            "$11::jsonb, "
+            "NULL, $12, $13, $14::jsonb)",
             warehouse.warehouse_name, warehouse.description,
             schemaTypeToString(warehouse.schema_type),
+            dataLayerToString(warehouse.target_layer),
             warehouse.source_db_engine, warehouse.source_connection_string,
             warehouse.target_db_engine, warehouse.target_connection_string,
             warehouse.target_schema, dimensionsStr, factsStr, warehouse.active,
@@ -185,15 +190,18 @@ void DataWarehouseRepository::insertOrUpdateWarehouse(
       } else {
         txn.exec_params(
             "INSERT INTO metadata.data_warehouse_catalog "
-            "(warehouse_name, description, schema_type, source_db_engine, "
+            "(warehouse_name, description, schema_type, target_layer, "
+            "source_db_engine, "
             "source_connection_string, target_db_engine, "
             "target_connection_string, "
             "target_schema, dimensions, facts, schedule_cron, active, enabled, "
             "metadata) "
-            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, "
-            "$11, $12, $13, $14::jsonb)",
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, "
+            "$11::jsonb, "
+            "$12, $13, $14, $15::jsonb)",
             warehouse.warehouse_name, warehouse.description,
             schemaTypeToString(warehouse.schema_type),
+            dataLayerToString(warehouse.target_layer),
             warehouse.source_db_engine, warehouse.source_connection_string,
             warehouse.target_db_engine, warehouse.target_connection_string,
             warehouse.target_schema, dimensionsStr, factsStr, scheduleCron,
@@ -204,15 +212,17 @@ void DataWarehouseRepository::insertOrUpdateWarehouse(
       if (scheduleCron.empty()) {
         txn.exec_params(
             "UPDATE metadata.data_warehouse_catalog SET "
-            "description = $2, schema_type = $3, source_db_engine = $4, "
-            "source_connection_string = $5, target_db_engine = $6, "
-            "target_connection_string = $7, target_schema = $8, dimensions = "
-            "$9::jsonb, "
-            "facts = $10::jsonb, schedule_cron = NULL, active = $11, enabled = "
-            "$12, "
-            "metadata = $13::jsonb, updated_at = NOW() WHERE id = $1",
+            "description = $2, schema_type = $3, target_layer = $4, "
+            "source_db_engine = $5, "
+            "source_connection_string = $6, target_db_engine = $7, "
+            "target_connection_string = $8, target_schema = $9, dimensions = "
+            "$10::jsonb, "
+            "facts = $11::jsonb, schedule_cron = NULL, active = $12, enabled = "
+            "$13, "
+            "metadata = $14::jsonb, updated_at = NOW() WHERE id = $1",
             id, warehouse.description,
             schemaTypeToString(warehouse.schema_type),
+            dataLayerToString(warehouse.target_layer),
             warehouse.source_db_engine, warehouse.source_connection_string,
             warehouse.target_db_engine, warehouse.target_connection_string,
             warehouse.target_schema, dimensionsStr, factsStr, warehouse.active,
@@ -220,15 +230,17 @@ void DataWarehouseRepository::insertOrUpdateWarehouse(
       } else {
         txn.exec_params(
             "UPDATE metadata.data_warehouse_catalog SET "
-            "description = $2, schema_type = $3, source_db_engine = $4, "
-            "source_connection_string = $5, target_db_engine = $6, "
-            "target_connection_string = $7, target_schema = $8, dimensions = "
-            "$9::jsonb, "
-            "facts = $10::jsonb, schedule_cron = $11, active = $12, enabled = "
-            "$13, "
-            "metadata = $14::jsonb, updated_at = NOW() WHERE id = $1",
+            "description = $2, schema_type = $3, target_layer = $4, "
+            "source_db_engine = $5, "
+            "source_connection_string = $6, target_db_engine = $7, "
+            "target_connection_string = $8, target_schema = $9, dimensions = "
+            "$10::jsonb, "
+            "facts = $11::jsonb, schedule_cron = $12, active = $13, enabled = "
+            "$14, "
+            "metadata = $15::jsonb, updated_at = NOW() WHERE id = $1",
             id, warehouse.description,
             schemaTypeToString(warehouse.schema_type),
+            dataLayerToString(warehouse.target_layer),
             warehouse.source_db_engine, warehouse.source_connection_string,
             warehouse.target_db_engine, warehouse.target_connection_string,
             warehouse.target_schema, dimensionsStr, factsStr, scheduleCron,
@@ -318,6 +330,12 @@ DataWarehouseRepository::rowToWarehouse(const pqxx::row &row) {
       row["description"].is_null() ? "" : row["description"].as<std::string>();
   warehouse.schema_type =
       stringToSchemaType(row["schema_type"].as<std::string>());
+  if (row["target_layer"].is_null()) {
+    warehouse.target_layer = DataLayer::BRONZE;
+  } else {
+    warehouse.target_layer =
+        stringToDataLayer(row["target_layer"].as<std::string>());
+  }
   warehouse.source_db_engine = row["source_db_engine"].as<std::string>();
   warehouse.source_connection_string =
       row["source_connection_string"].as<std::string>();
@@ -447,4 +465,26 @@ DataWarehouseRepository::stringToDimensionType(const std::string &str) {
     return DimensionType::TYPE_3;
   }
   return DimensionType::TYPE_1;
+}
+
+std::string DataWarehouseRepository::dataLayerToString(DataLayer layer) {
+  switch (layer) {
+  case DataLayer::BRONZE:
+    return "BRONZE";
+  case DataLayer::SILVER:
+    return "SILVER";
+  case DataLayer::GOLD:
+    return "GOLD";
+  default:
+    return "BRONZE";
+  }
+}
+
+DataLayer DataWarehouseRepository::stringToDataLayer(const std::string &str) {
+  if (str == "SILVER") {
+    return DataLayer::SILVER;
+  } else if (str == "GOLD") {
+    return DataLayer::GOLD;
+  }
+  return DataLayer::BRONZE;
 }

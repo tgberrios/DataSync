@@ -27,6 +27,30 @@ class DataWarehouseBuilder {
   void buildFactTable(const DataWarehouseModel &warehouse,
                       const FactTable &fact);
 
+  void buildBronzeLayer(const DataWarehouseModel &warehouse);
+  void buildSilverLayer(const DataWarehouseModel &warehouse);
+  void buildGoldLayer(const DataWarehouseModel &warehouse);
+
+  std::string getLayerSchemaName(const DataWarehouseModel &warehouse);
+  std::string getSourceSchemaName(const DataWarehouseModel &warehouse);
+
+  bool tableExistsInSchema(const std::string &connectionString,
+                           const std::string &schemaName,
+                           const std::string &tableName);
+
+  void buildBronzeTable(const DataWarehouseModel &warehouse,
+                        const std::string &tableName,
+                        const std::string &sourceQuery,
+                        const std::vector<std::string> &columns);
+
+  void buildSilverTable(const DataWarehouseModel &warehouse,
+                        const std::string &tableName,
+                        const std::vector<std::string> &columns,
+                        const std::vector<json> &cleanedData);
+
+  std::vector<json> cleanAndValidateData(const std::vector<json> &rawData,
+                                          const std::vector<std::string> &columns);
+
   void createDimensionTableStructure(const DataWarehouseModel &warehouse,
                                      const DimensionTable &dimension);
 
@@ -95,6 +119,10 @@ public:
   DataWarehouseModel getWarehouse(const std::string &warehouseName);
 
   void validateWarehouseModel(const DataWarehouseModel &warehouse);
+
+  void promoteToSilver(const std::string &warehouseName);
+  void promoteToGold(const std::string &warehouseName);
+  bool validateDataQuality(const DataWarehouseModel &warehouse);
 };
 
 #endif
