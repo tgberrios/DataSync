@@ -137,9 +137,11 @@ add_executable(DataSync
     src/catalog/custom_jobs_repository.cpp
     src/catalog/data_warehouse_repository.cpp
     src/catalog/data_vault_repository.cpp
+    src/catalog/workflow_repository.cpp
     src/sync/CustomJobExecutor.cpp
     src/sync/DataWarehouseBuilder.cpp
     src/sync/DataVaultBuilder.cpp
+    src/sync/WorkflowExecutor.cpp
     src/engines/csv_engine.cpp
     src/sync/CSVToDatabaseSync.cpp
     src/engines/google_sheets_engine.cpp

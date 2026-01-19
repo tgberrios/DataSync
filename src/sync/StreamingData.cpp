@@ -72,6 +72,17 @@ void StreamingData::initialize() {
                       std::string(e.what()));
   }
 
+  try {
+    std::string connStr = DatabaseConfig::getPostgresConnectionString();
+    workflowExecutor = std::make_unique<WorkflowExecutor>(connStr);
+    Logger::info(LogCategory::MONITORING,
+                 "Workflow executor initialized successfully");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::MONITORING, "initialize",
+                  "Error initializing workflow executor: " +
+                      std::string(e.what()));
+  }
+
   Logger::info(LogCategory::MONITORING,
                "System initialization completed successfully");
 }
@@ -114,6 +125,7 @@ void StreamingData::run(std::function<bool()> shutdownCheck) {
   threads.emplace_back(&StreamingData::customJobsSchedulerThread, this);
   threads.emplace_back(&StreamingData::warehouseBuilderThread, this);
   threads.emplace_back(&StreamingData::vaultBuilderThread, this);
+  threads.emplace_back(&StreamingData::workflowBuilderThread, this);
   threads.emplace_back(&StreamingData::datalakeSchedulerThread, this);
 
   Logger::info(LogCategory::MONITORING,
@@ -1744,6 +1756,177 @@ void StreamingData::vaultBuilderThread() {
     std::this_thread::sleep_for(std::chrono::seconds(60));
   }
   Logger::info(LogCategory::MONITORING, "Vault builder thread stopped");
+}
+
+void StreamingData::workflowBuilderThread() {
+  Logger::info(LogCategory::MONITORING, "Workflow builder thread started");
+  while (running) {
+    try {
+      if (!workflowExecutor) {
+        std::this_thread::sleep_for(std::chrono::seconds(60));
+        continue;
+      }
+
+      std::string connStr = DatabaseConfig::getPostgresConnectionString();
+      pqxx::connection conn(connStr);
+      pqxx::work txn(conn);
+
+      auto workflowsResult = txn.exec(
+          "SELECT workflow_name, schedule_cron, metadata, active, enabled "
+          "FROM metadata.workflows "
+          "WHERE active = true AND enabled = true");
+
+      std::vector<std::string> manualExecutions;
+      std::vector<std::pair<std::string, std::string>> scheduledWorkflows;
+
+      auto now = std::chrono::system_clock::now();
+      auto timeT = std::chrono::system_clock::to_time_t(now);
+      struct tm *tm = std::gmtime(&timeT);
+      int currentMinute = tm->tm_min;
+      int currentHour = tm->tm_hour;
+      int currentDay = tm->tm_mday;
+      int currentMonth = tm->tm_mon + 1;
+      int currentDow = tm->tm_wday;
+
+      for (const auto &row : workflowsResult) {
+        std::string workflowName = row["workflow_name"].as<std::string>();
+        std::string scheduleCron = row["schedule_cron"].is_null()
+                                      ? ""
+                                      : row["schedule_cron"].as<std::string>();
+        std::string metadataStr = row["metadata"].is_null()
+                                     ? "{}"
+                                     : row["metadata"].as<std::string>();
+
+        json metadata = json::parse(metadataStr);
+
+        if (metadata.contains("execute_now") &&
+            metadata["execute_now"].get<bool>()) {
+          manualExecutions.push_back(workflowName);
+        } else if (!scheduleCron.empty()) {
+          scheduledWorkflows.push_back({workflowName, scheduleCron});
+        }
+      }
+
+      txn.commit();
+
+      for (const auto &workflowName : manualExecutions) {
+        Logger::info(LogCategory::MONITORING, "workflowBuilderThread",
+                     "Executing manual workflow: " + workflowName);
+        try {
+          workflowExecutor->executeWorkflowAsync(workflowName, TriggerType::MANUAL);
+          pqxx::connection conn2(connStr);
+          pqxx::work txn2(conn2);
+          json updatedMetadata;
+          updatedMetadata["execute_now"] = false;
+          updatedMetadata.erase("execute_timestamp");
+          pqxx::params params;
+          params.append(updatedMetadata.dump());
+          params.append(workflowName);
+          txn2.exec(
+              pqxx::zview("UPDATE metadata.workflows SET metadata = "
+                          "$1::jsonb WHERE workflow_name = $2"),
+              params);
+          txn2.commit();
+        } catch (const std::exception &e) {
+          Logger::error(LogCategory::MONITORING, "workflowBuilderThread",
+                        "Error executing workflow " + workflowName + ": " +
+                            std::string(e.what()));
+        }
+      }
+
+      auto matchesCronField = [](const std::string &field,
+                                  int currentValue) -> bool {
+        if (field == "*") {
+          return true;
+        }
+
+        size_t dashPos = field.find('-');
+        size_t commaPos = field.find(',');
+        size_t slashPos = field.find('/');
+
+        if (dashPos != std::string::npos) {
+          try {
+            int start = std::stoi(field.substr(0, dashPos));
+            int end = std::stoi(field.substr(dashPos + 1));
+            return currentValue >= start && currentValue <= end;
+          } catch (...) {
+            return false;
+          }
+        }
+
+        if (commaPos != std::string::npos) {
+          std::istringstream listStream(field);
+          std::string item;
+          while (std::getline(listStream, item, ',')) {
+            try {
+              if (std::stoi(item) == currentValue) {
+                return true;
+              }
+            } catch (...) {
+              continue;
+            }
+          }
+          return false;
+        }
+
+        if (slashPos != std::string::npos) {
+          try {
+            std::string base = field.substr(0, slashPos);
+            int step = std::stoi(field.substr(slashPos + 1));
+            if (base == "*") {
+              return currentValue % step == 0;
+            }
+            int baseValue = std::stoi(base);
+            return (currentValue - baseValue) % step == 0;
+          } catch (...) {
+            return false;
+          }
+        }
+
+        try {
+          return std::stoi(field) == currentValue;
+        } catch (...) {
+          return false;
+        }
+      };
+
+      for (const auto &[workflowName, scheduleCron] : scheduledWorkflows) {
+        if (scheduleCron.empty()) {
+          continue;
+        }
+
+        std::istringstream cronStream(scheduleCron);
+        std::string minute, hour, day, month, dow;
+        cronStream >> minute >> hour >> day >> month >> dow;
+
+        bool shouldRun = matchesCronField(minute, currentMinute) &&
+                         matchesCronField(hour, currentHour) &&
+                         matchesCronField(day, currentDay) &&
+                         matchesCronField(month, currentMonth) &&
+                         matchesCronField(dow, currentDow);
+
+        if (shouldRun) {
+          Logger::info(LogCategory::MONITORING, "workflowBuilderThread",
+                       "Executing scheduled workflow: " + workflowName);
+          try {
+            workflowExecutor->executeWorkflowAsync(workflowName, TriggerType::SCHEDULED);
+          } catch (const std::exception &e) {
+            Logger::error(LogCategory::MONITORING, "workflowBuilderThread",
+                          "Error executing workflow " + workflowName + ": " +
+                              std::string(e.what()));
+          }
+        }
+      }
+
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::MONITORING, "workflowBuilderThread",
+                    "Error in workflow execution cycle: " +
+                        std::string(e.what()));
+    }
+
+    std::this_thread::sleep_for(std::chrono::seconds(60));
+  }
+  Logger::info(LogCategory::MONITORING, "Workflow builder thread stopped");
 }
 
 void StreamingData::executeJob(const std::string &jobName) {
