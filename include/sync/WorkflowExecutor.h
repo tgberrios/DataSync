@@ -31,6 +31,33 @@ class WorkflowExecutor {
       const std::map<std::string, std::set<std::string>> &dependencyGraph,
       const std::map<std::string, ExecutionStatus> &taskStatuses);
   
+  std::vector<std::string> getReadyTasks(
+      const WorkflowModel &workflow,
+      const std::map<std::string, std::set<std::string>> &dependencyGraph,
+      const std::map<std::string, ExecutionStatus> &taskStatuses,
+      const std::map<std::string, json> &taskOutputs);
+  
+  bool evaluateCondition(
+      const std::string &conditionExpression,
+      const WorkflowModel &workflow,
+      const std::map<std::string, ExecutionStatus> &taskStatuses,
+      const std::map<std::string, json> &taskOutputs);
+  
+  bool shouldExecuteTask(
+      const WorkflowTask &task,
+      const WorkflowModel &workflow,
+      const std::map<std::string, ExecutionStatus> &taskStatuses,
+      const std::map<std::string, json> &taskOutputs);
+  
+  std::vector<std::string> sortTasksByPriority(
+      const std::vector<std::string> &taskNames,
+      const WorkflowModel &workflow);
+  
+  bool executeTaskWithLoop(const WorkflowModel &workflow, const WorkflowTask &task,
+                          int64_t workflowExecutionId, int64_t &taskExecutionId,
+                          const std::map<std::string, ExecutionStatus> &taskStatuses,
+                          const std::map<std::string, json> &taskOutputs);
+  
   bool executeTask(const WorkflowModel &workflow, const WorkflowTask &task,
                    int64_t workflowExecutionId, int64_t &taskExecutionId);
   bool executeCustomJob(const std::string &jobName);
@@ -39,10 +66,15 @@ class WorkflowExecutor {
   bool executeSync(const json &syncConfig);
   bool executeAPICall(const json &apiConfig);
   bool executeScript(const json &scriptConfig);
+  bool executeSubWorkflow(const std::string &subWorkflowName);
 
   bool shouldRetry(const WorkflowTask &task, int retryCount);
   int calculateRetryDelay(const WorkflowTask &task, int retryCount);
   bool checkSLA(const WorkflowModel &workflow, const WorkflowExecution &execution);
+  
+  bool shouldRollback(const WorkflowModel &workflow, const WorkflowExecution &execution);
+  void rollbackWorkflow(const std::string &workflowName, const std::string &executionId);
+  bool rollbackTask(const WorkflowTask &task, const TaskExecution &taskExecution, const json &rollbackConfig);
   
   std::string generateExecutionId();
   std::string getCurrentTimestamp();

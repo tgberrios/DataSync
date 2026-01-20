@@ -165,6 +165,11 @@ add_executable(DataSync
     src/sync/DataWarehouseBuilder.cpp
     src/sync/DataVaultBuilder.cpp
     src/sync/WorkflowExecutor.cpp
+    src/sync/EventTriggerManager.cpp
+    src/sync/DataDrivenScheduler.cpp
+    src/sync/BackfillManager.cpp
+    src/sync/TaskQueue.cpp
+    src/catalog/WorkflowVersionManager.cpp
     src/engines/csv_engine.cpp
     src/sync/CSVToDatabaseSync.cpp
     src/engines/google_sheets_engine.cpp

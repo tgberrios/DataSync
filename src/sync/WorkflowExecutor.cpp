@@ -1,4 +1,6 @@
 #include "sync/WorkflowExecutor.h"
+#include <regex>
+#include <algorithm>
 #include <sstream>
 #include <iomanip>
 #include <random>
@@ -55,6 +57,15 @@ std::vector<std::string> WorkflowExecutor::getReadyTasks(
     const WorkflowModel &workflow,
     const std::map<std::string, std::set<std::string>> &dependencyGraph,
     const std::map<std::string, ExecutionStatus> &taskStatuses) {
+  std::map<std::string, json> taskOutputs;
+  return getReadyTasks(workflow, dependencyGraph, taskStatuses, taskOutputs);
+}
+
+std::vector<std::string> WorkflowExecutor::getReadyTasks(
+    const WorkflowModel &workflow,
+    const std::map<std::string, std::set<std::string>> &dependencyGraph,
+    const std::map<std::string, ExecutionStatus> &taskStatuses,
+    const std::map<std::string, json> &taskOutputs) {
   std::vector<std::string> readyTasks;
   
   for (const auto &task : workflow.tasks) {
@@ -76,12 +87,12 @@ std::vector<std::string> WorkflowExecutor::getReadyTasks(
       }
     }
     
-    if (allDependenciesMet) {
+    if (allDependenciesMet && shouldExecuteTask(task, workflow, taskStatuses, taskOutputs)) {
       readyTasks.push_back(task.task_name);
     }
   }
   
-  return readyTasks;
+  return sortTasksByPriority(readyTasks, workflow);
 }
 
 bool WorkflowExecutor::shouldRetry(const WorkflowTask &task, int retryCount) {
@@ -92,6 +103,165 @@ int WorkflowExecutor::calculateRetryDelay(const WorkflowTask &task, int retryCou
   int baseDelay = task.retry_policy.retry_delay_seconds;
   double multiplier = task.retry_policy.retry_backoff_multiplier;
   return static_cast<int>(baseDelay * std::pow(multiplier, retryCount));
+}
+
+bool WorkflowExecutor::evaluateCondition(
+    const std::string &conditionExpression,
+    const WorkflowModel &workflow,
+    const std::map<std::string, ExecutionStatus> &taskStatuses,
+    const std::map<std::string, json> &taskOutputs) {
+  if (conditionExpression.empty()) {
+    return true;
+  }
+  
+  std::string expr = conditionExpression;
+  
+  // Replace task status variables: ${task_name.status}
+  std::regex statusRegex(R"(\$\{([^}]+)\.status\})");
+  std::smatch matches;
+  
+  while (std::regex_search(expr, matches, statusRegex)) {
+    std::string taskName = matches[1].str();
+    auto statusIt = taskStatuses.find(taskName);
+    std::string statusValue = "UNKNOWN";
+    
+    if (statusIt != taskStatuses.end()) {
+      statusValue = workflowRepo_->executionStatusToString(statusIt->second);
+    }
+    
+    expr.replace(matches.position(), matches.length(), "\"" + statusValue + "\"");
+  }
+  
+  // Replace task output variables: ${task_name.output.field}
+  std::regex outputRegex(R"(\$\{([^}]+)\.output\.([^}]+)\})");
+  while (std::regex_search(expr, matches, outputRegex)) {
+    std::string taskName = matches[1].str();
+    std::string field = matches[2].str();
+    std::string outputValue = "null";
+    
+    auto outputIt = taskOutputs.find(taskName);
+    if (outputIt != taskOutputs.end() && outputIt->second.contains(field)) {
+      outputValue = outputIt->second[field].dump();
+    }
+    
+    expr.replace(matches.position(), matches.length(), outputValue);
+  }
+  
+  // Simple expression evaluator (supports basic comparisons)
+  // For production, use a proper expression parser library
+  try {
+    // Check for ==, !=, >, <, >=, <=
+    if (expr.find("==") != std::string::npos) {
+      size_t pos = expr.find("==");
+      std::string left = expr.substr(0, pos);
+      std::string right = expr.substr(pos + 2);
+      // Trim and compare
+      left.erase(0, left.find_first_not_of(" \t"));
+      left.erase(left.find_last_not_of(" \t") + 1);
+      right.erase(0, right.find_first_not_of(" \t"));
+      right.erase(right.find_last_not_of(" \t") + 1);
+      return left == right;
+    } else if (expr.find("!=") != std::string::npos) {
+      size_t pos = expr.find("!=");
+      std::string left = expr.substr(0, pos);
+      std::string right = expr.substr(pos + 2);
+      left.erase(0, left.find_first_not_of(" \t"));
+      left.erase(left.find_last_not_of(" \t") + 1);
+      right.erase(0, right.find_first_not_of(" \t"));
+      right.erase(right.find_last_not_of(" \t") + 1);
+      return left != right;
+    }
+    
+    // Default: evaluate as boolean
+    return expr == "true" || expr == "1" || expr == "\"SUCCESS\"";
+  } catch (...) {
+    Logger::warning(LogCategory::MONITORING, "evaluateCondition",
+                    "Error evaluating condition: " + conditionExpression);
+    return false;
+  }
+}
+
+bool WorkflowExecutor::shouldExecuteTask(
+    const WorkflowTask &task,
+    const WorkflowModel &workflow,
+    const std::map<std::string, ExecutionStatus> &taskStatuses,
+    const std::map<std::string, json> &taskOutputs) {
+  if (task.condition_type == ConditionType::ALWAYS) {
+    return true;
+  }
+  
+  if (task.condition_type == ConditionType::IF) {
+    return evaluateCondition(task.condition_expression, workflow, taskStatuses, taskOutputs);
+  }
+  
+  if (task.condition_type == ConditionType::ELSE || task.condition_type == ConditionType::ELSE_IF) {
+    if (task.parent_condition_task_name.empty()) {
+      return false;
+    }
+    
+    auto parentStatusIt = taskStatuses.find(task.parent_condition_task_name);
+    if (parentStatusIt == taskStatuses.end()) {
+      return false;
+    }
+    
+    bool parentExecuted = (parentStatusIt->second == ExecutionStatus::SUCCESS ||
+                          parentStatusIt->second == ExecutionStatus::FAILED ||
+                          parentStatusIt->second == ExecutionStatus::SKIPPED);
+    
+    if (!parentExecuted) {
+      return false;
+    }
+    
+    // Check if any IF/ELSE_IF in the same block was executed
+    bool anySiblingExecuted = false;
+    for (const auto &t : workflow.tasks) {
+      if (t.parent_condition_task_name == task.parent_condition_task_name &&
+          (t.condition_type == ConditionType::IF || t.condition_type == ConditionType::ELSE_IF) &&
+          taskStatuses.find(t.task_name) != taskStatuses.end() &&
+          taskStatuses.at(t.task_name) == ExecutionStatus::SUCCESS) {
+        anySiblingExecuted = true;
+        break;
+      }
+    }
+    
+    if (task.condition_type == ConditionType::ELSE) {
+      return !anySiblingExecuted;
+    } else {
+      return !anySiblingExecuted && evaluateCondition(task.condition_expression, workflow, taskStatuses, taskOutputs);
+    }
+  }
+  
+  return true;
+}
+
+std::vector<std::string> WorkflowExecutor::sortTasksByPriority(
+    const std::vector<std::string> &taskNames,
+    const WorkflowModel &workflow) {
+  std::vector<std::pair<std::string, int>> tasksWithPriority;
+  
+  for (const auto &taskName : taskNames) {
+    auto taskIt = std::find_if(workflow.tasks.begin(), workflow.tasks.end(),
+                               [&taskName](const WorkflowTask &t) {
+                                 return t.task_name == taskName;
+                               });
+    if (taskIt != workflow.tasks.end()) {
+      tasksWithPriority.push_back({taskName, taskIt->priority});
+    } else {
+      tasksWithPriority.push_back({taskName, 0});
+    }
+  }
+  
+  std::sort(tasksWithPriority.begin(), tasksWithPriority.end(),
+            [](const std::pair<std::string, int> &a, const std::pair<std::string, int> &b) {
+              return a.second > b.second;
+            });
+  
+  std::vector<std::string> sortedTasks;
+  for (const auto &[taskName, priority] : tasksWithPriority) {
+    sortedTasks.push_back(taskName);
+  }
+  
+  return sortedTasks;
 }
 
 bool WorkflowExecutor::checkSLA(const WorkflowModel &workflow,
@@ -163,6 +333,130 @@ bool WorkflowExecutor::executeScript(const json &scriptConfig) {
   Logger::warning(LogCategory::TRANSFER, "executeScript",
                   "Script task execution not yet implemented");
   return false;
+}
+
+bool WorkflowExecutor::executeSubWorkflow(const std::string &subWorkflowName) {
+  try {
+    executeWorkflow(subWorkflowName, TriggerType::MANUAL);
+    return true;
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "executeSubWorkflow",
+                  "Error executing sub-workflow " + subWorkflowName + ": " + std::string(e.what()));
+    return false;
+  }
+}
+
+bool WorkflowExecutor::executeTaskWithLoop(const WorkflowModel &workflow, const WorkflowTask &task,
+                                          int64_t workflowExecutionId, int64_t &taskExecutionId,
+                                          const std::map<std::string, ExecutionStatus> &taskStatuses,
+                                          const std::map<std::string, json> &taskOutputs) {
+  if (task.loop_type == LoopType::FOR) {
+    int iterations = 1;
+    if (task.loop_config.contains("iterations")) {
+      iterations = task.loop_config["iterations"].get<int>();
+    }
+    
+    bool allSuccess = true;
+    for (int i = 0; i < iterations; i++) {
+      int64_t loopTaskExecutionId = 0;
+      bool success = executeTask(workflow, task, workflowExecutionId, loopTaskExecutionId);
+      if (!success) {
+        allSuccess = false;
+        if (task.loop_config.contains("stop_on_error") && task.loop_config["stop_on_error"].get<bool>()) {
+          break;
+        }
+      }
+      
+      if (task.loop_config.contains("delay_seconds")) {
+        int delay = task.loop_config["delay_seconds"].get<int>();
+        if (delay > 0 && i < iterations - 1) {
+          std::this_thread::sleep_for(std::chrono::seconds(delay));
+        }
+      }
+    }
+    
+    return allSuccess;
+  } else if (task.loop_type == LoopType::WHILE) {
+    std::string conditionExpr = "";
+    if (task.loop_config.contains("condition")) {
+      conditionExpr = task.loop_config["condition"].get<std::string>();
+    }
+    
+    int maxIterations = 1000;
+    if (task.loop_config.contains("max_iterations")) {
+      maxIterations = task.loop_config["max_iterations"].get<int>();
+    }
+    
+    int iteration = 0;
+    bool allSuccess = true;
+    
+    while (iteration < maxIterations) {
+      if (!conditionExpr.empty()) {
+        bool conditionMet = evaluateCondition(conditionExpr, workflow, taskStatuses, taskOutputs);
+        if (!conditionMet) {
+          break;
+        }
+      }
+      
+      int64_t loopTaskExecutionId = 0;
+      bool success = executeTask(workflow, task, workflowExecutionId, loopTaskExecutionId);
+      if (!success) {
+        allSuccess = false;
+        if (task.loop_config.contains("stop_on_error") && task.loop_config["stop_on_error"].get<bool>()) {
+          break;
+        }
+      }
+      
+      iteration++;
+      
+      if (task.loop_config.contains("delay_seconds")) {
+        int delay = task.loop_config["delay_seconds"].get<int>();
+        if (delay > 0) {
+          std::this_thread::sleep_for(std::chrono::seconds(delay));
+        }
+      }
+    }
+    
+    return allSuccess;
+  } else if (task.loop_type == LoopType::FOREACH) {
+    std::vector<json> items;
+    if (task.loop_config.contains("items")) {
+      items = task.loop_config["items"].get<std::vector<json>>();
+    } else if (task.loop_config.contains("item_source")) {
+      std::string sourceTask = task.loop_config["item_source"].get<std::string>();
+      auto outputIt = taskOutputs.find(sourceTask);
+      if (outputIt != taskOutputs.end() && outputIt->second.contains("items")) {
+        items = outputIt->second["items"].get<std::vector<json>>();
+      }
+    }
+    
+    bool allSuccess = true;
+    for (size_t i = 0; i < items.size(); i++) {
+      WorkflowTask loopTask = task;
+      loopTask.task_config["loop_item"] = items[i];
+      loopTask.task_config["loop_index"] = i;
+      
+      int64_t loopTaskExecutionId = 0;
+      bool success = executeTask(workflow, loopTask, workflowExecutionId, loopTaskExecutionId);
+      if (!success) {
+        allSuccess = false;
+        if (task.loop_config.contains("stop_on_error") && task.loop_config["stop_on_error"].get<bool>()) {
+          break;
+        }
+      }
+      
+      if (task.loop_config.contains("delay_seconds")) {
+        int delay = task.loop_config["delay_seconds"].get<int>();
+        if (delay > 0 && i < items.size() - 1) {
+          std::this_thread::sleep_for(std::chrono::seconds(delay));
+        }
+      }
+    }
+    
+    return allSuccess;
+  }
+  
+  return executeTask(workflow, task, workflowExecutionId, taskExecutionId);
 }
 
 bool WorkflowExecutor::executeTask(const WorkflowModel &workflow,
@@ -260,13 +554,14 @@ void WorkflowExecutor::executeWorkflow(const std::string &workflowName,
   
   auto dependencyGraph = buildDependencyGraph(workflow);
   std::map<std::string, ExecutionStatus> taskStatuses;
+  std::map<std::string, json> taskOutputs;
   std::map<std::string, int> taskRetryCounts;
   
   bool workflowFailed = false;
   std::string workflowError;
   
   while (taskStatuses.size() < workflow.tasks.size() && !workflowFailed) {
-    auto readyTasks = getReadyTasks(workflow, dependencyGraph, taskStatuses);
+    auto readyTasks = getReadyTasks(workflow, dependencyGraph, taskStatuses, taskOutputs);
     
     if (readyTasks.empty()) {
       bool allCompleted = true;
@@ -300,11 +595,29 @@ void WorkflowExecutor::executeWorkflow(const std::string &workflowName,
       
       threads.emplace_back([&, taskName, taskIt]() {
         int64_t taskExecutionId = 0;
-        bool success = executeTask(workflow, *taskIt, workflowExecutionId, taskExecutionId);
+        bool success = false;
+        
+        if (taskIt->loop_type == LoopType::FOR || taskIt->loop_type == LoopType::WHILE || taskIt->loop_type == LoopType::FOREACH) {
+          success = executeTaskWithLoop(workflow, *taskIt, workflowExecutionId, taskExecutionId, taskStatuses, taskOutputs);
+        } else {
+          success = executeTask(workflow, *taskIt, workflowExecutionId, taskExecutionId);
+        }
+        
+        json taskOutput = json::object();
+        if (taskExecutionId > 0) {
+          auto taskExecutions = workflowRepo_->getTaskExecutions(workflowExecutionId);
+          for (const auto &te : taskExecutions) {
+            if (te.task_name == taskName) {
+              taskOutput = te.task_output;
+              break;
+            }
+          }
+        }
         
         std::lock_guard<std::mutex> lock(statusMutex);
         if (success) {
           taskStatuses[taskName] = ExecutionStatus::SUCCESS;
+          taskOutputs[taskName] = taskOutput;
           execution.completed_tasks++;
         } else {
           int retryCount = taskRetryCounts[taskName];
@@ -316,8 +629,17 @@ void WorkflowExecutor::executeWorkflow(const std::string &workflowName,
             taskStatuses.erase(taskName);
           } else {
             taskStatuses[taskName] = ExecutionStatus::FAILED;
+            taskOutputs[taskName] = taskOutput;
             execution.failed_tasks++;
-            workflowFailed = true;
+            
+            if (taskIt->condition_type == ConditionType::IF ||
+                taskIt->condition_type == ConditionType::ELSE_IF) {
+              // Conditional task failed, but don't fail entire workflow
+              taskStatuses[taskName] = ExecutionStatus::SKIPPED;
+              execution.skipped_tasks++;
+            } else {
+              workflowFailed = true;
+            }
           }
         }
       });
@@ -342,6 +664,12 @@ void WorkflowExecutor::executeWorkflow(const std::string &workflowName,
   workflowRepo_->updateLastExecution(workflowName, endTimeStr, statusStr);
   
   checkSLA(workflow, execution);
+  
+  if (shouldRollback(workflow, execution)) {
+    Logger::info(LogCategory::MONITORING, "executeWorkflow",
+                 "Initiating rollback for workflow: " + workflowName + ", execution: " + executionId);
+    rollbackWorkflow(workflowName, executionId);
+  }
 }
 
 void WorkflowExecutor::executeWorkflowAsync(const std::string &workflowName,

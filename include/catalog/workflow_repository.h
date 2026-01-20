@@ -15,13 +15,27 @@ enum class TaskType {
   DATA_VAULT,
   SYNC,
   API_CALL,
-  SCRIPT
+  SCRIPT,
+  SUB_WORKFLOW
 };
 
 enum class DependencyType {
   SUCCESS,
   COMPLETION,
   SKIP_ON_FAILURE
+};
+
+enum class ConditionType {
+  ALWAYS,
+  IF,
+  ELSE,
+  ELSE_IF
+};
+
+enum class LoopType {
+  FOR,
+  WHILE,
+  FOREACH
 };
 
 enum class ExecutionStatus {
@@ -52,6 +66,13 @@ struct SLAConfig {
   bool alert_on_sla_breach = true;
 };
 
+struct RollbackConfig {
+  bool enabled = false;
+  bool on_failure = true;
+  bool on_timeout = false;
+  int max_rollback_depth = 10;
+};
+
 struct WorkflowTask {
   int id;
   std::string workflow_name;
@@ -64,6 +85,12 @@ struct WorkflowTask {
   int position_x = 0;
   int position_y = 0;
   json metadata;
+  int priority = 0;
+  ConditionType condition_type = ConditionType::ALWAYS;
+  std::string condition_expression;
+  std::string parent_condition_task_name;
+  LoopType loop_type = LoopType::FOR;
+  json loop_config;
   std::string created_at;
   std::string updated_at;
 };
@@ -87,6 +114,7 @@ struct WorkflowModel {
   bool enabled = true;
   RetryPolicy retry_policy;
   SLAConfig sla_config;
+  RollbackConfig rollback_config;
   json metadata;
   std::string created_at;
   std::string updated_at;
@@ -94,6 +122,13 @@ struct WorkflowModel {
   std::string last_execution_status;
   std::vector<WorkflowTask> tasks;
   std::vector<WorkflowDependency> dependencies;
+};
+
+enum class RollbackStatus {
+  PENDING,
+  IN_PROGRESS,
+  COMPLETED,
+  FAILED
 };
 
 struct WorkflowExecution {
@@ -110,6 +145,10 @@ struct WorkflowExecution {
   int failed_tasks = 0;
   int skipped_tasks = 0;
   std::string error_message;
+  RollbackStatus rollback_status = RollbackStatus::PENDING;
+  std::string rollback_started_at;
+  std::string rollback_completed_at;
+  std::string rollback_error_message;
   json metadata;
   std::string created_at;
 };

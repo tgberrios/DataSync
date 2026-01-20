@@ -151,6 +151,8 @@ TaskType WorkflowRepository::stringToTaskType(const std::string &str) {
     return TaskType::API_CALL;
   if (str == "SCRIPT")
     return TaskType::SCRIPT;
+  if (str == "SUB_WORKFLOW")
+    return TaskType::SUB_WORKFLOW;
   return TaskType::CUSTOM_JOB;
 }
 
@@ -263,6 +265,19 @@ SLAConfig WorkflowRepository::parseSLAConfig(const json &j) {
   return config;
 }
 
+RollbackConfig WorkflowRepository::parseRollbackConfig(const json &j) {
+  RollbackConfig config;
+  if (j.contains("enabled"))
+    config.enabled = j["enabled"].get<bool>();
+  if (j.contains("on_failure"))
+    config.on_failure = j["on_failure"].get<bool>();
+  if (j.contains("on_timeout"))
+    config.on_timeout = j["on_timeout"].get<bool>();
+  if (j.contains("max_rollback_depth"))
+    config.max_rollback_depth = j["max_rollback_depth"].get<int>();
+  return config;
+}
+
 json WorkflowRepository::retryPolicyToJson(const RetryPolicy &policy) {
   json j;
   j["max_retries"] = policy.max_retries;
@@ -285,7 +300,8 @@ std::vector<WorkflowModel> WorkflowRepository::getAllWorkflows() {
     pqxx::work txn(conn);
     auto results = txn.exec(
         "SELECT id, workflow_name, description, schedule_cron, active, enabled, "
-        "retry_policy, sla_config, metadata, created_at, updated_at, "
+        "retry_policy, sla_config, COALESCE(rollback_config, '{\"enabled\": false}'::jsonb) as rollback_config, "
+        "metadata, created_at, updated_at, "
         "last_execution_time, last_execution_status "
         "FROM metadata.workflows ORDER BY workflow_name");
 
@@ -295,7 +311,10 @@ std::vector<WorkflowModel> WorkflowRepository::getAllWorkflows() {
       auto taskResults = txn.exec_params(
           "SELECT id, workflow_name, task_name, task_type, task_reference, "
           "description, task_config, retry_policy, position_x, position_y, "
-          "metadata, created_at, updated_at "
+          "metadata, COALESCE(priority, 0) as priority, "
+          "COALESCE(condition_type, 'ALWAYS') as condition_type, "
+          "condition_expression, parent_condition_task_name, "
+          "loop_type, loop_config, created_at, updated_at "
           "FROM metadata.workflow_tasks WHERE workflow_name = $1",
           workflow.workflow_name);
       
@@ -341,7 +360,10 @@ std::vector<WorkflowModel> WorkflowRepository::getActiveWorkflows() {
       auto taskResults = txn.exec_params(
           "SELECT id, workflow_name, task_name, task_type, task_reference, "
           "description, task_config, retry_policy, position_x, position_y, "
-          "metadata, created_at, updated_at "
+          "metadata, COALESCE(priority, 0) as priority, "
+          "COALESCE(condition_type, 'ALWAYS') as condition_type, "
+          "condition_expression, parent_condition_task_name, "
+          "loop_type, loop_config, created_at, updated_at "
           "FROM metadata.workflow_tasks WHERE workflow_name = $1",
           workflow.workflow_name);
       
@@ -427,6 +449,7 @@ void WorkflowRepository::insertOrUpdateWorkflow(const WorkflowModel &workflow) {
     
     std::string retryPolicyStr = retryPolicyToJson(workflow.retry_policy).dump();
     std::string slaConfigStr = slaConfigToJson(workflow.sla_config).dump();
+    std::string rollbackConfigStr = rollbackConfigToJson(workflow.rollback_config).dump();
     std::string metadataStr = workflow.metadata.dump();
     std::string scheduleCron = workflow.schedule_cron;
     
@@ -465,10 +488,10 @@ void WorkflowRepository::insertOrUpdateWorkflow(const WorkflowModel &workflow) {
         txn.exec_params(
             "UPDATE metadata.workflows SET description = $2, schedule_cron = $3, "
             "active = $4, enabled = $5, retry_policy = $6::jsonb, "
-            "sla_config = $7::jsonb, metadata = $8::jsonb, updated_at = NOW() "
+            "sla_config = $7::jsonb, rollback_config = $8::jsonb, metadata = $9::jsonb, updated_at = NOW() "
             "WHERE id = $1",
             id, workflow.description, scheduleCron, workflow.active,
-            workflow.enabled, retryPolicyStr, slaConfigStr, metadataStr);
+            workflow.enabled, retryPolicyStr, slaConfigStr, rollbackConfigStr, metadataStr);
       }
     }
     
@@ -481,25 +504,40 @@ void WorkflowRepository::insertOrUpdateWorkflow(const WorkflowModel &workflow) {
           "SELECT id FROM metadata.workflow_tasks WHERE workflow_name = $1 AND task_name = $2",
           workflow.workflow_name, task.task_name);
       
+      std::string loopConfigStr = task.loop_config.dump();
+      std::string conditionTypeStr = conditionTypeToString(task.condition_type);
+      std::string loopTypeStr = (task.loop_type == LoopType::FOR || task.loop_type == LoopType::WHILE || task.loop_type == LoopType::FOREACH) 
+                                 ? loopTypeToString(task.loop_type) : "";
+      
       if (taskExisting.empty()) {
         txn.exec_params(
             "INSERT INTO metadata.workflow_tasks (workflow_name, task_name, "
             "task_type, task_reference, description, task_config, retry_policy, "
-            "position_x, position_y, metadata) "
-            "VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10::jsonb)",
+            "position_x, position_y, metadata, priority, condition_type, "
+            "condition_expression, parent_condition_task_name, loop_type, loop_config) "
+            "VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10::jsonb, "
+            "$11, $12, $13, $14, $15, $16::jsonb)",
             workflow.workflow_name, task.task_name, taskTypeToString(task.task_type),
             task.task_reference, task.description, taskConfigStr, taskRetryPolicyStr,
-            task.position_x, task.position_y, taskMetadataStr);
+            task.position_x, task.position_y, taskMetadataStr, task.priority,
+            conditionTypeStr, task.condition_expression, task.parent_condition_task_name,
+            loopTypeStr.empty() ? pqxx::zview(nullptr) : pqxx::zview(loopTypeStr),
+            loopConfigStr);
       } else {
         int taskId = taskExisting[0][0].as<int>();
         txn.exec_params(
             "UPDATE metadata.workflow_tasks SET task_type = $3, task_reference = $4, "
             "description = $5, task_config = $6::jsonb, retry_policy = $7::jsonb, "
-            "position_x = $8, position_y = $9, metadata = $10::jsonb, updated_at = NOW() "
+            "position_x = $8, position_y = $9, metadata = $10::jsonb, "
+            "priority = $11, condition_type = $12, condition_expression = $13, "
+            "parent_condition_task_name = $14, loop_type = $15, loop_config = $16::jsonb, updated_at = NOW() "
             "WHERE id = $1 AND workflow_name = $2",
             taskId, workflow.workflow_name, taskTypeToString(task.task_type),
             task.task_reference, task.description, taskConfigStr, taskRetryPolicyStr,
-            task.position_x, task.position_y, taskMetadataStr);
+            task.position_x, task.position_y, taskMetadataStr, task.priority,
+            conditionTypeStr, task.condition_expression, task.parent_condition_task_name,
+            loopTypeStr.empty() ? pqxx::zview(nullptr) : pqxx::zview(loopTypeStr),
+            loopConfigStr);
       }
     }
     
@@ -655,15 +693,15 @@ int64_t WorkflowRepository::createWorkflowExecution(
         "INSERT INTO metadata.workflow_executions (workflow_name, execution_id, "
         "status, trigger_type, start_time, end_time, duration_seconds, "
         "total_tasks, completed_tasks, failed_tasks, skipped_tasks, "
-        "error_message, metadata) "
+        "error_message, rollback_status, metadata) "
         "VALUES ($1, $2, $3, $4, $5::timestamp, $6::timestamp, $7, $8, $9, $10, "
-        "$11, $12, $13::jsonb) RETURNING id",
+        "$11, $12, $13, $14::jsonb) RETURNING id",
         execution.workflow_name, execution.execution_id,
         executionStatusToString(execution.status),
         triggerTypeToString(execution.trigger_type), startTime, endTime,
         execution.duration_seconds, execution.total_tasks, execution.completed_tasks,
         execution.failed_tasks, execution.skipped_tasks, execution.error_message,
-        metadataStr);
+        rollbackStatusToString(execution.rollback_status), metadataStr);
 
     if (!result.empty()) {
       int64_t id = result[0][0].as<int64_t>();
@@ -693,10 +731,16 @@ void WorkflowRepository::updateWorkflowExecution(
         "UPDATE metadata.workflow_executions SET status = $2, start_time = $3::timestamp, "
         "end_time = $4::timestamp, duration_seconds = $5, total_tasks = $6, "
         "completed_tasks = $7, failed_tasks = $8, skipped_tasks = $9, "
-        "error_message = $10, metadata = $11::jsonb WHERE id = $1",
+        "error_message = $10, rollback_status = $11, "
+        "rollback_started_at = $12, rollback_completed_at = $13, rollback_error_message = $14, "
+        "metadata = $15::jsonb WHERE id = $1",
         execution.id, executionStatusToString(execution.status), startTime, endTime,
         execution.duration_seconds, execution.total_tasks, execution.completed_tasks,
         execution.failed_tasks, execution.skipped_tasks, execution.error_message,
+        rollbackStatusToString(execution.rollback_status),
+        execution.rollback_started_at.empty() ? pqxx::zview(nullptr) : pqxx::zview(execution.rollback_started_at),
+        execution.rollback_completed_at.empty() ? pqxx::zview(nullptr) : pqxx::zview(execution.rollback_completed_at),
+        execution.rollback_error_message.empty() ? pqxx::zview(nullptr) : pqxx::zview(execution.rollback_error_message),
         metadataStr);
     
     txn.commit();
@@ -819,9 +863,19 @@ WorkflowModel WorkflowRepository::rowToWorkflow(const pqxx::row &row) {
     }
   }
   
-  if (!row[8].is_null()) {
+  int colIdx = 8;
+  if (row.size() > colIdx && !row[colIdx].is_null()) {
     try {
-      workflow.metadata = json::parse(row[8].as<std::string>());
+      workflow.rollback_config = parseRollbackConfig(json::parse(row[colIdx].as<std::string>()));
+    } catch (...) {
+      workflow.rollback_config = RollbackConfig();
+    }
+    colIdx++;
+  }
+  
+  if (row.size() > colIdx && !row[colIdx].is_null()) {
+    try {
+      workflow.metadata = json::parse(row[colIdx].as<std::string>());
     } catch (...) {
       workflow.metadata = json{};
     }
@@ -871,8 +925,58 @@ WorkflowTask WorkflowRepository::rowToTask(const pqxx::row &row) {
     }
   }
   
-  task.created_at = row[11].is_null() ? "" : row[11].as<std::string>();
-  task.updated_at = row[12].is_null() ? "" : row[12].as<std::string>();
+  int colIdx = 11;
+  if (row.size() > colIdx) {
+    task.priority = row[colIdx].is_null() ? 0 : row[colIdx].as<int>();
+    colIdx++;
+  }
+  
+  if (row.size() > colIdx) {
+    std::string conditionTypeStr = row[colIdx].is_null() ? "ALWAYS" : row[colIdx].as<std::string>();
+    if (conditionTypeStr == "IF") task.condition_type = ConditionType::IF;
+    else if (conditionTypeStr == "ELSE") task.condition_type = ConditionType::ELSE;
+    else if (conditionTypeStr == "ELSE_IF") task.condition_type = ConditionType::ELSE_IF;
+    else task.condition_type = ConditionType::ALWAYS;
+    colIdx++;
+  }
+  
+  if (row.size() > colIdx) {
+    task.condition_expression = row[colIdx].is_null() ? "" : row[colIdx].as<std::string>();
+    colIdx++;
+  }
+  
+  if (row.size() > colIdx) {
+    task.parent_condition_task_name = row[colIdx].is_null() ? "" : row[colIdx].as<std::string>();
+    colIdx++;
+  }
+  
+  if (row.size() > colIdx) {
+    std::string loopTypeStr = row[colIdx].is_null() ? "" : row[colIdx].as<std::string>();
+    if (loopTypeStr == "FOR") task.loop_type = LoopType::FOR;
+    else if (loopTypeStr == "WHILE") task.loop_type = LoopType::WHILE;
+    else if (loopTypeStr == "FOREACH") task.loop_type = LoopType::FOREACH;
+    colIdx++;
+  }
+  
+  if (row.size() > colIdx) {
+    if (!row[colIdx].is_null()) {
+      try {
+        task.loop_config = json::parse(row[colIdx].as<std::string>());
+      } catch (...) {
+        task.loop_config = json{};
+      }
+    }
+    colIdx++;
+  }
+  
+  if (row.size() > colIdx) {
+    task.created_at = row[colIdx].is_null() ? "" : row[colIdx].as<std::string>();
+    colIdx++;
+  }
+  
+  if (row.size() > colIdx) {
+    task.updated_at = row[colIdx].is_null() ? "" : row[colIdx].as<std::string>();
+  }
   
   return task;
 }
@@ -905,15 +1009,44 @@ WorkflowExecution WorkflowRepository::rowToExecution(const pqxx::row &row) {
   execution.skipped_tasks = row[11].is_null() ? 0 : row[11].as<int>();
   execution.error_message = row[12].is_null() ? "" : row[12].as<std::string>();
   
-  if (!row[13].is_null()) {
+  int colIdx = 13;
+  if (row.size() > colIdx) {
+    std::string rollbackStatusStr = row[colIdx].is_null() ? "" : row[colIdx].as<std::string>();
+    if (rollbackStatusStr == "IN_PROGRESS") execution.rollback_status = RollbackStatus::IN_PROGRESS;
+    else if (rollbackStatusStr == "COMPLETED") execution.rollback_status = RollbackStatus::COMPLETED;
+    else if (rollbackStatusStr == "FAILED") execution.rollback_status = RollbackStatus::FAILED;
+    else execution.rollback_status = RollbackStatus::PENDING;
+    colIdx++;
+  }
+  
+  if (row.size() > colIdx) {
+    execution.rollback_started_at = row[colIdx].is_null() ? "" : row[colIdx].as<std::string>();
+    colIdx++;
+  }
+  
+  if (row.size() > colIdx) {
+    execution.rollback_completed_at = row[colIdx].is_null() ? "" : row[colIdx].as<std::string>();
+    colIdx++;
+  }
+  
+  if (row.size() > colIdx) {
+    execution.rollback_error_message = row[colIdx].is_null() ? "" : row[colIdx].as<std::string>();
+    colIdx++;
+  }
+  
+  if (row.size() > colIdx && !row[colIdx].is_null()) {
     try {
-      execution.metadata = json::parse(row[13].as<std::string>());
+      execution.metadata = json::parse(row[colIdx].as<std::string>());
     } catch (...) {
       execution.metadata = json{};
     }
+    colIdx++;
   }
   
-  execution.created_at = row[14].is_null() ? "" : row[14].as<std::string>();
+  if (row.size() > colIdx) {
+    execution.created_at = row[colIdx].is_null() ? "" : row[colIdx].as<std::string>();
+  }
+  
   return execution;
 }
 
@@ -948,4 +1081,36 @@ TaskExecution WorkflowRepository::rowToTaskExecution(const pqxx::row &row) {
   
   execution.created_at = row[12].is_null() ? "" : row[12].as<std::string>();
   return execution;
+}
+
+std::string WorkflowRepository::conditionTypeToString(ConditionType type) {
+  switch (type) {
+    case ConditionType::IF: return "IF";
+    case ConditionType::ELSE: return "ELSE";
+    case ConditionType::ELSE_IF: return "ELSE_IF";
+    default: return "ALWAYS";
+  }
+}
+
+ConditionType WorkflowRepository::stringToConditionType(const std::string &str) {
+  if (str == "IF") return ConditionType::IF;
+  if (str == "ELSE") return ConditionType::ELSE;
+  if (str == "ELSE_IF") return ConditionType::ELSE_IF;
+  return ConditionType::ALWAYS;
+}
+
+std::string WorkflowRepository::loopTypeToString(LoopType type) {
+  switch (type) {
+    case LoopType::FOR: return "FOR";
+    case LoopType::WHILE: return "WHILE";
+    case LoopType::FOREACH: return "FOREACH";
+  }
+  return "";
+}
+
+LoopType WorkflowRepository::stringToLoopType(const std::string &str) {
+  if (str == "FOR") return LoopType::FOR;
+  if (str == "WHILE") return LoopType::WHILE;
+  if (str == "FOREACH") return LoopType::FOREACH;
+  return LoopType::FOR;
 }
