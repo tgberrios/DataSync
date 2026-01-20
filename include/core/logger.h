@@ -31,6 +31,7 @@ enum class LogCategory {
   METRICS = 8,
   GOVERNANCE = 9,
   QUALITY = 10,
+  TRANSFORM = 11,
   UNKNOWN = 99
 };
 
@@ -118,6 +119,8 @@ private:
       return "GOVERNANCE";
     case LogCategory::QUALITY:
       return "QUALITY";
+    case LogCategory::TRANSFORM:
+      return "TRANSFORM";
     default:
       return "UNKNOWN";
     }

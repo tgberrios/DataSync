@@ -35,23 +35,9 @@
 - Optimización y organización
 
 ---
-
----
-
 ## 📋 Otras Opciones (Después de Cloud-Native)
 
-### Opción 2: Transformaciones avanzadas (4-6 semanas)
-- Lookup transformations (enriquecimiento con tablas de referencia)
-- Joiner transformations (INNER, LEFT, RIGHT, FULL OUTER)
-- Aggregator transformations (GROUP BY, SUM, AVG, etc.)
-- Router transformations (split data por condiciones)
-- Union transformations (combinar múltiples fuentes)
-- Mejor UX para usuarios no técnicos
-
-**Complejidad:** Media
-**Impacto:** Alto (UX)
-
-### Opción 3: Stream Processing (Kafka integration) (6-8 semanas)
+### Opción 2: Stream Processing (Kafka integration) (6-8 semanas)
 - Integración con Kafka/RabbitMQ/Redis Streams
 - Producer/Consumer patterns
 - Windowing (tumbling, sliding, session windows)
@@ -75,24 +61,6 @@
 - Priorización de tareas - Opcional
 - Task versioning - Opcional
 - Rollback automático en caso de fallo - Opcional
-
-### Transformaciones avanzadas
-- Rank transformations (TOP N, BOTTOM N)
-- Sorter transformations
-- Expression transformations (funciones matemáticas, strings, fechas)
-- Sequence Generator (generar IDs secuenciales)
-- Normalizer (desnormalizar columnas)
-- XML/JSON Parser transformations
-- Funciones de ventana (ROW_NUMBER, LAG, LEAD, PARTITION BY)
-- Funciones de agregación avanzadas (PERCENTILE, STDDEV, VARIANCE)
-- Funciones de string avanzadas (REGEX, SPLIT, CONCAT con separadores)
-- Funciones de fecha avanzadas (DATEADD, DATEDIFF, DATEPART)
-- Funciones de geolocalización (distancia, polígonos)
-- Data cleansing automático (trim, uppercase, remove special chars)
-- Address standardization
-- Phone number formatting
-- Email validation y normalization
-- Deduplication avanzado (fuzzy matching)
 
 ### Streaming y procesamiento en tiempo real
 - Integración con Kafka/RabbitMQ/Redis Streams

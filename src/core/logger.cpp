@@ -31,7 +31,8 @@ const std::unordered_map<std::string, LogCategory> Logger::categoryMap = {
     {"DDL_EXPORT", LogCategory::DDL_EXPORT},
     {"METRICS", LogCategory::METRICS},
     {"GOVERNANCE", LogCategory::GOVERNANCE},
-    {"QUALITY", LogCategory::QUALITY}};
+    {"QUALITY", LogCategory::QUALITY},
+    {"TRANSFORM", LogCategory::TRANSFORM}};
 
 const std::unordered_map<std::string, LogLevel> Logger::levelMap = {
     {"DEBUG", LogLevel::DEBUG},      {"INFO", LogLevel::INFO},

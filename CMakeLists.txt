@@ -57,6 +57,7 @@ include_directories(
     ./include/governance
     ./include/metrics
     ./include/backup
+    ./include/transformations
     ./include/third_party
     /usr/local/include
     /usr/include/mariadb
@@ -115,6 +116,23 @@ add_executable(DataSync
     src/utils/PostgreSQLClusterNameProvider.cpp
     src/backup/backup_manager.cpp
     src/backup/backup_scheduler.cpp
+    src/transformations/transformation_engine.cpp
+    src/transformations/lookup_transformation.cpp
+    src/transformations/aggregate_transformation.cpp
+    src/transformations/join_transformation.cpp
+    src/transformations/router_transformation.cpp
+    src/transformations/union_transformation.cpp
+    src/transformations/sorter_transformation.cpp
+    src/transformations/expression_transformation.cpp
+    src/transformations/data_cleansing_transformation.cpp
+    src/transformations/rank_transformation.cpp
+    src/transformations/sequence_generator_transformation.cpp
+    src/transformations/window_functions_transformation.cpp
+    src/transformations/normalizer_transformation.cpp
+    src/transformations/json_parser_transformation.cpp
+    src/transformations/geolocation_transformation.cpp
+    src/transformations/data_validation_transformation.cpp
+    src/transformations/deduplication_transformation.cpp
     src/engines/mariadb_engine.cpp
     src/engines/mssql_engine.cpp
     src/engines/postgres_engine.cpp

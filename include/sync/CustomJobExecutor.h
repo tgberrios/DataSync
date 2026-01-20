@@ -10,18 +10,37 @@
 #include "engines/oracle_engine.h"
 #endif
 #include "engines/postgres_engine.h"
+#include "transformations/transformation_engine.h"
+#include "transformations/lookup_transformation.h"
+#include "transformations/aggregate_transformation.h"
+#include "transformations/join_transformation.h"
+#include "transformations/router_transformation.h"
+#include "transformations/union_transformation.h"
+#include "transformations/sorter_transformation.h"
+#include "transformations/expression_transformation.h"
+#include "transformations/data_cleansing_transformation.h"
+#include "transformations/rank_transformation.h"
+#include "transformations/sequence_generator_transformation.h"
+#include "transformations/window_functions_transformation.h"
+#include "transformations/normalizer_transformation.h"
+#include "transformations/json_parser_transformation.h"
+#include "transformations/geolocation_transformation.h"
+#include "transformations/data_validation_transformation.h"
+#include "transformations/deduplication_transformation.h"
 #include "third_party/json.hpp"
 #include <bson/bson.h>
 #include <mongoc/mongoc.h>
 #include <pqxx/pqxx>
 #include <string>
 #include <vector>
+#include <memory>
 
 using json = nlohmann::json;
 
 class CustomJobExecutor {
   std::string metadataConnectionString_;
   std::unique_ptr<CustomJobsRepository> jobsRepo_;
+  std::unique_ptr<TransformationEngine> transformationEngine_;
 
   std::vector<json> executeQueryPostgreSQL(const std::string &connectionString,
                                            const std::string &query);
@@ -37,6 +56,15 @@ class CustomJobExecutor {
 
   std::vector<json> transformData(const std::vector<json> &data,
                                   const json &transformConfig);
+  
+  // Initialize transformation engine with all transformations
+  void initializeTransformationEngine();
+  
+  // Process pipeline graph transformations
+  std::vector<json> processPipelineTransformations(
+    const std::vector<json> &data,
+    const json &pipelineConfig
+  );
 
   void insertDataToPostgreSQL(const CustomJob &job,
                               const std::vector<json> &data);

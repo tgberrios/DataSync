@@ -47,19 +47,23 @@ static std::string extractOracleSchema(const std::string &connectionString) {
 CustomJobExecutor::CustomJobExecutor(std::string metadataConnectionString)
     : metadataConnectionString_(std::move(metadataConnectionString)),
       jobsRepo_(
-          std::make_unique<CustomJobsRepository>(metadataConnectionString_)) {}
+          std::make_unique<CustomJobsRepository>(metadataConnectionString_)) {
+  initializeTransformationEngine();
+}
 
 CustomJobExecutor::~CustomJobExecutor() = default;
 
 CustomJobExecutor::CustomJobExecutor(CustomJobExecutor &&other) noexcept
     : metadataConnectionString_(std::move(other.metadataConnectionString_)),
-      jobsRepo_(std::move(other.jobsRepo_)) {}
+      jobsRepo_(std::move(other.jobsRepo_)),
+      transformationEngine_(std::move(other.transformationEngine_)) {}
 
 CustomJobExecutor &
 CustomJobExecutor::operator=(CustomJobExecutor &&other) noexcept {
   if (this != &other) {
     metadataConnectionString_ = std::move(other.metadataConnectionString_);
     jobsRepo_ = std::move(other.jobsRepo_);
+    transformationEngine_ = std::move(other.transformationEngine_);
   }
   return *this;
 }
@@ -1788,6 +1792,21 @@ int64_t CustomJobExecutor::executeJobAndGetLogId(const std::string &jobName) {
 
     totalRowsProcessed = results.size();
 
+    // Apply transformations if pipeline config exists
+    if (!results.empty() && job.transform_config.is_object() && 
+        job.transform_config.contains("transformations")) {
+      try {
+        results = processPipelineTransformations(results, job.transform_config);
+        Logger::info(LogCategory::TRANSFER, "executeJobAndGetLogId",
+                     "Applied transformations, result size: " + 
+                     std::to_string(results.size()) + " rows");
+      } catch (const std::exception& e) {
+        Logger::error(LogCategory::TRANSFER, "executeJobAndGetLogId",
+                      "Error applying transformations: " + std::string(e.what()));
+        throw;
+      }
+    }
+
     if (!results.empty()) {
       std::vector<std::string> columns = detectColumns(results);
 
@@ -1861,4 +1880,87 @@ int64_t CustomJobExecutor::executeJobAndGetLogId(const std::string &jobName) {
 
 void CustomJobExecutor::executeJob(const std::string &jobName) {
   executeJobAndGetLogId(jobName);
+}
+
+void CustomJobExecutor::initializeTransformationEngine() {
+  transformationEngine_ = std::make_unique<TransformationEngine>();
+  
+  // Register all transformations
+  transformationEngine_->registerTransformation(
+    std::make_unique<LookupTransformation>()
+  );
+  transformationEngine_->registerTransformation(
+    std::make_unique<AggregateTransformation>()
+  );
+  transformationEngine_->registerTransformation(
+    std::make_unique<JoinTransformation>()
+  );
+  transformationEngine_->registerTransformation(
+    std::make_unique<RouterTransformation>()
+  );
+  transformationEngine_->registerTransformation(
+    std::make_unique<UnionTransformation>()
+  );
+  transformationEngine_->registerTransformation(
+    std::make_unique<SorterTransformation>()
+  );
+  transformationEngine_->registerTransformation(
+    std::make_unique<ExpressionTransformation>()
+  );
+  transformationEngine_->registerTransformation(
+    std::make_unique<DataCleansingTransformation>()
+  );
+  transformationEngine_->registerTransformation(
+    std::make_unique<RankTransformation>()
+  );
+  transformationEngine_->registerTransformation(
+    std::make_unique<SequenceGeneratorTransformation>()
+  );
+  transformationEngine_->registerTransformation(
+    std::make_unique<WindowFunctionsTransformation>()
+  );
+  transformationEngine_->registerTransformation(
+    std::make_unique<NormalizerTransformation>()
+  );
+  transformationEngine_->registerTransformation(
+    std::make_unique<JsonParserTransformation>()
+  );
+  transformationEngine_->registerTransformation(
+    std::make_unique<GeolocationTransformation>()
+  );
+  transformationEngine_->registerTransformation(
+    std::make_unique<DataValidationTransformation>()
+  );
+  transformationEngine_->registerTransformation(
+    std::make_unique<DeduplicationTransformation>()
+  );
+  
+  Logger::info(LogCategory::TRANSFER, "CustomJobExecutor",
+               "Transformation engine initialized with all transformations");
+}
+
+std::vector<json> CustomJobExecutor::processPipelineTransformations(
+  const std::vector<json> &data,
+  const json &pipelineConfig
+) {
+  if (!transformationEngine_) {
+    Logger::error(LogCategory::TRANSFER, "processPipelineTransformations",
+                  "Transformation engine not initialized");
+    return data;
+  }
+  
+  if (!pipelineConfig.contains("transformations") || 
+      !pipelineConfig["transformations"].is_array()) {
+    Logger::warning(LogCategory::TRANSFER, "processPipelineTransformations",
+                    "No transformations found in pipeline config");
+    return data;
+  }
+  
+  try {
+    return transformationEngine_->executePipeline(data, pipelineConfig);
+  } catch (const std::exception& e) {
+    Logger::error(LogCategory::TRANSFER, "processPipelineTransformations",
+                  "Error executing pipeline: " + std::string(e.what()));
+    throw;
+  }
 }
