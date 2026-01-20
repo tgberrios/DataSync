@@ -56,6 +56,7 @@ include_directories(
     ./include/core
     ./include/governance
     ./include/metrics
+    ./include/backup
     ./include/third_party
     /usr/local/include
     /usr/include/mariadb
@@ -112,6 +113,8 @@ add_executable(DataSync
     src/utils/MariaDBClusterNameProvider.cpp
     src/utils/MSSQLClusterNameProvider.cpp
     src/utils/PostgreSQLClusterNameProvider.cpp
+    src/backup/backup_manager.cpp
+    src/backup/backup_scheduler.cpp
     src/engines/mariadb_engine.cpp
     src/engines/mssql_engine.cpp
     src/engines/postgres_engine.cpp
