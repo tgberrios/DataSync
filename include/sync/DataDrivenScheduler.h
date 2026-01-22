@@ -41,7 +41,7 @@ private:
   std::atomic<bool> running_;
   std::thread schedulerThread_;
   std::vector<DataDrivenSchedule> schedules_;
-  std::mutex schedulesMutex_;
+  mutable std::mutex schedulesMutex_;
   
   void schedulerLoop();
   bool checkSchedule(const DataDrivenSchedule& schedule);

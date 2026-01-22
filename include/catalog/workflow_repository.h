@@ -205,6 +205,10 @@ public:
   ExecutionStatus stringToExecutionStatus(const std::string &str);
   std::string triggerTypeToString(TriggerType type);
   TriggerType stringToTriggerType(const std::string &str);
+  std::string conditionTypeToString(ConditionType type);
+  ConditionType stringToConditionType(const std::string &str);
+  std::string loopTypeToString(LoopType type);
+  LoopType stringToLoopType(const std::string &str);
 
 private:
   pqxx::connection getConnection();
@@ -215,8 +219,11 @@ private:
   TaskExecution rowToTaskExecution(const pqxx::row &row);
   RetryPolicy parseRetryPolicy(const json &j);
   SLAConfig parseSLAConfig(const json &j);
+  RollbackConfig parseRollbackConfig(const json &j);
   json retryPolicyToJson(const RetryPolicy &policy);
   json slaConfigToJson(const SLAConfig &config);
+  json rollbackConfigToJson(const RollbackConfig &config);
+  std::string rollbackStatusToString(RollbackStatus status);
 };
 
 #endif

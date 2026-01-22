@@ -60,7 +60,7 @@ void TaskQueue::enqueue(const QueuedTask& task) {
                " (priority: " + std::to_string(task.priority) + ")");
 }
 
-QueuedTask TaskQueue::dequeue() {
+TaskQueue::QueuedTask TaskQueue::dequeue() {
   std::unique_lock<std::mutex> lock(queueMutex_);
   queueCondition_.wait(lock, [this] { return !queue_.empty() || !running_.load(); });
   

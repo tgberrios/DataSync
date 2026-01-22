@@ -293,6 +293,30 @@ json WorkflowRepository::slaConfigToJson(const SLAConfig &config) {
   return j;
 }
 
+json WorkflowRepository::rollbackConfigToJson(const RollbackConfig &config) {
+  json j;
+  j["enabled"] = config.enabled;
+  j["on_failure"] = config.on_failure;
+  j["on_timeout"] = config.on_timeout;
+  j["max_rollback_depth"] = config.max_rollback_depth;
+  return j;
+}
+
+std::string WorkflowRepository::rollbackStatusToString(RollbackStatus status) {
+  switch (status) {
+    case RollbackStatus::PENDING:
+      return "PENDING";
+    case RollbackStatus::IN_PROGRESS:
+      return "IN_PROGRESS";
+    case RollbackStatus::COMPLETED:
+      return "COMPLETED";
+    case RollbackStatus::FAILED:
+      return "FAILED";
+    default:
+      return "PENDING";
+  }
+}
+
 std::vector<WorkflowModel> WorkflowRepository::getAllWorkflows() {
   std::vector<WorkflowModel> workflows;
   try {
@@ -308,25 +332,29 @@ std::vector<WorkflowModel> WorkflowRepository::getAllWorkflows() {
     for (const auto &row : results) {
       WorkflowModel workflow = rowToWorkflow(row);
       
-      auto taskResults = txn.exec_params(
-          "SELECT id, workflow_name, task_name, task_type, task_reference, "
+      pqxx::params taskParams;
+      taskParams.append(workflow.workflow_name);
+      auto taskResults = txn.exec(
+          pqxx::zview("SELECT id, workflow_name, task_name, task_type, task_reference, "
           "description, task_config, retry_policy, position_x, position_y, "
           "metadata, COALESCE(priority, 0) as priority, "
           "COALESCE(condition_type, 'ALWAYS') as condition_type, "
           "condition_expression, parent_condition_task_name, "
           "loop_type, loop_config, created_at, updated_at "
-          "FROM metadata.workflow_tasks WHERE workflow_name = $1",
-          workflow.workflow_name);
+          "FROM metadata.workflow_tasks WHERE workflow_name = $1"),
+          taskParams);
       
       for (const auto &taskRow : taskResults) {
         workflow.tasks.push_back(rowToTask(taskRow));
       }
       
-      auto depResults = txn.exec_params(
-          "SELECT id, workflow_name, upstream_task_name, downstream_task_name, "
+      pqxx::params depParams;
+      depParams.append(workflow.workflow_name);
+      auto depResults = txn.exec(
+          pqxx::zview("SELECT id, workflow_name, upstream_task_name, downstream_task_name, "
           "dependency_type, condition_expression, created_at "
-          "FROM metadata.workflow_dependencies WHERE workflow_name = $1",
-          workflow.workflow_name);
+          "FROM metadata.workflow_dependencies WHERE workflow_name = $1"),
+          depParams);
       
       for (const auto &depRow : depResults) {
         workflow.dependencies.push_back(rowToDependency(depRow));
@@ -357,25 +385,29 @@ std::vector<WorkflowModel> WorkflowRepository::getActiveWorkflows() {
     for (const auto &row : results) {
       WorkflowModel workflow = rowToWorkflow(row);
       
-      auto taskResults = txn.exec_params(
-          "SELECT id, workflow_name, task_name, task_type, task_reference, "
+      pqxx::params taskParams;
+      taskParams.append(workflow.workflow_name);
+      auto taskResults = txn.exec(
+          pqxx::zview("SELECT id, workflow_name, task_name, task_type, task_reference, "
           "description, task_config, retry_policy, position_x, position_y, "
           "metadata, COALESCE(priority, 0) as priority, "
           "COALESCE(condition_type, 'ALWAYS') as condition_type, "
           "condition_expression, parent_condition_task_name, "
           "loop_type, loop_config, created_at, updated_at "
-          "FROM metadata.workflow_tasks WHERE workflow_name = $1",
-          workflow.workflow_name);
+          "FROM metadata.workflow_tasks WHERE workflow_name = $1"),
+          taskParams);
       
       for (const auto &taskRow : taskResults) {
         workflow.tasks.push_back(rowToTask(taskRow));
       }
       
-      auto depResults = txn.exec_params(
-          "SELECT id, workflow_name, upstream_task_name, downstream_task_name, "
+      pqxx::params depParams;
+      depParams.append(workflow.workflow_name);
+      auto depResults = txn.exec(
+          pqxx::zview("SELECT id, workflow_name, upstream_task_name, downstream_task_name, "
           "dependency_type, condition_expression, created_at "
-          "FROM metadata.workflow_dependencies WHERE workflow_name = $1",
-          workflow.workflow_name);
+          "FROM metadata.workflow_dependencies WHERE workflow_name = $1"),
+          depParams);
       
       for (const auto &depRow : depResults) {
         workflow.dependencies.push_back(rowToDependency(depRow));
@@ -397,32 +429,38 @@ WorkflowModel WorkflowRepository::getWorkflow(const std::string &workflowName) {
   try {
     auto conn = getConnection();
     pqxx::work txn(conn);
-    auto results = txn.exec_params(
-        "SELECT id, workflow_name, description, schedule_cron, active, enabled, "
+    pqxx::params workflowParams;
+    workflowParams.append(workflowName);
+    auto results = txn.exec(
+        pqxx::zview("SELECT id, workflow_name, description, schedule_cron, active, enabled, "
         "retry_policy, sla_config, metadata, created_at, updated_at, "
         "last_execution_time, last_execution_status "
-        "FROM metadata.workflows WHERE workflow_name = $1",
-        workflowName);
+        "FROM metadata.workflows WHERE workflow_name = $1"),
+        workflowParams);
 
     if (!results.empty()) {
       workflow = rowToWorkflow(results[0]);
       
-      auto taskResults = txn.exec_params(
-          "SELECT id, workflow_name, task_name, task_type, task_reference, "
+      pqxx::params taskParams2;
+      taskParams2.append(workflowName);
+      auto taskResults = txn.exec(
+          pqxx::zview("SELECT id, workflow_name, task_name, task_type, task_reference, "
           "description, task_config, retry_policy, position_x, position_y, "
           "metadata, created_at, updated_at "
-          "FROM metadata.workflow_tasks WHERE workflow_name = $1",
-          workflowName);
+          "FROM metadata.workflow_tasks WHERE workflow_name = $1"),
+          taskParams2);
       
       for (const auto &taskRow : taskResults) {
         workflow.tasks.push_back(rowToTask(taskRow));
       }
       
-      auto depResults = txn.exec_params(
-          "SELECT id, workflow_name, upstream_task_name, downstream_task_name, "
+      pqxx::params depParams2;
+      depParams2.append(workflowName);
+      auto depResults = txn.exec(
+          pqxx::zview("SELECT id, workflow_name, upstream_task_name, downstream_task_name, "
           "dependency_type, condition_expression, created_at "
-          "FROM metadata.workflow_dependencies WHERE workflow_name = $1",
-          workflowName);
+          "FROM metadata.workflow_dependencies WHERE workflow_name = $1"),
+          depParams2);
       
       for (const auto &depRow : depResults) {
         workflow.dependencies.push_back(rowToDependency(depRow));
@@ -453,45 +491,77 @@ void WorkflowRepository::insertOrUpdateWorkflow(const WorkflowModel &workflow) {
     std::string metadataStr = workflow.metadata.dump();
     std::string scheduleCron = workflow.schedule_cron;
     
-    auto existing = txn.exec_params(
-        "SELECT id FROM metadata.workflows WHERE workflow_name = $1",
-        workflow.workflow_name);
+    pqxx::params existingParams;
+    existingParams.append(workflow.workflow_name);
+    auto existing = txn.exec(
+        pqxx::zview("SELECT id FROM metadata.workflows WHERE workflow_name = $1"),
+        existingParams);
     
     if (existing.empty()) {
       if (scheduleCron.empty()) {
-        txn.exec_params(
-            "INSERT INTO metadata.workflows (workflow_name, description, "
+        pqxx::params insertParams1;
+        insertParams1.append(workflow.workflow_name);
+        insertParams1.append(workflow.description);
+        insertParams1.append(workflow.active);
+        insertParams1.append(workflow.enabled);
+        insertParams1.append(retryPolicyStr);
+        insertParams1.append(slaConfigStr);
+        insertParams1.append(metadataStr);
+        txn.exec(
+            pqxx::zview("INSERT INTO metadata.workflows (workflow_name, description, "
             "schedule_cron, active, enabled, retry_policy, sla_config, metadata) "
-            "VALUES ($1, $2, NULL, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb)",
-            workflow.workflow_name, workflow.description, workflow.active,
-            workflow.enabled, retryPolicyStr, slaConfigStr, metadataStr);
+            "VALUES ($1, $2, NULL, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb)"),
+            insertParams1);
       } else {
-        txn.exec_params(
-            "INSERT INTO metadata.workflows (workflow_name, description, "
+        pqxx::params insertParams2;
+        insertParams2.append(workflow.workflow_name);
+        insertParams2.append(workflow.description);
+        insertParams2.append(scheduleCron);
+        insertParams2.append(workflow.active);
+        insertParams2.append(workflow.enabled);
+        insertParams2.append(retryPolicyStr);
+        insertParams2.append(slaConfigStr);
+        insertParams2.append(metadataStr);
+        txn.exec(
+            pqxx::zview("INSERT INTO metadata.workflows (workflow_name, description, "
             "schedule_cron, active, enabled, retry_policy, sla_config, metadata) "
-            "VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb)",
-            workflow.workflow_name, workflow.description, scheduleCron,
-            workflow.active, workflow.enabled, retryPolicyStr, slaConfigStr,
-            metadataStr);
+            "VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb)"),
+            insertParams2);
       }
     } else {
       int id = existing[0][0].as<int>();
       if (scheduleCron.empty()) {
-        txn.exec_params(
-            "UPDATE metadata.workflows SET description = $2, schedule_cron = NULL, "
+        pqxx::params updateParams1;
+        updateParams1.append(id);
+        updateParams1.append(workflow.description);
+        updateParams1.append(workflow.active);
+        updateParams1.append(workflow.enabled);
+        updateParams1.append(retryPolicyStr);
+        updateParams1.append(slaConfigStr);
+        updateParams1.append(metadataStr);
+        txn.exec(
+            pqxx::zview("UPDATE metadata.workflows SET description = $2, schedule_cron = NULL, "
             "active = $3, enabled = $4, retry_policy = $5::jsonb, "
             "sla_config = $6::jsonb, metadata = $7::jsonb, updated_at = NOW() "
-            "WHERE id = $1",
-            id, workflow.description, workflow.active, workflow.enabled,
-            retryPolicyStr, slaConfigStr, metadataStr);
+            "WHERE id = $1"),
+            updateParams1);
       } else {
-        txn.exec_params(
-            "UPDATE metadata.workflows SET description = $2, schedule_cron = $3, "
+        pqxx::params updateParams2;
+        updateParams2.append(id);
+        updateParams2.append(workflow.description);
+        updateParams2.append(scheduleCron);
+        updateParams2.append(workflow.active);
+        updateParams2.append(workflow.enabled);
+        updateParams2.append(retryPolicyStr);
+        updateParams2.append(slaConfigStr);
+        updateParams2.append(rollbackConfigStr);
+        updateParams2.append(metadataStr);
+        txn.exec(
+            pqxx::zview("UPDATE metadata.workflows SET description = $2, schedule_cron = $3, "
             "active = $4, enabled = $5, retry_policy = $6::jsonb, "
             "sla_config = $7::jsonb, rollback_config = $8::jsonb, metadata = $9::jsonb, updated_at = NOW() "
-            "WHERE id = $1",
-            id, workflow.description, scheduleCron, workflow.active,
-            workflow.enabled, retryPolicyStr, slaConfigStr, rollbackConfigStr, metadataStr);
+            "WHERE id = $1"),
+            updateParams2);
       }
     }
     
@@ -500,9 +570,12 @@ void WorkflowRepository::insertOrUpdateWorkflow(const WorkflowModel &workflow) {
       std::string taskRetryPolicyStr = retryPolicyToJson(task.retry_policy).dump();
       std::string taskMetadataStr = task.metadata.dump();
       
-      auto taskExisting = txn.exec_params(
-          "SELECT id FROM metadata.workflow_tasks WHERE workflow_name = $1 AND task_name = $2",
-          workflow.workflow_name, task.task_name);
+      pqxx::params taskExistingParams;
+      taskExistingParams.append(workflow.workflow_name);
+      taskExistingParams.append(task.task_name);
+      auto taskExisting = txn.exec(
+          pqxx::zview("SELECT id FROM metadata.workflow_tasks WHERE workflow_name = $1 AND task_name = $2"),
+          taskExistingParams);
       
       std::string loopConfigStr = task.loop_config.dump();
       std::string conditionTypeStr = conditionTypeToString(task.condition_type);
@@ -510,48 +583,79 @@ void WorkflowRepository::insertOrUpdateWorkflow(const WorkflowModel &workflow) {
                                  ? loopTypeToString(task.loop_type) : "";
       
       if (taskExisting.empty()) {
-        txn.exec_params(
-            "INSERT INTO metadata.workflow_tasks (workflow_name, task_name, "
+        pqxx::params taskInsertParams;
+        taskInsertParams.append(workflow.workflow_name);
+        taskInsertParams.append(task.task_name);
+        taskInsertParams.append(taskTypeToString(task.task_type));
+        taskInsertParams.append(task.task_reference);
+        taskInsertParams.append(task.description);
+        taskInsertParams.append(taskConfigStr);
+        taskInsertParams.append(taskRetryPolicyStr);
+        taskInsertParams.append(task.position_x);
+        taskInsertParams.append(task.position_y);
+        taskInsertParams.append(taskMetadataStr);
+        taskInsertParams.append(task.priority);
+        taskInsertParams.append(conditionTypeStr);
+        taskInsertParams.append(task.condition_expression);
+        taskInsertParams.append(task.parent_condition_task_name);
+        taskInsertParams.append(loopTypeStr.empty() ? pqxx::zview(nullptr) : pqxx::zview(loopTypeStr));
+        taskInsertParams.append(loopConfigStr);
+        txn.exec(
+            pqxx::zview("INSERT INTO metadata.workflow_tasks (workflow_name, task_name, "
             "task_type, task_reference, description, task_config, retry_policy, "
             "position_x, position_y, metadata, priority, condition_type, "
             "condition_expression, parent_condition_task_name, loop_type, loop_config) "
             "VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10::jsonb, "
-            "$11, $12, $13, $14, $15, $16::jsonb)",
-            workflow.workflow_name, task.task_name, taskTypeToString(task.task_type),
-            task.task_reference, task.description, taskConfigStr, taskRetryPolicyStr,
-            task.position_x, task.position_y, taskMetadataStr, task.priority,
-            conditionTypeStr, task.condition_expression, task.parent_condition_task_name,
-            loopTypeStr.empty() ? pqxx::zview(nullptr) : pqxx::zview(loopTypeStr),
-            loopConfigStr);
+            "$11, $12, $13, $14, $15, $16::jsonb)"),
+            taskInsertParams);
       } else {
         int taskId = taskExisting[0][0].as<int>();
-        txn.exec_params(
-            "UPDATE metadata.workflow_tasks SET task_type = $3, task_reference = $4, "
+        pqxx::params taskUpdateParams;
+        taskUpdateParams.append(taskId);
+        taskUpdateParams.append(workflow.workflow_name);
+        taskUpdateParams.append(taskTypeToString(task.task_type));
+        taskUpdateParams.append(task.task_reference);
+        taskUpdateParams.append(task.description);
+        taskUpdateParams.append(taskConfigStr);
+        taskUpdateParams.append(taskRetryPolicyStr);
+        taskUpdateParams.append(task.position_x);
+        taskUpdateParams.append(task.position_y);
+        taskUpdateParams.append(taskMetadataStr);
+        taskUpdateParams.append(task.priority);
+        taskUpdateParams.append(conditionTypeStr);
+        taskUpdateParams.append(task.condition_expression);
+        taskUpdateParams.append(task.parent_condition_task_name);
+        taskUpdateParams.append(loopTypeStr.empty() ? pqxx::zview(nullptr) : pqxx::zview(loopTypeStr));
+        taskUpdateParams.append(loopConfigStr);
+        txn.exec(
+            pqxx::zview("UPDATE metadata.workflow_tasks SET task_type = $3, task_reference = $4, "
             "description = $5, task_config = $6::jsonb, retry_policy = $7::jsonb, "
             "position_x = $8, position_y = $9, metadata = $10::jsonb, "
             "priority = $11, condition_type = $12, condition_expression = $13, "
             "parent_condition_task_name = $14, loop_type = $15, loop_config = $16::jsonb, updated_at = NOW() "
-            "WHERE id = $1 AND workflow_name = $2",
-            taskId, workflow.workflow_name, taskTypeToString(task.task_type),
-            task.task_reference, task.description, taskConfigStr, taskRetryPolicyStr,
-            task.position_x, task.position_y, taskMetadataStr, task.priority,
-            conditionTypeStr, task.condition_expression, task.parent_condition_task_name,
-            loopTypeStr.empty() ? pqxx::zview(nullptr) : pqxx::zview(loopTypeStr),
-            loopConfigStr);
+            "WHERE id = $1 AND workflow_name = $2"),
+            taskUpdateParams);
       }
     }
     
-    txn.exec_params(
-        "DELETE FROM metadata.workflow_dependencies WHERE workflow_name = $1",
-        workflow.workflow_name);
+    pqxx::params deleteDepParams;
+    deleteDepParams.append(workflow.workflow_name);
+    txn.exec(
+        pqxx::zview("DELETE FROM metadata.workflow_dependencies WHERE workflow_name = $1"),
+        deleteDepParams);
     
     for (const auto &dep : workflow.dependencies) {
-      txn.exec_params(
-          "INSERT INTO metadata.workflow_dependencies (workflow_name, "
+      pqxx::params depInsertParams;
+      depInsertParams.append(workflow.workflow_name);
+      depInsertParams.append(dep.upstream_task_name);
+      depInsertParams.append(dep.downstream_task_name);
+      depInsertParams.append(dependencyTypeToString(dep.dependency_type));
+      depInsertParams.append(dep.condition_expression);
+      txn.exec(
+          pqxx::zview("INSERT INTO metadata.workflow_dependencies (workflow_name, "
           "upstream_task_name, downstream_task_name, dependency_type, condition_expression) "
-          "VALUES ($1, $2, $3, $4, $5)",
-          workflow.workflow_name, dep.upstream_task_name, dep.downstream_task_name,
-          dependencyTypeToString(dep.dependency_type), dep.condition_expression);
+          "VALUES ($1, $2, $3, $4, $5)"),
+          depInsertParams);
     }
     
     txn.commit();
@@ -566,8 +670,10 @@ void WorkflowRepository::deleteWorkflow(const std::string &workflowName) {
   try {
     auto conn = getConnection();
     pqxx::work txn(conn);
-    txn.exec_params("DELETE FROM metadata.workflows WHERE workflow_name = $1",
-                    workflowName);
+    pqxx::params deleteParams;
+    deleteParams.append(workflowName);
+    txn.exec(pqxx::zview("DELETE FROM metadata.workflows WHERE workflow_name = $1"),
+             deleteParams);
     txn.commit();
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "deleteWorkflow",
@@ -581,10 +687,13 @@ void WorkflowRepository::updateWorkflowActive(const std::string &workflowName,
   try {
     auto conn = getConnection();
     pqxx::work txn(conn);
-    txn.exec_params(
-        "UPDATE metadata.workflows SET active = $1, updated_at = NOW() "
-        "WHERE workflow_name = $2",
-        active, workflowName);
+    pqxx::params activeParams;
+    activeParams.append(active);
+    activeParams.append(workflowName);
+    txn.exec(
+        pqxx::zview("UPDATE metadata.workflows SET active = $1, updated_at = NOW() "
+        "WHERE workflow_name = $2"),
+        activeParams);
     txn.commit();
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "updateWorkflowActive",
@@ -598,10 +707,13 @@ void WorkflowRepository::updateWorkflowEnabled(const std::string &workflowName,
   try {
     auto conn = getConnection();
     pqxx::work txn(conn);
-    txn.exec_params(
-        "UPDATE metadata.workflows SET enabled = $1, updated_at = NOW() "
-        "WHERE workflow_name = $2",
-        enabled, workflowName);
+    pqxx::params enabledParams;
+    enabledParams.append(enabled);
+    enabledParams.append(workflowName);
+    txn.exec(
+        pqxx::zview("UPDATE metadata.workflows SET enabled = $1, updated_at = NOW() "
+        "WHERE workflow_name = $2"),
+        enabledParams);
     txn.commit();
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "updateWorkflowEnabled",
@@ -616,10 +728,14 @@ void WorkflowRepository::updateLastExecution(const std::string &workflowName,
   try {
     auto conn = getConnection();
     pqxx::work txn(conn);
-    txn.exec_params(
-        "UPDATE metadata.workflows SET last_execution_time = $1::timestamp, "
-        "last_execution_status = $2, updated_at = NOW() WHERE workflow_name = $3",
-        executionTime, status, workflowName);
+    pqxx::params lastExecParams;
+    lastExecParams.append(executionTime);
+    lastExecParams.append(status);
+    lastExecParams.append(workflowName);
+    txn.exec(
+        pqxx::zview("UPDATE metadata.workflows SET last_execution_time = $1::timestamp, "
+        "last_execution_status = $2, updated_at = NOW() WHERE workflow_name = $3"),
+        lastExecParams);
     txn.commit();
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "updateLastExecution",
@@ -635,13 +751,16 @@ WorkflowRepository::getWorkflowExecutions(const std::string &workflowName,
   try {
     auto conn = getConnection();
     pqxx::work txn(conn);
-    auto results = txn.exec_params(
-        "SELECT id, workflow_name, execution_id, status, trigger_type, "
+    pqxx::params execParams1;
+    execParams1.append(workflowName);
+    execParams1.append(limit);
+    auto results = txn.exec(
+        pqxx::zview("SELECT id, workflow_name, execution_id, status, trigger_type, "
         "start_time, end_time, duration_seconds, total_tasks, completed_tasks, "
         "failed_tasks, skipped_tasks, error_message, metadata, created_at "
         "FROM metadata.workflow_executions WHERE workflow_name = $1 "
-        "ORDER BY created_at DESC LIMIT $2",
-        workflowName, limit);
+        "ORDER BY created_at DESC LIMIT $2"),
+        execParams1);
 
     for (const auto &row : results) {
       executions.push_back(rowToExecution(row));
@@ -661,12 +780,14 @@ WorkflowRepository::getWorkflowExecution(const std::string &executionId) {
   try {
     auto conn = getConnection();
     pqxx::work txn(conn);
-    auto results = txn.exec_params(
-        "SELECT id, workflow_name, execution_id, status, trigger_type, "
+    pqxx::params execParams2;
+    execParams2.append(executionId);
+    auto results = txn.exec(
+        pqxx::zview("SELECT id, workflow_name, execution_id, status, trigger_type, "
         "start_time, end_time, duration_seconds, total_tasks, completed_tasks, "
         "failed_tasks, skipped_tasks, error_message, metadata, created_at "
-        "FROM metadata.workflow_executions WHERE execution_id = $1",
-        executionId);
+        "FROM metadata.workflow_executions WHERE execution_id = $1"),
+        execParams2);
 
     if (!results.empty()) {
       execution = rowToExecution(results[0]);
@@ -689,19 +810,29 @@ int64_t WorkflowRepository::createWorkflowExecution(
     std::string startTime = execution.start_time;
     std::string endTime = execution.end_time;
     
-    auto result = txn.exec_params(
-        "INSERT INTO metadata.workflow_executions (workflow_name, execution_id, "
+    pqxx::params createExecParams;
+    createExecParams.append(execution.workflow_name);
+    createExecParams.append(execution.execution_id);
+    createExecParams.append(executionStatusToString(execution.status));
+    createExecParams.append(triggerTypeToString(execution.trigger_type));
+    createExecParams.append(startTime);
+    createExecParams.append(endTime);
+    createExecParams.append(execution.duration_seconds);
+    createExecParams.append(execution.total_tasks);
+    createExecParams.append(execution.completed_tasks);
+    createExecParams.append(execution.failed_tasks);
+    createExecParams.append(execution.skipped_tasks);
+    createExecParams.append(execution.error_message);
+    createExecParams.append(rollbackStatusToString(execution.rollback_status));
+    createExecParams.append(metadataStr);
+    auto result = txn.exec(
+        pqxx::zview("INSERT INTO metadata.workflow_executions (workflow_name, execution_id, "
         "status, trigger_type, start_time, end_time, duration_seconds, "
         "total_tasks, completed_tasks, failed_tasks, skipped_tasks, "
         "error_message, rollback_status, metadata) "
         "VALUES ($1, $2, $3, $4, $5::timestamp, $6::timestamp, $7, $8, $9, $10, "
-        "$11, $12, $13, $14::jsonb) RETURNING id",
-        execution.workflow_name, execution.execution_id,
-        executionStatusToString(execution.status),
-        triggerTypeToString(execution.trigger_type), startTime, endTime,
-        execution.duration_seconds, execution.total_tasks, execution.completed_tasks,
-        execution.failed_tasks, execution.skipped_tasks, execution.error_message,
-        rollbackStatusToString(execution.rollback_status), metadataStr);
+        "$11, $12, $13, $14::jsonb) RETURNING id"),
+        createExecParams);
 
     if (!result.empty()) {
       int64_t id = result[0][0].as<int64_t>();
@@ -727,21 +858,30 @@ void WorkflowRepository::updateWorkflowExecution(
     std::string startTime = execution.start_time;
     std::string endTime = execution.end_time;
     
-    txn.exec_params(
-        "UPDATE metadata.workflow_executions SET status = $2, start_time = $3::timestamp, "
+    pqxx::params updateExecParams;
+    updateExecParams.append(execution.id);
+    updateExecParams.append(executionStatusToString(execution.status));
+    updateExecParams.append(startTime);
+    updateExecParams.append(endTime);
+    updateExecParams.append(execution.duration_seconds);
+    updateExecParams.append(execution.total_tasks);
+    updateExecParams.append(execution.completed_tasks);
+    updateExecParams.append(execution.failed_tasks);
+    updateExecParams.append(execution.skipped_tasks);
+    updateExecParams.append(execution.error_message);
+    updateExecParams.append(rollbackStatusToString(execution.rollback_status));
+    updateExecParams.append(execution.rollback_started_at.empty() ? pqxx::zview(nullptr) : pqxx::zview(execution.rollback_started_at));
+    updateExecParams.append(execution.rollback_completed_at.empty() ? pqxx::zview(nullptr) : pqxx::zview(execution.rollback_completed_at));
+    updateExecParams.append(execution.rollback_error_message.empty() ? pqxx::zview(nullptr) : pqxx::zview(execution.rollback_error_message));
+    updateExecParams.append(metadataStr);
+    txn.exec(
+        pqxx::zview("UPDATE metadata.workflow_executions SET status = $2, start_time = $3::timestamp, "
         "end_time = $4::timestamp, duration_seconds = $5, total_tasks = $6, "
         "completed_tasks = $7, failed_tasks = $8, skipped_tasks = $9, "
         "error_message = $10, rollback_status = $11, "
         "rollback_started_at = $12, rollback_completed_at = $13, rollback_error_message = $14, "
-        "metadata = $15::jsonb WHERE id = $1",
-        execution.id, executionStatusToString(execution.status), startTime, endTime,
-        execution.duration_seconds, execution.total_tasks, execution.completed_tasks,
-        execution.failed_tasks, execution.skipped_tasks, execution.error_message,
-        rollbackStatusToString(execution.rollback_status),
-        execution.rollback_started_at.empty() ? pqxx::zview(nullptr) : pqxx::zview(execution.rollback_started_at),
-        execution.rollback_completed_at.empty() ? pqxx::zview(nullptr) : pqxx::zview(execution.rollback_completed_at),
-        execution.rollback_error_message.empty() ? pqxx::zview(nullptr) : pqxx::zview(execution.rollback_error_message),
-        metadataStr);
+        "metadata = $15::jsonb WHERE id = $1"),
+        updateExecParams);
     
     txn.commit();
   } catch (const std::exception &e) {
@@ -757,13 +897,15 @@ WorkflowRepository::getTaskExecutions(int64_t workflowExecutionId) {
   try {
     auto conn = getConnection();
     pqxx::work txn(conn);
-    auto results = txn.exec_params(
-        "SELECT id, workflow_execution_id, workflow_name, task_name, status, "
+    pqxx::params taskExecParams1;
+    taskExecParams1.append(workflowExecutionId);
+    auto results = txn.exec(
+        pqxx::zview("SELECT id, workflow_execution_id, workflow_name, task_name, status, "
         "start_time, end_time, duration_seconds, retry_count, error_message, "
         "task_output, metadata, created_at "
         "FROM metadata.workflow_task_executions WHERE workflow_execution_id = $1 "
-        "ORDER BY created_at",
-        workflowExecutionId);
+        "ORDER BY created_at"),
+        taskExecParams1);
 
     for (const auto &row : results) {
       executions.push_back(rowToTaskExecution(row));
@@ -786,16 +928,25 @@ int64_t WorkflowRepository::createTaskExecution(const TaskExecution &execution) 
     std::string startTime = execution.start_time;
     std::string endTime = execution.end_time;
     
-    auto result = txn.exec_params(
-        "INSERT INTO metadata.workflow_task_executions (workflow_execution_id, "
+    pqxx::params createTaskExecParams;
+    createTaskExecParams.append(execution.workflow_execution_id);
+    createTaskExecParams.append(execution.workflow_name);
+    createTaskExecParams.append(execution.task_name);
+    createTaskExecParams.append(executionStatusToString(execution.status));
+    createTaskExecParams.append(startTime);
+    createTaskExecParams.append(endTime);
+    createTaskExecParams.append(execution.duration_seconds);
+    createTaskExecParams.append(execution.retry_count);
+    createTaskExecParams.append(execution.error_message);
+    createTaskExecParams.append(taskOutputStr);
+    createTaskExecParams.append(metadataStr);
+    auto result = txn.exec(
+        pqxx::zview("INSERT INTO metadata.workflow_task_executions (workflow_execution_id, "
         "workflow_name, task_name, status, start_time, end_time, duration_seconds, "
         "retry_count, error_message, task_output, metadata) "
         "VALUES ($1, $2, $3, $4, $5::timestamp, $6::timestamp, $7, $8, $9, "
-        "$10::jsonb, $11::jsonb) RETURNING id",
-        execution.workflow_execution_id, execution.workflow_name,
-        execution.task_name, executionStatusToString(execution.status), startTime,
-        endTime, execution.duration_seconds, execution.retry_count,
-        execution.error_message, taskOutputStr, metadataStr);
+        "$10::jsonb, $11::jsonb) RETURNING id"),
+        createTaskExecParams);
 
     if (!result.empty()) {
       int64_t id = result[0][0].as<int64_t>();
@@ -821,14 +972,22 @@ void WorkflowRepository::updateTaskExecution(const TaskExecution &execution) {
     std::string startTime = execution.start_time;
     std::string endTime = execution.end_time;
     
-    txn.exec_params(
-        "UPDATE metadata.workflow_task_executions SET status = $2, "
+    pqxx::params updateTaskExecParams;
+    updateTaskExecParams.append(execution.id);
+    updateTaskExecParams.append(executionStatusToString(execution.status));
+    updateTaskExecParams.append(startTime);
+    updateTaskExecParams.append(endTime);
+    updateTaskExecParams.append(execution.duration_seconds);
+    updateTaskExecParams.append(execution.retry_count);
+    updateTaskExecParams.append(execution.error_message);
+    updateTaskExecParams.append(taskOutputStr);
+    updateTaskExecParams.append(metadataStr);
+    txn.exec(
+        pqxx::zview("UPDATE metadata.workflow_task_executions SET status = $2, "
         "start_time = $3::timestamp, end_time = $4::timestamp, "
         "duration_seconds = $5, retry_count = $6, error_message = $7, "
-        "task_output = $8::jsonb, metadata = $9::jsonb WHERE id = $1",
-        execution.id, executionStatusToString(execution.status), startTime, endTime,
-        execution.duration_seconds, execution.retry_count, execution.error_message,
-        taskOutputStr, metadataStr);
+        "task_output = $8::jsonb, metadata = $9::jsonb WHERE id = $1"),
+        updateTaskExecParams);
     
     txn.commit();
   } catch (const std::exception &e) {

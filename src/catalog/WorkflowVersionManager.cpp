@@ -16,18 +16,22 @@ int WorkflowVersionManager::createVersion(const std::string& workflowName, const
     pqxx::connection conn(connStr);
     pqxx::work txn(conn);
     
-    auto currentVersionResult = txn.exec_params(
-        "SELECT COALESCE(MAX(version), 0) FROM metadata.workflow_versions WHERE workflow_name = $1",
-        workflowName);
+    pqxx::params params1;
+    params1.append(workflowName);
+    auto currentVersionResult = txn.exec(
+        pqxx::zview("SELECT COALESCE(MAX(version), 0) FROM metadata.workflow_versions WHERE workflow_name = $1"),
+        params1);
     
     int newVersion = 1;
     if (!currentVersionResult.empty()) {
       newVersion = currentVersionResult[0][0].as<int>() + 1;
     }
     
-    txn.exec_params(
-        "UPDATE metadata.workflow_versions SET is_current = false WHERE workflow_name = $1",
-        workflowName);
+    pqxx::params params2;
+    params2.append(workflowName);
+    txn.exec(
+        pqxx::zview("UPDATE metadata.workflow_versions SET is_current = false WHERE workflow_name = $1"),
+        params2);
     
     WorkflowRepository repo(connStr);
     WorkflowModel workflow = repo.getWorkflow(workflowName);
@@ -59,11 +63,17 @@ int WorkflowVersionManager::createVersion(const std::string& workflowName, const
     
     std::string workflowDefStr = workflowDef.dump();
     
-    txn.exec_params(
-        "INSERT INTO metadata.workflow_versions (workflow_name, version, description, "
+    pqxx::params params3;
+    params3.append(workflowName);
+    params3.append(newVersion);
+    params3.append(description);
+    params3.append(createdBy);
+    params3.append(workflowDefStr);
+    txn.exec(
+        pqxx::zview("INSERT INTO metadata.workflow_versions (workflow_name, version, description, "
         "created_by, is_current, workflow_definition) "
-        "VALUES ($1, $2, $3, $4, true, $5::jsonb)",
-        workflowName, newVersion, description, createdBy, workflowDefStr);
+        "VALUES ($1, $2, $3, $4, true, $5::jsonb)"),
+        params3);
     
     txn.commit();
     
@@ -89,11 +99,13 @@ std::vector<WorkflowVersionManager::WorkflowVersion> WorkflowVersionManager::get
     pqxx::connection conn(connStr);
     pqxx::work txn(conn);
     
-    auto results = txn.exec_params(
-        "SELECT version, workflow_name, description, created_at, created_by, "
+    pqxx::params params4;
+    params4.append(workflowName);
+    auto results = txn.exec(
+        pqxx::zview("SELECT version, workflow_name, description, created_at, created_by, "
         "is_current, workflow_definition "
-        "FROM metadata.workflow_versions WHERE workflow_name = $1 ORDER BY version DESC",
-        workflowName);
+        "FROM metadata.workflow_versions WHERE workflow_name = $1 ORDER BY version DESC"),
+        params4);
     
     for (const auto& row : results) {
       WorkflowVersion version;
@@ -130,11 +142,14 @@ WorkflowVersionManager::WorkflowVersion WorkflowVersionManager::getVersion(const
     pqxx::connection conn(connStr);
     pqxx::work txn(conn);
     
-    auto result = txn.exec_params(
-        "SELECT version, workflow_name, description, created_at, created_by, "
+    pqxx::params params5;
+    params5.append(workflowName);
+    params5.append(version);
+    auto result = txn.exec(
+        pqxx::zview("SELECT version, workflow_name, description, created_at, created_by, "
         "is_current, workflow_definition "
-        "FROM metadata.workflow_versions WHERE workflow_name = $1 AND version = $2",
-        workflowName, version);
+        "FROM metadata.workflow_versions WHERE workflow_name = $1 AND version = $2"),
+        params5);
     
     if (!result.empty()) {
       const auto& row = result[0];
@@ -213,12 +228,17 @@ bool WorkflowVersionManager::restoreVersion(const std::string& workflowName, int
     std::string connStr2 = DatabaseConfig::getPostgresConnectionString();
     pqxx::connection conn(connStr2);
     pqxx::work txn(conn);
-    txn.exec_params(
-        "UPDATE metadata.workflow_versions SET is_current = false WHERE workflow_name = $1",
-        workflowName);
-    txn.exec_params(
-        "UPDATE metadata.workflow_versions SET is_current = true WHERE workflow_name = $1 AND version = $2",
-        workflowName, version);
+    pqxx::params params6;
+    params6.append(workflowName);
+    txn.exec(
+        pqxx::zview("UPDATE metadata.workflow_versions SET is_current = false WHERE workflow_name = $1"),
+        params6);
+    pqxx::params params7;
+    params7.append(workflowName);
+    params7.append(version);
+    txn.exec(
+        pqxx::zview("UPDATE metadata.workflow_versions SET is_current = true WHERE workflow_name = $1 AND version = $2"),
+        params7);
     txn.commit();
     
     std::lock_guard<std::mutex> lock(versionsMutex_);
@@ -241,9 +261,12 @@ bool WorkflowVersionManager::deleteVersion(const std::string& workflowName, int 
     pqxx::connection conn(connStr);
     pqxx::work txn(conn);
     
-    txn.exec_params(
-        "DELETE FROM metadata.workflow_versions WHERE workflow_name = $1 AND version = $2",
-        workflowName, version);
+    pqxx::params params8;
+    params8.append(workflowName);
+    params8.append(version);
+    txn.exec(
+        pqxx::zview("DELETE FROM metadata.workflow_versions WHERE workflow_name = $1 AND version = $2"),
+        params8);
     txn.commit();
     
     Logger::info(LogCategory::MONITORING, "deleteVersion",

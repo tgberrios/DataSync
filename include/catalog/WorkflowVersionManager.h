@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <mutex>
 
 class WorkflowVersionManager {
 public:
@@ -34,7 +35,7 @@ private:
   WorkflowVersionManager& operator=(const WorkflowVersionManager&) = delete;
   
   std::map<std::string, int> currentVersions_;
-  std::mutex versionsMutex_;
+  mutable std::mutex versionsMutex_;
 };
 
 #endif

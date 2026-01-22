@@ -58,7 +58,7 @@ void BackfillManager::executeBackfill(const BackfillConfig& config) {
                "Backfill completed for workflow: " + config.workflow_name);
 }
 
-std::vector<BackfillExecution> BackfillManager::getBackfillExecutions(const std::string& workflowName) const {
+std::vector<BackfillManager::BackfillExecution> BackfillManager::getBackfillExecutions(const std::string& workflowName) const {
   std::vector<BackfillExecution> executions;
   return executions;
 }

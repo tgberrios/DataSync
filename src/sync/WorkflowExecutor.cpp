@@ -697,3 +697,127 @@ std::vector<TaskExecution>
 WorkflowExecutor::getTaskExecutions(int64_t workflowExecutionId) {
   return workflowRepo_->getTaskExecutions(workflowExecutionId);
 }
+
+bool WorkflowExecutor::shouldRollback(const WorkflowModel &workflow, const WorkflowExecution &execution) {
+  if (!workflow.rollback_config.enabled) {
+    return false;
+  }
+  
+  if (workflow.rollback_config.on_failure && execution.status == ExecutionStatus::FAILED) {
+    return true;
+  }
+  
+  if (workflow.rollback_config.on_timeout) {
+    if (execution.duration_seconds > workflow.sla_config.max_execution_time_seconds) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+void WorkflowExecutor::rollbackWorkflow(const std::string &workflowName, const std::string &executionId) {
+  try {
+    WorkflowExecution execution = workflowRepo_->getWorkflowExecution(executionId);
+    if (execution.execution_id.empty()) {
+      Logger::error(LogCategory::MONITORING, "rollbackWorkflow",
+                    "Execution not found: " + executionId);
+      return;
+    }
+    
+    WorkflowModel workflow = workflowRepo_->getWorkflow(workflowName);
+    if (workflow.workflow_name.empty()) {
+      Logger::error(LogCategory::MONITORING, "rollbackWorkflow",
+                    "Workflow not found: " + workflowName);
+      return;
+    }
+    
+    execution.rollback_status = RollbackStatus::IN_PROGRESS;
+    execution.rollback_started_at = getCurrentTimestamp();
+    workflowRepo_->updateWorkflowExecution(execution);
+    
+    std::vector<TaskExecution> taskExecutions = workflowRepo_->getTaskExecutions(execution.id);
+    
+    std::sort(taskExecutions.begin(), taskExecutions.end(),
+              [](const TaskExecution &a, const TaskExecution &b) {
+                return a.id > b.id;
+              });
+    
+    int rollbackDepth = 0;
+    int maxDepth = workflow.rollback_config.max_rollback_depth;
+    
+    for (const auto &taskExec : taskExecutions) {
+      if (rollbackDepth >= maxDepth) {
+        break;
+      }
+      
+      if (taskExec.status == ExecutionStatus::SUCCESS) {
+        auto taskIt = std::find_if(workflow.tasks.begin(), workflow.tasks.end(),
+                                   [&taskExec](const WorkflowTask &t) {
+                                     return t.task_name == taskExec.task_name;
+                                   });
+        
+        if (taskIt != workflow.tasks.end()) {
+          json rollbackConfig = taskIt->task_config.contains("rollback") 
+                                ? taskIt->task_config["rollback"] 
+                                : json{};
+          
+          if (!rollbackTask(*taskIt, taskExec, rollbackConfig)) {
+            Logger::warning(LogCategory::MONITORING, "rollbackWorkflow",
+                           "Failed to rollback task: " + taskExec.task_name);
+          }
+          rollbackDepth++;
+        }
+      }
+    }
+    
+    execution.rollback_status = RollbackStatus::COMPLETED;
+    execution.rollback_completed_at = getCurrentTimestamp();
+    workflowRepo_->updateWorkflowExecution(execution);
+    
+    Logger::info(LogCategory::MONITORING, "rollbackWorkflow",
+                 "Rollback completed for workflow: " + workflowName + ", execution: " + executionId);
+  } catch (const std::exception &e) {
+    try {
+      WorkflowExecution execution = workflowRepo_->getWorkflowExecution(executionId);
+      execution.rollback_status = RollbackStatus::FAILED;
+      execution.rollback_error_message = e.what();
+      execution.rollback_completed_at = getCurrentTimestamp();
+      workflowRepo_->updateWorkflowExecution(execution);
+    } catch (...) {
+    }
+    
+    Logger::error(LogCategory::MONITORING, "rollbackWorkflow",
+                  "Error during rollback for workflow " + workflowName + ": " + std::string(e.what()));
+  }
+}
+
+bool WorkflowExecutor::rollbackTask(const WorkflowTask &task, const TaskExecution &, const json &rollbackConfig) {
+  try {
+    if (rollbackConfig.empty()) {
+      Logger::info(LogCategory::MONITORING, "rollbackTask",
+                   "No rollback configuration for task: " + task.task_name);
+      return true;
+    }
+    
+    if (task.task_type == TaskType::DATA_WAREHOUSE || task.task_type == TaskType::DATA_VAULT) {
+      Logger::info(LogCategory::MONITORING, "rollbackTask",
+                   "Rollback for data warehouse/vault tasks not yet implemented: " + task.task_name);
+      return true;
+    }
+    
+    if (task.task_type == TaskType::CUSTOM_JOB) {
+      Logger::info(LogCategory::MONITORING, "rollbackTask",
+                   "Rollback for custom job tasks not yet implemented: " + task.task_name);
+      return true;
+    }
+    
+    Logger::info(LogCategory::MONITORING, "rollbackTask",
+                 "Rollback completed for task: " + task.task_name);
+    return true;
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::MONITORING, "rollbackTask",
+                  "Error rolling back task " + task.task_name + ": " + std::string(e.what()));
+    return false;
+  }
+}

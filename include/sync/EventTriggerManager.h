@@ -52,7 +52,7 @@ private:
   
   std::atomic<bool> running_;
   std::thread fileWatcherThread_;
-  std::mutex triggersMutex_;
+  mutable std::mutex triggersMutex_;
   std::map<std::string, EventTrigger> triggers_;
   std::map<std::string, std::string> fileWatchers_;
   std::map<std::string, std::filesystem::file_time_type> fileLastModified_;

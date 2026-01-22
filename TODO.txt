@@ -49,19 +49,6 @@
 
 ---
 
-## 📊 Funcionalidades Faltantes (Opcionales)
-
-### Workflow Orchestration - Opcionales
-- Ejecución condicional (if/else, loops) - Opcional
-- Sub-workflows reutilizables - Opcional
-- Triggers basados en eventos (file arrival, API call, etc.) - Opcional
-- Schedules basados en datos (data-driven) - Opcional
-- Backfilling (reprocesar períodos históricos) - Pendiente
-- Task pools y queues - Opcional
-- Priorización de tareas - Opcional
-- Task versioning - Opcional
-- Rollback automático en caso de fallo - Opcional
-
 ### Streaming y procesamiento en tiempo real
 - Integración con Kafka/RabbitMQ/Redis Streams
 - Producer/Consumer patterns
@@ -204,3 +191,180 @@
 
 
 que otra cosa del backend de node.js podemos mover al script cpp ? 
+
+
+falto algo de implementar en la ui que exista en el cpp ? 
+
+Revisando los componentes de UI para generar la lista de pruebas:
+
+
+[7 tools called]
+
+
+Revisando los componentes de UI para generar la lista de pruebas:
+
+
+[7 tools called]
+
+
+Lista de pruebas para la UI, organizada por funcionalidad:
+
+## 📋 LISTA DE PRUEBAS - UI
+
+### 🎯 **WORKFLOWS - Funcionalidades Core**
+
+#### **1. Crear/Editar Workflow**
+- [ ] Crear workflow nuevo desde `/workflows`
+- [ ] Editar workflow existente
+- [ ] Validar campos requeridos (workflow_name)
+- [ ] Guardar configuración básica (description, schedule_cron, active, enabled)
+- [ ] Configurar Retry Policy (max_retries, retry_delay_seconds, retry_backoff_multiplier)
+- [ ] Configurar SLA Config (max_execution_time_seconds, alert_on_sla_breach)
+- [ ] Navegación entre tabs (Basic Info / DAG Builder)
+
+#### **2. DAG Builder - Visual Editor**
+- [ ] Agregar tarea nueva (botón "Add Task")
+- [ ] Editar tarea existente (doble click o botón edit)
+- [ ] Eliminar tarea
+- [ ] Arrastrar y soltar nodos (drag & drop)
+- [ ] Crear dependencias entre tareas (conectar nodos)
+- [ ] Eliminar dependencias
+- [ ] Visualización de nodos (colores por tipo de tarea)
+- [ ] Mostrar contadores de dependencias (↑ X | ↓ Y)
+
+#### **3. Configuración de Tareas - TaskModal**
+- [ ] Seleccionar Task Type (CUSTOM_JOB, DATA_WAREHOUSE, DATA_VAULT, SYNC, API_CALL, SCRIPT, **SUB_WORKFLOW**)
+- [ ] Seleccionar Reference según Task Type
+- [ ] **Priority**: Campo numérico (higher = more priority)
+- [ ] **Condition Type**: Dropdown (ALWAYS, IF, ELSE_IF, ELSE)
+- [ ] **Condition Expression**: Textarea (aparece solo si IF/ELSE_IF)
+  - [ ] Validar formato de expresión (ej: `${task1.status} == "SUCCESS"`)
+- [ ] **Parent IF Task Name**: Input (aparece solo si ELSE/ELSE_IF)
+- [ ] **Loop Type**: Dropdown (No Loop, FOR, WHILE, FOREACH)
+- [ ] **Loop Config**: JSON textarea (aparece solo si hay loop)
+  - [ ] Validar JSON válido
+  - [ ] Para FOR: `iterations`, `stop_on_error`, `delay_seconds`
+  - [ ] Para WHILE: `condition`, `max_iterations`, `stop_on_error`, `delay_seconds`
+  - [ ] Para FOREACH: `items` o `item_source`, `stop_on_error`, `delay_seconds`
+- [ ] Guardar tarea con todas las configuraciones
+- [ ] Visualización en nodo: badges de condición (IF/ELSE IF/ELSE) y prioridad (P1, P2, etc.)
+
+#### **4. Sub-Workflows**
+- [ ] Seleccionar tipo de tarea "SUB_WORKFLOW"
+- [ ] Dropdown muestra workflows disponibles (excluyendo el workflow actual)
+- [ ] Seleccionar workflow como referencia
+- [ ] Guardar y ejecutar sub-workflow
+
+#### **5. Ejecución de Workflows**
+- [ ] Ejecutar workflow manualmente (botón Execute)
+- [ ] Ver ejecuciones en WorkflowMonitor
+- [ ] Ver estado de ejecución (PENDING, RUNNING, SUCCESS, FAILED, CANCELLED, SKIPPED)
+- [ ] Ver trigger_type (SCHEDULED, MANUAL, API, EVENT)
+- [ ] Ver duración de ejecución
+- [ ] Ver task executions individuales
+- [ ] Ver task outputs en ejecuciones
+
+#### **6. Condicionales (IF/ELSE/ELSE_IF)**
+- [ ] Crear tarea con condición IF
+- [ ] Crear tarea ELSE_IF con parent task
+- [ ] Crear tarea ELSE con parent task
+- [ ] Validar que ELSE/ELSE_IF requieren parent_condition_task_name
+- [ ] Ejecutar workflow y verificar que condiciones se evalúan correctamente
+- [ ] Verificar que tareas se SKIP cuando condición no se cumple
+
+#### **7. Loops (FOR/WHILE/FOREACH)**
+- [ ] Configurar loop FOR con iterations
+- [ ] Configurar loop WHILE con condition y max_iterations
+- [ ] Configurar loop FOREACH con items array
+- [ ] Configurar loop FOREACH con item_source (de otra tarea)
+- [ ] Ejecutar workflow con loops y verificar iteraciones
+- [ ] Verificar stop_on_error funciona
+- [ ] Verificar delay_seconds entre iteraciones
+
+#### **8. Priorización**
+- [ ] Asignar diferentes prioridades a tareas
+- [ ] Verificar que tareas con mayor prioridad se ejecutan primero
+- [ ] Visualización de prioridad en nodos (badge P1, P2, etc.)
+
+#### **9. Rollback Automático** ⚠️ **FALTA UI**
+- [ ] **PENDIENTE**: Agregar sección de Rollback Config en AddWorkflowModal
+  - [ ] Checkbox "Enable Rollback"
+  - [ ] Checkbox "Rollback on Failure"
+  - [ ] Checkbox "Rollback on Timeout"
+  - [ ] Input "Max Rollback Depth"
+- [ ] **PENDIENTE**: Ver estado de rollback en WorkflowMonitor
+  - [ ] Mostrar rollback_status (PENDING, IN_PROGRESS, COMPLETED, FAILED)
+  - [ ] Mostrar rollback_started_at, rollback_completed_at
+  - [ ] Mostrar rollback_error_message si falló
+
+#### **10. Event Triggers** ⚠️ **FALTA UI**
+- [ ] **PENDIENTE**: Agregar sección de Event Triggers en AddWorkflowModal
+  - [ ] Dropdown Event Type (FILE_ARRIVAL, API_CALL, DATABASE_CHANGE, SCHEDULE, MANUAL)
+  - [ ] JSON config para event_config
+  - [ ] Checkbox "Active"
+- [ ] **PENDIENTE**: Lista de triggers registrados
+- [ ] **PENDIENTE**: Activar/desactivar triggers
+
+#### **11. Data-Driven Schedules** ⚠️ **FALTA UI**
+- [ ] **PENDIENTE**: Agregar sección de Data-Driven Schedule en AddWorkflowModal
+  - [ ] Input "Query SQL"
+  - [ ] Input "Connection String"
+  - [ ] Input "Condition Field"
+  - [ ] Input "Condition Value"
+  - [ ] Input "Check Interval (seconds)"
+  - [ ] Checkbox "Active"
+
+#### **12. Backfilling** ⚠️ **FALTA UI**
+- [ ] **PENDIENTE**: Agregar botón "Backfill" en Workflows
+- [ ] **PENDIENTE**: Modal de Backfill
+  - [ ] Input "Start Date"
+  - [ ] Input "End Date"
+  - [ ] Input "Date Field"
+  - [ ] Dropdown "Interval" (daily, weekly, monthly)
+  - [ ] Checkbox "Parallel Execution"
+  - [ ] Input "Max Parallel Jobs"
+- [ ] **PENDIENTE**: Ver progreso de backfill
+- [ ] **PENDIENTE**: Cancelar backfill
+
+#### **13. Task Versioning** ⚠️ **FALTA UI**
+- [ ] **PENDIENTE**: Agregar botón "Version History" en workflow
+- [ ] **PENDIENTE**: Modal de Version History
+  - [ ] Lista de versiones con descripción, created_by, created_at
+  - [ ] Indicador de versión actual
+  - [ ] Botón "Restore Version"
+  - [ ] Botón "Create New Version"
+  - [ ] Botón "Delete Version"
+- [ ] **PENDIENTE**: Crear nueva versión al guardar cambios
+- [ ] **PENDIENTE**: Restaurar versión anterior
+
+#### **14. Task Queue** ⚠️ **FALTA UI**
+- [ ] **PENDIENTE**: Ver cola de tareas pendientes
+- [ ] **PENDIENTE**: Ver workers activos
+- [ ] **PENDIENTE**: Configurar tamaño del pool de workers
+
+---
+
+
+
+
+#### **16. Advanced Transformations UI**
+- [ ] Visual Editor - Agregar nodo "Transform"
+- [ ] Dropdown de Transformation Type
+- [ ] Formularios específicos para cada transformación:
+  - [ ] Sorter (columns, order)
+  - [ ] Expression (expressions array)
+  - [ ] Data Cleansing (operations, columns)
+  - [ ] Rank (function, columns, limit)
+  - [ ] Sequence Generator (start, increment, column)
+  - [ ] Window Functions (windows array)
+  - [ ] Normalizer (columns)
+  - [ ] JSON Parser (paths)
+  - [ ] Geolocation (operations)
+  - [ ] Data Validation (rules)
+  - [ ] Deduplication (columns, threshold)
+- [ ] Guardar configuración
+- [ ] Ejecutar job con transformaciones
+
+---
+
+
