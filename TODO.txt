@@ -1,10 +1,178 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │ TAREAS PENDIENTES - DataSync                                    │
+│ ORDENADAS POR DEPENDENCIAS LÓGICAS                              │
 └─────────────────────────────────────────────────────────────────┘
-anadir test en los otros para nulls, esto y lo otros
-## 🎯 SIGUIENTE PRIORIDAD (Alta)
 
-### Cloud-Native Deployment (4-6 semanas)
+anadir test en los otros para nulls, esto y lo otros
+
+## 🔌 FASE 1: CONNECTORS Y FUENTES DE DATOS
+**Orden lógico:** Necesario antes de cualquier procesamiento de datos
+
+### 1.1. Connectors adicionales
+- Salesforce
+- SAP
+- Mainframe (COBOL, VSAM)
+- AS/400 (IBM i)
+- Teradata
+- Netezza
+- Hive / HDFS
+- Cassandra
+- DynamoDB
+- S3 / Azure Blob / GCS
+- FTP/SFTP file sources
+- Email (IMAP/POP3)
+- Web Services (SOAP)
+- GraphQL APIs
+
+### 1.2. File formats
+- Excel (XLSX, XLS)
+- Fixed-width files
+- EBCDIC files
+- XML estructurado
+- Avro, Parquet, ORC
+- Compressed files (GZIP, BZIP2, LZ4)
+
+---
+
+## 📊 FASE 2: PROCESAMIENTO DE DATOS
+**Orden lógico:** Requiere connectors y formatos de archivo completados
+
+### 2.1. Big data processing
+- Procesamiento distribuido (clusters)
+- Spark integration
+- MapReduce patterns
+- Distributed joins
+- Broadcast variables
+- Integración con S3/ADLS/GCS
+- Formatos columnar (Parquet, ORC)
+- Partitioning automático por fecha/región
+- Schema evolution
+- Delta Lake / Iceberg support
+- Procesamiento por particiones
+- Incremental processing inteligente
+- Merge strategies (UPSERT, SCD Type 4)
+
+### 2.2. Data modeling avanzado
+- SCD Type 4 (history table)
+- SCD Type 6 (hybrid)
+- Outrigger dimensions
+- Junk dimensions
+- Degenerate dimensions
+- Factless fact tables
+
+---
+
+## 🌊 FASE 3: STREAMING Y PROCESAMIENTO EN TIEMPO REAL
+**Orden lógico:** Requiere connectors completados (Fase 1) y preferiblemente big data processing (Fase 2)
+
+### 3.1. Stream Processing (Kafka integration) (6-8 semanas)
+- Integración con Kafka/RabbitMQ/Redis Streams
+- Producer/Consumer patterns
+- Windowing (tumbling, sliding, session windows)
+- Stateful processing
+- Alto impacto para casos de uso en tiempo real
+
+**Complejidad:** Alta
+**Impacto:** Alto (funcional)
+
+### 3.2. Streaming y procesamiento en tiempo real
+- Integración con Kafka/RabbitMQ/Redis Streams
+- Producer/Consumer patterns
+- Topic management
+- Partitioning strategy
+- Message serialization (Avro, Protobuf, JSON Schema)
+- Procesamiento de streams en tiempo real
+- Windowing (tumbling, sliding, session windows)
+- Stateful processing (mantener estado entre eventos)
+- Event time vs processing time
+- Watermarks para late data
+- CEP (Complex Event Processing)
+- CDC nativo de bases de datos (Debezium, Oracle GoldenGate)
+- Binlog reading (MySQL/MariaDB)
+- Transaction log reading (MSSQL, PostgreSQL WAL)
+- Redo log reading (Oracle)
+
+---
+
+## ⚡ FASE 4: OPTIMIZACIÓN Y PERFORMANCE
+**Orden lógico:** Requiere que las funcionalidades base funcionen correctamente
+
+### 4.1. Performance y optimización
+- Dynamic partitioning
+- Partition pruning
+- Pushdown optimization (ejecutar filtros en source)
+- Join optimization (hash, sort-merge, broadcast)
+- Memory management avanzado
+- Result caching
+- Lookup caching
+- Metadata caching
+- Data compression (LZ4, Snappy, GZIP)
+- Columnar storage
+
+---
+
+## 🧪 FASE 5: TESTING Y VALIDACIÓN
+**Orden lógico:** Requiere funcionalidades implementadas para poder testearlas
+
+### 5.1. Testing y validación
+- Unit tests para transformaciones
+- Integration tests
+- Data quality tests (Great Expectations, dbt tests)
+- Regression testing
+- Data profiling automático
+- Custom validation rules
+- Referential integrity checks
+- Business rule validation
+- Schema validation
+
+---
+
+## 📚 FASE 6: METADATA Y DOCUMENTACIÓN
+**Orden lógico:** Requiere sistema funcionando para documentar
+
+### 6.1. Metadata y documentación
+- Business glossary
+- Data dictionary avanzado
+- Impact analysis (qué se afecta si cambio X)
+- Data lineage visual avanzado (graph completo)
+- Column-level lineage
+- Transformation lineage (qué transformaciones se aplicaron)
+- Auto-documentación de pipelines
+- Data dictionary generation
+- API documentation (Swagger/OpenAPI)
+
+---
+
+## 🔒 FASE 7: SECURITY AVANZADO
+**Orden lógico:** Puede desarrollarse en paralelo pero mejor después de la base
+
+### 7.1. Security avanzado
+- Field-level masking dinámico (mejora de data masking existente)
+- Tokenization avanzado
+- Data anonymization
+- Fine-grained permissions
+
+---
+
+## 📈 FASE 8: MONITORING Y OBSERVABILITY
+**Orden lógico:** Requiere sistema funcionando para monitorear
+
+### 8.1. Monitoring y observability
+- Distributed tracing
+- APM (Application Performance Monitoring)
+- Log aggregation (ELK, Splunk)
+- Alerting avanzado (PagerDuty, Opsgenie)
+- Query performance analysis
+- Bottleneck detection
+- Resource utilization tracking
+- Cost tracking
+
+---
+
+## 🚀 FASE 9: DEPLOYMENT E INFRAESTRUCTURA
+**Orden lógico:** Puede desarrollarse en paralelo pero mejor después de la base estable
+
+### 9.1. Cloud-Native Deployment (4-6 semanas)
 **Por qué es crítico:**
 - "Terraform, Docker, Kubernetes" genera interés (mencionado en LinkedIn post)
 - Facilita deployment enterprise
@@ -26,144 +194,7 @@ anadir test en los otros para nulls, esto y lo otros
 **Complejidad:** Media
 **Impacto:** Medio-Alto (DevOps/enterprise + marketing)
 
----
-
-## 🔧 Quick Wins (Tareas Menores)
-
-### 1. Normalizar la DB
-- Mejorar estructura de base de datos
-- Optimización y organización
-
----
-## 📋 Otras Opciones (Después de Cloud-Native)
-
-### Opción 2: Stream Processing (Kafka integration) (6-8 semanas)
-- Integración con Kafka/RabbitMQ/Redis Streams
-- Producer/Consumer patterns
-- Windowing (tumbling, sliding, session windows)
-- Stateful processing
-- Alto impacto para casos de uso en tiempo real
-
-**Complejidad:** Alta
-**Impacto:** Alto (funcional)
-
----
-
-### Streaming y procesamiento en tiempo real
-- Integración con Kafka/RabbitMQ/Redis Streams
-- Producer/Consumer patterns
-- Topic management
-- Partitioning strategy
-- Message serialization (Avro, Protobuf, JSON Schema)
-- Procesamiento de streams en tiempo real
-- Windowing (tumbling, sliding, session windows)
-- Stateful processing (mantener estado entre eventos)
-- Event time vs processing time
-- Watermarks para late data
-- CEP (Complex Event Processing)
-- CDC nativo de bases de datos (Debezium, Oracle GoldenGate)
-- Binlog reading (MySQL/MariaDB)
-- Transaction log reading (MSSQL, PostgreSQL WAL)
-- Redo log reading (Oracle)
-
-### Big data processing
-- Procesamiento distribuido (clusters)
-- Spark integration
-- MapReduce patterns
-- Distributed joins
-- Broadcast variables
-- Integración con S3/ADLS/GCS
-- Formatos columnar (Parquet, ORC)
-- Partitioning automático por fecha/región
-- Schema evolution
-- Delta Lake / Iceberg support
-- Procesamiento por particiones
-- Incremental processing inteligente
-- Merge strategies (UPSERT, SCD Type 4)
-
-### Connectors adicionales
-- Salesforce
-- SAP
-- Mainframe (COBOL, VSAM)
-- AS/400 (IBM i)
-- Teradata
-- Netezza
-- Hive / HDFS
-- Cassandra
-- DynamoDB
-- S3 / Azure Blob / GCS
-- FTP/SFTP file sources
-- Email (IMAP/POP3)
-- Web Services (SOAP)
-- GraphQL APIs
-
-### File formats
-- Excel (XLSX, XLS)
-- Fixed-width files
-- EBCDIC files
-- XML estructurado
-- Avro, Parquet, ORC
-- Compressed files (GZIP, BZIP2, LZ4)
-
-### Data modeling avanzado
-- SCD Type 4 (history table)
-- SCD Type 6 (hybrid)
-- Outrigger dimensions
-- Junk dimensions
-- Degenerate dimensions
-- Factless fact tables
-
-### Performance y optimización
-- Dynamic partitioning
-- Partition pruning
-- Pushdown optimization (ejecutar filtros en source)
-- Join optimization (hash, sort-merge, broadcast)
-- Memory management avanzado
-- Result caching
-- Lookup caching
-- Metadata caching
-- Data compression (LZ4, Snappy, GZIP)
-- Columnar storage
-
-### Testing y validación
-- Unit tests para transformaciones
-- Integration tests
-- Data quality tests (Great Expectations, dbt tests)
-- Regression testing
-- Data profiling automático
-- Custom validation rules
-- Referential integrity checks
-- Business rule validation
-- Schema validation
-
-### Metadata y documentación
-- Business glossary
-- Data dictionary avanzado
-- Impact analysis (qué se afecta si cambio X)
-- Data lineage visual avanzado (graph completo)
-- Column-level lineage
-- Transformation lineage (qué transformaciones se aplicaron)
-- Auto-documentación de pipelines
-- Data dictionary generation
-- API documentation (Swagger/OpenAPI)
-
-### Security avanzado
-- Field-level masking dinámico (mejora de data masking existente)
-- Tokenization avanzado
-- Data anonymization
-- Fine-grained permissions
-
-### Monitoring y observability
-- Distributed tracing
-- APM (Application Performance Monitoring)
-- Log aggregation (ELK, Splunk)
-- Alerting avanzado (PagerDuty, Opsgenie)
-- Query performance analysis
-- Bottleneck detection
-- Resource utilization tracking
-- Cost tracking
-
-### DevOps y CI/CD
+### 9.2. DevOps y CI/CD
 - Pipeline versioning
 - Git integration para pipelines
 - Rollback automático
@@ -174,36 +205,14 @@ anadir test en los otros para nulls, esto y lo otros
 
 ---
 
-## 📝 Notas
+## 🖥️ FASE 10: UI Y TESTING DE INTERFAZ
+**Orden lógico:** Requiere backend funcionando
 
-### API REST MÁS COMPLETA
-- Endpoints para todas las funcionalidades
-- Swagger/OpenAPI documentation
-- API versioning
-- Autenticación mejorada (API keys, OAuth2)
-
-### FIRST SETUP DE LA DB
-- Backup de la DB con solo estructura
-- Backup de data de config
-- Script de inicialización automática
-- Restore desde backup
+### 10.1. Lista de pruebas para la UI
 
 
 
 
-Revisando los componentes de UI para generar la lista de pruebas:
-
-
-[7 tools called]
-
-
-Revisando los componentes de UI para generar la lista de pruebas:
-
-
-[7 tools called]
-
-
-Lista de pruebas para la UI, organizada por funcionalidad:
 
 ## 📋 LISTA DE PRUEBAS - UI
 
@@ -216,25 +225,7 @@ Lista de pruebas para la UI, organizada por funcionalidad:
 - [ ] Guardar configuración básica (description, schedule_cron, active, enabled)
 - [ ] Configurar Retry Policy (max_retries, retry_delay_seconds, retry_backoff_multiplier)
 - [ ] Configurar SLA Config (max_execution_time_seconds, alert_on_sla_breach)
-- [ ] Navegación entre tabs (Basic Info / DAG Builder)
-
-
-tener un mapeo procesiso de donde viene cada tabla del datalake y ademas su refresh rate etc etc 
-obtener un mapeo de objectos no usados 
-
-
-necesitamos un componente que sea para archivados de datos.
-necesitamos un componente que limpie las tablas de CDC 
-
-
-
-una applicacion de weebhooks en terminal 
-
-
-esta fallando lo del warehouse cuando renombro un coso 
-
-
-juego en la terminal 
+- [ ] Navegación entre tabs (Basic Info / DAG Builder) 
 
 
 #### **2. DAG Builder - Visual Editor**
@@ -246,8 +237,6 @@ juego en la terminal
 - [ ] Eliminar dependencias
 - [ ] Visualización de nodos (colores por tipo de tarea)
 - [ ] Mostrar contadores de dependencias (↑ X | ↓ Y)
-
-mongodb://localhost:27017
 
 
 #### **3. Configuración de Tareas - TaskModal**
@@ -385,23 +374,65 @@ mongodb://localhost:27017
 
 ---
 
-me falta testear macros, vault y workflow 
+## 🐛 FASE 11: BUGS Y ISSUES CONOCIDOS
+**Orden lógico:** Arreglar después de tener funcionalidades base estables
 
-yay
-actualizar el sistema con yay
+### 11.1. Bugs Críticos
+- [ ] **BUG**: El governance de MariaDB no está guardando info
+- [ ] **BUG**: El governance de MSSQL tampoco está guardando info
+- [ ] **BUG**: El governance de MongoDB está guardando info "más o menos" (parcial)
+- [ ] **BUG**: Está fallando lo del warehouse cuando renombro un objeto
 
+### 11.2. Testing Pendiente
+- [ ] Me falta testear macros
+- [ ] Me falta testear vault
+- [ ] Me falta testear workflow
+- [ ] Añadir test en los otros para nulls
 
-descargar vencord
+---
 
+## 📝 FASE 12: NOTAS Y MEJORAS FUTURAS
+**Orden lógico:** Ideas y mejoras que no son críticas pero son deseables
 
-me fatla crear encryption de probar
-row security level
-y audit trail 
+### 12.1. Funcionalidades Adicionales Deseadas
+- Tener un mapeo preciso de dónde viene cada tabla del datalake y además su refresh rate, etc.
+- Obtener un mapeo de objetos no usados
+- Necesitamos un componente que sea para archivados de datos
+- Necesitamos un componente que limpie las tablas de CDC
+- Una aplicación de webhooks en terminal
 
+### 12.2. Security Pendiente
+- Me falta crear encryption de probar
+- Row security level
+- Audit trail
 
-el governance de mariadb no esta guardando info
-el de mssql tampoco
-mongo mas o menos
+### 12.3. Tareas de Mantenimiento
+- Que archivos podemos eliminar y cuáles no
 
+### 12.4. Tareas Personales (No relacionadas con DataSync)
+- yay (actualizar el sistema con yay)
+- descargar vencord
+- juego en la terminal
 
-que archivos podemos eliminar y cuales no 
+---
+
+## 🏗️ FASE 13: OPTIMIZACIÓN Y REFACTORIZACIÓN FINAL
+**Orden lógico:** Debe completarse al final, después de tener todas las funcionalidades implementadas y probadas
+
+### 13.1. Base de Datos y Setup
+- Normalizar la DB
+  - Mejorar estructura de base de datos
+  - Optimización y organización
+
+- FIRST SETUP DE LA DB
+  - Backup de la DB con solo estructura
+  - Backup de data de config
+  - Script de inicialización automática
+  - Restore desde backup
+
+### 13.2. API Base
+- API REST MÁS COMPLETA
+  - Endpoints para todas las funcionalidades
+  - Swagger/OpenAPI documentation
+  - API versioning
+  - Autenticación mejorada (API keys, OAuth2) 
