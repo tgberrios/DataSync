@@ -418,7 +418,7 @@ int MetadataRepository::deactivateNoDataTables() {
     pqxx::work txn(conn);
     auto result = txn.exec_params("UPDATE metadata.catalog SET active = false "
                                   "WHERE status = $1 AND active = true",
-                                  std::string(CatalogStatus::NO_DATA));
+                                  std::string(CatalogStatus::NO_DATA_STATUS));
     txn.commit();
     return result.affected_rows();
   } catch (const std::exception &e) {
@@ -446,7 +446,7 @@ int MetadataRepository::markInactiveTablesAsSkip(bool truncateTarget) {
     auto inactiveTables = selectTxn.exec_params(
         "SELECT schema_name, table_name, db_engine FROM metadata.catalog "
         "WHERE active = false AND status != $1",
-        std::string(CatalogStatus::NO_DATA));
+        std::string(CatalogStatus::NO_DATA_STATUS));
     selectTxn.commit();
     struct TableInfo {
       std::string schema;
@@ -495,7 +495,7 @@ int MetadataRepository::markInactiveTablesAsSkip(bool truncateTarget) {
           "WHERE schema_name = $2 AND table_name = $3 AND db_engine = $4 "
           "AND active = false AND status != $5",
           std::string(CatalogStatus::SKIP), entry.schema, entry.table,
-          entry.dbEngine, std::string(CatalogStatus::NO_DATA));
+          entry.dbEngine, std::string(CatalogStatus::NO_DATA_STATUS));
       updatedCount += result.affected_rows();
     }
     updateTxn.commit();

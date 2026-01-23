@@ -11,7 +11,7 @@
 namespace CatalogStatus {
 constexpr const char *PENDING = "PENDING";
 constexpr const char *SKIP = "SKIP";
-constexpr const char *NO_DATA = "NO_DATA";
+constexpr const char *NO_DATA_STATUS = "NO_DATA";
 constexpr const char *FULL_LOAD = "FULL_LOAD";
 constexpr const char *LISTENING_CHANGES = "LISTENING_CHANGES";
 } // namespace CatalogStatus

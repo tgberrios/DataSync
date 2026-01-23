@@ -73,10 +73,16 @@ private:
 
   void detectOptimizeNeeds(MYSQL *conn, const std::string &connStr);
   void detectAnalyzeTableNeeds(MYSQL *conn, const std::string &connStr);
+  void detectReindexNeedsMariaDB(MYSQL *conn, const std::string &connStr);
 
   void detectUpdateStatisticsNeeds(SQLHDBC conn, const std::string &connStr);
   void detectRebuildIndexNeeds(SQLHDBC conn, const std::string &connStr);
   void detectReorganizeIndexNeeds(SQLHDBC conn, const std::string &connStr);
+
+  void detectMongoDBMaintenance(const std::string &connStr);
+  void detectMongoDBIndexMaintenance(const std::string &connStr);
+  void detectMongoDBCollectionMaintenance(const std::string &connStr);
+  void executeMongoDBMaintenance(const MaintenanceTask &task);
 
   void executePostgreSQLMaintenance(const MaintenanceTask &task);
   void executeMariaDBMaintenance(const MaintenanceTask &task);

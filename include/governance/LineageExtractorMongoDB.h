@@ -47,6 +47,7 @@ private:
   void extractCollectionDependencies();
   void extractViewDependencies();
   void extractPipelineDependencies();
+  void extractDatalakeRelationships();
 };
 
 #endif

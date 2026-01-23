@@ -1,4 +1,5 @@
 #include "governance/LineageExtractorOracle.h"
+#include "catalog/metadata_repository.h"
 #include "core/database_config.h"
 #include "core/logger.h"
 #include "engines/oracle_engine.h"
@@ -265,6 +266,14 @@ void LineageExtractorOracle::extractLineage() {
     extractTriggerDependencies();
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorOracle",
                  "After trigger extraction: " + std::to_string([this]() {
+                   std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
+                   return lineageEdges_.size();
+                 }()) +
+                     " edges");
+
+    extractDatalakeRelationships();
+    Logger::info(LogCategory::GOVERNANCE, "LineageExtractorOracle",
+                 "After datalake extraction: " + std::to_string([this]() {
                    std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
                    return lineageEdges_.size();
                  }()) +
@@ -916,5 +925,75 @@ void LineageExtractorOracle::addTriggerEdge(
       std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
       lineageEdges_.push_back(edge);
     }
+  }
+}
+
+void LineageExtractorOracle::extractDatalakeRelationships() {
+  try {
+    std::string metadataConnStr = DatabaseConfig::getPostgresConnectionString();
+    pqxx::connection metadataConn(metadataConnStr);
+    if (!metadataConn.is_open()) {
+      Logger::warning(LogCategory::GOVERNANCE, "LineageExtractorOracle",
+                      "Failed to connect to metadata database for datalake relationships");
+      return;
+    }
+
+    pqxx::work txn(metadataConn);
+    std::string query = R"(
+      SELECT DISTINCT
+        schema_name,
+        table_name,
+        connection_string as source_connection_string
+      FROM metadata.catalog
+      WHERE db_engine = 'Oracle'
+        AND active = true
+        AND connection_string = $1
+    )";
+
+    pqxx::params pqParams;
+    pqParams.append(connectionString_);
+    auto catalogResults = txn.exec(pqxx::zview(query), pqParams);
+    txn.commit();
+
+    for (const auto &catalogRow : catalogResults) {
+      std::string sourceSchema = catalogRow[0].as<std::string>();
+      std::string sourceTable = catalogRow[1].as<std::string>();
+      std::string targetSchema = sourceSchema;
+      std::string targetTable = sourceTable;
+
+      OracleLineageEdge edge;
+      edge.server_name = serverName_;
+      edge.database_name = schemaName_;
+      edge.schema_name = sourceSchema;
+      edge.object_name = sourceTable;
+      edge.object_type = "TABLE";
+      edge.target_object_name = targetTable;
+      edge.target_object_type = "TABLE";
+      edge.relationship_type = "SYNCED_TO_DATALAKE";
+      edge.definition_text = "Table synced from Oracle source to DataLake PostgreSQL";
+      edge.dependency_level = 0;
+      edge.discovery_method = "METADATA_CATALOG";
+      edge.confidence_score = 1.0;
+      edge.consumer_type = "DATALAKE";
+      edge.consumer_name = "DataLake";
+      edge.edge_key = generateEdgeKey(edge);
+
+      {
+        std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
+        lineageEdges_.push_back(edge);
+      }
+
+      Logger::debug(LogCategory::GOVERNANCE, "LineageExtractorOracle",
+                    "Added datalake edge: " + sourceSchema + "." + sourceTable +
+                        " -> DataLake." + targetSchema + "." + targetTable);
+    }
+
+    Logger::info(LogCategory::GOVERNANCE, "LineageExtractorOracle",
+                 "Extracted " + std::to_string(catalogResults.size()) +
+                     " datalake relationships from catalog");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::GOVERNANCE, "LineageExtractorOracle",
+                  "Error extracting datalake relationships: " +
+                      std::string(e.what()));
   }
 }

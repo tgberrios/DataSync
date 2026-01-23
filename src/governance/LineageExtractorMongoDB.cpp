@@ -1,4 +1,5 @@
 #include "governance/LineageExtractorMongoDB.h"
+#include "catalog/metadata_repository.h"
 #include "core/database_config.h"
 #include "core/logger.h"
 #include "engines/mongodb_engine.h"
@@ -230,6 +231,14 @@ void LineageExtractorMongoDB::extractLineage() {
     extractPipelineDependencies();
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMongoDB",
                  "After pipeline extraction: " + std::to_string([this]() {
+                   std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
+                   return lineageEdges_.size();
+                 }()) +
+                     " edges");
+
+    extractDatalakeRelationships();
+    Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMongoDB",
+                 "After datalake extraction: " + std::to_string([this]() {
                    std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
                    return lineageEdges_.size();
                  }()) +
@@ -666,5 +675,70 @@ void LineageExtractorMongoDB::storeLineage() {
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "LineageExtractorMongoDB",
                   "Error storing lineage data: " + std::string(e.what()));
+  }
+}
+
+void LineageExtractorMongoDB::extractDatalakeRelationships() {
+  try {
+    std::string metadataConnStr = DatabaseConfig::getPostgresConnectionString();
+    pqxx::connection metadataConn(metadataConnStr);
+    if (!metadataConn.is_open()) {
+      Logger::warning(LogCategory::GOVERNANCE, "LineageExtractorMongoDB",
+                      "Failed to connect to metadata database for datalake relationships");
+      return;
+    }
+
+    pqxx::work txn(metadataConn);
+    std::string query = R"(
+      SELECT DISTINCT
+        schema_name,
+        table_name,
+        connection_string as source_connection_string
+      FROM metadata.catalog
+      WHERE db_engine = 'MongoDB'
+        AND active = true
+        AND connection_string = $1
+    )";
+
+    pqxx::params pqParams;
+    pqParams.append(connectionString_);
+    auto catalogResults = txn.exec(pqxx::zview(query), pqParams);
+    txn.commit();
+
+    for (const auto &catalogRow : catalogResults) {
+      std::string sourceDatabase = catalogRow[0].as<std::string>();  // schema_name is database in MongoDB
+      std::string sourceCollection = catalogRow[1].as<std::string>();  // table_name is collection in MongoDB
+      std::string targetSchema = sourceDatabase;
+      std::string targetTable = sourceCollection;
+
+      MongoDBLineageEdge edge;
+      edge.server_name = serverName_;
+      edge.database_name = databaseName_;
+      edge.source_collection = sourceCollection;
+      edge.target_collection = targetTable;
+      edge.relationship_type = "SYNCED_TO_DATALAKE";
+      edge.definition_text = "Collection synced from MongoDB source to DataLake PostgreSQL";
+      edge.dependency_level = 0;
+      edge.discovery_method = "METADATA_CATALOG";
+      edge.confidence_score = 1.0;
+      edge.edge_key = generateEdgeKey(edge);
+
+      {
+        std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
+        lineageEdges_.push_back(edge);
+      }
+
+      Logger::debug(LogCategory::GOVERNANCE, "LineageExtractorMongoDB",
+                    "Added datalake edge: " + sourceDatabase + "." + sourceCollection +
+                        " -> DataLake." + targetSchema + "." + targetTable);
+    }
+
+    Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMongoDB",
+                 "Extracted " + std::to_string(catalogResults.size()) +
+                     " datalake relationships from catalog");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::GOVERNANCE, "LineageExtractorMongoDB",
+                  "Error extracting datalake relationships: " +
+                      std::string(e.what()));
   }
 }

@@ -54,6 +54,7 @@ private:
   void extractViewDependencies();
   void extractTriggerDependencies();
   void extractForeignKeyDependencies();
+  void extractDatalakeRelationships();
 
   std::set<std::pair<std::string, std::string>>
   extractReferencedTablesFromStatement(const std::string &actionStatement);
@@ -61,6 +62,10 @@ private:
       const std::string &triggerSchema, const std::string &triggerName,
       const std::string &eventTable,
       const std::set<std::pair<std::string, std::string>> &referencedTables);
+  void addDatalakeEdge(
+      const std::string &sourceSchema, const std::string &sourceTable,
+      const std::string &targetSchema, const std::string &targetTable,
+      const std::string &targetConnectionString);
 };
 
 #endif

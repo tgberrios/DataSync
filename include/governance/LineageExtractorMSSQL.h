@@ -59,6 +59,7 @@ private:
   void extractViewDependencies();
   void extractForeignKeyDependencies();
   void extractSqlExpressionDependencies();
+  void extractDatalakeRelationships();
 };
 
 #endif

@@ -2520,3 +2520,82 @@ create index idx_masking_policies_active
 create index idx_masking_policies_type
     on metadata.masking_policies (masking_type);
 
+create table metadata.schema_change_audit
+(
+    id                  serial
+        primary key,
+    db_engine           varchar(50)                                          not null
+        constraint chk_schema_audit_db_engine
+            check ((db_engine)::text = ANY
+                   ((ARRAY ['PostgreSQL'::character varying, 'MariaDB'::character varying, 'MSSQL'::character varying, 'Oracle'::character varying, 'MongoDB'::character varying])::text[])),
+    server_name         varchar(200),
+    database_name       varchar(100),
+    schema_name         varchar(100),
+    object_name         varchar(200),
+    object_type         varchar(50),
+    change_type         varchar(50)                                          not null
+        constraint chk_schema_audit_change_type
+            check ((change_type)::text = ANY
+                   ((ARRAY ['CREATE'::character varying, 'ALTER'::character varying, 'DROP'::character varying, 'RENAME'::character varying, 'TRUNCATE'::character varying])::text[])),
+    ddl_statement       text                                                 not null,
+    executed_by         varchar(100),
+    execution_timestamp  timestamp   default now()                            not null,
+    connection_string    text,
+    before_state         jsonb,
+    after_state          jsonb,
+    affected_columns     text[],
+    rollback_sql         text,
+    is_rollback_possible boolean     default false,
+    metadata_json        jsonb       default '{}'::jsonb,
+    created_at           timestamp   default now()                             not null
+);
+
+comment on table metadata.schema_change_audit is 'Audit log of all DDL changes made by users across all database engines. Captures CREATE, ALTER, DROP, RENAME, and TRUNCATE operations.';
+
+comment on column metadata.schema_change_audit.db_engine is 'Database engine where the change occurred (PostgreSQL, MariaDB, MSSQL, Oracle, MongoDB)';
+
+comment on column metadata.schema_change_audit.change_type is 'Type of DDL operation: CREATE, ALTER, DROP, RENAME, TRUNCATE';
+
+comment on column metadata.schema_change_audit.ddl_statement is 'The complete DDL statement that was executed';
+
+comment on column metadata.schema_change_audit.executed_by is 'Database user who executed the DDL statement';
+
+comment on column metadata.schema_change_audit.execution_timestamp is 'Timestamp when the DDL statement was executed';
+
+comment on column metadata.schema_change_audit.before_state is 'JSONB snapshot of object state before the change (columns, constraints, indexes, etc.)';
+
+comment on column metadata.schema_change_audit.after_state is 'JSONB snapshot of object state after the change';
+
+comment on column metadata.schema_change_audit.affected_columns is 'Array of column names that were affected by the change';
+
+comment on column metadata.schema_change_audit.rollback_sql is 'SQL statement to rollback the change if possible';
+
+comment on column metadata.schema_change_audit.is_rollback_possible is 'Whether the change can be automatically rolled back';
+
+comment on column metadata.schema_change_audit.metadata_json is 'Additional metadata about the change (IP address, application, session info, etc.)';
+
+alter table metadata.schema_change_audit
+    owner to "tomy.berrios";
+
+create index idx_schema_change_audit_db_engine
+    on metadata.schema_change_audit (db_engine);
+
+create index idx_schema_change_audit_change_type
+    on metadata.schema_change_audit (change_type);
+
+create index idx_schema_change_audit_execution_timestamp
+    on metadata.schema_change_audit (execution_timestamp);
+
+create index idx_schema_change_audit_schema_table
+    on metadata.schema_change_audit (schema_name, object_name);
+
+create index idx_schema_change_audit_executed_by
+    on metadata.schema_change_audit (executed_by);
+
+create index idx_schema_change_audit_object_type
+    on metadata.schema_change_audit (object_type);
+
+
+
+
+

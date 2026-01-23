@@ -1,4 +1,5 @@
 #include "governance/LineageExtractorMariaDB.h"
+#include "catalog/metadata_repository.h"
 #include "core/database_config.h"
 #include "core/logger.h"
 #include "engines/mariadb_engine.h"
@@ -92,6 +93,10 @@ LineageExtractorMariaDB::executeQuery(MYSQL *conn, const std::string &query) {
 std::string
 LineageExtractorMariaDB::generateEdgeKey(const MariaDBLineageEdge &edge) {
   auto escapeKeyComponent = [](const std::string &str) -> std::string {
+    // Handle empty strings
+    if (str.empty()) {
+      return "";
+    }
     std::string escaped = str;
     size_t pos = 0;
     while ((pos = escaped.find('|', pos)) != std::string::npos) {
@@ -110,17 +115,17 @@ LineageExtractorMariaDB::generateEdgeKey(const MariaDBLineageEdge &edge) {
   };
 
   std::stringstream ss;
-  ss << escapeKeyComponent(edge.server_name) << "|"
-     << escapeKeyComponent(edge.database_name) << "|"
-     << escapeKeyComponent(edge.schema_name) << "|"
-     << escapeKeyComponent(edge.object_name) << "|"
-     << escapeKeyComponent(edge.object_type) << "|"
+  ss << escapeKeyComponent(edge.server_name.empty() ? "" : edge.server_name) << "|"
+     << escapeKeyComponent(edge.database_name.empty() ? "" : edge.database_name) << "|"
+     << escapeKeyComponent(edge.schema_name.empty() ? "" : edge.schema_name) << "|"
+     << escapeKeyComponent(edge.object_name.empty() ? "" : edge.object_name) << "|"
+     << escapeKeyComponent(edge.object_type.empty() ? "" : edge.object_type) << "|"
      << escapeKeyComponent(edge.column_name.empty() ? "" : edge.column_name)
-     << "|" << escapeKeyComponent(edge.target_object_name) << "|"
-     << escapeKeyComponent(edge.target_object_type) << "|"
+     << "|" << escapeKeyComponent(edge.target_object_name.empty() ? "" : edge.target_object_name) << "|"
+     << escapeKeyComponent(edge.target_object_type.empty() ? "" : edge.target_object_type) << "|"
      << escapeKeyComponent(
             edge.target_column_name.empty() ? "" : edge.target_column_name)
-     << "|" << escapeKeyComponent(edge.relationship_type);
+     << "|" << escapeKeyComponent(edge.relationship_type.empty() ? "" : edge.relationship_type);
   return ss.str();
 }
 
@@ -181,6 +186,14 @@ void LineageExtractorMariaDB::extractLineage() {
     extractTriggerDependencies();
     Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
                  "After trigger extraction: " + std::to_string([this]() {
+                   std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
+                   return lineageEdges_.size();
+                 }()) +
+                     " edges");
+
+    extractDatalakeRelationships();
+    Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
+                 "After datalake extraction: " + std::to_string([this]() {
                    std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
                    return lineageEdges_.size();
                  }()) +
@@ -628,23 +641,25 @@ void LineageExtractorMariaDB::storeLineage() {
             updated_at = NOW()
         )";
 
-        txn.exec_params(
-            query, edge.edge_key, edge.server_name,
-            edge.database_name.empty() ? nullptr : edge.database_name.c_str(),
-            edge.schema_name.empty() ? nullptr : edge.schema_name.c_str(),
-            edge.object_name, edge.object_type,
-            edge.column_name.empty() ? nullptr : edge.column_name.c_str(),
-            edge.target_object_name.empty() ? nullptr
-                                            : edge.target_object_name.c_str(),
-            edge.target_object_type.empty() ? nullptr
-                                            : edge.target_object_type.c_str(),
-            edge.target_column_name.empty() ? nullptr
-                                            : edge.target_column_name.c_str(),
-            edge.relationship_type,
-            edge.definition_text.empty() ? nullptr
-                                         : edge.definition_text.c_str(),
-            edge.dependency_level, edge.discovery_method,
-            "LineageExtractorMariaDB", edge.confidence_score);
+        pqxx::params params;
+        params.append(edge.edge_key);
+        params.append(edge.server_name);
+        params.append(edge.database_name.empty() ? nullptr : edge.database_name);
+        params.append(edge.schema_name.empty() ? nullptr : edge.schema_name);
+        params.append(edge.object_name);
+        params.append(edge.object_type);
+        params.append(edge.column_name.empty() ? nullptr : edge.column_name);
+        params.append(edge.target_object_name.empty() ? nullptr : edge.target_object_name);
+        params.append(edge.target_object_type.empty() ? nullptr : edge.target_object_type);
+        params.append(edge.target_column_name.empty() ? nullptr : edge.target_column_name);
+        params.append(edge.relationship_type);
+        params.append(edge.definition_text.empty() ? nullptr : edge.definition_text);
+        params.append(edge.dependency_level);
+        params.append(edge.discovery_method);
+        params.append("LineageExtractorMariaDB");
+        params.append(edge.confidence_score);
+        
+        txn.exec(pqxx::zview(query), params);
         txn.commit();
         stored++;
       } catch (const std::exception &e) {
@@ -746,5 +761,143 @@ void LineageExtractorMariaDB::addTriggerEdge(
       std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
       lineageEdges_.push_back(edge);
     }
+  }
+}
+
+void LineageExtractorMariaDB::extractDatalakeRelationships() {
+  try {
+    // Connect to metadata database to query catalog
+    std::string metadataConnStr = DatabaseConfig::getPostgresConnectionString();
+    pqxx::connection metadataConn(metadataConnStr);
+    if (!metadataConn.is_open()) {
+      Logger::warning(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
+                      "Failed to connect to metadata database for datalake relationships");
+      return;
+    }
+
+    // Parse connection string of this extractor to get host/port/database for comparison
+    auto sourceParams = ConnectionStringParser::parse(connectionString_);
+    if (!sourceParams) {
+      Logger::warning(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
+                      "Failed to parse connection string for datalake relationships");
+      return;
+    }
+
+    // Query catalog to find all active MariaDB tables (without filtering by connection_string)
+    pqxx::work txn(metadataConn);
+    std::string query = R"(
+      SELECT DISTINCT
+        schema_name,
+        table_name,
+        connection_string as source_connection_string
+      FROM metadata.catalog
+      WHERE db_engine = 'MariaDB'
+        AND active = true
+    )";
+
+    auto catalogResults = txn.exec(pqxx::zview(query));
+    txn.commit();
+
+    int matchedCount = 0;
+    // For each source table in catalog, check if it matches this source and create relationship
+    for (const auto &catalogRow : catalogResults) {
+      // Handle NULLs correctly
+      if (catalogRow[0].is_null() || catalogRow[1].is_null()) {
+        continue;
+      }
+
+      std::string sourceSchema = catalogRow[0].as<std::string>();
+      std::string sourceTable = catalogRow[1].as<std::string>();
+      
+      // Parse connection string from catalog to compare by host/port/database
+      std::string catalogConnStr;
+      if (!catalogRow[2].is_null()) {
+        catalogConnStr = catalogRow[2].as<std::string>();
+      } else {
+        continue;  // Skip if connection_string is NULL
+      }
+
+      auto catalogParams = ConnectionStringParser::parse(catalogConnStr);
+      if (!catalogParams) {
+        continue;  // Skip if we can't parse the connection string
+      }
+
+      // Compare by host, port, and database (more flexible than exact string match)
+      bool matches = (sourceParams->host == catalogParams->host) &&
+                     (sourceParams->port == catalogParams->port) &&
+                     (sourceParams->db == catalogParams->db);
+
+      if (!matches) {
+        continue;  // Skip tables from different sources
+      }
+      
+      // The target in datalake typically uses the same schema/table name
+      // or could be in a specific datalake schema
+      std::string targetSchema = sourceSchema;  // Could be 'datalake' or same as source
+      std::string targetTable = sourceTable;
+
+      MariaDBLineageEdge edge;
+      edge.server_name = serverName_.empty() ? "UNKNOWN" : serverName_;
+      edge.database_name = databaseName_.empty() ? "" : databaseName_;
+      edge.schema_name = sourceSchema.empty() ? "" : sourceSchema;
+      edge.object_name = sourceTable.empty() ? "" : sourceTable;
+      edge.object_type = "TABLE";
+      edge.target_object_name = targetTable.empty() ? "" : targetTable;
+      edge.target_object_type = "TABLE";
+      edge.relationship_type = "SYNCED_TO_DATALAKE";
+      edge.definition_text = "Table synced from MariaDB source to DataLake PostgreSQL";
+      edge.dependency_level = 0;  // Direct sync relationship
+      edge.discovery_method = "METADATA_CATALOG";
+      edge.confidence_score = 1.0;  // High confidence - comes from catalog
+      edge.consumer_type = "DATALAKE";
+      edge.consumer_name = "DataLake";
+      edge.edge_key = generateEdgeKey(edge);
+
+      {
+        std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
+        lineageEdges_.push_back(edge);
+      }
+
+      matchedCount++;
+      Logger::debug(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
+                    "Added datalake edge: " + sourceSchema + "." + sourceTable +
+                        " -> DataLake." + targetSchema + "." + targetTable);
+    }
+
+    Logger::info(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
+                 "Extracted " + std::to_string(matchedCount) +
+                     " datalake relationships from catalog (matched from " +
+                     std::to_string(catalogResults.size()) + " total MariaDB tables)");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::GOVERNANCE, "LineageExtractorMariaDB",
+                  "Error extracting datalake relationships: " +
+                      std::string(e.what()));
+  }
+}
+
+void LineageExtractorMariaDB::addDatalakeEdge(
+    const std::string &sourceSchema, const std::string &sourceTable,
+    const std::string &/*targetSchema*/, const std::string &targetTable,
+    const std::string &/*targetConnectionString*/) {
+  MariaDBLineageEdge edge;
+  edge.server_name = serverName_;
+  edge.database_name = databaseName_;
+  edge.schema_name = sourceSchema;
+  edge.object_name = sourceTable;
+  edge.object_type = "TABLE";
+  edge.target_object_name = targetTable;
+  edge.target_object_type = "TABLE";
+  edge.relationship_type = "SYNCED_TO_DATALAKE";
+  edge.definition_text = "Table synced from MariaDB to DataLake";
+  edge.dependency_level = 0;
+  edge.discovery_method = "METADATA_CATALOG";
+  edge.confidence_score = 1.0;
+  edge.consumer_type = "DATALAKE";
+  edge.consumer_name = "DataLake";
+  edge.edge_key = generateEdgeKey(edge);
+
+  {
+    std::lock_guard<std::mutex> lock(lineageEdgesMutex_);
+    lineageEdges_.push_back(edge);
   }
 }

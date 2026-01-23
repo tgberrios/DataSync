@@ -4,6 +4,7 @@
 #include "core/database_defaults.h"
 #include "core/logger.h"
 #include "engines/mariadb_engine.h"
+#include "engines/mongodb_engine.h"
 #include "engines/mssql_engine.h"
 #include "utils/connection_utils.h"
 #include "utils/time_utils.h"
@@ -16,6 +17,8 @@
 #include <sqlext.h>
 #include <sstream>
 #include <thread>
+#include <bson/bson.h>
+#include <mongoc/mongoc.h>
 
 MaintenanceManager::MaintenanceManager(
     const std::string &metadataConnectionString)
@@ -41,6 +44,22 @@ MaintenanceManager::MaintenanceManager(
       },
       "analyze": {
         "days_since_last_analyze": 1
+      },
+      "reindex": {
+        "fragmentation_threshold": 30.0
+      }
+    },
+    "mongodb": {
+      "rebuild_index": {
+        "unused_days_threshold": 30,
+        "fragmentation_threshold": 20.0
+      },
+      "compact_collection": {
+        "fragmentation_threshold": 30.0,
+        "size_threshold_mb": 100
+      },
+      "update_statistics": {
+        "days_since_last_update": 7
       }
     },
     "mssql": {
@@ -122,6 +141,20 @@ void MaintenanceManager::detectMaintenanceNeeds() {
         } catch (const std::exception &e) {
           Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
                         "Error detecting MSSQL maintenance: " +
+                            std::string(e.what()));
+        }
+      }
+    }
+
+    std::vector<std::string> mongodbConnections =
+        repo.getConnectionStrings("MongoDB");
+    for (const auto &connStr : mongodbConnections) {
+      if (!connStr.empty()) {
+        try {
+          detectMongoDBMaintenance(connStr);
+        } catch (const std::exception &e) {
+          Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
+                        "Error detecting MongoDB maintenance: " +
                             std::string(e.what()));
         }
       }
@@ -387,6 +420,7 @@ void MaintenanceManager::detectMariaDBMaintenance(const std::string &connStr) {
     MYSQL *mysqlConn = conn.get();
     detectOptimizeNeeds(mysqlConn, connStr);
     detectAnalyzeTableNeeds(mysqlConn, connStr);
+    detectReindexNeedsMariaDB(mysqlConn, connStr);
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
                   "Error in MariaDB maintenance detection: " +
@@ -534,6 +568,102 @@ void MaintenanceManager::detectAnalyzeTableNeeds(MYSQL *conn,
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
                   "Error detecting analyze table needs: " +
+                      std::string(e.what()));
+  }
+}
+
+void MaintenanceManager::detectReindexNeedsMariaDB(MYSQL *conn,
+                                                   const std::string &connStr) {
+  try {
+    auto thresholds = getThresholds("mariadb", "reindex");
+    double fragmentationThreshold =
+        thresholds.value("fragmentation_threshold", 30.0);
+
+    // MariaDB doesn't have direct index fragmentation metrics
+    // We use table-level fragmentation and cardinality as indicators
+    std::string query = R"(
+      SELECT 
+        s.table_schema,
+        s.table_name,
+        s.index_name,
+        s.cardinality,
+        t.table_rows,
+        CASE 
+          WHEN t.table_rows > 0 
+          THEN (s.cardinality / t.table_rows) * 100
+          ELSE 0
+        END as selectivity_pct,
+        CASE 
+          WHEN (t.data_length + t.index_length) > 0 
+          THEN (t.data_free / (t.data_length + t.index_length)) * 100
+          ELSE 0
+        END as fragmentation_pct
+      FROM information_schema.statistics s
+      INNER JOIN information_schema.tables t 
+        ON s.table_schema = t.table_schema 
+        AND s.table_name = t.table_name
+      WHERE s.table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+        AND t.table_type = 'BASE TABLE'
+        AND s.index_name != 'PRIMARY'
+        AND (
+          (t.data_length + t.index_length) > 0 
+          AND (t.data_free / (t.data_length + t.index_length)) * 100 > )" +
+                        std::to_string(fragmentationThreshold) + R"(
+          OR (t.table_rows > 0 AND s.cardinality IS NOT NULL AND s.cardinality > 0 
+              AND (s.cardinality / t.table_rows) * 100 < 10)
+        )
+    )";
+
+    if (mysql_query(conn, query.c_str())) {
+      Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
+                    "Query failed: " + std::string(mysql_error(conn)));
+      return;
+    }
+
+    MYSQL_RES *res = mysql_store_result(conn);
+    if (!res)
+      return;
+
+    MYSQL_ROW row;
+    while ((row = mysql_fetch_row(res))) {
+      double fragmentation = 0.0;
+      try {
+        if (row[6] && strlen(row[6]) > 0) {
+          fragmentation = std::stod(row[6]);
+        }
+      } catch (...) {
+      }
+
+      MaintenanceTask task;
+      task.maintenance_type = "REBUILD INDEX";
+      task.db_engine = "MariaDB";
+      task.connection_string = connStr;
+      task.schema_name = row[0] ? row[0] : "";
+      // Store as "table_name.index_name" for parsing in execute
+      std::string tableName = row[1] ? row[1] : "";
+      std::string indexName = row[2] ? row[2] : "";
+      task.object_name = tableName + "." + indexName;
+      task.object_type = "INDEX";
+      task.auto_execute = true;
+      task.enabled = true;
+      task.priority = fragmentation > 50 ? 7 : 5;
+      task.status = "PENDING";
+      task.next_maintenance_date =
+          calculateNextMaintenanceDate("REBUILD INDEX");
+      task.thresholds = thresholds;
+
+      auto params = ConnectionStringParser::parse(connStr);
+      if (params) {
+        task.server_name = params->host;
+        task.database_name = params->db;
+      }
+
+      storeTask(task);
+    }
+    mysql_free_result(res);
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
+                  "Error detecting MariaDB reindex needs: " +
                       std::string(e.what()));
   }
 }
@@ -825,6 +955,14 @@ void MaintenanceManager::executeMaintenance() {
   const int batchSize = 5;
   int consecutiveEmptyBatches = 0;
   const int maxEmptyBatches = 3;
+  
+  // MSSQL execution limits per batch
+  int mssqlRebuildCount = 0;
+  int mssqlReorganizeCount = 0;
+  int mssqlUpdateStatsCount = 0;
+  const int MSSQL_REBUILD_LIMIT = 1;
+  const int MSSQL_REORGANIZE_LIMIT = 10;
+  const int MSSQL_UPDATE_STATS_LIMIT = 20;
 
   try {
     while (true) {
@@ -845,10 +983,40 @@ void MaintenanceManager::executeMaintenance() {
 
       consecutiveEmptyBatches = 0;
       int batchExecuted = 0;
+      
+      // Reset MSSQL counters for new batch
+      mssqlRebuildCount = 0;
+      mssqlReorganizeCount = 0;
+      mssqlUpdateStatsCount = 0;
 
       for (const auto &task : tasks) {
         if (!task.auto_execute || !task.enabled) {
           continue;
+        }
+
+        // Check MSSQL execution limits
+        if (task.db_engine == "MSSQL") {
+          if (task.maintenance_type == "REBUILD INDEX" && 
+              mssqlRebuildCount >= MSSQL_REBUILD_LIMIT) {
+            Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
+                         "Skipping REBUILD INDEX - limit reached (" +
+                             std::to_string(MSSQL_REBUILD_LIMIT) + " per batch)");
+            continue;
+          }
+          if (task.maintenance_type == "REORGANIZE INDEX" && 
+              mssqlReorganizeCount >= MSSQL_REORGANIZE_LIMIT) {
+            Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
+                         "Skipping REORGANIZE INDEX - limit reached (" +
+                             std::to_string(MSSQL_REORGANIZE_LIMIT) + " per batch)");
+            continue;
+          }
+          if (task.maintenance_type == "UPDATE STATISTICS" && 
+              mssqlUpdateStatsCount >= MSSQL_UPDATE_STATS_LIMIT) {
+            Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
+                         "Skipping UPDATE STATISTICS - limit reached (" +
+                             std::to_string(MSSQL_UPDATE_STATS_LIMIT) + " per batch)");
+            continue;
+          }
         }
 
         try {
@@ -863,6 +1031,16 @@ void MaintenanceManager::executeMaintenance() {
             executeMariaDBMaintenance(task);
           } else if (task.db_engine == "MSSQL") {
             executeMSSQLMaintenance(task);
+            // Increment MSSQL counters
+            if (task.maintenance_type == "REBUILD INDEX") {
+              mssqlRebuildCount++;
+            } else if (task.maintenance_type == "REORGANIZE INDEX") {
+              mssqlReorganizeCount++;
+            } else if (task.maintenance_type == "UPDATE STATISTICS") {
+              mssqlUpdateStatsCount++;
+            }
+          } else if (task.db_engine == "MongoDB") {
+            executeMongoDBMaintenance(task);
           }
 
           auto endTime = std::chrono::high_resolution_clock::now();
@@ -1136,6 +1314,85 @@ void MaintenanceManager::executeMariaDBMaintenance(
     } else if (task.maintenance_type == "ANALYZE TABLE") {
       query = "ANALYZE TABLE " + escapeSQL(mysqlConn, task.schema_name) + "." +
               escapeSQL(mysqlConn, task.object_name);
+    } else if (task.maintenance_type == "REBUILD INDEX") {
+      if (task.object_type == "INDEX") {
+        // Parse table_name.index_name format
+        size_t dotPos = task.object_name.find('.');
+        if (dotPos == std::string::npos) {
+          throw std::runtime_error("Invalid index name format: " + task.object_name);
+        }
+        std::string tableName = task.object_name.substr(0, dotPos);
+        std::string indexName = task.object_name.substr(dotPos + 1);
+        
+        // In MariaDB, we drop and recreate the index
+        // First, get index definition
+        std::string getIndexQuery = 
+            "SELECT INDEX_TYPE, COLUMN_NAME, NON_UNIQUE, SEQ_IN_INDEX "
+            "FROM information_schema.statistics "
+            "WHERE table_schema = '" + escapeSQL(mysqlConn, task.schema_name) + "' "
+            "AND table_name = '" + escapeSQL(mysqlConn, tableName) + "' "
+            "AND index_name = '" + escapeSQL(mysqlConn, indexName) + "' "
+            "ORDER BY seq_in_index";
+        
+        if (mysql_query(mysqlConn, getIndexQuery.c_str())) {
+          throw std::runtime_error("Failed to get index definition: " + 
+                                   std::string(mysql_error(mysqlConn)));
+        }
+        
+        MYSQL_RES *indexRes = mysql_store_result(mysqlConn);
+        if (!indexRes) {
+          throw std::runtime_error("Failed to store index definition result");
+        }
+        
+        std::vector<std::string> columns;
+        std::string indexType = "BTREE";
+        bool isUnique = false;
+        
+        MYSQL_ROW indexRow;
+        while ((indexRow = mysql_fetch_row(indexRes))) {
+          if (indexRow[0]) indexType = indexRow[0];
+          if (indexRow[1]) columns.push_back(indexRow[1]);
+          if (indexRow[2] && strcmp(indexRow[2], "0") == 0) {
+            isUnique = true;
+          }
+        }
+        mysql_free_result(indexRes);
+        
+        if (columns.empty()) {
+          throw std::runtime_error("Index not found: " + indexName);
+        }
+        
+        // Drop index
+        std::string dropQuery = "ALTER TABLE " + escapeSQL(mysqlConn, task.schema_name) + 
+                                "." + escapeSQL(mysqlConn, tableName) + 
+                                " DROP INDEX " + escapeSQL(mysqlConn, indexName);
+        
+        if (mysql_query(mysqlConn, dropQuery.c_str())) {
+          throw std::runtime_error("Failed to drop index: " + 
+                                   std::string(mysql_error(mysqlConn)));
+        }
+        
+        // Recreate index
+        std::string createQuery = "ALTER TABLE " + escapeSQL(mysqlConn, task.schema_name) + 
+                                  "." + escapeSQL(mysqlConn, tableName) + " ADD ";
+        if (isUnique) {
+          createQuery += "UNIQUE ";
+        }
+        createQuery += "INDEX " + escapeSQL(mysqlConn, indexName) + " ";
+        if (indexType != "BTREE") {
+          createQuery += "USING " + indexType + " ";
+        }
+        createQuery += "(";
+        for (size_t i = 0; i < columns.size(); i++) {
+          if (i > 0) createQuery += ", ";
+          createQuery += escapeSQL(mysqlConn, columns[i]);
+        }
+        createQuery += ")";
+        
+        query = createQuery;
+      } else {
+        throw std::runtime_error("REBUILD INDEX requires object_type to be INDEX");
+      }
     }
 
     if (!query.empty()) {
@@ -1244,8 +1501,43 @@ void MaintenanceManager::executeMSSQLMaintenance(const MaintenanceTask &task) {
     std::string escapedObject = escapeSQLMSSQL(task.object_name);
 
     if (task.maintenance_type == "UPDATE STATISTICS") {
-      query =
-          "UPDATE STATISTICS [" + escapedSchema + "].[" + escapedObject + "]";
+      // Check table size to determine if we should use SAMPLE
+      std::string checkSizeQuery = 
+          "SELECT SUM(p.rows) FROM sys.partitions p "
+          "INNER JOIN sys.objects o ON p.object_id = o.object_id "
+          "INNER JOIN sys.schemas s ON o.schema_id = s.schema_id "
+          "WHERE s.name = '" + escapeSQLMSSQL(task.schema_name) + "' "
+          "AND o.name = '" + escapeSQLMSSQL(task.object_name) + "' "
+          "AND p.index_id IN (0, 1)";
+      
+      SQLRETURN ret2 = SQLExecDirect(stmt, (SQLCHAR *)checkSizeQuery.c_str(), SQL_NTS);
+      long long rowCount = 0;
+      if (ret2 == SQL_SUCCESS || ret2 == SQL_SUCCESS_WITH_INFO) {
+        char buffer[256];
+        SQLLEN len;
+        if (SQLFetch(stmt) == SQL_SUCCESS) {
+          if (SQLGetData(stmt, 1, SQL_C_CHAR, buffer, sizeof(buffer), &len) == SQL_SUCCESS) {
+            if (len > 0 && len < 256) {
+              try {
+                rowCount = std::stoll(std::string(buffer, len));
+              } catch (...) {}
+            }
+          }
+        }
+      }
+      SQLFreeStmt(stmt, SQL_CLOSE);
+      
+      // Use SAMPLE for large tables (millions/billions of rows)
+      if (rowCount > 1000000) {
+        // Use 10% sample for very large tables
+        query = "UPDATE STATISTICS [" + escapedSchema + "].[" + escapedObject + "] WITH SAMPLE 10 PERCENT";
+      } else if (rowCount > 100000) {
+        // Use 20% sample for large tables
+        query = "UPDATE STATISTICS [" + escapedSchema + "].[" + escapedObject + "] WITH SAMPLE 20 PERCENT";
+      } else {
+        // Full statistics for smaller tables
+        query = "UPDATE STATISTICS [" + escapedSchema + "].[" + escapedObject + "]";
+      }
     } else if (task.maintenance_type == "REBUILD INDEX") {
       if (task.object_type == "INDEX") {
         std::string tableName;
@@ -1271,8 +1563,65 @@ void MaintenanceManager::executeMSSQLMaintenance(const MaintenanceTask &task) {
           throw std::runtime_error("Could not find table for index: " + task.object_name);
         }
         
-        query = "ALTER INDEX [" + escapedObject + "] ON [" + escapedSchema +
-                "].[" + escapeSQLMSSQL(tableName) + "] REBUILD";
+        // Check SQL Server version and index properties to determine if ONLINE is supported
+        std::string versionQuery = "SELECT @@VERSION";
+        ret2 = SQLExecDirect(stmt, (SQLCHAR *)versionQuery.c_str(), SQL_NTS);
+        bool supportsOnline = false;
+        if (ret2 == SQL_SUCCESS || ret2 == SQL_SUCCESS_WITH_INFO) {
+          char versionBuffer[1024];
+          SQLLEN versionLen;
+          if (SQLFetch(stmt) == SQL_SUCCESS) {
+            if (SQLGetData(stmt, 1, SQL_C_CHAR, versionBuffer, sizeof(versionBuffer), &versionLen) == SQL_SUCCESS) {
+              std::string versionStr((char *)versionBuffer, versionLen);
+              // SQL Server 2014+ supports ONLINE operations for Enterprise/Developer editions
+              // Check for version 12.0 (2014) or higher
+              if (versionStr.find("12.") != std::string::npos || 
+                  versionStr.find("13.") != std::string::npos ||
+                  versionStr.find("14.") != std::string::npos ||
+                  versionStr.find("15.") != std::string::npos ||
+                  versionStr.find("16.") != std::string::npos) {
+                // Check if Enterprise or Developer edition
+                if (versionStr.find("Enterprise") != std::string::npos ||
+                    versionStr.find("Developer") != std::string::npos) {
+                  supportsOnline = true;
+                }
+              }
+            }
+          }
+        }
+        SQLFreeStmt(stmt, SQL_CLOSE);
+        
+        // Check if index allows ONLINE operations (not on memory-optimized tables, etc.)
+        std::string checkOnlineQuery = 
+            "SELECT CASE WHEN t.is_memory_optimized = 1 THEN 0 ELSE 1 END "
+            "FROM sys.indexes i "
+            "INNER JOIN sys.objects o ON i.object_id = o.object_id "
+            "INNER JOIN sys.tables t ON o.object_id = t.object_id "
+            "INNER JOIN sys.schemas s ON o.schema_id = s.schema_id "
+            "WHERE s.name = '" + escapeSQLMSSQL(task.schema_name) + "' "
+            "AND i.name = '" + escapeSQLMSSQL(task.object_name) + "'";
+        
+        ret2 = SQLExecDirect(stmt, (SQLCHAR *)checkOnlineQuery.c_str(), SQL_NTS);
+        bool canUseOnline = false;
+        if (ret2 == SQL_SUCCESS || ret2 == SQL_SUCCESS_WITH_INFO) {
+          char onlineBuffer[10];
+          SQLLEN onlineLen;
+          if (SQLFetch(stmt) == SQL_SUCCESS) {
+            if (SQLGetData(stmt, 1, SQL_C_CHAR, onlineBuffer, sizeof(onlineBuffer), &onlineLen) == SQL_SUCCESS) {
+              std::string onlineStr((char *)onlineBuffer, onlineLen);
+              canUseOnline = (onlineStr.find("1") != std::string::npos);
+            }
+          }
+        }
+        SQLFreeStmt(stmt, SQL_CLOSE);
+        
+        if (supportsOnline && canUseOnline) {
+          query = "ALTER INDEX [" + escapedObject + "] ON [" + escapedSchema +
+                  "].[" + escapeSQLMSSQL(tableName) + "] REBUILD WITH (ONLINE = ON)";
+        } else {
+          query = "ALTER INDEX [" + escapedObject + "] ON [" + escapedSchema +
+                  "].[" + escapeSQLMSSQL(tableName) + "] REBUILD";
+        }
       } else {
         SQLFreeHandle(SQL_HANDLE_STMT, stmt);
         throw std::runtime_error(
@@ -1303,8 +1652,9 @@ void MaintenanceManager::executeMSSQLMaintenance(const MaintenanceTask &task) {
           throw std::runtime_error("Could not find table for index: " + task.object_name);
         }
         
+        // REORGANIZE is always online in SQL Server, but we can add WITH options
         query = "ALTER INDEX [" + escapedObject + "] ON [" + escapedSchema +
-                "].[" + escapeSQLMSSQL(tableName) + "] REORGANIZE";
+                "].[" + escapeSQLMSSQL(tableName) + "] REORGANIZE WITH (LOB_COMPACTION = ON)";
       } else {
         SQLFreeHandle(SQL_HANDLE_STMT, stmt);
         throw std::runtime_error(
@@ -1915,6 +2265,493 @@ void MaintenanceManager::executeManual(int maintenanceId) {
       updateTaskStatus(maintenanceId, "FAILED", "", std::string(e.what()));
     } catch (...) {
     }
+  }
+}
+
+void MaintenanceManager::detectMongoDBMaintenance(const std::string &connStr) {
+  try {
+    detectMongoDBIndexMaintenance(connStr);
+    detectMongoDBCollectionMaintenance(connStr);
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
+                  "Error in MongoDB maintenance detection: " +
+                      std::string(e.what()));
+  }
+}
+
+void MaintenanceManager::detectMongoDBIndexMaintenance(
+    const std::string &connStr) {
+  try {
+    MongoDBEngine engine(connStr);
+    if (!engine.isValid()) {
+      Logger::warning(LogCategory::GOVERNANCE, "MaintenanceManager",
+                      "Failed to connect to MongoDB for index maintenance detection");
+      return;
+    }
+
+    auto thresholds = getThresholds("mongodb", "rebuild_index");
+    int unusedDaysThreshold = thresholds.value("unused_days_threshold", 30);
+    double fragmentationThreshold =
+        thresholds.value("fragmentation_threshold", 20.0);
+
+    mongoc_client_t *client = engine.getClient();
+    if (!client) {
+      return;
+    }
+
+    // Get list of databases
+    bson_t opts;
+    bson_init(&opts);
+    char **dbNames = mongoc_client_get_database_names(client, nullptr);
+    
+    if (dbNames) {
+      for (int i = 0; dbNames[i]; i++) {
+        std::string dbName = dbNames[i];
+        
+        // Skip system databases
+        if (dbName == "admin" || dbName == "local" || dbName == "config") {
+          continue;
+        }
+
+        mongoc_database_t *database =
+            mongoc_client_get_database(client, dbName.c_str());
+        if (!database) {
+          continue;
+        }
+
+        // Get collections in database
+        bson_t filter;
+        bson_init(&filter);
+        mongoc_cursor_t *cursor =
+            mongoc_database_find_collections_with_opts(database, &filter);
+
+        const bson_t *doc;
+        while (mongoc_cursor_next(cursor, &doc)) {
+          char *str = bson_as_canonical_extended_json(doc, nullptr);
+          std::string jsonStr(str);
+          bson_free(str);
+
+          // Parse collection name from JSON
+          size_t namePos = jsonStr.find("\"name\"");
+          if (namePos != std::string::npos) {
+            size_t colonPos = jsonStr.find(':', namePos);
+            size_t quoteStart = jsonStr.find('"', colonPos);
+            size_t quoteEnd = jsonStr.find('"', quoteStart + 1);
+            if (quoteStart != std::string::npos && quoteEnd != std::string::npos) {
+              std::string collectionName =
+                  jsonStr.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
+
+              mongoc_collection_t *collection = mongoc_client_get_collection(
+                  client, dbName.c_str(), collectionName.c_str());
+              if (collection) {
+                // Get index statistics
+                bson_t statsCmd;
+                bson_init(&statsCmd);
+                BSON_APPEND_UTF8(&statsCmd, "collStats", collectionName.c_str());
+                BSON_APPEND_BOOL(&statsCmd, "indexDetails", true);
+
+                bson_t reply;
+                bson_error_t error;
+                bool success = mongoc_database_command_simple(
+                    database, &statsCmd, nullptr, &reply, &error);
+
+                if (success) {
+                  // Check for unused indexes (indexes not used in queries)
+                  // This requires querying system.profile or using index usage stats
+                  // For now, we'll check index size vs collection size for fragmentation
+                  
+                  bson_iter_t iter;
+                  if (bson_iter_init_find(&iter, &reply, "indexSizes")) {
+                    bson_iter_t indexSizes;
+                    if (bson_iter_recurse(&iter, &indexSizes)) {
+                      while (bson_iter_next(&indexSizes)) {
+                        const char *indexName = bson_iter_key(&indexSizes);
+                        if (indexName && strcmp(indexName, "_id_") != 0) {
+                          // Check if index is unused (would need query stats)
+                          // For now, create maintenance task for all non-_id indexes
+                          // that might need rebuilding
+                          
+                          MaintenanceTask task;
+                          task.maintenance_type = "REBUILD INDEX";
+                          task.db_engine = "MongoDB";
+                          task.connection_string = connStr;
+                          task.schema_name = dbName;
+                          task.object_name = collectionName;
+                          task.object_type = "INDEX";
+                          task.auto_execute = true;
+                          task.enabled = true;
+                          task.priority = 5;
+                          task.status = "PENDING";
+                          task.next_maintenance_date =
+                              calculateNextMaintenanceDate("REBUILD INDEX");
+                          task.thresholds = thresholds;
+
+                          auto params = ConnectionStringParser::parse(connStr);
+                          if (params) {
+                            task.server_name = params->host;
+                            task.database_name = dbName;
+                          }
+
+                          // Store index name in object_name with collection
+                          task.object_name = collectionName + "." + std::string(indexName);
+                          
+                          storeTask(task);
+                        }
+                      }
+                    }
+                  }
+                }
+
+                bson_destroy(&reply);
+                bson_destroy(&statsCmd);
+                mongoc_collection_destroy(collection);
+              }
+            }
+          }
+        }
+
+        mongoc_cursor_destroy(cursor);
+        bson_destroy(&filter);
+        mongoc_database_destroy(database);
+      }
+
+      bson_strfreev(dbNames);
+    }
+
+    bson_destroy(&opts);
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
+                  "Error detecting MongoDB index maintenance: " +
+                      std::string(e.what()));
+  }
+}
+
+void MaintenanceManager::detectMongoDBCollectionMaintenance(
+    const std::string &connStr) {
+  try {
+    MongoDBEngine engine(connStr);
+    if (!engine.isValid()) {
+      Logger::warning(LogCategory::GOVERNANCE, "MaintenanceManager",
+                      "Failed to connect to MongoDB for collection maintenance detection");
+      return;
+    }
+
+    auto thresholds = getThresholds("mongodb", "compact_collection");
+    double fragmentationThreshold =
+        thresholds.value("fragmentation_threshold", 30.0);
+    double sizeThresholdMB =
+        thresholds.value("size_threshold_mb", 100.0);
+
+    mongoc_client_t *client = engine.getClient();
+    if (!client) {
+      return;
+    }
+
+    bson_error_t error;
+    char **dbNames = mongoc_client_get_database_names_with_opts(client, nullptr, &error);
+    
+    if (dbNames) {
+      for (int i = 0; dbNames[i]; i++) {
+        std::string dbName = dbNames[i];
+        
+        if (dbName == "admin" || dbName == "local" || dbName == "config") {
+          continue;
+        }
+
+        mongoc_database_t *database =
+            mongoc_client_get_database(client, dbName.c_str());
+        if (!database) {
+          continue;
+        }
+
+        bson_t filter;
+        bson_init(&filter);
+        mongoc_cursor_t *cursor =
+            mongoc_database_find_collections_with_opts(database, &filter);
+
+        const bson_t *doc;
+        while (mongoc_cursor_next(cursor, &doc)) {
+          bson_iter_t iter;
+          std::string collectionName;
+          
+          if (bson_iter_init(&iter, doc) && bson_iter_find(&iter, "name")) {
+            if (BSON_ITER_HOLDS_UTF8(&iter)) {
+              collectionName = bson_iter_utf8(&iter, nullptr);
+            }
+          }
+
+          if (!collectionName.empty()) {
+            mongoc_collection_t *collection = mongoc_client_get_collection(
+                client, dbName.c_str(), collectionName.c_str());
+            if (collection) {
+              // Get collection stats
+              bson_t statsCmd;
+              bson_init(&statsCmd);
+              BSON_APPEND_UTF8(&statsCmd, "collStats", collectionName.c_str());
+
+              bson_t reply;
+              bson_error_t cmdError;
+              bool success = mongoc_database_command_simple(
+                  database, &statsCmd, nullptr, &reply, &cmdError);
+
+              if (success) {
+                bson_iter_t statsIter;
+                int64_t storageSize = 0;
+                int64_t dataSize = 0;
+                
+                if (bson_iter_init_find(&statsIter, &reply, "storageSize")) {
+                  if (BSON_ITER_HOLDS_INT32(&statsIter)) {
+                    storageSize = bson_iter_int32(&statsIter);
+                  } else if (BSON_ITER_HOLDS_INT64(&statsIter)) {
+                    storageSize = bson_iter_int64(&statsIter);
+                  }
+                }
+                
+                if (bson_iter_init_find(&statsIter, &reply, "size")) {
+                  if (BSON_ITER_HOLDS_INT32(&statsIter)) {
+                    dataSize = bson_iter_int32(&statsIter);
+                  } else if (BSON_ITER_HOLDS_INT64(&statsIter)) {
+                    dataSize = bson_iter_int64(&statsIter);
+                  }
+                }
+
+                double storageSizeMB = storageSize / (1024.0 * 1024.0);
+                double dataSizeMB = dataSize / (1024.0 * 1024.0);
+
+                // Calculate fragmentation
+                double fragmentation = 0.0;
+                if (dataSizeMB > 0) {
+                  fragmentation = ((storageSizeMB - dataSizeMB) / dataSizeMB) * 100.0;
+                }
+
+                // Check if collection needs compacting
+                if (storageSizeMB > sizeThresholdMB && fragmentation > fragmentationThreshold) {
+                  MaintenanceTask task;
+                  task.maintenance_type = "COMPACT COLLECTION";
+                  task.db_engine = "MongoDB";
+                  task.connection_string = connStr;
+                  task.schema_name = dbName;
+                  task.object_name = collectionName;
+                  task.object_type = "COLLECTION";
+                  task.auto_execute = true;
+                  task.enabled = true;
+                  task.priority = fragmentation > 50 ? 7 : 5;
+                  task.status = "PENDING";
+                  task.next_maintenance_date =
+                      calculateNextMaintenanceDate("COMPACT COLLECTION");
+                  task.thresholds = thresholds;
+
+                  auto params = ConnectionStringParser::parse(connStr);
+                  if (params) {
+                    task.server_name = params->host;
+                    task.database_name = dbName;
+                  }
+
+                  storeTask(task);
+                }
+              }
+
+              bson_destroy(&reply);
+              bson_destroy(&statsCmd);
+              mongoc_collection_destroy(collection);
+            }
+          }
+        }
+
+        mongoc_cursor_destroy(cursor);
+        bson_destroy(&filter);
+        mongoc_database_destroy(database);
+      }
+
+      bson_strfreev(dbNames);
+    }
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::GOVERNANCE, "MaintenanceManager",
+                  "Error detecting MongoDB collection maintenance: " +
+                      std::string(e.what()));
+  }
+}
+
+void MaintenanceManager::executeMongoDBMaintenance(const MaintenanceTask &task) {
+  try {
+    MongoDBEngine engine(task.connection_string);
+    if (!engine.isValid()) {
+      throw std::runtime_error("Failed to connect to MongoDB");
+    }
+
+    mongoc_client_t *client = engine.getClient();
+    if (!client) {
+      throw std::runtime_error("MongoDB client is null");
+    }
+
+    mongoc_database_t *database =
+        mongoc_client_get_database(client, task.database_name.c_str());
+    if (!database) {
+      throw std::runtime_error("Failed to get database: " + task.database_name);
+    }
+
+    if (task.maintenance_type == "REBUILD INDEX") {
+      // Extract collection and index name from object_name
+      size_t dotPos = task.object_name.find('.');
+      if (dotPos == std::string::npos) {
+        mongoc_database_destroy(database);
+        throw std::runtime_error("Invalid index name format: " + task.object_name);
+      }
+
+      std::string collectionName = task.object_name.substr(0, dotPos);
+      std::string indexName = task.object_name.substr(dotPos + 1);
+
+      mongoc_collection_t *collection =
+          mongoc_client_get_collection(client, task.database_name.c_str(),
+                                       collectionName.c_str());
+      if (!collection) {
+        mongoc_database_destroy(database);
+        throw std::runtime_error("Collection not found: " + collectionName);
+      }
+
+      // Get index definition first
+      mongoc_cursor_t *indexCursor = mongoc_collection_find_indexes_with_opts(
+          collection, nullptr);
+      
+      bson_t *indexDef = nullptr;
+      const bson_t *indexDoc;
+      bool foundIndex = false;
+      
+      while (mongoc_cursor_next(indexCursor, &indexDoc)) {
+        bson_iter_t iter;
+        std::string currentIndexName;
+        
+        if (bson_iter_init(&iter, indexDoc) && bson_iter_find(&iter, "name")) {
+          if (BSON_ITER_HOLDS_UTF8(&iter)) {
+            currentIndexName = bson_iter_utf8(&iter, nullptr);
+            if (currentIndexName == indexName) {
+              indexDef = bson_copy(indexDoc);
+              foundIndex = true;
+              break;
+            }
+          }
+        }
+      }
+      mongoc_cursor_destroy(indexCursor);
+
+      if (!foundIndex || !indexDef) {
+        mongoc_collection_destroy(collection);
+        mongoc_database_destroy(database);
+        throw std::runtime_error("Index not found: " + indexName);
+      }
+
+      // Drop index
+      bson_error_t error;
+      bson_t dropIndexCmd;
+      bson_init(&dropIndexCmd);
+      BSON_APPEND_UTF8(&dropIndexCmd, "dropIndexes", collectionName.c_str());
+      BSON_APPEND_UTF8(&dropIndexCmd, "index", indexName.c_str());
+      
+      bson_t reply;
+      bool success = mongoc_database_command_simple(
+          database, &dropIndexCmd, nullptr, &reply, &error);
+      bson_destroy(&dropIndexCmd);
+      bson_destroy(&reply);
+
+      if (!success) {
+        bson_destroy(indexDef);
+        mongoc_collection_destroy(collection);
+        mongoc_database_destroy(database);
+        throw std::runtime_error("Failed to drop index: " + std::string(error.message));
+      }
+
+      // Recreate index using the definition
+      bson_t *keys = nullptr;
+      bson_iter_t defIter;
+      if (bson_iter_init(&defIter, indexDef) && bson_iter_find(&defIter, "key")) {
+        bson_iter_t keyIter;
+        if (bson_iter_recurse(&defIter, &keyIter)) {
+          keys = bson_new();
+          while (bson_iter_next(&keyIter)) {
+            const char *key = bson_iter_key(&keyIter);
+            int32_t value = 1;
+            if (BSON_ITER_HOLDS_INT32(&keyIter)) {
+              value = bson_iter_int32(&keyIter);
+            } else if (BSON_ITER_HOLDS_INT64(&keyIter)) {
+              value = (int32_t)bson_iter_int64(&keyIter);
+            }
+            BSON_APPEND_INT32(keys, key, value);
+          }
+        }
+      }
+
+      if (keys) {
+        mongoc_index_opt_t indexOpt;
+        mongoc_index_opt_init(&indexOpt);
+        
+        // Check if unique
+        bson_iter_t uniqueIter;
+        if (bson_iter_init_find(&uniqueIter, indexDef, "unique") &&
+            BSON_ITER_HOLDS_BOOL(&uniqueIter)) {
+          indexOpt.unique = bson_iter_bool(&uniqueIter);
+        }
+
+        bson_t *reply = bson_new();
+        success = mongoc_collection_create_index_with_opts(
+            collection, keys, &indexOpt, nullptr, reply, &error);
+        bson_destroy(reply);
+        
+        bson_destroy(keys);
+        
+        if (!success) {
+          bson_destroy(indexDef);
+          mongoc_collection_destroy(collection);
+          mongoc_database_destroy(database);
+          throw std::runtime_error("Failed to recreate index: " + std::string(error.message));
+        }
+      }
+
+      bson_destroy(indexDef);
+      mongoc_collection_destroy(collection);
+      Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
+                   "Rebuilt MongoDB index " + indexName + " on collection " +
+                       collectionName);
+    } else if (task.maintenance_type == "COMPACT COLLECTION") {
+      mongoc_collection_t *collection =
+          mongoc_client_get_collection(client, task.database_name.c_str(),
+                                       task.object_name.c_str());
+      if (!collection) {
+        mongoc_database_destroy(database);
+        throw std::runtime_error("Collection not found: " + task.object_name);
+      }
+
+      // Compact collection (MongoDB compact command)
+      bson_t compactCmd;
+      bson_init(&compactCmd);
+      BSON_APPEND_UTF8(&compactCmd, "compact", task.object_name.c_str());
+
+      bson_t reply;
+      bson_error_t error;
+      bool success = mongoc_database_command_simple(
+          database, &compactCmd, nullptr, &reply, &error);
+
+      bson_destroy(&compactCmd);
+      bson_destroy(&reply);
+      mongoc_collection_destroy(collection);
+
+      if (!success) {
+        mongoc_database_destroy(database);
+        throw std::runtime_error("Failed to compact collection: " +
+                                  std::string(error.message));
+      }
+
+      Logger::info(LogCategory::GOVERNANCE, "MaintenanceManager",
+                   "Compacted MongoDB collection " + task.object_name);
+    }
+
+    mongoc_database_destroy(database);
+  } catch (const std::exception &e) {
+    std::string errorMsg = std::string(e.what());
+    if (errorMsg.find("does not exist") != std::string::npos ||
+        errorMsg.find("not found") != std::string::npos) {
+      cleanupNonExistentTask(task.id, errorMsg);
+    }
+    throw std::runtime_error("MongoDB maintenance failed: " + errorMsg);
   }
 }
 

@@ -54,6 +54,7 @@ private:
   void extractViewDependencies();
   void extractTriggerDependencies();
   void extractForeignKeyDependencies();
+  void extractDatalakeRelationships();
 
   std::set<std::pair<std::string, std::string>>
   extractReferencedTablesFromStatement(const std::string &actionStatement);
