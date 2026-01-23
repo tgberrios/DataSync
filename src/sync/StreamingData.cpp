@@ -83,6 +83,17 @@ void StreamingData::initialize() {
                       std::string(e.what()));
   }
 
+  try {
+    std::string connStr = DatabaseConfig::getPostgresConnectionString();
+    dbtExecutor = std::make_unique<DBTExecutor>(connStr);
+    Logger::info(LogCategory::MONITORING,
+                 "DBT executor initialized successfully");
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::MONITORING, "initialize",
+                  "Error initializing DBT executor: " +
+                      std::string(e.what()));
+  }
+
   Logger::info(LogCategory::MONITORING,
                "System initialization completed successfully");
 }
@@ -111,7 +122,7 @@ void StreamingData::run(std::function<bool()> shutdownCheck) {
   Logger::info(LogCategory::MONITORING,
                "Launching transfer threads (MariaDB, MSSQL, MongoDB, Oracle, "
                "PostgreSQL, API, CSV, Google Sheets, Custom Jobs, Data "
-               "Warehouse, Datalake "
+               "Warehouse, DBT, Datalake "
                "Scheduler)");
   threads.emplace_back(&StreamingData::mariaTransferThread, this);
   threads.emplace_back(&StreamingData::mssqlTransferThread, this);
@@ -125,6 +136,7 @@ void StreamingData::run(std::function<bool()> shutdownCheck) {
   threads.emplace_back(&StreamingData::customJobsSchedulerThread, this);
   threads.emplace_back(&StreamingData::warehouseBuilderThread, this);
   threads.emplace_back(&StreamingData::vaultBuilderThread, this);
+  threads.emplace_back(&StreamingData::dbtExecutorThread, this);
   threads.emplace_back(&StreamingData::workflowBuilderThread, this);
   threads.emplace_back(&StreamingData::datalakeSchedulerThread, this);
 
@@ -1927,6 +1939,156 @@ void StreamingData::workflowBuilderThread() {
     std::this_thread::sleep_for(std::chrono::seconds(60));
   }
   Logger::info(LogCategory::MONITORING, "Workflow builder thread stopped");
+}
+
+void StreamingData::dbtExecutorThread() {
+  Logger::info(LogCategory::MONITORING, "DBT executor thread started");
+  while (running) {
+    try {
+      if (!dbtExecutor) {
+        std::this_thread::sleep_for(std::chrono::seconds(60));
+        continue;
+      }
+
+      std::string connStr = DatabaseConfig::getPostgresConnectionString();
+      pqxx::connection conn(connStr);
+      pqxx::work txn(conn);
+
+      auto now = std::chrono::system_clock::now();
+      auto nowTimeT = std::chrono::system_clock::to_time_t(now);
+
+      auto modelsResult = txn.exec(
+          "SELECT model_name, metadata, active, last_run_time "
+          "FROM metadata.dbt_models "
+          "WHERE active = true");
+
+      std::vector<std::string> modelsToExecute;
+      std::vector<std::string> modelsToTest;
+      std::map<std::string, int> modelIntervals;
+
+      for (const auto &row : modelsResult) {
+        std::string modelName = row["model_name"].as<std::string>();
+        std::string metadataStr = row["metadata"].is_null()
+                                   ? "{}"
+                                   : row["metadata"].as<std::string>();
+        bool lastRunTimeIsNull = row["last_run_time"].is_null();
+
+        json metadata;
+        try {
+          metadata = json::parse(metadataStr);
+        } catch (const std::exception &e) {
+          Logger::warning(LogCategory::MONITORING, "dbtExecutorThread",
+                          "Invalid JSON metadata for model " + modelName + ": " +
+                              std::string(e.what()));
+          continue;
+        }
+
+        int executionInterval = 3600;
+        if (metadata.contains("execution_interval_seconds")) {
+          executionInterval = metadata["execution_interval_seconds"].get<int>();
+        }
+
+        bool shouldExecute = false;
+
+        if (metadata.contains("execute_now") &&
+            metadata["execute_now"].get<bool>()) {
+          shouldExecute = true;
+          metadata.erase("execute_now");
+          txn.exec_params(
+              "UPDATE metadata.dbt_models SET metadata = $1::jsonb, updated_at = NOW() WHERE model_name = $2",
+              metadata.dump(), modelName);
+        } else if (lastRunTimeIsNull) {
+          shouldExecute = true;
+        } else {
+          try {
+            std::string lastRunTimeStr = row["last_run_time"].as<std::string>();
+            std::tm tm = {};
+            std::istringstream ss(lastRunTimeStr);
+            
+            if (ss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S")) {
+              auto lastRunTime = std::mktime(&tm);
+              auto timeSinceLastRun = nowTimeT - lastRunTime;
+              
+              if (timeSinceLastRun >= executionInterval) {
+                shouldExecute = true;
+              }
+            } else {
+              ss.clear();
+              ss.str(lastRunTimeStr);
+              if (ss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%S")) {
+                auto lastRunTime = std::mktime(&tm);
+                auto timeSinceLastRun = nowTimeT - lastRunTime;
+                
+                if (timeSinceLastRun >= executionInterval) {
+                  shouldExecute = true;
+                }
+              } else {
+                Logger::warning(LogCategory::MONITORING, "dbtExecutorThread",
+                                "Could not parse last_run_time for model " + modelName + ", executing anyway");
+                shouldExecute = true;
+              }
+            }
+          } catch (const std::exception &e) {
+            Logger::warning(LogCategory::MONITORING, "dbtExecutorThread",
+                            "Error parsing last_run_time for model " + modelName + ": " +
+                                std::string(e.what()) + ", executing anyway");
+            shouldExecute = true;
+          }
+        }
+
+        if (shouldExecute) {
+          modelsToExecute.push_back(modelName);
+        }
+        
+        if (metadata.contains("run_tests") &&
+            metadata["run_tests"].get<bool>()) {
+          modelsToTest.push_back(modelName);
+          
+          metadata.erase("run_tests");
+          txn.exec_params(
+              "UPDATE metadata.dbt_models SET metadata = $1::jsonb, updated_at = NOW() WHERE model_name = $2",
+              metadata.dump(), modelName);
+        }
+      }
+
+      txn.commit();
+
+      for (const auto &modelName : modelsToExecute) {
+        Logger::info(LogCategory::MONITORING, "dbtExecutorThread",
+                     "Executing DBT model: " + modelName);
+        try {
+          dbtExecutor->executeModel(modelName);
+          
+          Logger::info(LogCategory::MONITORING, "dbtExecutorThread",
+                       "Running tests for DBT model: " + modelName);
+          dbtExecutor->runAllTests(modelName);
+        } catch (const std::exception &e) {
+          Logger::error(LogCategory::MONITORING, "dbtExecutorThread",
+                        "Error executing DBT model " + modelName + ": " +
+                            std::string(e.what()));
+        }
+      }
+
+      for (const auto &modelName : modelsToTest) {
+        Logger::info(LogCategory::MONITORING, "dbtExecutorThread",
+                     "Running tests for DBT model: " + modelName);
+        try {
+          dbtExecutor->runAllTests(modelName);
+        } catch (const std::exception &e) {
+          Logger::error(LogCategory::MONITORING, "dbtExecutorThread",
+                        "Error running tests for " + modelName + ": " +
+                            std::string(e.what()));
+        }
+      }
+
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::MONITORING, "dbtExecutorThread",
+                    "Error in DBT executor cycle: " + std::string(e.what()));
+    }
+
+    std::this_thread::sleep_for(std::chrono::seconds(30));
+  }
+  Logger::info(LogCategory::MONITORING, "DBT executor thread stopped");
 }
 
 void StreamingData::executeJob(const std::string &jobName) {

@@ -261,11 +261,36 @@ void DBTExecutor::executeIncrementalMaterialization(const DBTModel &model,
 }
 
 void DBTExecutor::executeModel(const std::string &modelName) {
-  DBTModel model = dbtRepo_->getModel(modelName);
-  if (model.model_name.empty()) {
-    throw std::runtime_error("Model not found: " + modelName);
+  Logger::error(LogCategory::TRANSFER, "executeModel",
+                "Starting execution for model: " + modelName);
+  try {
+    DBTModel model = dbtRepo_->getModel(modelName);
+    Logger::error(LogCategory::TRANSFER, "executeModel",
+                  "Model retrieved - name: '" + model.model_name + 
+                  "', schema: '" + model.schema_name + 
+                  "', sql_content length: " + std::to_string(model.sql_content.length()));
+    
+    if (model.model_name.empty()) {
+      Logger::error(LogCategory::TRANSFER, "executeModel",
+                    "Model name is empty for: " + modelName);
+      throw std::runtime_error("Model not found: " + modelName);
+    }
+    if (model.schema_name.empty()) {
+      Logger::error(LogCategory::TRANSFER, "executeModel",
+                    "Model schema_name is empty for model: " + modelName);
+      throw std::runtime_error("Model schema_name is empty for model: " + modelName);
+    }
+    if (model.sql_content.empty()) {
+      Logger::error(LogCategory::TRANSFER, "executeModel",
+                    "Model sql_content is empty for model: " + modelName);
+      throw std::runtime_error("Model sql_content is empty for model: " + modelName);
+    }
+    executeModel(model);
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "executeModel",
+                  "Exception in executeModel for " + modelName + ": " + std::string(e.what()));
+    throw;
   }
-  executeModel(model);
 }
 
 void DBTExecutor::executeModel(const DBTModel &model) {
@@ -288,18 +313,46 @@ void DBTExecutor::executeModel(const DBTModel &model) {
       std::chrono::duration_cast<std::chrono::milliseconds>(
           startTime.time_since_epoch()).count());
   
+  auto timeT = std::chrono::system_clock::to_time_t(startTime);
+  std::tm tm = {};
+  std::stringstream ss;
+  ss << std::put_time(std::gmtime(&timeT), "%Y-%m-%d %H:%M:%S");
+  std::string startTimeStr = ss.str();
+  
   DBTModelRun run;
+  run.id = 0;
   run.model_name = model.model_name;
   run.run_id = runId;
   run.status = "running";
   run.materialization = model.materialization;
-  run.start_time = std::to_string(
-      std::chrono::duration_cast<std::chrono::seconds>(
-          startTime.time_since_epoch()).count());
+  run.start_time = startTimeStr;
+  run.end_time = "";
   run.rows_affected = 0;
   run.duration_seconds = 0.0;
+  run.error_message = "";
+  run.compiled_sql = "";
+  run.executed_sql = "";
+  run.metadata = json::object();
+  run.created_at = "";
   
-  int64_t runIdDb = dbtRepo_->createModelRun(run);
+  Logger::error(LogCategory::TRANSFER, "executeModel",
+                "Creating model run - model_name: '" + run.model_name + 
+                "', run_id: '" + run.run_id + 
+                "', status: '" + run.status + 
+                "', start_time: '" + run.start_time + "'");
+  
+  int64_t runIdDb = 0;
+  try {
+    runIdDb = dbtRepo_->createModelRun(run);
+    Logger::error(LogCategory::TRANSFER, "executeModel",
+                  "Model run created successfully with id: " + std::to_string(runIdDb));
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::TRANSFER, "executeModel",
+                  "Failed to create model run - model_name: '" + run.model_name + 
+                  "', run_id: '" + run.run_id + 
+                  "', error: " + std::string(e.what()));
+    throw;
+  }
   
   try {
     std::string compiledSQL = compileSQL(model);
@@ -338,11 +391,15 @@ void DBTExecutor::executeModel(const DBTModel &model) {
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
         endTime - startTime).count() / 1000.0;
     
+    auto endTimeT = std::chrono::system_clock::to_time_t(endTime);
+    std::tm endTm = {};
+    std::stringstream endSs;
+    endSs << std::put_time(std::gmtime(&endTimeT), "%Y-%m-%d %H:%M:%S");
+    std::string endTimeStr = endSs.str();
+    
     run.id = runIdDb;
     run.status = "success";
-    run.end_time = std::to_string(
-        std::chrono::duration_cast<std::chrono::seconds>(
-            endTime.time_since_epoch()).count());
+    run.end_time = endTimeStr;
     run.rows_affected = rowsAffected;
     run.duration_seconds = duration;
     run.executed_sql = compiledSQL;
@@ -383,11 +440,15 @@ void DBTExecutor::executeModel(const DBTModel &model) {
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
         endTime - startTime).count() / 1000.0;
     
+    auto endTimeT = std::chrono::system_clock::to_time_t(endTime);
+    std::tm endTm = {};
+    std::stringstream endSs;
+    endSs << std::put_time(std::gmtime(&endTimeT), "%Y-%m-%d %H:%M:%S");
+    std::string endTimeStr = endSs.str();
+    
     run.id = runIdDb;
     run.status = "error";
-    run.end_time = std::to_string(
-        std::chrono::duration_cast<std::chrono::seconds>(
-            endTime.time_since_epoch()).count());
+    run.end_time = endTimeStr;
     run.duration_seconds = duration;
     run.error_message = std::string(e.what());
     

@@ -2,6 +2,7 @@
 #include "sync/StreamingData.h"
 #include "backup/backup_manager.h"
 #include "backup/backup_scheduler.h"
+#include "sync/DBTExecutor.h"
 #include "third_party/json.hpp"
 #include <atomic>
 #include <csignal>
@@ -140,9 +141,81 @@ int handleBackupCommand(int argc, char* argv[]) {
   }
 }
 
+int handleDBTCommand(int argc, char* argv[]) {
+  if (argc < 3) {
+    std::cerr << "Usage: DataSync --execute-dbt-model <modelName>" << std::endl;
+    std::cerr << "       DataSync --run-dbt-tests <modelName>" << std::endl;
+    std::cerr << "       DataSync --compile-dbt-model <modelName>" << std::endl;
+    return 1;
+  }
+  
+  std::string command = argv[1];
+  std::string modelName = argv[2];
+  
+  try {
+    DatabaseConfig::loadFromFile("config.json");
+    if (!DatabaseConfig::isInitialized()) {
+      std::cerr << "Error: Database configuration failed to initialize." << std::endl;
+      return 1;
+    }
+    
+    Logger::initialize();
+    
+    std::string metadataConnStr = DatabaseConfig::getPostgresConnectionString();
+    DBTExecutor executor(metadataConnStr);
+    
+    if (command == "--execute-dbt-model") {
+      executor.executeModel(modelName);
+      nlohmann::json output;
+      output["success"] = true;
+      output["message"] = "Model executed successfully";
+      std::cout << output.dump(2) << std::endl;
+      Logger::shutdown();
+      return 0;
+      
+    } else if (command == "--run-dbt-tests") {
+      executor.runAllTests(modelName);
+      nlohmann::json output;
+      output["success"] = true;
+      output["message"] = "Tests executed successfully";
+      std::cout << output.dump(2) << std::endl;
+      Logger::shutdown();
+      return 0;
+      
+    } else if (command == "--compile-dbt-model") {
+      std::string compiledSQL = executor.compileModel(modelName);
+      nlohmann::json output;
+      output["success"] = true;
+      output["compiled_sql"] = compiledSQL;
+      std::cout << output.dump(2) << std::endl;
+      Logger::shutdown();
+      return 0;
+      
+    } else {
+      std::cerr << "Unknown DBT command: " << command << std::endl;
+      Logger::shutdown();
+      return 1;
+    }
+    
+  } catch (const std::exception& e) {
+    nlohmann::json output;
+    output["success"] = false;
+    output["error"] = e.what();
+    std::cerr << output.dump(2) << std::endl;
+    Logger::shutdown();
+    return 1;
+  }
+}
+
 int main(int argc, char* argv[]) {
   if (argc > 1 && std::string(argv[1]) == "backup") {
     return handleBackupCommand(argc, argv);
+  }
+  
+  if (argc > 1 && (std::string(argv[1]) == "--execute-dbt-model" || 
+                   std::string(argv[1]) == "--run-dbt-tests" || 
+                   std::string(argv[1]) == "--compile-dbt-model")) {
+    return handleDBTCommand(argc, argv);
   }
   try {
     DatabaseConfig::loadFromFile("config.json");

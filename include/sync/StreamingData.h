@@ -14,6 +14,7 @@
 #include "sync/DB2ToPostgres.h"
 #include "sync/DataWarehouseBuilder.h"
 #include "sync/DataVaultBuilder.h"
+#include "sync/DBTExecutor.h"
 #include "sync/WorkflowExecutor.h"
 #include "sync/GoogleSheetsToDatabaseSync.h"
 #include "sync/MSSQLToPostgres.h"
@@ -63,6 +64,7 @@ private:
   std::unique_ptr<CustomJobExecutor> customJobExecutor;
   std::unique_ptr<DataWarehouseBuilder> warehouseBuilder;
   std::unique_ptr<DataVaultBuilder> vaultBuilder;
+  std::unique_ptr<DBTExecutor> dbtExecutor;
   std::unique_ptr<WorkflowExecutor> workflowExecutor;
   CatalogManager catalogManager;
   DataQuality dataQuality;
@@ -83,6 +85,7 @@ private:
   void customJobsSchedulerThread();
   void warehouseBuilderThread();
   void vaultBuilderThread();
+  void dbtExecutorThread();
   void workflowBuilderThread();
   void qualityThread();
   void maintenanceThread();

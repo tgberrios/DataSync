@@ -222,6 +222,21 @@ Lista de pruebas para la UI, organizada por funcionalidad:
 - [ ] Configurar SLA Config (max_execution_time_seconds, alert_on_sla_breach)
 - [ ] Navegación entre tabs (Basic Info / DAG Builder)
 
+
+tener un mapeo procesiso de donde viene cada tabla del datalake y ademas su refresh rate etc etc 
+obtener un mapeo de objectos no usados 
+
+
+necesitamos un componente que sea para archivados de datos.
+necesitamos un componente que limpie las tablas de CDC 
+
+
+esta fallando lo del warehouse cuando renombro un coso 
+
+
+que en dbt, pueda testear etc 
+
+
 #### **2. DAG Builder - Visual Editor**
 - [ ] Agregar tarea nueva (botón "Add Task")
 - [ ] Editar tarea existente (doble click o botón edit)
@@ -377,3 +392,7 @@ casi que todo esta usando process log o no ?
 ---
 
 
+eso del DBT no deberia estar en cpp ? 
+
+
+no tenemos como una columna llamada digamos cronjob en models para saber cuando ejecutarlo o asi no ? 

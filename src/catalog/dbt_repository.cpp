@@ -381,8 +381,12 @@ DBTModel DBTRepository::getModel(const std::string &modelName) {
   DBTModel model;
   model.model_name = "";
   try {
+    Logger::error(LogCategory::DATABASE, "getModel",
+                  "Getting model from database: " + modelName);
     auto conn = getConnection();
     pqxx::work txn(conn);
+    Logger::error(LogCategory::DATABASE, "getModel",
+                  "Executing SELECT query for model: " + modelName);
     auto results = txn.exec_params(
         "SELECT id, model_name, model_type, materialization, schema_name, "
         "database_name, sql_content, config, description, tags, depends_on, "
@@ -392,13 +396,24 @@ DBTModel DBTRepository::getModel(const std::string &modelName) {
         "FROM metadata.dbt_models WHERE model_name = $1",
         modelName);
 
+    Logger::error(LogCategory::DATABASE, "getModel",
+                  "Query executed, results size: " + std::to_string(results.size()));
+
     if (!results.empty()) {
+      Logger::error(LogCategory::DATABASE, "getModel",
+                    "Converting row to model");
       model = rowToModel(results[0]);
+      Logger::error(LogCategory::DATABASE, "getModel",
+                    "Model converted successfully - name: '" + model.model_name + "'");
+    } else {
+      Logger::error(LogCategory::DATABASE, "getModel",
+                    "No results found for model: " + modelName);
     }
     txn.commit();
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "getModel",
-                  "Error getting dbt model: " + std::string(e.what()));
+                  "Error getting dbt model: " + modelName + " - " + std::string(e.what()) + 
+                  ", error type: " + typeid(e).name());
   }
   return model;
 }
@@ -1084,36 +1099,73 @@ std::vector<DBTModelRun> DBTRepository::getModelRuns(const std::string &modelNam
 
 int64_t DBTRepository::createModelRun(const DBTModelRun &run) {
   try {
+    Logger::error(LogCategory::DATABASE, "createModelRun",
+                  "Starting createModelRun - model_name: '" + run.model_name + 
+                  "', run_id: '" + run.run_id + 
+                  "', status: '" + run.status + "'");
+    
     auto conn = getConnection();
     pqxx::work txn(conn);
 
+    Logger::error(LogCategory::DATABASE, "createModelRun",
+                  "Connection established, preparing metadata and materialization");
+    
     std::string metadataStr = run.metadata.dump();
     std::string materializationStr = materializationToString(run.materialization);
+    
+    Logger::error(LogCategory::DATABASE, "createModelRun",
+                  "Values prepared - materialization: '" + materializationStr + 
+                  "', start_time: '" + run.start_time + 
+                  "', end_time: '" + (run.end_time.empty() ? "NULL" : run.end_time) + "'");
 
+    Logger::error(LogCategory::DATABASE, "createModelRun",
+                  "Executing INSERT query");
+    
+    std::string startTimeParam = run.start_time.empty() ? "" : run.start_time;
+    std::string endTimeParam = run.end_time.empty() ? "" : run.end_time;
+    std::string errorMsgParam = run.error_message.empty() ? "" : run.error_message;
+    std::string compiledSqlParam = run.compiled_sql.empty() ? "" : run.compiled_sql;
+    std::string executedSqlParam = run.executed_sql.empty() ? "" : run.executed_sql;
+    
+    Logger::error(LogCategory::DATABASE, "createModelRun",
+                  "Parameters prepared - startTimeParam: '" + startTimeParam + 
+                  "', endTimeParam: '" + endTimeParam + "'");
+    
     auto res = txn.exec_params(
         "INSERT INTO metadata.dbt_model_runs (model_name, run_id, status, "
         "materialization, start_time, end_time, duration_seconds, rows_affected, "
         "error_message, compiled_sql, executed_sql, metadata) "
-        "VALUES ($1, $2, $3, $4, $5::timestamp, $6::timestamp, $7, $8, $9, $10, $11, $12::jsonb) "
+        "VALUES ($1, $2, $3, $4, NULLIF($5, '')::timestamp, NULLIF($6, '')::timestamp, $7, $8, NULLIF($9, ''), NULLIF($10, ''), NULLIF($11, ''), $12::jsonb) "
         "RETURNING id",
         run.model_name, run.run_id, run.status, materializationStr,
-        run.start_time.empty() ? nullptr : run.start_time,
-        run.end_time.empty() ? nullptr : run.end_time,
+        startTimeParam, endTimeParam,
         run.duration_seconds, run.rows_affected,
-        run.error_message.empty() ? nullptr : run.error_message,
-        run.compiled_sql.empty() ? nullptr : run.compiled_sql,
-        run.executed_sql.empty() ? nullptr : run.executed_sql, metadataStr);
+        errorMsgParam, compiledSqlParam, executedSqlParam, metadataStr);
+
+    Logger::error(LogCategory::DATABASE, "createModelRun",
+                  "INSERT query executed, result size: " + std::to_string(res.size()));
 
     if (!res.empty()) {
+      Logger::error(LogCategory::DATABASE, "createModelRun",
+                    "Reading result id from row");
       int64_t id = res[0][0].as<int64_t>();
+      Logger::error(LogCategory::DATABASE, "createModelRun",
+                    "Got id: " + std::to_string(id) + ", committing transaction");
       txn.commit();
+      Logger::error(LogCategory::DATABASE, "createModelRun",
+                    "Transaction committed successfully, returning id: " + std::to_string(id));
       return id;
     }
+    Logger::error(LogCategory::DATABASE, "createModelRun",
+                  "Result is empty, committing and returning 0");
     txn.commit();
     return 0;
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "createModelRun",
-                  "Error creating model run: " + std::string(e.what()));
+                  "Error creating model run - model_name: '" + run.model_name + 
+                  "', run_id: '" + run.run_id + 
+                  "', error: " + std::string(e.what()) + 
+                  ", error type: " + typeid(e).name());
     throw;
   }
 }
@@ -1125,19 +1177,22 @@ void DBTRepository::updateModelRun(const DBTModelRun &run) {
 
     std::string metadataStr = run.metadata.dump();
     std::string materializationStr = materializationToString(run.materialization);
+    
+    std::string startTimeParam = run.start_time.empty() ? "" : run.start_time;
+    std::string endTimeParam = run.end_time.empty() ? "" : run.end_time;
+    std::string errorMsgParam = run.error_message.empty() ? "" : run.error_message;
+    std::string compiledSqlParam = run.compiled_sql.empty() ? "" : run.compiled_sql;
+    std::string executedSqlParam = run.executed_sql.empty() ? "" : run.executed_sql;
 
     txn.exec_params(
         "UPDATE metadata.dbt_model_runs SET status = $2, materialization = $3, "
-        "start_time = $4::timestamp, end_time = $5::timestamp, duration_seconds = $6, "
-        "rows_affected = $7, error_message = $8, compiled_sql = $9, executed_sql = $10, "
+        "start_time = NULLIF($4, '')::timestamp, end_time = NULLIF($5, '')::timestamp, duration_seconds = $6, "
+        "rows_affected = $7, error_message = NULLIF($8, ''), compiled_sql = NULLIF($9, ''), executed_sql = NULLIF($10, ''), "
         "metadata = $11::jsonb WHERE id = $1",
         run.id, run.status, materializationStr,
-        run.start_time.empty() ? nullptr : run.start_time,
-        run.end_time.empty() ? nullptr : run.end_time,
+        startTimeParam, endTimeParam,
         run.duration_seconds, run.rows_affected,
-        run.error_message.empty() ? nullptr : run.error_message,
-        run.compiled_sql.empty() ? nullptr : run.compiled_sql,
-        run.executed_sql.empty() ? nullptr : run.executed_sql, metadataStr);
+        errorMsgParam, compiledSqlParam, executedSqlParam, metadataStr);
 
     txn.commit();
   } catch (const std::exception &e) {
@@ -1149,16 +1204,46 @@ void DBTRepository::updateModelRun(const DBTModelRun &run) {
 
 DBTModel DBTRepository::rowToModel(const pqxx::row &row) {
   DBTModel model;
-  model.id = row[0].as<int>();
-  model.model_name = row[1].as<std::string>();
-  model.model_type = row[2].is_null() ? "sql" : row[2].as<std::string>();
-  model.materialization = stringToMaterialization(
-      row[3].is_null() ? "table" : row[3].as<std::string>());
-  model.schema_name = row[4].as<std::string>();
-  model.database_name = row[5].is_null() ? "" : row[5].as<std::string>();
-  model.sql_content = row[6].as<std::string>();
-  
-  if (!row[7].is_null()) {
+  try {
+    Logger::error(LogCategory::DATABASE, "rowToModel",
+                  "Starting rowToModel conversion");
+    
+    model.id = row[0].as<int>();
+    Logger::error(LogCategory::DATABASE, "rowToModel",
+                  "Read id: " + std::to_string(model.id));
+    
+    Logger::error(LogCategory::DATABASE, "rowToModel",
+                  "Reading model_name - is_null: " + std::to_string(row[1].is_null()));
+    model.model_name = row[1].is_null() ? "" : row[1].as<std::string>();
+    Logger::error(LogCategory::DATABASE, "rowToModel",
+                  "model_name: '" + model.model_name + "'");
+    
+    Logger::error(LogCategory::DATABASE, "rowToModel",
+                  "Reading model_type - is_null: " + std::to_string(row[2].is_null()));
+    model.model_type = row[2].is_null() ? "sql" : row[2].as<std::string>();
+    
+    Logger::error(LogCategory::DATABASE, "rowToModel",
+                  "Reading materialization - is_null: " + std::to_string(row[3].is_null()));
+    std::string matStr = row[3].is_null() ? "table" : row[3].as<std::string>();
+    model.materialization = stringToMaterialization(matStr);
+    
+    Logger::error(LogCategory::DATABASE, "rowToModel",
+                  "Reading schema_name - is_null: " + std::to_string(row[4].is_null()));
+    model.schema_name = row[4].is_null() ? "" : row[4].as<std::string>();
+    Logger::error(LogCategory::DATABASE, "rowToModel",
+                  "schema_name: '" + model.schema_name + "'");
+    
+    Logger::error(LogCategory::DATABASE, "rowToModel",
+                  "Reading database_name - is_null: " + std::to_string(row[5].is_null()));
+    model.database_name = row[5].is_null() ? "" : row[5].as<std::string>();
+    
+    Logger::error(LogCategory::DATABASE, "rowToModel",
+                  "Reading sql_content - is_null: " + std::to_string(row[6].is_null()));
+    model.sql_content = row[6].is_null() ? "" : row[6].as<std::string>();
+    Logger::error(LogCategory::DATABASE, "rowToModel",
+                  "sql_content length: " + std::to_string(model.sql_content.length()));
+    
+    if (!row[7].is_null()) {
     try {
       model.config = json::parse(row[7].as<std::string>());
     } catch (...) {
@@ -1226,19 +1311,28 @@ DBTModel DBTRepository::rowToModel(const pqxx::row &row) {
     } catch (...) {
       model.metadata = json{};
     }
+    }
+    
+    model.version = row[15].is_null() ? 1 : row[15].as<int>();
+    model.git_commit_hash = row[16].is_null() ? "" : row[16].as<std::string>();
+    model.git_branch = row[17].is_null() ? "" : row[17].as<std::string>();
+    model.active = row[18].as<bool>();
+    model.created_at = row[19].is_null() ? "" : row[19].as<std::string>();
+    model.updated_at = row[20].is_null() ? "" : row[20].as<std::string>();
+    model.last_run_time = row[21].is_null() ? "" : row[21].as<std::string>();
+    model.last_run_status = row[22].is_null() ? "" : row[22].as<std::string>();
+    model.last_run_rows = row[23].is_null() ? 0 : row[23].as<int>();
+    
+    Logger::error(LogCategory::DATABASE, "rowToModel",
+                  "rowToModel completed successfully for model: '" + model.model_name + "'");
+    
+    return model;
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::DATABASE, "rowToModel",
+                  "Error in rowToModel: " + std::string(e.what()) + 
+                  ", error type: " + typeid(e).name());
+    throw;
   }
-  
-  model.version = row[15].is_null() ? 1 : row[15].as<int>();
-  model.git_commit_hash = row[16].is_null() ? "" : row[16].as<std::string>();
-  model.git_branch = row[17].is_null() ? "" : row[17].as<std::string>();
-  model.active = row[18].as<bool>();
-  model.created_at = row[19].is_null() ? "" : row[19].as<std::string>();
-  model.updated_at = row[20].is_null() ? "" : row[20].as<std::string>();
-  model.last_run_time = row[21].is_null() ? "" : row[21].as<std::string>();
-  model.last_run_status = row[22].is_null() ? "" : row[22].as<std::string>();
-  model.last_run_rows = row[23].is_null() ? 0 : row[23].as<int>();
-  
-  return model;
 }
 
 DBTTest DBTRepository::rowToTest(const pqxx::row &row) {
@@ -1408,7 +1502,7 @@ DBTModelRun DBTRepository::rowToModelRun(const pqxx::row &row) {
   run.model_name = row[1].as<std::string>();
   run.run_id = row[2].as<std::string>();
   run.status = row[3].as<std::string>();
-  run.materialization = stringToMaterialization(row[4].as<std::string>());
+  run.materialization = row[4].is_null() ? MaterializationType::TABLE : stringToMaterialization(row[4].as<std::string>());
   run.start_time = row[5].is_null() ? "" : row[5].as<std::string>();
   run.end_time = row[6].is_null() ? "" : row[6].as<std::string>();
   run.duration_seconds = row[7].is_null() ? 0.0 : row[7].as<double>();
