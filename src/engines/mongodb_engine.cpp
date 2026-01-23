@@ -15,7 +15,8 @@ MongoDBEngine::MongoDBEngine(std::string connectionString)
     valid_ = connect();
   } else {
     Logger::error(LogCategory::DATABASE, "MongoDBEngine",
-                  "Failed to parse connection string");
+                  "Failed to parse connection string: " +
+                  connectionString_.substr(0, 100));
   }
 }
 
@@ -33,38 +34,22 @@ bool MongoDBEngine::parseConnectionString(const std::string &connectionString) {
     return false;
   }
 
-  size_t dbStart = connectionString.find_last_of('/');
-  if (dbStart == std::string::npos) {
-    Logger::error(LogCategory::DATABASE, "MongoDBEngine",
-                  "Database name not found in connection string");
-    return false;
-  }
-
-  size_t dbEnd = connectionString.find('?', dbStart);
-  if (dbEnd == std::string::npos) {
-    dbEnd = connectionString.length();
-  }
-
-  databaseName_ = connectionString.substr(dbStart + 1, dbEnd - dbStart - 1);
-  if (databaseName_.empty()) {
-    Logger::error(LogCategory::DATABASE, "MongoDBEngine",
-                  "Database name is empty");
-    return false;
-  }
-
   size_t hostStart = connectionString.find("://") + 3;
   size_t atPos = connectionString.find('@', hostStart);
   size_t colonPos = connectionString.find(':', hostStart);
   size_t slashPos = connectionString.find('/', hostStart);
+  size_t queryPos = connectionString.find('?', hostStart);
+  
+  size_t pathStart = (slashPos != std::string::npos) ? slashPos : 
+                     ((queryPos != std::string::npos) ? queryPos : connectionString.length());
 
-  if (atPos != std::string::npos && atPos < slashPos) {
+  if (atPos != std::string::npos && atPos < pathStart) {
     hostStart = atPos + 1;
   }
 
-  if (colonPos != std::string::npos && colonPos < slashPos) {
+  if (colonPos != std::string::npos && colonPos < pathStart) {
     host_ = connectionString.substr(hostStart, colonPos - hostStart);
-    std::string portStr =
-        connectionString.substr(colonPos + 1, slashPos - colonPos - 1);
+    std::string portStr = connectionString.substr(colonPos + 1, pathStart - colonPos - 1);
     try {
       if (!portStr.empty() && portStr.length() <= 5) {
         port_ = std::stoi(portStr);
@@ -84,8 +69,33 @@ bool MongoDBEngine::parseConnectionString(const std::string &connectionString) {
       port_ = 27017;
     }
   } else {
-    host_ = connectionString.substr(hostStart, slashPos - hostStart);
+    if (pathStart != std::string::npos && pathStart > hostStart) {
+      host_ = connectionString.substr(hostStart, pathStart - hostStart);
+    } else {
+      host_ = connectionString.substr(hostStart);
+    }
     port_ = 27017;
+  }
+
+  if (host_.empty()) {
+    Logger::error(LogCategory::DATABASE, "MongoDBEngine",
+                  "Host is empty in connection string");
+    return false;
+  }
+
+  if (slashPos != std::string::npos && slashPos < connectionString.length() - 1) {
+    size_t dbStart = slashPos + 1;
+    size_t dbEnd = connectionString.find('?', dbStart);
+    if (dbEnd == std::string::npos) {
+      dbEnd = connectionString.length();
+    }
+    
+    databaseName_ = connectionString.substr(dbStart, dbEnd - dbStart);
+    if (databaseName_.empty()) {
+      databaseName_ = "admin";
+    }
+  } else {
+    databaseName_ = "admin";
   }
 
   return true;
@@ -95,35 +105,56 @@ bool MongoDBEngine::connect() {
   static std::once_flag initFlag;
   std::call_once(initFlag, []() { mongoc_init(); });
 
+  Logger::info(LogCategory::DATABASE, "MongoDBEngine",
+               "Attempting to connect with connection string: " + connectionString_);
+
   bson_error_t error;
   client_ = mongoc_client_new(connectionString_.c_str());
 
   if (!client_) {
     Logger::error(LogCategory::DATABASE, "MongoDBEngine",
-                  "Failed to create MongoDB client");
+                  "Failed to create MongoDB client for connection string: " +
+                  connectionString_.substr(0, 50) + "...");
     return false;
   }
 
   mongoc_client_set_appname(client_, "DataSync");
 
   bson_t *ping = BCON_NEW("ping", BCON_INT32(1));
+  bool ret = false;
+  
   mongoc_database_t *db =
       mongoc_client_get_database(client_, databaseName_.c_str());
-  bool ret = mongoc_database_command_simple(db, ping, nullptr, nullptr, &error);
-  bson_destroy(ping);
+  ret = mongoc_database_command_simple(db, ping, nullptr, nullptr, &error);
   mongoc_database_destroy(db);
 
   if (!ret) {
-    Logger::error(LogCategory::DATABASE, "MongoDBEngine",
-                  "Failed to ping MongoDB: " + std::string(error.message));
-    mongoc_client_destroy(client_);
-    client_ = nullptr;
-    return false;
+    Logger::warning(LogCategory::DATABASE, "MongoDBEngine",
+                    "Ping to database '" + databaseName_ + "' failed: " + 
+                    std::string(error.message) + 
+                    ". Trying 'admin' as fallback...");
+    
+    mongoc_database_t *adminDb = mongoc_client_get_database(client_, "admin");
+    ret = mongoc_database_command_simple(adminDb, ping, nullptr, nullptr, &error);
+    mongoc_database_destroy(adminDb);
+    
+    if (!ret) {
+      Logger::warning(LogCategory::DATABASE, "MongoDBEngine",
+                      "Ping to 'admin' database also failed: " + 
+                      std::string(error.message) + 
+                      ". Connection will be attempted anyway.");
+    } else {
+      Logger::info(LogCategory::DATABASE, "MongoDBEngine",
+                   "Connected to MongoDB via 'admin' database: " + host_ + ":" + 
+                   std::to_string(port_));
+    }
+  } else {
+    Logger::info(LogCategory::DATABASE, "MongoDBEngine",
+                 "Connected to MongoDB: " + host_ + ":" + std::to_string(port_) +
+                     "/" + databaseName_);
   }
 
-  Logger::info(LogCategory::DATABASE, "MongoDBEngine",
-               "Connected to MongoDB: " + host_ + ":" + std::to_string(port_) +
-                   "/" + databaseName_);
+  bson_destroy(ping);
   return true;
 }
 
@@ -190,6 +221,9 @@ MongoDBEngine::discoverAllDatabasesAndCollections() {
     return allCollections;
   }
 
+  Logger::info(LogCategory::DATABASE, "MongoDBEngine",
+               "Starting discovery with connection string: " + connectionString_);
+
   try {
     std::lock_guard<std::mutex> lock(clientMutex_);
     bson_error_t error;
@@ -199,7 +233,19 @@ MongoDBEngine::discoverAllDatabasesAndCollections() {
     if (!database_names) {
       Logger::error(LogCategory::DATABASE, "MongoDBEngine",
                     "Failed to get database names: " +
-                        std::string(error.message));
+                        std::string(error.message) +
+                        ". Connection string used: " + connectionString_);
+      return allCollections;
+    }
+
+    std::string baseConn = getBaseConnectionString();
+    if (baseConn.empty() || 
+        (baseConn.find("mongodb://") != 0 && baseConn.find("mongodb+srv://") != 0)) {
+      Logger::error(LogCategory::DATABASE, "MongoDBEngine",
+                    "Invalid base connection string: " + baseConn +
+                    ". Original connection string: " + connectionString_ +
+                    ". Cannot construct valid connection strings for discovered collections.");
+      bson_strfreev(database_names);
       return allCollections;
     }
 
@@ -220,12 +266,22 @@ MongoDBEngine::discoverAllDatabasesAndCollections() {
           CatalogTableInfo info;
           info.schema = dbName;
           info.table = collection_names[j];
-          std::string baseConn = getBaseConnectionString();
+          
           if (baseConn.back() == '/') {
             info.connectionString = baseConn + dbName;
           } else {
             info.connectionString = baseConn + "/" + dbName;
           }
+          
+          if (info.connectionString.find("mongodb://") != 0 && 
+              info.connectionString.find("mongodb+srv://") != 0) {
+            Logger::warning(LogCategory::DATABASE, "MongoDBEngine",
+                           "Invalid connection string constructed for " + dbName + "." + 
+                           collection_names[j] + ": " + info.connectionString + 
+                           ". Skipping this collection.");
+            continue;
+          }
+          
           allCollections.push_back(info);
         }
         bson_strfreev(collection_names);
@@ -248,20 +304,46 @@ MongoDBEngine::discoverAllDatabasesAndCollections() {
 }
 
 std::string MongoDBEngine::getBaseConnectionString() const {
+  if (connectionString_.empty()) {
+    return "";
+  }
+
+  if (connectionString_.find("mongodb://") != 0 && 
+      connectionString_.find("mongodb+srv://") != 0) {
+    Logger::error(LogCategory::DATABASE, "MongoDBEngine",
+                  "Invalid connection string format in getBaseConnectionString: " +
+                  connectionString_.substr(0, 50) + "...");
+    return "";
+  }
+
+  size_t protocolEnd = connectionString_.find("://") + 3;
+  if (protocolEnd == std::string::npos || protocolEnd >= connectionString_.length()) {
+    Logger::error(LogCategory::DATABASE, "MongoDBEngine",
+                  "Invalid connection string (no protocol end) in getBaseConnectionString: " +
+                  connectionString_.substr(0, 50) + "...");
+    return "";
+  }
+
   size_t dbStart = connectionString_.find_last_of('/');
-  if (dbStart == std::string::npos) {
-    return connectionString_;
+  if (dbStart == std::string::npos || dbStart < protocolEnd) {
+    if (connectionString_.find("mongodb://") == 0 || 
+        connectionString_.find("mongodb+srv://") == 0) {
+      size_t queryPos = connectionString_.find('?');
+      if (queryPos != std::string::npos) {
+        return connectionString_.substr(0, queryPos) + "/";
+      }
+      return connectionString_ + "/";
+    }
+    return "";
   }
 
-  size_t dbEnd = connectionString_.find('?', dbStart);
-  if (dbEnd == std::string::npos) {
-    dbEnd = connectionString_.length();
-  }
-
+  size_t queryStart = connectionString_.find('?', dbStart);
+  size_t endPos = (queryStart != std::string::npos) ? queryStart : connectionString_.length();
+  
   std::string base = connectionString_.substr(0, dbStart + 1);
   std::string queryParams = "";
-  if (dbEnd < connectionString_.length()) {
-    queryParams = connectionString_.substr(dbEnd);
+  if (queryStart != std::string::npos && queryStart < connectionString_.length()) {
+    queryParams = connectionString_.substr(queryStart);
   }
 
   if (!queryParams.empty() && queryParams[0] == '?') {

@@ -232,6 +232,15 @@ Lista de pruebas para la UI, organizada por funcionalidad:
 - [ ] Visualización de nodos (colores por tipo de tarea)
 - [ ] Mostrar contadores de dependencias (↑ X | ↓ Y)
 
+mongodb://localhost:27017
+
+
+que pueda filtrar por dos level en error log, por warning y error y que tambien podamos hacer distinct con el mas recent siempre ?
+el boton de clear all logs no esta funcionando 
+
+casi que todo esta usando process log o no ? 
+
+
 #### **3. Configuración de Tareas - TaskModal**
 - [ ] Seleccionar Task Type (CUSTOM_JOB, DATA_WAREHOUSE, DATA_VAULT, SYNC, API_CALL, SCRIPT, **SUB_WORKFLOW**)
 - [ ] Seleccionar Reference según Task Type

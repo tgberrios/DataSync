@@ -110,8 +110,60 @@ void CatalogCleaner::cleanNonExistentOracleTables() {
 
 void CatalogCleaner::cleanNonExistentMongoDBTables() {
   try {
-    size_t totalDeleted =
-        cleanNonExistentTablesForEngine<MongoDBEngine>("MongoDB");
+    size_t totalDeleted = 0;
+    auto connStrings = repo_->getConnectionStrings("MongoDB");
+
+    for (const auto &connStr : connStrings) {
+      if (connStr.empty() || 
+          (connStr.find("mongodb://") != 0 && connStr.find("mongodb+srv://") != 0)) {
+        Logger::warning(LogCategory::DATABASE, "CatalogCleaner",
+                       "Invalid MongoDB connection string format: " +
+                       connStr.substr(0, 50) + "... Skipping cleanup.");
+        continue;
+      }
+
+      try {
+        MongoDBEngine engine(connStr);
+        
+        std::vector<CatalogTableInfo> existingTables;
+        if (engine.isValid()) {
+          try {
+            existingTables = engine.discoverAllDatabasesAndCollections();
+          } catch (const std::exception &e) {
+            Logger::warning(LogCategory::DATABASE, "CatalogCleaner",
+                           "Failed to discover all MongoDB databases for connection: " +
+                           connStr.substr(0, 50) + "... Error: " + std::string(e.what()) +
+                           ". Skipping cleanup for this connection to prevent data loss.");
+            continue;
+          }
+        } else {
+          Logger::warning(LogCategory::DATABASE, "CatalogCleaner",
+                         "MongoDB engine invalid for connection: " +
+                         connStr.substr(0, 50) + "... Skipping cleanup to prevent data loss.");
+          continue;
+        }
+
+        std::set<std::pair<std::string, std::string>> existingSet;
+        for (const auto &table : existingTables) {
+          existingSet.insert({table.schema, table.table});
+        }
+
+        auto catalogEntries = repo_->getCatalogEntries("MongoDB", connStr);
+        for (const auto &entry : catalogEntries) {
+          if (existingSet.find({entry.schema, entry.table}) ==
+              existingSet.end()) {
+            repo_->deleteTable(entry.schema, entry.table, "MongoDB", connStr,
+                             true);
+            totalDeleted++;
+          }
+        }
+      } catch (const std::exception &e) {
+        Logger::error(LogCategory::DATABASE, "CatalogCleaner",
+                     "Error checking MongoDB connection: " + std::string(e.what()) +
+                     ". Skipping cleanup for this connection to prevent data loss.");
+      }
+    }
+
     if (totalDeleted > 0) {
       Logger::info(
           LogCategory::DATABASE, "CatalogCleaner",
@@ -120,7 +172,7 @@ void CatalogCleaner::cleanNonExistentMongoDBTables() {
     }
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "CatalogCleaner",
-                  "Error cleaning MongoDB tables: " + std::string(e.what()));
+                 "Error cleaning MongoDB tables: " + std::string(e.what()));
   }
 }
 

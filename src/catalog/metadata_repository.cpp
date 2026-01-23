@@ -62,10 +62,68 @@ MetadataRepository::getConnectionStrings(const std::string &dbEngine) {
         dbEngine);
     txn.commit();
 
+    Logger::info(LogCategory::DATABASE, "MetadataRepository",
+                 "Found " + std::to_string(results.size()) + 
+                 " distinct connection strings for " + dbEngine);
+
     for (const auto &row : results) {
-      if (!row[0].is_null())
-        connStrings.push_back(row[0].as<std::string>());
+      if (!row[0].is_null()) {
+        std::string connStr = row[0].as<std::string>();
+        
+        Logger::info(LogCategory::DATABASE, "MetadataRepository",
+                     "Processing connection string: " + connStr.substr(0, 100) + 
+                     (connStr.length() > 100 ? "..." : ""));
+        
+        if (dbEngine == "MongoDB") {
+          if (connStr.empty() || 
+              (connStr.find("mongodb://") != 0 && connStr.find("mongodb+srv://") != 0)) {
+            Logger::warning(LogCategory::DATABASE, "MetadataRepository",
+                           "Skipping invalid MongoDB connection string format: " +
+                           connStr.substr(0, 50) + "...");
+            continue;
+          }
+          
+          size_t protocolEnd = connStr.find("://") + 3;
+          if (protocolEnd == std::string::npos || protocolEnd >= connStr.length()) {
+            Logger::warning(LogCategory::DATABASE, "MetadataRepository",
+                           "Skipping invalid MongoDB connection string (no protocol): " +
+                           connStr.substr(0, 50) + "...");
+            continue;
+          }
+          
+          size_t atPos = connStr.find('@', protocolEnd);
+          size_t colonPos = connStr.find(':', protocolEnd);
+          size_t slashPos = connStr.find('/', protocolEnd);
+          
+          bool hasHost = false;
+          if (atPos != std::string::npos) {
+            hasHost = (atPos > protocolEnd);
+          } else if (colonPos != std::string::npos && 
+                     (slashPos == std::string::npos || colonPos < slashPos)) {
+            hasHost = (colonPos > protocolEnd);
+          } else if (slashPos != std::string::npos) {
+            hasHost = (slashPos > protocolEnd);
+          } else {
+            hasHost = (connStr.length() > protocolEnd);
+          }
+          
+          if (!hasHost) {
+            Logger::warning(LogCategory::DATABASE, "MetadataRepository",
+                           "Skipping invalid MongoDB connection string (no host): " +
+                           connStr.substr(0, 50) + "...");
+            continue;
+          }
+        }
+        
+        connStrings.push_back(connStr);
+        Logger::info(LogCategory::DATABASE, "MetadataRepository",
+                     "Added valid connection string for " + dbEngine);
+      }
     }
+    
+    Logger::info(LogCategory::DATABASE, "MetadataRepository",
+                 "Returning " + std::to_string(connStrings.size()) + 
+                 " valid connection strings for " + dbEngine);
   } catch (const std::exception &e) {
     Logger::error(LogCategory::DATABASE, "MetadataRepository",
                   "Error getting connection strings: " + std::string(e.what()));
@@ -150,10 +208,8 @@ void MetadataRepository::insertOrUpdateTable(
     auto existing = txn.exec_params(
         "SELECT pk_columns, pk_strategy, table_size, connection_string, active "
         "FROM metadata.catalog "
-        "WHERE schema_name = $1 AND table_name = $2 AND db_engine = $3 AND "
-        "connection_string = $4",
-        tableInfo.schema, tableInfo.table, dbEngine,
-        tableInfo.connectionString);
+        "WHERE schema_name = $1 AND table_name = $2 AND db_engine = $3",
+        tableInfo.schema, tableInfo.table, dbEngine);
 
     if (existing.empty()) {
       txn.exec_params("INSERT INTO metadata.catalog "
@@ -168,29 +224,35 @@ void MetadataRepository::insertOrUpdateTable(
                       std::string(CatalogStatus::FULL_LOAD), pkColumnsJSON,
                       pkStrategy, tableSize);
     } else {
-      bool currentActive = existing[0][4].as<bool>();
+      bool currentActive = existing[0][4].is_null() ? false : existing[0][4].as<bool>();
       std::string currentPKColumns =
           existing[0][0].is_null() ? "" : existing[0][0].as<std::string>();
       std::string currentPKStrategy =
           existing[0][1].is_null() ? "" : existing[0][1].as<std::string>();
+      std::string currentConnectionString =
+          existing[0][3].is_null() ? "" : existing[0][3].as<std::string>();
+      
+      bool connectionStringChanged = (currentConnectionString != tableInfo.connectionString);
+      
       if (currentPKColumns != pkColumnsJSON ||
-          currentPKStrategy != pkStrategy) {
+          currentPKStrategy != pkStrategy || connectionStringChanged) {
         txn.exec_params("UPDATE metadata.catalog SET "
                         "pk_columns = $1, pk_strategy = $2, "
-                        "table_size = $3, status = $4, active = $5 "
-                        "WHERE schema_name = $6 AND table_name = $7 AND "
-                        "db_engine = $8 AND connection_string = $9",
+                        "table_size = $3, status = $4, active = $5, "
+                        "connection_string = $6 "
+                        "WHERE schema_name = $7 AND table_name = $8 AND "
+                        "db_engine = $9",
                         pkColumnsJSON, pkStrategy, tableSize,
                         std::string(CatalogStatus::FULL_LOAD), currentActive,
-                        tableInfo.schema, tableInfo.table, dbEngine,
-                        tableInfo.connectionString);
+                        tableInfo.connectionString,
+                        tableInfo.schema, tableInfo.table, dbEngine);
       } else {
         txn.exec_params(
             "UPDATE metadata.catalog SET table_size = $1, active = $2 "
             "WHERE schema_name = $3 AND table_name = $4 AND "
-            "db_engine = $5 AND connection_string = $6",
+            "db_engine = $5",
             tableSize, currentActive, tableInfo.schema, tableInfo.table,
-            dbEngine, tableInfo.connectionString);
+            dbEngine);
       }
     }
     txn.commit();
