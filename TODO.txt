@@ -190,10 +190,6 @@ anadir test en los otros para nulls, esto y lo otros
 
 
 
-que otra cosa del backend de node.js podemos mover al script cpp ? 
-
-
-falto algo de implementar en la ui que exista en el cpp ? 
 
 Revisando los componentes de UI para generar la lista de pruebas:
 
@@ -231,10 +227,12 @@ necesitamos un componente que sea para archivados de datos.
 necesitamos un componente que limpie las tablas de CDC 
 
 
+
+una applicacion de weebhooks en terminal 
+
+
 esta fallando lo del warehouse cuando renombro un coso 
 
-
-que en dbt, pueda testear etc 
 
 juego en la terminal 
 
@@ -250,12 +248,6 @@ juego en la terminal
 - [ ] Mostrar contadores de dependencias (↑ X | ↓ Y)
 
 mongodb://localhost:27017
-
-
-que pueda filtrar por dos level en error log, por warning y error y que tambien podamos hacer distinct con el mas recent siempre ?
-el boton de clear all logs no esta funcionando 
-
-casi que todo esta usando process log o no ? 
 
 
 #### **3. Configuración de Tareas - TaskModal**
@@ -395,18 +387,11 @@ casi que todo esta usando process log o no ?
 
 me falta testear macros, vault y workflow 
 
-
-
-tengo mas tablas y column catalog solo captura dos tablas ? 
-
 yay
 actualizar el sistema con yay
 
 
 descargar vencord
-
-
-maintance esta en cpp ? 
 
 
 me fatla crear encryption de probar
@@ -417,3 +402,6 @@ y audit trail
 el governance de mariadb no esta guardando info
 el de mssql tampoco
 mongo mas o menos
+
+
+que archivos podemos eliminar y cuales no 

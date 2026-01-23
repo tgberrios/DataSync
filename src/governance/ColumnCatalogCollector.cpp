@@ -16,6 +16,7 @@
 #include <mysql/mysql.h>
 #include <pqxx/pqxx>
 #include <regex>
+#include <set>
 #include <sql.h>
 #include <sqlext.h>
 #include <sstream>
@@ -47,6 +48,10 @@ void ColumnCatalogCollector::collectAllColumns() {
 
     std::vector<std::string> postgresConnections =
         repo.getConnectionStrings("PostgreSQL");
+    Logger::info(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                 "Found " + std::to_string(postgresConnections.size()) +
+                     " PostgreSQL connection(s)");
+    
     for (const auto &connStr : postgresConnections) {
       if (!connStr.empty()) {
         try {
@@ -64,7 +69,7 @@ void ColumnCatalogCollector::collectAllColumns() {
     if (postgresConnections.empty()) {
       try {
         Logger::info(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
-                     "Collecting columns from DataLake PostgreSQL");
+                     "No PostgreSQL sources in catalog, collecting columns from DataLake PostgreSQL");
         collectPostgreSQLColumns(DatabaseConfig::getPostgresConnectionString());
       } catch (const std::exception &e) {
         Logger::error(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
@@ -75,6 +80,10 @@ void ColumnCatalogCollector::collectAllColumns() {
 
     std::vector<std::string> mariadbConnections =
         repo.getConnectionStrings("MariaDB");
+    Logger::info(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                 "Found " + std::to_string(mariadbConnections.size()) +
+                     " MariaDB connection(s)");
+    
     for (const auto &connStr : mariadbConnections) {
       if (!connStr.empty()) {
         try {
@@ -91,6 +100,10 @@ void ColumnCatalogCollector::collectAllColumns() {
 
     std::vector<std::string> mssqlConnections =
         repo.getConnectionStrings("MSSQL");
+    Logger::info(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                 "Found " + std::to_string(mssqlConnections.size()) +
+                     " MSSQL connection(s)");
+    
     for (const auto &connStr : mssqlConnections) {
       if (!connStr.empty()) {
         try {
@@ -105,9 +118,17 @@ void ColumnCatalogCollector::collectAllColumns() {
       }
     }
 
+    // Calculate unique tables from collected columns
+    std::set<std::string> uniqueTables;
+    for (const auto &col : columnData_) {
+      std::string tableKey = col.schema_name + "." + col.table_name + " (" + col.db_engine + ")";
+      uniqueTables.insert(tableKey);
+    }
+
     Logger::info(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
                  "Column catalog collection completed. Collected " +
-                     std::to_string(columnData_.size()) + " columns");
+                     std::to_string(columnData_.size()) + " columns from " +
+                     std::to_string(uniqueTables.size()) + " unique table(s)");
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
                   "Error in collectAllColumns: " + std::string(e.what()));
@@ -145,7 +166,11 @@ void ColumnCatalogCollector::collectPostgreSQLColumns(
         COALESCE(a.attidentity, '') as attidentity,
         COALESCE(a.attcollation::regclass::text, '') as attcollation
       FROM information_schema.columns c
-      LEFT JOIN pg_attribute a ON a.attrelid = (c.table_schema||'.'||c.table_name)::regclass
+      LEFT JOIN pg_namespace n ON n.nspname = c.table_schema
+      LEFT JOIN pg_class pc ON pc.relname = c.table_name
+        AND pc.relnamespace = n.oid
+        AND pc.relkind = 'r'
+      LEFT JOIN pg_attribute a ON a.attrelid = pc.oid
         AND a.attname = c.column_name
         AND a.attnum > 0
         AND NOT a.attisdropped
@@ -196,53 +221,94 @@ void ColumnCatalogCollector::collectPostgreSQLColumns(
     auto result = txn.exec(query);
     txn.commit();
 
+    // Count unique tables before processing
+    std::set<std::string> uniqueTablesBefore;
     for (const auto &row : result) {
-      ColumnMetadata col;
-      col.schema_name = row[0].as<std::string>();
-      col.table_name = row[1].as<std::string>();
-      col.column_name = row[2].as<std::string>();
-      col.db_engine = "PostgreSQL";
-      col.connection_string = connectionString;
-
-      col.ordinal_position = row[3].as<int>();
-      col.data_type = row[4].as<std::string>();
-      col.character_maximum_length = row[5].is_null() ? 0 : row[5].as<int>();
-      col.numeric_precision = row[6].is_null() ? 0 : row[6].as<int>();
-      col.numeric_scale = row[7].is_null() ? 0 : row[7].as<int>();
-      col.is_nullable = (row[8].as<std::string>() == "YES");
-      col.column_default = row[9].is_null() ? "" : row[9].as<std::string>();
-      col.is_auto_increment = row[10].as<bool>();
-      col.is_generated = row[11].as<bool>();
-      col.is_primary_key = row[12].as<bool>();
-      col.is_foreign_key = row[13].as<bool>();
-      col.is_unique = row[14].as<bool>();
-      col.is_indexed = row[15].as<bool>();
-
-      json pgMetadata;
-      pgMetadata["attnum"] = row[16].as<std::string>();
-      pgMetadata["atttypid"] = row[17].as<std::string>();
-      pgMetadata["attnotnull"] = row[18].as<std::string>();
-      pgMetadata["atthasdef"] = row[19].as<std::string>();
-      pgMetadata["attidentity"] = row[20].as<std::string>();
-      pgMetadata["attcollation"] = row[21].as<std::string>();
-
-      json columnMetadata;
-      columnMetadata["source_specific"]["postgresql"] = pgMetadata;
-      col.column_metadata_json = columnMetadata;
-
-      analyzeColumnStatistics(col, connectionString);
-      classifyColumn(col);
-      calculateAdvancedStatistics(col, connectionString);
-      detectPatterns(col, connectionString);
-      analyzeDistribution(col, connectionString);
-      detectOutliers(col, connectionString);
-      calculateProfilingQualityScore(col);
-      columnData_.push_back(col);
+      std::string schema = row[0].as<std::string>();
+      std::string table = row[1].as<std::string>();
+      uniqueTablesBefore.insert(schema + "." + table);
     }
 
     Logger::info(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
-                 "Collected " + std::to_string(result.size()) +
-                     " PostgreSQL columns");
+                 "PostgreSQL query returned " + std::to_string(result.size()) +
+                     " columns from " + std::to_string(uniqueTablesBefore.size()) +
+                     " unique table(s)");
+
+    int processedColumns = 0;
+    int failedColumns = 0;
+    std::set<std::string> processedTables;
+    
+    for (const auto &row : result) {
+      try {
+        ColumnMetadata col;
+        col.schema_name = row[0].as<std::string>();
+        col.table_name = row[1].as<std::string>();
+        col.column_name = row[2].as<std::string>();
+        col.db_engine = "PostgreSQL";
+        col.connection_string = connectionString;
+
+        col.ordinal_position = row[3].as<int>();
+        col.data_type = row[4].as<std::string>();
+        col.character_maximum_length = row[5].is_null() ? 0 : row[5].as<int>();
+        col.numeric_precision = row[6].is_null() ? 0 : row[6].as<int>();
+        col.numeric_scale = row[7].is_null() ? 0 : row[7].as<int>();
+        col.is_nullable = (row[8].as<std::string>() == "YES");
+        col.column_default = row[9].is_null() ? "" : row[9].as<std::string>();
+        col.is_auto_increment = row[10].as<bool>();
+        col.is_generated = row[11].as<bool>();
+        col.is_primary_key = row[12].as<bool>();
+        col.is_foreign_key = row[13].as<bool>();
+        col.is_unique = row[14].as<bool>();
+        col.is_indexed = row[15].as<bool>();
+
+        json pgMetadata;
+        pgMetadata["attnum"] = row[16].as<std::string>();
+        pgMetadata["atttypid"] = row[17].as<std::string>();
+        pgMetadata["attnotnull"] = row[18].as<std::string>();
+        pgMetadata["atthasdef"] = row[19].as<std::string>();
+        pgMetadata["attidentity"] = row[20].as<std::string>();
+        pgMetadata["attcollation"] = row[21].as<std::string>();
+
+        json columnMetadata;
+        columnMetadata["source_specific"]["postgresql"] = pgMetadata;
+        col.column_metadata_json = columnMetadata;
+
+        analyzeColumnStatistics(col, connectionString);
+        classifyColumn(col);
+        calculateAdvancedStatistics(col, connectionString);
+        detectPatterns(col, connectionString);
+        analyzeDistribution(col, connectionString);
+        detectOutliers(col, connectionString);
+        calculateProfilingQualityScore(col);
+        columnData_.push_back(col);
+        
+        processedColumns++;
+        processedTables.insert(col.schema_name + "." + col.table_name);
+      } catch (const std::exception &e) {
+        failedColumns++;
+        std::string schema = row[0].as<std::string>();
+        std::string table = row[1].as<std::string>();
+        std::string column = row[2].as<std::string>();
+        Logger::error(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                      "Error processing column " + schema + "." + table + "." + column +
+                      ": " + std::string(e.what()));
+      }
+    }
+
+    Logger::info(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                 "PostgreSQL processing completed: " +
+                     std::to_string(processedColumns) + " columns processed, " +
+                     std::to_string(failedColumns) + " failed, from " +
+                     std::to_string(processedTables.size()) + " unique table(s)");
+    
+    if (uniqueTablesBefore.size() != processedTables.size()) {
+      Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                      "Table count mismatch: Query found " +
+                          std::to_string(uniqueTablesBefore.size()) +
+                          " tables, but only " +
+                          std::to_string(processedTables.size()) +
+                          " tables were successfully processed");
+    }
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
                   "Error collecting PostgreSQL columns: " +
@@ -325,17 +391,39 @@ void ColumnCatalogCollector::collectMariaDBColumns(
     }
 
     unsigned int numFields = mysql_num_fields(res);
-    MYSQL_ROW row;
-    int count = 0;
-    while ((row = mysql_fetch_row(res))) {
-      ColumnMetadata col;
-      col.schema_name = row[0] ? row[0] : "";
-      col.table_name = row[1] ? row[1] : "";
-      col.column_name = row[2] ? row[2] : "";
-      col.db_engine = "MariaDB";
-      col.connection_string = connectionString;
+    my_ulonglong numRows = mysql_num_rows(res);
+    
+    // Count unique tables before processing
+    std::set<std::string> uniqueTablesBefore;
+    MYSQL_ROW tempRow;
+    mysql_data_seek(res, 0);
+    while ((tempRow = mysql_fetch_row(res))) {
+      std::string schema = tempRow[0] ? tempRow[0] : "";
+      std::string table = tempRow[1] ? tempRow[1] : "";
+      uniqueTablesBefore.insert(schema + "." + table);
+    }
+    mysql_data_seek(res, 0);
+    
+    Logger::info(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                 "MariaDB query returned " + std::to_string(numRows) +
+                     " columns from " + std::to_string(uniqueTablesBefore.size()) +
+                     " unique table(s)");
 
+    MYSQL_ROW row;
+    int processedColumns = 0;
+    int failedColumns = 0;
+    std::set<std::string> processedTables;
+    
+    while ((row = mysql_fetch_row(res))) {
       try {
+        ColumnMetadata col;
+        col.schema_name = row[0] ? row[0] : "";
+        col.table_name = row[1] ? row[1] : "";
+        col.column_name = row[2] ? row[2] : "";
+        col.db_engine = "MariaDB";
+        col.connection_string = connectionString;
+
+        try {
         if (row[3] && strlen(row[3]) > 0 && strlen(row[3]) <= 10) {
           col.ordinal_position = std::stoi(row[3]);
         } else {
@@ -345,12 +433,12 @@ void ColumnCatalogCollector::collectMariaDBColumns(
         Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
                         "Failed to parse ordinal_position: " +
                             std::string(e.what()));
-        col.ordinal_position = 0;
-      }
+          col.ordinal_position = 0;
+        }
 
-      col.data_type = row[4] ? row[4] : "";
+        col.data_type = row[4] ? row[4] : "";
 
-      try {
+        try {
         if (row[5] && strlen(row[5]) > 0 && strlen(row[5]) <= 10) {
           col.character_maximum_length = std::stoi(row[5]);
         } else {
@@ -360,140 +448,163 @@ void ColumnCatalogCollector::collectMariaDBColumns(
         Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
                         "Failed to parse character_maximum_length: " +
                             std::string(e.what()));
-        col.character_maximum_length = 0;
-      }
+          col.character_maximum_length = 0;
+        }
 
-      try {
-        if (row[6] && strlen(row[6]) > 0 && strlen(row[6]) <= 10) {
-          col.numeric_precision = std::stoi(row[6]);
-        } else {
+        try {
+          if (row[6] && strlen(row[6]) > 0 && strlen(row[6]) <= 10) {
+            col.numeric_precision = std::stoi(row[6]);
+          } else {
+            col.numeric_precision = 0;
+          }
+        } catch (const std::exception &e) {
+          Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                          "Failed to parse numeric_precision: " +
+                              std::string(e.what()));
           col.numeric_precision = 0;
         }
-      } catch (const std::exception &e) {
-        Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
-                        "Failed to parse numeric_precision: " +
-                            std::string(e.what()));
-        col.numeric_precision = 0;
-      }
 
-      try {
-        if (row[7] && strlen(row[7]) > 0 && strlen(row[7]) <= 10) {
-          col.numeric_scale = std::stoi(row[7]);
-        } else {
+        try {
+          if (row[7] && strlen(row[7]) > 0 && strlen(row[7]) <= 10) {
+            col.numeric_scale = std::stoi(row[7]);
+          } else {
+            col.numeric_scale = 0;
+          }
+        } catch (const std::exception &e) {
+          Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                          "Failed to parse numeric_scale: " +
+                              std::string(e.what()));
           col.numeric_scale = 0;
         }
-      } catch (const std::exception &e) {
-        Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
-                        "Failed to parse numeric_scale: " +
-                            std::string(e.what()));
-        col.numeric_scale = 0;
-      }
 
-      col.is_nullable = (row[8] && std::string(row[8]) == "YES");
-      col.column_default = row[9] ? row[9] : "";
+        col.is_nullable = (row[8] && std::string(row[8]) == "YES");
+        col.column_default = row[9] ? row[9] : "";
 
-      try {
-        if (row[16] && strlen(row[16]) > 0 && strlen(row[16]) <= 2) {
-          col.is_primary_key = (std::stoi(row[16]) == 1);
-        } else {
+        try {
+          if (row[16] && strlen(row[16]) > 0 && strlen(row[16]) <= 2) {
+            col.is_primary_key = (std::stoi(row[16]) == 1);
+          } else {
+            col.is_primary_key = false;
+          }
+        } catch (const std::exception &e) {
+          Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                          "Failed to parse is_primary_key: " +
+                              std::string(e.what()));
           col.is_primary_key = false;
         }
-      } catch (const std::exception &e) {
-        Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
-                        "Failed to parse is_primary_key: " +
-                            std::string(e.what()));
-        col.is_primary_key = false;
-      }
 
-      try {
-        if (row[17] && strlen(row[17]) > 0 && strlen(row[17]) <= 2) {
-          col.is_foreign_key = (std::stoi(row[17]) == 1);
-        } else {
+        try {
+          if (row[17] && strlen(row[17]) > 0 && strlen(row[17]) <= 2) {
+            col.is_foreign_key = (std::stoi(row[17]) == 1);
+          } else {
+            col.is_foreign_key = false;
+          }
+        } catch (const std::exception &e) {
+          Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                          "Failed to parse is_foreign_key: " +
+                              std::string(e.what()));
           col.is_foreign_key = false;
         }
-      } catch (const std::exception &e) {
-        Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
-                        "Failed to parse is_foreign_key: " +
-                            std::string(e.what()));
-        col.is_foreign_key = false;
-      }
 
-      try {
-        if (row[18] && strlen(row[18]) > 0 && strlen(row[18]) <= 2) {
-          col.is_unique = (std::stoi(row[18]) == 1);
-        } else {
+        try {
+          if (row[18] && strlen(row[18]) > 0 && strlen(row[18]) <= 2) {
+            col.is_unique = (std::stoi(row[18]) == 1);
+          } else {
+            col.is_unique = false;
+          }
+        } catch (const std::exception &e) {
+          Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                          "Failed to parse is_unique: " + std::string(e.what()));
           col.is_unique = false;
         }
-      } catch (const std::exception &e) {
-        Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
-                        "Failed to parse is_unique: " + std::string(e.what()));
-        col.is_unique = false;
-      }
 
-      try {
-        if (row[19] && strlen(row[19]) > 0 && strlen(row[19]) <= 2) {
-          col.is_indexed = (std::stoi(row[19]) == 1);
-        } else {
+        try {
+          if (row[19] && strlen(row[19]) > 0 && strlen(row[19]) <= 2) {
+            col.is_indexed = (std::stoi(row[19]) == 1);
+          } else {
+            col.is_indexed = false;
+          }
+        } catch (const std::exception &e) {
+          Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                          "Failed to parse is_indexed: " + std::string(e.what()));
           col.is_indexed = false;
         }
-      } catch (const std::exception &e) {
-        Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
-                        "Failed to parse is_indexed: " + std::string(e.what()));
-        col.is_indexed = false;
-      }
 
-      try {
-        if (row[20] && strlen(row[20]) > 0 && strlen(row[20]) <= 2) {
-          col.is_auto_increment = (std::stoi(row[20]) == 1);
-        } else {
+        try {
+          if (row[20] && strlen(row[20]) > 0 && strlen(row[20]) <= 2) {
+            col.is_auto_increment = (std::stoi(row[20]) == 1);
+          } else {
+            col.is_auto_increment = false;
+          }
+        } catch (const std::exception &e) {
+          Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                          "Failed to parse is_auto_increment: " +
+                              std::string(e.what()));
           col.is_auto_increment = false;
         }
-      } catch (const std::exception &e) {
-        Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
-                        "Failed to parse is_auto_increment: " +
-                            std::string(e.what()));
-        col.is_auto_increment = false;
-      }
 
-      try {
-        if (numFields > 21 && row[21] && strlen(row[21]) > 0 &&
-            strlen(row[21]) <= 2) {
-          col.is_generated = (std::stoi(row[21]) == 1);
-        } else {
+        try {
+          if (numFields > 21 && row[21] && strlen(row[21]) > 0 &&
+              strlen(row[21]) <= 2) {
+            col.is_generated = (std::stoi(row[21]) == 1);
+          } else {
+            col.is_generated = false;
+          }
+        } catch (const std::exception &e) {
+          Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                          "Failed to parse is_generated: " +
+                              std::string(e.what()));
           col.is_generated = false;
         }
+
+        json mariadbMetadata;
+        mariadbMetadata["column_type"] = row[10] ? row[10] : "";
+        mariadbMetadata["column_key"] = row[11] ? row[11] : "";
+        mariadbMetadata["extra"] = row[12] ? row[12] : "";
+        mariadbMetadata["privileges"] = row[13] ? row[13] : "";
+        mariadbMetadata["column_comment"] = row[14] ? row[14] : "";
+
+        json columnMetadata;
+        columnMetadata["source_specific"]["mariadb"] = mariadbMetadata;
+        col.column_metadata_json = columnMetadata;
+
+        analyzeColumnStatistics(col, connectionString);
+        classifyColumn(col);
+        calculateAdvancedStatistics(col, connectionString);
+        detectPatterns(col, connectionString);
+        analyzeDistribution(col, connectionString);
+        detectOutliers(col, connectionString);
+        calculateProfilingQualityScore(col);
+        columnData_.push_back(col);
+        
+        processedColumns++;
+        processedTables.insert(col.schema_name + "." + col.table_name);
       } catch (const std::exception &e) {
-        Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
-                        "Failed to parse is_generated: " +
-                            std::string(e.what()));
-        col.is_generated = false;
+        failedColumns++;
+        std::string schema = row[0] ? row[0] : "";
+        std::string table = row[1] ? row[1] : "";
+        std::string column = row[2] ? row[2] : "";
+        Logger::error(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                      "Error processing MariaDB column " + schema + "." + table + "." + column +
+                      ": " + std::string(e.what()));
       }
-
-      json mariadbMetadata;
-      mariadbMetadata["column_type"] = row[10] ? row[10] : "";
-      mariadbMetadata["column_key"] = row[11] ? row[11] : "";
-      mariadbMetadata["extra"] = row[12] ? row[12] : "";
-      mariadbMetadata["privileges"] = row[13] ? row[13] : "";
-      mariadbMetadata["column_comment"] = row[14] ? row[14] : "";
-
-      json columnMetadata;
-      columnMetadata["source_specific"]["mariadb"] = mariadbMetadata;
-      col.column_metadata_json = columnMetadata;
-
-      analyzeColumnStatistics(col, connectionString);
-      classifyColumn(col);
-      calculateAdvancedStatistics(col, connectionString);
-      detectPatterns(col, connectionString);
-      analyzeDistribution(col, connectionString);
-      detectOutliers(col, connectionString);
-      calculateProfilingQualityScore(col);
-      columnData_.push_back(col);
-      count++;
     }
     mysql_free_result(res);
 
     Logger::info(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
-                 "Collected " + std::to_string(count) + " MariaDB columns");
+                 "MariaDB processing completed: " +
+                     std::to_string(processedColumns) + " columns processed, " +
+                     std::to_string(failedColumns) + " failed, from " +
+                     std::to_string(processedTables.size()) + " unique table(s)");
+    
+    if (uniqueTablesBefore.size() != processedTables.size()) {
+      Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                      "MariaDB table count mismatch: Query found " +
+                          std::to_string(uniqueTablesBefore.size()) +
+                          " tables, but only " +
+                          std::to_string(processedTables.size()) +
+                          " tables were successfully processed");
+    }
   } catch (const std::exception &e) {
     Logger::error(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
                   "Error collecting MariaDB columns: " + std::string(e.what()));
@@ -616,123 +727,166 @@ void ColumnCatalogCollector::collectMSSQLColumns(
     SQLSMALLINT numCols;
     SQLNumResultCols(stmt, &numCols);
 
-    int count = 0;
+    int processedColumns = 0;
+    int failedColumns = 0;
+    std::set<std::string> processedTables;
+    std::set<std::string> uniqueTablesBefore;
+    
     while (SQLFetch(stmt) == SQL_SUCCESS) {
-      ColumnMetadata col;
-      char buffer[1024];
-      SQLLEN len;
+      try {
+        ColumnMetadata col;
+        char buffer[1024];
+        SQLLEN len;
 
-      SQLGetData(stmt, 1, SQL_C_CHAR, buffer, sizeof(buffer), &len);
-      col.schema_name = (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer)))
+        SQLGetData(stmt, 1, SQL_C_CHAR, buffer, sizeof(buffer), &len);
+        col.schema_name = (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer)))
                             ? std::string(buffer, len)
                             : "";
 
-      SQLGetData(stmt, 2, SQL_C_CHAR, buffer, sizeof(buffer), &len);
-      col.table_name = (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer)))
+        SQLGetData(stmt, 2, SQL_C_CHAR, buffer, sizeof(buffer), &len);
+        col.table_name = (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer)))
                            ? std::string(buffer, len)
                            : "";
+        
+        // Track unique tables from query results
+        uniqueTablesBefore.insert(col.schema_name + "." + col.table_name);
 
-      SQLGetData(stmt, 3, SQL_C_CHAR, buffer, sizeof(buffer), &len);
-      col.column_name = (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer)))
+        SQLGetData(stmt, 3, SQL_C_CHAR, buffer, sizeof(buffer), &len);
+        col.column_name = (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer)))
                             ? std::string(buffer, len)
                             : "";
 
-      col.db_engine = "MSSQL";
-      col.connection_string = connectionString;
+        col.db_engine = "MSSQL";
+        col.connection_string = connectionString;
 
-      SQLINTEGER ordinalPos;
-      SQLGetData(stmt, 4, SQL_C_LONG, &ordinalPos, 0, &len);
-      col.ordinal_position = (len > 0) ? ordinalPos : 0;
+        SQLINTEGER ordinalPos;
+        SQLGetData(stmt, 4, SQL_C_LONG, &ordinalPos, 0, &len);
+        col.ordinal_position = (len > 0) ? ordinalPos : 0;
 
-      SQLGetData(stmt, 5, SQL_C_CHAR, buffer, sizeof(buffer), &len);
-      col.data_type = (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer)))
-                          ? std::string(buffer, len)
-                          : "";
+        SQLGetData(stmt, 5, SQL_C_CHAR, buffer, sizeof(buffer), &len);
+        col.data_type = (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer)))
+                            ? std::string(buffer, len)
+                            : "";
 
-      SQLINTEGER maxLen;
-      SQLGetData(stmt, 6, SQL_C_LONG, &maxLen, 0, &len);
-      col.character_maximum_length = (len > 0) ? maxLen : 0;
+        SQLINTEGER maxLen;
+        SQLGetData(stmt, 6, SQL_C_LONG, &maxLen, 0, &len);
+        col.character_maximum_length = (len > 0) ? maxLen : 0;
 
-      SQLSMALLINT precision;
-      SQLGetData(stmt, 7, SQL_C_SHORT, &precision, 0, &len);
-      col.numeric_precision = (len > 0) ? precision : 0;
+        SQLSMALLINT precision;
+        SQLGetData(stmt, 7, SQL_C_SHORT, &precision, 0, &len);
+        col.numeric_precision = (len > 0) ? precision : 0;
 
-      SQLSMALLINT scale;
-      SQLGetData(stmt, 8, SQL_C_SHORT, &scale, 0, &len);
-      col.numeric_scale = (len > 0) ? scale : 0;
+        SQLSMALLINT scale;
+        SQLGetData(stmt, 8, SQL_C_SHORT, &scale, 0, &len);
+        col.numeric_scale = (len > 0) ? scale : 0;
 
-      SQLSMALLINT isNullable;
-      SQLGetData(stmt, 9, SQL_C_SHORT, &isNullable, 0, &len);
-      col.is_nullable = (len > 0 && isNullable == 1);
+        SQLSMALLINT isNullable;
+        SQLGetData(stmt, 9, SQL_C_SHORT, &isNullable, 0, &len);
+        col.is_nullable = (len > 0 && isNullable == 1);
 
-      SQLGetData(stmt, 10, SQL_C_CHAR, buffer, sizeof(buffer), &len);
-      col.column_default =
-          (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer)))
-              ? std::string(buffer, len)
-              : "";
+        SQLGetData(stmt, 10, SQL_C_CHAR, buffer, sizeof(buffer), &len);
+        col.column_default =
+            (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer)))
+                ? std::string(buffer, len)
+                : "";
 
-      SQLSMALLINT isAutoInc;
-      SQLGetData(stmt, 11, SQL_C_SHORT, &isAutoInc, 0, &len);
-      col.is_auto_increment = (len > 0 && isAutoInc == 1);
+        SQLSMALLINT isAutoInc;
+        SQLGetData(stmt, 11, SQL_C_SHORT, &isAutoInc, 0, &len);
+        col.is_auto_increment = (len > 0 && isAutoInc == 1);
 
-      SQLSMALLINT isGenerated;
-      SQLGetData(stmt, 12, SQL_C_SHORT, &isGenerated, 0, &len);
-      col.is_generated = (len > 0 && isGenerated == 1);
+        SQLSMALLINT isGenerated;
+        SQLGetData(stmt, 12, SQL_C_SHORT, &isGenerated, 0, &len);
+        col.is_generated = (len > 0 && isGenerated == 1);
 
-      SQLINTEGER systemTypeId;
-      SQLGetData(stmt, 13, SQL_C_LONG, &systemTypeId, 0, &len);
-      SQLINTEGER userTypeId;
-      SQLGetData(stmt, 14, SQL_C_LONG, &userTypeId, 0, &len);
-      SQLSMALLINT isSparse;
-      SQLGetData(stmt, 15, SQL_C_SHORT, &isSparse, 0, &len);
-      SQLSMALLINT isColumnSet;
-      SQLGetData(stmt, 16, SQL_C_SHORT, &isColumnSet, 0, &len);
+        SQLINTEGER systemTypeId;
+        SQLGetData(stmt, 13, SQL_C_LONG, &systemTypeId, 0, &len);
+        SQLINTEGER userTypeId;
+        SQLGetData(stmt, 14, SQL_C_LONG, &userTypeId, 0, &len);
+        SQLSMALLINT isSparse;
+        SQLGetData(stmt, 15, SQL_C_SHORT, &isSparse, 0, &len);
+        SQLSMALLINT isColumnSet;
+        SQLGetData(stmt, 16, SQL_C_SHORT, &isColumnSet, 0, &len);
 
-      SQLSMALLINT isPK;
-      SQLGetData(stmt, 17, SQL_C_SHORT, &isPK, 0, &len);
-      col.is_primary_key = (len > 0 && isPK == 1);
+        SQLSMALLINT isPK;
+        SQLGetData(stmt, 17, SQL_C_SHORT, &isPK, 0, &len);
+        col.is_primary_key = (len > 0 && isPK == 1);
 
-      SQLSMALLINT isFK;
-      SQLGetData(stmt, 18, SQL_C_SHORT, &isFK, 0, &len);
-      col.is_foreign_key = (len > 0 && isFK == 1);
+        SQLSMALLINT isFK;
+        SQLGetData(stmt, 18, SQL_C_SHORT, &isFK, 0, &len);
+        col.is_foreign_key = (len > 0 && isFK == 1);
 
-      SQLSMALLINT isUQ;
-      SQLGetData(stmt, 19, SQL_C_SHORT, &isUQ, 0, &len);
-      col.is_unique = (len > 0 && isUQ == 1);
+        SQLSMALLINT isUQ;
+        SQLGetData(stmt, 19, SQL_C_SHORT, &isUQ, 0, &len);
+        col.is_unique = (len > 0 && isUQ == 1);
 
-      SQLSMALLINT isIdx;
-      SQLGetData(stmt, 20, SQL_C_SHORT, &isIdx, 0, &len);
-      col.is_indexed = (len > 0 && isIdx == 1);
+        SQLSMALLINT isIdx;
+        SQLGetData(stmt, 20, SQL_C_SHORT, &isIdx, 0, &len);
+        col.is_indexed = (len > 0 && isIdx == 1);
 
-      json mssqlMetadata;
-      mssqlMetadata["system_type_id"] = (len > 0) ? systemTypeId : 0;
-      mssqlMetadata["user_type_id"] = (len > 0) ? userTypeId : 0;
-      mssqlMetadata["max_length"] = col.character_maximum_length;
-      mssqlMetadata["precision"] = col.numeric_precision;
-      mssqlMetadata["scale"] = col.numeric_scale;
-      mssqlMetadata["is_computed"] = col.is_generated;
-      mssqlMetadata["is_sparse"] = (len > 0 && isSparse == 1);
-      mssqlMetadata["is_column_set"] = (len > 0 && isColumnSet == 1);
+        json mssqlMetadata;
+        mssqlMetadata["system_type_id"] = (len > 0) ? systemTypeId : 0;
+        mssqlMetadata["user_type_id"] = (len > 0) ? userTypeId : 0;
+        mssqlMetadata["max_length"] = col.character_maximum_length;
+        mssqlMetadata["precision"] = col.numeric_precision;
+        mssqlMetadata["scale"] = col.numeric_scale;
+        mssqlMetadata["is_computed"] = col.is_generated;
+        mssqlMetadata["is_sparse"] = (len > 0 && isSparse == 1);
+        mssqlMetadata["is_column_set"] = (len > 0 && isColumnSet == 1);
 
-      json columnMetadata;
-      columnMetadata["source_specific"]["mssql"] = mssqlMetadata;
-      col.column_metadata_json = columnMetadata;
+        json columnMetadata;
+        columnMetadata["source_specific"]["mssql"] = mssqlMetadata;
+        col.column_metadata_json = columnMetadata;
 
-      analyzeColumnStatistics(col, connectionString);
-      classifyColumn(col);
-      calculateAdvancedStatistics(col, connectionString);
-      detectPatterns(col, connectionString);
-      analyzeDistribution(col, connectionString);
-      detectOutliers(col, connectionString);
-      calculateProfilingQualityScore(col);
-      columnData_.push_back(col);
-      count++;
+        analyzeColumnStatistics(col, connectionString);
+        classifyColumn(col);
+        calculateAdvancedStatistics(col, connectionString);
+        detectPatterns(col, connectionString);
+        analyzeDistribution(col, connectionString);
+        detectOutliers(col, connectionString);
+        calculateProfilingQualityScore(col);
+        columnData_.push_back(col);
+        
+        processedColumns++;
+        processedTables.insert(col.schema_name + "." + col.table_name);
+      } catch (const std::exception &e) {
+        failedColumns++;
+        char buffer[1024];
+        SQLLEN len;
+        SQLGetData(stmt, 1, SQL_C_CHAR, buffer, sizeof(buffer), &len);
+        std::string schema = (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer)))
+                                ? std::string(buffer, len)
+                                : "";
+        SQLGetData(stmt, 2, SQL_C_CHAR, buffer, sizeof(buffer), &len);
+        std::string table = (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer)))
+                               ? std::string(buffer, len)
+                               : "";
+        SQLGetData(stmt, 3, SQL_C_CHAR, buffer, sizeof(buffer), &len);
+        std::string column = (len > 0 && len < static_cast<SQLLEN>(sizeof(buffer)))
+                                ? std::string(buffer, len)
+                                : "";
+        Logger::error(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                      "Error processing MSSQL column " + schema + "." + table + "." + column +
+                      ": " + std::string(e.what()));
+      }
     }
 
     SQLFreeHandle(SQL_HANDLE_STMT, stmt);
 
     Logger::info(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
-                 "Collected " + std::to_string(count) + " MSSQL columns");
+                 "MSSQL processing completed: " +
+                     std::to_string(processedColumns) + " columns processed, " +
+                     std::to_string(failedColumns) + " failed, from " +
+                     std::to_string(processedTables.size()) + " unique table(s) (query found " +
+                     std::to_string(uniqueTablesBefore.size()) + " tables)");
+    
+    if (uniqueTablesBefore.size() != processedTables.size()) {
+      Logger::warning(LogCategory::GOVERNANCE, "ColumnCatalogCollector",
+                      "MSSQL table count mismatch: Query found " +
+                          std::to_string(uniqueTablesBefore.size()) +
+                          " tables, but only " +
+                          std::to_string(processedTables.size()) +
+                          " tables were successfully processed");
+    }
   } catch (const std::exception &e) {
     if (stmt != SQL_NULL_HANDLE) {
       SQLFreeHandle(SQL_HANDLE_STMT, stmt);
