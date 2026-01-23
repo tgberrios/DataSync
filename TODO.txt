@@ -390,3 +390,38 @@ casi que todo esta usando process log o no ?
 - [ ] Ejecutar job con transformaciones
 
 ---
+
+me falta testear macros, vault y workflow 
+
+el lineage no contempla digamos datalake 
+
+tengo mas tablas y column catalog solo captura dos tablas ? 
+
+yay
+actualizar el sistema con yay
+
+
+estamos haciendo maintance para mongodb ? 
+
+estamos haciendo actualizacion de indexes ?
+
+
+maintance esta en cpp ? 
+
+que schema migrations capture cambios hechos por usuarios pero a nivel de base de datos 
+como un auditor digamos y lo guardamos en datalake en una tabla ?
+
+me fatla crear encryption de probar
+row security level
+y audit trail 
+
+
+Y MAS DE AUDITOR DE BLUE TEAM
+
+TAMBIEN MEJORAR COMO SE VE USER MANANGEMENT EN RIQUESERLO Y MEJORARLO
+METERLE charts
+tambien la parte visual mejorarla como que el rol y el name sale muy pegados y asi ? 
+
+el governance de mariadb no esta guardando info
+el de mssql tampoco
+mongo mas o menos
