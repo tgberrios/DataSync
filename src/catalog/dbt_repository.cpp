@@ -674,11 +674,11 @@ int64_t DBTRepository::createTestResult(const DBTTestResult &result) {
     auto res = txn.exec_params(
         "INSERT INTO metadata.dbt_test_results (test_name, model_name, test_type, "
         "status, error_message, rows_affected, execution_time_seconds, test_result, run_id) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9) RETURNING id",
+        "VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6, $7, $8::jsonb, NULLIF($9, '')) RETURNING id",
         result.test_name, result.model_name, testTypeToString(result.test_type),
-        result.status, result.error_message.empty() ? nullptr : result.error_message,
+        result.status, result.error_message.empty() ? "" : result.error_message,
         result.rows_affected, result.execution_time_seconds, testResultStr,
-        result.run_id.empty() ? nullptr : result.run_id);
+        result.run_id.empty() ? "" : result.run_id);
 
     if (!res.empty()) {
       int64_t id = res[0][0].as<int64_t>();

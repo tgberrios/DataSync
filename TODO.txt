@@ -1,7 +1,7 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │ TAREAS PENDIENTES - DataSync                                    │
 └─────────────────────────────────────────────────────────────────┘
-
+anadir test en los otros para nulls, esto y lo otros
 ## 🎯 SIGUIENTE PRIORIDAD (Alta)
 
 ### Cloud-Native Deployment (4-6 semanas)
@@ -390,9 +390,3 @@ casi que todo esta usando process log o no ?
 - [ ] Ejecutar job con transformaciones
 
 ---
-
-
-eso del DBT no deberia estar en cpp ? 
-
-
-no tenemos como una columna llamada digamos cronjob en models para saber cuando ejecutarlo o asi no ? 

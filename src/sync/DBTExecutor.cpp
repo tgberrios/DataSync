@@ -471,22 +471,26 @@ std::string DBTExecutor::compileModel(const std::string &modelName) {
 
 std::string DBTExecutor::generateTestSQL(const DBTTest &test, const DBTModel &model) {
   std::string testSQL;
-  std::string tableName = model.schema_name + "." + model.model_name;
+  std::string schemaQuoted = "\"" + model.schema_name + "\"";
+  std::string tableQuoted = "\"" + model.model_name + "\"";
+  std::string tableName = schemaQuoted + "." + tableQuoted;
   
   switch (test.test_type) {
     case TestType::NOT_NULL:
       if (!test.column_name.empty()) {
+        std::string columnQuoted = "\"" + test.column_name + "\"";
         testSQL = "SELECT COUNT(*) FROM " + tableName + 
-                  " WHERE " + test.column_name + " IS NULL";
+                  " WHERE " + columnQuoted + " IS NULL";
       }
       break;
       
     case TestType::UNIQUE:
       if (!test.column_name.empty()) {
+        std::string columnQuoted = "\"" + test.column_name + "\"";
         testSQL = "SELECT COUNT(*) FROM ("
-                  "SELECT " + test.column_name + ", COUNT(*) as cnt "
+                  "SELECT " + columnQuoted + ", COUNT(*) as cnt "
                   "FROM " + tableName + 
-                  " GROUP BY " + test.column_name + 
+                  " GROUP BY " + columnQuoted + 
                   " HAVING COUNT(*) > 1) as duplicates";
       }
       break;
@@ -497,10 +501,12 @@ std::string DBTExecutor::generateTestSQL(const DBTTest &test, const DBTModel &mo
         std::string refColumn = test.test_config.contains("field") 
             ? test.test_config["field"].get<std::string>() 
             : test.column_name;
+        std::string columnQuoted = "\"" + test.column_name + "\"";
+        std::string refColumnQuoted = "\"" + refColumn + "\"";
         testSQL = "SELECT COUNT(*) FROM " + tableName + " t1 "
-                  "LEFT JOIN " + refTable + " t2 ON t1." + test.column_name + 
-                  " = t2." + refColumn + 
-                  " WHERE t2." + refColumn + " IS NULL";
+                  "LEFT JOIN " + refTable + " t2 ON t1." + columnQuoted + 
+                  " = t2." + refColumnQuoted + 
+                  " WHERE t2." + refColumnQuoted + " IS NULL";
       }
       break;
       
@@ -512,8 +518,9 @@ std::string DBTExecutor::generateTestSQL(const DBTTest &test, const DBTModel &mo
           if (i > 0) valuesList += ", ";
           valuesList += "'" + values[i].get<std::string>() + "'";
         }
+        std::string columnQuoted = "\"" + test.column_name + "\"";
         testSQL = "SELECT COUNT(*) FROM " + tableName + 
-                  " WHERE " + test.column_name + " NOT IN (" + valuesList + ")";
+                  " WHERE " + columnQuoted + " NOT IN (" + valuesList + ")";
       }
       break;
       
@@ -542,6 +549,7 @@ std::string DBTExecutor::generateTestSQL(const DBTTest &test, const DBTModel &mo
 DBTTestResult DBTExecutor::runTest(const DBTTest &test, const std::string &modelName,
                                     const std::string &runId) {
   DBTTestResult result;
+  result.id = 0;
   result.test_name = test.test_name;
   result.model_name = modelName;
   result.test_type = test.test_type;
@@ -549,6 +557,9 @@ DBTTestResult DBTExecutor::runTest(const DBTTest &test, const std::string &model
   result.status = "error";
   result.rows_affected = 0;
   result.execution_time_seconds = 0.0;
+  result.error_message = "";
+  result.test_result = json::object();
+  result.created_at = "";
   
   if (!test.active) {
     result.status = "skipped";
@@ -564,16 +575,84 @@ DBTTestResult DBTExecutor::runTest(const DBTTest &test, const std::string &model
   auto startTime = std::chrono::system_clock::now();
   
   try {
-    std::string testSQL = generateTestSQL(test, model);
+    std::string connStr = getConnectionString(model.schema_name, model.database_name);
+    pqxx::connection conn(connStr);
+    pqxx::work txn(conn);
+    
+    std::string schemaQuoted = txn.quote_name(model.schema_name);
+    std::string tableQuoted = txn.quote_name(model.model_name);
+    std::string tableName = schemaQuoted + "." + tableQuoted;
+    
+    std::string testSQL;
+    switch (test.test_type) {
+      case TestType::NOT_NULL:
+        if (!test.column_name.empty()) {
+          std::string columnQuoted = txn.quote_name(test.column_name);
+          testSQL = "SELECT COUNT(*) FROM " + tableName + 
+                    " WHERE " + columnQuoted + " IS NULL";
+        }
+        break;
+        
+      case TestType::UNIQUE:
+        if (!test.column_name.empty()) {
+          std::string columnQuoted = txn.quote_name(test.column_name);
+          testSQL = "SELECT COUNT(*) FROM ("
+                    "SELECT " + columnQuoted + ", COUNT(*) as cnt "
+                    "FROM " + tableName + 
+                    " GROUP BY " + columnQuoted + 
+                    " HAVING COUNT(*) > 1) as duplicates";
+        }
+        break;
+        
+      case TestType::RELATIONSHIPS:
+        if (test.test_config.contains("to") && !test.column_name.empty()) {
+          std::string refTable = test.test_config["to"].get<std::string>();
+          std::string refColumn = test.test_config.contains("field") 
+              ? test.test_config["field"].get<std::string>() 
+              : test.column_name;
+          std::string columnQuoted = txn.quote_name(test.column_name);
+          std::string refColumnQuoted = txn.quote_name(refColumn);
+          testSQL = "SELECT COUNT(*) FROM " + tableName + " t1 "
+                    "LEFT JOIN " + refTable + " t2 ON t1." + columnQuoted + 
+                    " = t2." + refColumnQuoted + 
+                    " WHERE t2." + refColumnQuoted + " IS NULL";
+        }
+        break;
+        
+      case TestType::ACCEPTED_VALUES:
+        if (test.test_config.contains("values") && !test.column_name.empty()) {
+          json values = test.test_config["values"];
+          std::string valuesList;
+          for (size_t i = 0; i < values.size(); ++i) {
+            if (i > 0) valuesList += ", ";
+            valuesList += "'" + values[i].get<std::string>() + "'";
+          }
+          std::string columnQuoted = txn.quote_name(test.column_name);
+          testSQL = "SELECT COUNT(*) FROM " + tableName + 
+                    " WHERE " + columnQuoted + " NOT IN (" + valuesList + ")";
+        }
+        break;
+        
+      case TestType::EXPRESSION:
+        if (!test.test_sql.empty()) {
+          testSQL = test.test_sql;
+          std::regex tablePattern("\\{\\{\\s*ref\\s*\\(['\"]?" + model.model_name + 
+                                  "['\"]?\\)\\s*\\}\\}");
+          testSQL = std::regex_replace(testSQL, tablePattern, tableName);
+        }
+        break;
+        
+      case TestType::CUSTOM:
+        if (!test.test_sql.empty()) {
+          testSQL = test.test_sql;
+        }
+        break;
+    }
     
     if (testSQL.empty()) {
       result.error_message = "Could not generate test SQL";
       return result;
     }
-    
-    std::string connStr = getConnectionString(model.schema_name, model.database_name);
-    pqxx::connection conn(connStr);
-    pqxx::work txn(conn);
     
     auto testResult = txn.exec(testSQL);
     int failureCount = testResult[0][0].as<int>();
