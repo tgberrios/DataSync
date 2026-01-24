@@ -13,6 +13,8 @@
 #include "sync/MergeStrategyExecutor.h"
 #include "sync/PartitioningManager.h"
 #include "sync/DistributedProcessingManager.h"
+#include "storage/ColumnarStorage.h"
+#include "utils/MemoryManager.h"
 #ifdef HAVE_SPARK
 #include "engines/spark_engine.h"
 #endif
@@ -49,6 +51,16 @@ DataWarehouseBuilder::DataWarehouseBuilder(std::string metadataConnectionString)
     distributedManager_->initialize();
   }
 #endif
+
+  // Initialize memory manager
+  MemoryManager::MemoryLimit memLimit;
+  memLimit.maxMemory = 4ULL * 1024 * 1024 * 1024;  // 4GB for warehouse operations
+  memLimit.enableSpill = true;
+  memLimit.spillDirectory = "/tmp/datasync_warehouse_spill";
+  memoryManager_ = std::make_unique<MemoryManager>(memLimit);
+  
+  Logger::info(LogCategory::SYSTEM, "DataWarehouseBuilder",
+               "DataWarehouseBuilder initialized with performance optimizations");
 }
 
 DataWarehouseBuilder::~DataWarehouseBuilder() = default;

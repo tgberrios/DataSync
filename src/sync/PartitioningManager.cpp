@@ -1,9 +1,11 @@
 #include "sync/PartitioningManager.h"
 #include "core/logger.h"
+#include <pqxx/pqxx>
 #include <algorithm>
 #include <regex>
 #include <sstream>
 #include <iomanip>
+#include <chrono>
 
 PartitioningManager::PartitionDetectionResult
 PartitioningManager::detectPartitions(
@@ -236,4 +238,229 @@ std::string PartitioningManager::generatePartitionFilter(
   }
   
   return filter.str();
+}
+
+bool PartitioningManager::createDynamicPartition(
+    const std::string& schemaName,
+    const std::string& tableName,
+    const PartitionInfo& partitionInfo,
+    const std::string& partitionValue,
+    const std::string& connectionString) {
+  
+  try {
+    pqxx::connection conn(connectionString);
+    pqxx::work txn(conn);
+
+    std::string partitionName = generatePartitionName(partitionInfo, partitionValue);
+    
+    // Verificar si la partición ya existe
+    auto checkResult = txn.exec_params(
+        "SELECT COUNT(*) FROM pg_inherits WHERE inhrelid = "
+        "(SELECT oid FROM pg_class WHERE relname = $1)",
+        partitionName
+    );
+    
+    if (checkResult[0][0].as<int>() > 0) {
+      Logger::debug(LogCategory::SYSTEM, "PartitioningManager",
+                    "Partition already exists: " + partitionName);
+      txn.commit();
+      return true;
+    }
+
+    // Generar SQL para crear partición según tipo
+    std::stringstream sql;
+    sql << "CREATE TABLE IF NOT EXISTS " << schemaName << "." << partitionName 
+        << " PARTITION OF " << schemaName << "." << tableName;
+
+    switch (partitionInfo.type) {
+      case PartitionType::DATE: {
+        // Para particiones de fecha, usar FOR VALUES FROM ... TO
+        sql << " FOR VALUES FROM ('" << partitionValue << "') TO ('";
+        // Calcular siguiente valor (simplificado)
+        if (partitionInfo.format == "year") {
+          int year = std::stoi(partitionValue);
+          sql << (year + 1);
+        } else if (partitionInfo.format == "year-month") {
+          // Incrementar mes
+          sql << partitionValue << "-01";  // Simplificado
+        } else {
+          sql << partitionValue << " 00:00:00'::timestamp + INTERVAL '1 day'";
+        }
+        sql << "')";
+        break;
+      }
+      
+      case PartitionType::RANGE: {
+        sql << " FOR VALUES FROM (" << partitionValue << ") TO (";
+        // Calcular siguiente valor en rango (simplificado)
+        sql << partitionValue << " + 1000)";  // Placeholder
+        sql << ")";
+        break;
+      }
+      
+      case PartitionType::LIST: {
+        sql << " FOR VALUES IN ('" << partitionValue << "')";
+        break;
+      }
+      
+      default:
+        Logger::error(LogCategory::SYSTEM, "PartitioningManager",
+                      "Unsupported partition type for dynamic creation");
+        return false;
+    }
+
+    txn.exec(sql.str());
+    txn.commit();
+
+    Logger::info(LogCategory::SYSTEM, "PartitioningManager",
+                 "Created dynamic partition: " + partitionName);
+    return true;
+  } catch (const std::exception& e) {
+    Logger::error(LogCategory::SYSTEM, "PartitioningManager",
+                  "Error creating dynamic partition: " + std::string(e.what()));
+    return false;
+  }
+}
+
+std::vector<std::string> PartitioningManager::getExistingPartitions(
+    const std::string& schemaName,
+    const std::string& tableName,
+    const PartitionInfo& partitionInfo,
+    const std::string& connectionString) {
+  
+  std::vector<std::string> partitions;
+
+  try {
+    pqxx::connection conn(connectionString);
+    pqxx::work txn(conn);
+
+    // Obtener particiones de la tabla
+    auto result = txn.exec_params(
+        "SELECT relname FROM pg_inherits i "
+        "JOIN pg_class c ON i.inhrelid = c.oid "
+        "JOIN pg_class p ON i.inhparent = p.oid "
+        "WHERE p.relname = $1 AND c.relnamespace = "
+        "(SELECT oid FROM pg_namespace WHERE nspname = $2)",
+        tableName, schemaName
+    );
+
+    for (const auto& row : result) {
+      std::string partitionName = row["relname"].as<std::string>();
+      // Extraer valor de partición del nombre (simplificado)
+      partitions.push_back(partitionName);
+    }
+
+    txn.commit();
+  } catch (const std::exception& e) {
+    Logger::error(LogCategory::SYSTEM, "PartitioningManager",
+                  "Error getting existing partitions: " + std::string(e.what()));
+  }
+
+  return partitions;
+}
+
+bool PartitioningManager::needsNewPartition(
+    const std::string& partitionValue,
+    const std::vector<std::string>& existingPartitions,
+    const PartitionInfo& partitionInfo) {
+  
+  // Verificar si ya existe una partición para este valor
+  std::string expectedName = generatePartitionName(partitionInfo, partitionValue);
+  
+  for (const auto& existing : existingPartitions) {
+    if (existing.find(expectedName) != std::string::npos ||
+        existing.find(partitionValue) != std::string::npos) {
+      return false;  // Ya existe
+    }
+  }
+
+  return true;  // Necesita nueva partición
+}
+
+std::string PartitioningManager::generatePartitionName(
+    const PartitionInfo& partitionInfo,
+    const std::string& partitionValue) {
+  
+  std::stringstream name;
+  name << partitionInfo.columnName << "_";
+  
+  switch (partitionInfo.type) {
+    case PartitionType::DATE: {
+      name << "p" << partitionValue;
+      // Reemplazar caracteres no válidos
+      std::string dateStr = name.str();
+      std::replace(dateStr.begin(), dateStr.end(), '-', '_');
+      std::replace(dateStr.begin(), dateStr.end(), ' ', '_');
+      std::replace(dateStr.begin(), dateStr.end(), ':', '_');
+      return dateStr;
+    }
+    
+    case PartitionType::RANGE:
+      name << "p" << partitionValue;
+      return name.str();
+    
+    case PartitionType::LIST: {
+      name << "p" << partitionValue;
+      // Sanitizar para nombre de tabla
+      std::string listStr = name.str();
+      std::replace(listStr.begin(), listStr.end(), ' ', '_');
+      std::replace(listStr.begin(), listStr.end(), '-', '_');
+      return listStr;
+    }
+    
+    default:
+      name << "p" << std::hash<std::string>{}(partitionValue);
+      return name.str();
+  }
+}
+
+size_t PartitioningManager::dropOldPartitions(
+    const std::string& schemaName,
+    const std::string& tableName,
+    const PartitionInfo& partitionInfo,
+    int retentionDays,
+    const std::string& connectionString) {
+  
+  size_t dropped = 0;
+
+  try {
+    pqxx::connection conn(connectionString);
+    pqxx::work txn(conn);
+
+    // Calcular fecha de corte (retentionDays en días)
+    auto cutoffDate = std::chrono::system_clock::now() - 
+                      std::chrono::hours(24 * retentionDays);
+    auto cutoffTimeT = std::chrono::system_clock::to_time_t(cutoffDate);
+
+    // Obtener particiones antiguas (para DATE partitions)
+    if (partitionInfo.type == PartitionType::DATE) {
+      auto result = txn.exec_params(
+          "SELECT relname FROM pg_inherits i "
+          "JOIN pg_class c ON i.inhrelid = c.oid "
+          "JOIN pg_class p ON i.inhparent = p.oid "
+          "WHERE p.relname = $1 AND c.relnamespace = "
+          "(SELECT oid FROM pg_namespace WHERE nspname = $2) "
+          "AND pg_stat_file(pg_relation_filepath(c.oid))::text::timestamp < to_timestamp($3)",
+          tableName, schemaName, cutoffTimeT
+      );
+
+      for (const auto& row : result) {
+        std::string partitionName = row["relname"].as<std::string>();
+        txn.exec("DROP TABLE IF EXISTS " + schemaName + "." + partitionName);
+        dropped++;
+      }
+    }
+
+    txn.commit();
+
+    if (dropped > 0) {
+      Logger::info(LogCategory::SYSTEM, "PartitioningManager",
+                   "Dropped " + std::to_string(dropped) + " old partitions");
+    }
+  } catch (const std::exception& e) {
+    Logger::error(LogCategory::SYSTEM, "PartitioningManager",
+                  "Error dropping old partitions: " + std::string(e.what()));
+  }
+
+  return dropped;
 }

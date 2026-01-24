@@ -5,7 +5,13 @@
 #include "core/logger.h"
 #include "sync/ParallelProcessing.h"
 #include "sync/PartitioningManager.h"
+#include "sync/PartitionPruner.h"
+#include "sync/PushdownOptimizer.h"
 #include "sync/DistributedProcessingManager.h"
+#include "utils/ResultCache.h"
+#include "utils/MetadataCache.h"
+#include "utils/MemoryManager.h"
+#include "utils/DataCompressor.h"
 #include "third_party/json.hpp"
 #include <atomic>
 #include <mutex>
@@ -46,6 +52,14 @@ protected:
   std::unique_ptr<DistributedProcessingManager> distributedManager_;
   bool usePartitioning_{true};
   bool useDistributedProcessing_{true};
+
+  // Performance optimizations
+  std::unique_ptr<ResultCache> resultCache_;
+  std::unique_ptr<MetadataCache> metadataCache_;
+  std::unique_ptr<MemoryManager> memoryManager_;
+  bool usePartitionPruning_{true};
+  bool usePushdownOptimization_{true};
+  bool useCompression_{false};
   
   // Helper methods for partitioning and distributed processing
   PartitioningManager::PartitionDetectionResult detectTablePartitions(

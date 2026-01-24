@@ -24,22 +24,6 @@ anadir test en los otros para nulls, esto y lo otros
 rpg
 
 
-## ⚡ FASE 4: OPTIMIZACIÓN Y PERFORMANCE
-**Orden lógico:** Requiere que las funcionalidades base funcionen correctamente
-
-### 4.1. Performance y optimización
-- Dynamic partitioning
-- Partition pruning
-- Pushdown optimization (ejecutar filtros en source)
-- Join optimization (hash, sort-merge, broadcast)
-- Memory management avanzado
-- Result caching
-- Lookup caching
-- Metadata caching
-- Data compression (LZ4, Snappy, GZIP)
-- Columnar storage
-
----
 
 ## 🧪 FASE 5: TESTING Y VALIDACIÓN
 **Orden lógico:** Requiere funcionalidades implementadas para poder testearlas
@@ -142,7 +126,7 @@ rpg
 
 
 
-
+hay una de las terminales que
 
 ## 📋 LISTA DE PRUEBAS - UI
 

@@ -1,4 +1,6 @@
 #include "transformations/transformation_engine.h"
+#include "sync/JoinOptimizer.h"
+#include "utils/MemoryManager.h"
 #include "core/logger.h"
 #include <algorithm>
 
@@ -7,9 +9,21 @@
 #include "engines/spark_engine.h"
 #endif
 
-TransformationEngine::TransformationEngine() = default;
+TransformationEngine::TransformationEngine() {
+  // Initialize memory manager with default limits
+  MemoryManager::MemoryLimit memLimit;
+  memLimit.maxMemory = 2ULL * 1024 * 1024 * 1024;  // 2GB default
+  memLimit.enableSpill = true;
+  memLimit.spillDirectory = "/tmp/datasync_spill";
+  memoryManager_ = std::make_unique<MemoryManager>(memLimit);
+  
+  Logger::info(LogCategory::SYSTEM, "TransformationEngine",
+               "TransformationEngine initialized with memory management");
+}
 
-TransformationEngine::~TransformationEngine() = default;
+TransformationEngine::~TransformationEngine() {
+  memoryManager_.reset();
+}
 
 void TransformationEngine::registerTransformation(
   std::unique_ptr<Transformation> transformation
@@ -168,6 +182,46 @@ std::vector<json> TransformationEngine::executePipelineWithSpark(
   }
   return currentData;
 #endif
+}
+
+std::vector<json> TransformationEngine::optimizeJoin(
+    const std::vector<json>& leftData,
+    const std::vector<json>& rightData,
+    const json& joinConfig) {
+  
+  // Crear configuración de join
+  JoinOptimizer::JoinConfig config;
+  config.leftTable = joinConfig.value("left_table", "left");
+  config.rightTable = joinConfig.value("right_table", "right");
+  
+  if (joinConfig.contains("left_columns")) {
+    for (const auto& col : joinConfig["left_columns"]) {
+      config.leftColumns.push_back(col.get<std::string>());
+    }
+  }
+  
+  if (joinConfig.contains("right_columns")) {
+    for (const auto& col : joinConfig["right_columns"]) {
+      config.rightColumns.push_back(col.get<std::string>());
+    }
+  }
+  
+  config.joinType = joinConfig.value("join_type", "inner");
+  
+  // Estimar estadísticas
+  config.leftStats = JoinOptimizer::estimateTableStats(config.leftTable, leftData);
+  config.rightStats = JoinOptimizer::estimateTableStats(config.rightTable, rightData);
+  
+  // Ejecutar join optimizado
+  JoinOptimizer::JoinResult result = JoinOptimizer::executeJoin(config, leftData, rightData);
+  
+  if (!result.success) {
+    Logger::error(LogCategory::SYSTEM, "TransformationEngine",
+                  "Join optimization failed: " + result.errorMessage);
+    return {};
+  }
+  
+  return result.resultRows;
 }
 
 bool TransformationEngine::shouldUseSpark(const json& pipelineConfig) const {

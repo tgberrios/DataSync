@@ -317,6 +317,14 @@ add_executable(DataSync
     src/utils/MariaDBClusterNameProvider.cpp
     src/utils/MSSQLClusterNameProvider.cpp
     src/utils/PostgreSQLClusterNameProvider.cpp
+    src/utils/CacheManager.cpp
+    src/utils/ResultCache.cpp
+    src/utils/MetadataCache.cpp
+    src/utils/MemoryManager.cpp
+    src/utils/DataCompressor.cpp
+    src/storage/ColumnarStorage.cpp
+    src/storage/ColumnarReader.cpp
+    src/storage/ColumnarWriter.cpp
     src/backup/backup_manager.cpp
     src/backup/backup_scheduler.cpp
     src/transformations/transformation_engine.cpp
@@ -344,6 +352,7 @@ add_executable(DataSync
     src/catalog/metadata_repository.cpp
     src/catalog/catalog_cleaner.cpp
     src/catalog/catalog_manager.cpp
+    src/catalog/metadata_cache_repository.cpp
     src/catalog/catalog_lock.cpp
     src/sync/DatabaseToPostgresSync.cpp
     src/sync/MariaDBToPostgres.cpp
@@ -422,7 +431,10 @@ add_executable(DataSync
     src/sync/ChangeStreamsReader.cpp
     src/sync/MessageSerializer.cpp
     src/sync/DistributedJoinExecutor.cpp
+    src/sync/JoinOptimizer.cpp
     src/sync/PartitioningManager.cpp
+    src/sync/PartitionPruner.cpp
+    src/sync/PushdownOptimizer.cpp
     src/sync/IncrementalProcessor.cpp
     src/sync/CDCStrategyManager.cpp
     src/sync/MergeStrategyExecutor.cpp
@@ -469,10 +481,55 @@ if(HAVE_PROTOBUF)
 endif()
 
 # Compression libraries
+# zlib (GZIP compression)
 find_library(ZLIB_LIB z)
 if(ZLIB_LIB)
     list(APPEND OPTIONAL_LIBS ${ZLIB_LIB})
     message(STATUS "Found zlib: ${ZLIB_LIB}")
+endif()
+
+# LZ4 compression
+find_library(LZ4_LIB lz4
+    PATHS
+    /usr/local/lib
+    /usr/lib
+    ENV LD_LIBRARY_PATH
+)
+find_path(LZ4_INCLUDE_DIR lz4.h
+    PATHS
+    /usr/local/include
+    /usr/include
+)
+if(LZ4_LIB AND LZ4_INCLUDE_DIR)
+    set(HAVE_LZ4 TRUE)
+    add_definitions(-DHAVE_LZ4)
+    list(APPEND OPTIONAL_LIBS ${LZ4_LIB})
+    include_directories(${LZ4_INCLUDE_DIR})
+    message(STATUS "LZ4 support: ENABLED")
+else()
+    message(STATUS "LZ4 support: DISABLED (liblz4 not found)")
+endif()
+
+# Snappy compression
+find_library(SNAPPY_LIB snappy
+    PATHS
+    /usr/local/lib
+    /usr/lib
+    ENV LD_LIBRARY_PATH
+)
+find_path(SNAPPY_INCLUDE_DIR snappy.h
+    PATHS
+    /usr/local/include
+    /usr/include
+)
+if(SNAPPY_LIB AND SNAPPY_INCLUDE_DIR)
+    set(HAVE_SNAPPY TRUE)
+    add_definitions(-DHAVE_SNAPPY)
+    list(APPEND OPTIONAL_LIBS ${SNAPPY_LIB})
+    include_directories(${SNAPPY_INCLUDE_DIR})
+    message(STATUS "Snappy support: ENABLED")
+else()
+    message(STATUS "Snappy support: DISABLED (libsnappy not found)")
 endif()
 
 find_library(BZIP2_LIB bz2)

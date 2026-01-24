@@ -8,6 +8,8 @@
 #include "sync/MergeStrategyExecutor.h"
 #include "sync/PartitioningManager.h"
 #include "sync/DistributedProcessingManager.h"
+#include "storage/ColumnarStorage.h"
+#include "utils/MemoryManager.h"
 #include "third_party/json.hpp"
 #include <memory>
 #include <pqxx/pqxx>
@@ -23,6 +25,10 @@ class DataWarehouseBuilder {
   // Distributed processing and merge strategies
   std::unique_ptr<MergeStrategyExecutor> mergeExecutor_;
   std::unique_ptr<DistributedProcessingManager> distributedManager_;
+  
+  // Performance optimizations
+  std::unique_ptr<MemoryManager> memoryManager_;
+  bool useColumnarStorage_{false};
   
   // Helper methods for merge strategies and partitioning
   void applyMergeStrategy(const DataWarehouseModel& warehouse,
