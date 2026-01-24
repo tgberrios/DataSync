@@ -309,6 +309,15 @@ add_executable(DataSync
     src/governance/BusinessGlossaryManager.cpp
     src/governance/AlertingManager.cpp
     src/governance/WebhookManager.cpp
+    src/governance/ImpactAnalyzer.cpp
+    src/governance/ImpactAnalysisRepository.cpp
+    src/governance/ColumnLineageExtractor.cpp
+    src/governance/TransformationLineageTracker.cpp
+    src/governance/DataDictionaryGenerator.cpp
+    src/governance/LineageGraphBuilder.cpp
+    src/governance/LineageVisualizer.cpp
+    src/governance/PipelineMetadataCollector.cpp
+    src/governance/PipelineDocumentationGenerator.cpp
     src/metrics/MetricsCollector.cpp
     src/utils/connection_utils.cpp
     src/utils/cluster_name_resolver.cpp

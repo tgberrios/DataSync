@@ -14,6 +14,9 @@ WorkflowExecutor::WorkflowExecutor(std::string metadataConnectionString)
       customJobExecutor_(std::make_unique<CustomJobExecutor>(metadataConnectionString_)) {
   workflowRepo_->createTables();
   
+  // Inicializar TransformationLineageTracker
+  lineageTracker_ = std::make_unique<TransformationLineageTracker>(metadataConnectionString_);
+  
   // Inicializar DistributedProcessingManager
   DistributedProcessingManager::ProcessingConfig distConfig;
   distConfig.sparkConfig.appName = "DataSync-Workflow";

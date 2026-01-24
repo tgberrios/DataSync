@@ -41,22 +41,6 @@ rpg
 
 ---
 
-## 📚 FASE 6: METADATA Y DOCUMENTACIÓN
-**Orden lógico:** Requiere sistema funcionando para documentar
-
-### 6.1. Metadata y documentación
-- Business glossary
-- Data dictionary avanzado
-- Impact analysis (qué se afecta si cambio X)
-- Data lineage visual avanzado (graph completo)
-- Column-level lineage
-- Transformation lineage (qué transformaciones se aplicaron)
-- Auto-documentación de pipelines
-- Data dictionary generation
-- API documentation (Swagger/OpenAPI)
-
----
-
 ## 🔒 FASE 7: SECURITY AVANZADO
 **Orden lógico:** Puede desarrollarse en paralelo pero mejor después de la base
 

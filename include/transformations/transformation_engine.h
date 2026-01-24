@@ -5,6 +5,7 @@
 #include "transformations/spark_translator.h"
 #include "sync/JoinOptimizer.h"
 #include "utils/MemoryManager.h"
+#include "governance/TransformationLineageTracker.h"
 #include <string>
 #include <vector>
 #include <memory>
@@ -64,6 +65,7 @@ public:
 private:
   std::map<std::string, std::unique_ptr<Transformation>> transformations_;
   std::unique_ptr<MemoryManager> memoryManager_;
+  std::unique_ptr<TransformationLineageTracker> lineageTracker_;
   
   // Check if pipeline should use Spark
   bool shouldUseSpark(const json& pipelineConfig) const;
@@ -73,6 +75,18 @@ private:
     const std::vector<json>& leftData,
     const std::vector<json>& rightData,
     const json& joinConfig
+  );
+  
+  // Track transformation lineage
+  void trackTransformation(
+    const std::string& transformationType,
+    const json& config,
+    const std::vector<json>& inputData,
+    const std::vector<json>& outputData,
+    const std::string& workflowName = "",
+    const std::string& taskName = "",
+    int64_t workflowExecutionId = 0,
+    int64_t taskExecutionId = 0
   );
 };
 

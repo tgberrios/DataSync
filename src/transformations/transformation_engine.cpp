@@ -1,8 +1,10 @@
 #include "transformations/transformation_engine.h"
 #include "sync/JoinOptimizer.h"
 #include "utils/MemoryManager.h"
+#include "governance/TransformationLineageTracker.h"
 #include "core/logger.h"
 #include <algorithm>
+#include <chrono>
 
 #ifdef HAVE_SPARK
 #include "transformations/spark_transformation.h"
@@ -16,6 +18,9 @@ TransformationEngine::TransformationEngine() {
   memLimit.enableSpill = true;
   memLimit.spillDirectory = "/tmp/datasync_spill";
   memoryManager_ = std::make_unique<MemoryManager>(memLimit);
+  
+  // TransformationLineageTracker se inicializará cuando se necesite con connection string
+  // Por ahora, se inicializa como nullptr y se crea bajo demanda
   
   Logger::info(LogCategory::SYSTEM, "TransformationEngine",
                "TransformationEngine initialized with memory management");
@@ -101,7 +106,19 @@ std::vector<json> TransformationEngine::executeTransformation(
   }
   
   try {
-    return it->second->execute(inputData, config);
+    auto startTime = std::chrono::high_resolution_clock::now();
+    std::vector<json> result = it->second->execute(inputData, config);
+    auto endTime = std::chrono::high_resolution_clock::now();
+    double executionTimeMs = std::chrono::duration<double, std::milli>(endTime - startTime).count();
+
+    // Track transformation lineage si está disponible
+    // (se inicializará cuando se tenga connection string)
+    if (lineageTracker_) {
+      trackTransformation(transformationType, config, inputData, result,
+                         "", "", 0, 0);
+    }
+
+    return result;
   } catch (const std::exception& e) {
     Logger::error(LogCategory::SYSTEM, "TransformationEngine",
                   "Error executing transformation " + transformationType + ": " + 
@@ -222,6 +239,50 @@ std::vector<json> TransformationEngine::optimizeJoin(
   }
   
   return result.resultRows;
+}
+
+void TransformationEngine::trackTransformation(
+    const std::string& transformationType,
+    const json& config,
+    const std::vector<json>& inputData,
+    const std::vector<json>& outputData,
+    const std::string& workflowName,
+    const std::string& taskName,
+    int64_t workflowExecutionId,
+    int64_t taskExecutionId) {
+  
+  if (!lineageTracker_) {
+    return;  // No tracking disponible
+  }
+
+  try {
+    TransformationLineageTracker::TransformationRecord record;
+    record.transformationId = std::to_string(
+        std::chrono::system_clock::now().time_since_epoch().count());
+    record.transformationType = transformationType;
+    record.transformationConfig = config;
+    record.workflowName = workflowName;
+    record.taskName = taskName;
+    record.workflowExecutionId = workflowExecutionId;
+    record.taskExecutionId = taskExecutionId;
+    record.executedAt = std::chrono::system_clock::now();
+    record.rowsProcessed = outputData.size();
+    record.success = true;
+
+    // Extraer schemas/tablas/columnas de input y output
+    // (simplificado - en implementación real, se extraería de metadata)
+    if (!inputData.empty() && inputData[0].contains("_schema")) {
+      record.inputSchemas.push_back(inputData[0]["_schema"].get<std::string>());
+    }
+    if (!outputData.empty() && outputData[0].contains("_schema")) {
+      record.outputSchemas.push_back(outputData[0]["_schema"].get<std::string>());
+    }
+
+    lineageTracker_->recordTransformation(record);
+  } catch (const std::exception& e) {
+    Logger::warning(LogCategory::GOVERNANCE, "TransformationEngine",
+                    "Failed to track transformation lineage: " + std::string(e.what()));
+  }
 }
 
 bool TransformationEngine::shouldUseSpark(const json& pipelineConfig) const {
