@@ -1,4 +1,5 @@
 #include "core/Config.h"
+#include "core/database_config.h"
 #include "sync/StreamingData.h"
 #include "backup/backup_manager.h"
 #include "backup/backup_scheduler.h"
@@ -7,6 +8,14 @@
 #include "governance/TokenizationManager.h"
 #include "governance/AnonymizationEngine.h"
 #include "governance/FineGrainedPermissions.h"
+#include "monitoring/DistributedTracingManager.h"
+#include "monitoring/APMManager.h"
+#include "monitoring/BottleneckDetector.h"
+#include "monitoring/ResourceTracker.h"
+#include "monitoring/CostTracker.h"
+#include "monitoring/LogAggregator.h"
+#include "monitoring/AdvancedAlertingManager.h"
+#include "monitoring/QueryPerformanceAnalyzer.h"
 #include "third_party/json.hpp"
 #include <atomic>
 #include <csignal>
@@ -407,6 +416,237 @@ int handleSecurityCommand() {
   }
 }
 
+int handleMonitoringCommand() {
+  try {
+    DatabaseConfig::loadFromFile("config.json");
+    if (!DatabaseConfig::isInitialized()) {
+      nlohmann::json output;
+      output["success"] = false;
+      output["error"] = "Database configuration failed to initialize";
+      std::cerr << output.dump(2) << std::endl;
+      return 1;
+    }
+    
+    std::string metadataConnStr = DatabaseConfig::getPostgresConnectionString();
+    std::string input;
+    std::string line;
+    while (std::getline(std::cin, line)) {
+      input += line + "\n";
+    }
+    
+    if (input.empty()) {
+      nlohmann::json output;
+      output["success"] = false;
+      output["error"] = "No input provided";
+      std::cerr << output.dump(2) << std::endl;
+      Logger::shutdown();
+      return 1;
+    }
+    
+    nlohmann::json request = nlohmann::json::parse(input);
+    std::string operation = request.value("operation", "");
+    nlohmann::json output;
+    
+    if (operation == "start_span") {
+      DistributedTracingManager tracing(metadataConnStr);
+      std::string traceId = request.value("trace_id", tracing.generateTraceId());
+      std::string parentSpanId = request.value("parent_span_id", "");
+      std::string operationName = request["operation_name"];
+      std::string serviceName = request.value("service_name", "datasync");
+      
+      std::string spanId = tracing.startSpan(traceId, parentSpanId, operationName, serviceName);
+      output["success"] = true;
+      output["span_id"] = spanId;
+      output["trace_id"] = traceId;
+      
+    } else if (operation == "end_span") {
+      DistributedTracingManager tracing(metadataConnStr);
+      std::string spanId = request["span_id"];
+      std::string status = request.value("status", "ok");
+      std::string errorMessage = request.value("error_message", "");
+      
+      bool success = tracing.endSpan(spanId, status, errorMessage);
+      output["success"] = success;
+      
+    } else if (operation == "list_traces") {
+      DistributedTracingManager tracing(metadataConnStr);
+      std::string serviceName = request.value("service_name", "");
+      int limit = request.value("limit", 100);
+      
+      auto traces = tracing.listTraces(serviceName, limit);
+      output["success"] = true;
+      output["traces"] = nlohmann::json::array();
+      for (const auto& t : traces) {
+        nlohmann::json traceJson;
+        traceJson["trace_id"] = t.traceId;
+        traceJson["service_name"] = t.serviceName;
+        traceJson["span_count"] = t.spanCount;
+        traceJson["duration_microseconds"] = t.durationMicroseconds;
+        output["traces"].push_back(traceJson);
+      }
+      
+    } else if (operation == "get_trace") {
+      DistributedTracingManager tracing(metadataConnStr);
+      std::string traceId = request["trace_id"];
+      auto trace = tracing.getTrace(traceId);
+      if (trace) {
+        output["success"] = true;
+        output["trace_id"] = trace->traceId;
+        output["service_name"] = trace->serviceName;
+        output["span_count"] = trace->spanCount;
+        output["duration_microseconds"] = trace->durationMicroseconds;
+        output["spans"] = nlohmann::json::array();
+        for (const auto& span : trace->spans) {
+          nlohmann::json spanJson;
+          spanJson["span_id"] = span.spanId;
+          spanJson["operation_name"] = span.operationName;
+          spanJson["service_name"] = span.serviceName;
+          spanJson["duration_microseconds"] = span.durationMicroseconds;
+          spanJson["status"] = span.status;
+          output["spans"].push_back(spanJson);
+        }
+      } else {
+        output["success"] = false;
+        output["error"] = "Trace not found";
+      }
+      
+    } else if (operation == "record_request") {
+      APMManager apm(metadataConnStr);
+      std::string operationName = request["operation_name"];
+      std::string serviceName = request.value("service_name", "datasync");
+      int64_t latencyMs = request["latency_ms"];
+      bool isError = request.value("is_error", false);
+      
+      apm.recordRequest(operationName, serviceName, latencyMs, isError);
+      output["success"] = true;
+      
+    } else if (operation == "get_metrics") {
+      APMManager apm(metadataConnStr);
+      std::string operationName = request.value("operation_name", "");
+      std::string timeWindow = request.value("time_window", "1min");
+      
+      auto metrics = apm.getMetrics(operationName, timeWindow);
+      output["success"] = true;
+      output["metrics"] = nlohmann::json::array();
+      for (const auto& m : metrics) {
+        nlohmann::json metricJson;
+        metricJson["operation_name"] = m.operationName;
+        metricJson["service_name"] = m.serviceName;
+        metricJson["latency_p50"] = m.latencyP50;
+        metricJson["latency_p95"] = m.latencyP95;
+        metricJson["latency_p99"] = m.latencyP99;
+        metricJson["throughput"] = m.throughput;
+        metricJson["error_rate"] = m.errorRate;
+        output["metrics"].push_back(metricJson);
+      }
+      
+    } else if (operation == "analyze_bottlenecks") {
+      BottleneckDetector detector(metadataConnStr);
+      auto bottlenecks = detector.analyze();
+      output["success"] = true;
+      output["bottlenecks"] = nlohmann::json::array();
+      for (const auto& b : bottlenecks) {
+        nlohmann::json bottleneckJson;
+        bottleneckJson["id"] = b.id;
+        bottleneckJson["resource_type"] = b.resourceType;
+        bottleneckJson["severity"] = b.severity;
+        bottleneckJson["description"] = b.description;
+        bottleneckJson["recommendations"] = nlohmann::json::array();
+        for (const auto& rec : b.recommendations) {
+          bottleneckJson["recommendations"].push_back(rec);
+        }
+        output["bottlenecks"].push_back(bottleneckJson);
+      }
+      
+    } else if (operation == "collect_resources") {
+      ResourceTracker tracker(metadataConnStr);
+      auto metrics = tracker.collectCurrentMetrics();
+      tracker.saveMetrics(metrics);
+      output["success"] = true;
+      output["cpu_percent"] = metrics.cpuPercent;
+      output["memory_percent"] = metrics.memoryPercent;
+      output["db_connections"] = metrics.dbConnections;
+      
+    } else if (operation == "calculate_cost") {
+      CostTracker costTracker(metadataConnStr);
+      std::string workflowId = request.value("workflow_id", "");
+      std::string operationName = request.value("operation_name", "");
+      ResourceTracker tracker(metadataConnStr);
+      auto metrics = tracker.collectCurrentMetrics();
+      
+      auto cost = costTracker.calculateOperationCost(workflowId, operationName, metrics);
+      costTracker.saveCost(cost);
+      output["success"] = true;
+      output["total_cost"] = cost.totalCost;
+      output["compute_cost"] = cost.computeCost;
+      output["storage_cost"] = cost.storageCost;
+      output["network_cost"] = cost.networkCost;
+      
+    } else if (operation == "export_logs") {
+      LogAggregator aggregator(metadataConnStr);
+      std::string configId = request["config_id"];
+      int limit = request.value("limit", 1000);
+      
+      int exported = aggregator.exportLogs(configId, limit);
+      output["success"] = true;
+      output["logs_exported"] = exported;
+      
+    } else if (operation == "trigger_alert") {
+      AdvancedAlertingManager alerting(metadataConnStr);
+      std::string integrationId = request["integration_id"];
+      Alert alert;
+      alert.id = request.value("alert_id", 0);
+      alert.alert_type = AlertType::CUSTOM;
+      alert.severity = AlertSeverity::WARNING;
+      alert.title = request["title"];
+      alert.message = request.value("message", "");
+      alert.source = request.value("source", "datasync");
+      
+      std::string incidentId = alerting.triggerAlert(integrationId, alert);
+      output["success"] = !incidentId.empty();
+      output["incident_id"] = incidentId;
+      
+    } else if (operation == "analyze_query") {
+      QueryPerformanceAnalyzer analyzer(metadataConnStr);
+      std::string queryId = request["query_id"];
+      std::string queryText = request["query_text"];
+      
+      auto analysis = analyzer.analyzeQuery(queryId, queryText);
+      if (analysis) {
+        output["success"] = true;
+        output["query_fingerprint"] = analysis->queryFingerprint;
+        output["issues"] = nlohmann::json::array();
+        for (const auto& issue : analysis->issues) {
+          output["issues"].push_back(issue);
+        }
+        output["recommendations"] = nlohmann::json::array();
+        for (const auto& rec : analysis->recommendations) {
+          output["recommendations"].push_back(rec);
+        }
+      } else {
+        output["success"] = false;
+        output["error"] = "Failed to analyze query";
+      }
+      
+    } else {
+      output["success"] = false;
+      output["error"] = "Unknown operation: " + operation;
+    }
+    
+    std::cout << output.dump(2) << std::endl;
+    Logger::shutdown();
+    return output.value("success", false) ? 0 : 1;
+    
+  } catch (const std::exception& e) {
+    nlohmann::json output;
+    output["success"] = false;
+    output["error"] = e.what();
+    std::cerr << output.dump(2) << std::endl;
+    Logger::shutdown();
+    return 1;
+  }
+}
+
 int main(int argc, char* argv[]) {
   if (argc > 1 && std::string(argv[1]) == "backup") {
     return handleBackupCommand(argc, argv);
@@ -420,6 +660,10 @@ int main(int argc, char* argv[]) {
   
   if (argc > 1 && std::string(argv[1]) == "--security") {
     return handleSecurityCommand();
+  }
+  
+  if (argc > 1 && std::string(argv[1]) == "--monitoring") {
+    return handleMonitoringCommand();
   }
   try {
     DatabaseConfig::loadFromFile("config.json");

@@ -322,6 +322,14 @@ add_executable(DataSync
     src/governance/TokenizationManager.cpp
     src/governance/AnonymizationEngine.cpp
     src/governance/FineGrainedPermissions.cpp
+    src/monitoring/DistributedTracingManager.cpp
+    src/monitoring/APMManager.cpp
+    src/monitoring/BottleneckDetector.cpp
+    src/monitoring/ResourceTracker.cpp
+    src/monitoring/CostTracker.cpp
+    src/monitoring/LogAggregator.cpp
+    src/monitoring/AdvancedAlertingManager.cpp
+    src/monitoring/QueryPerformanceAnalyzer.cpp
     src/metrics/MetricsCollector.cpp
     src/utils/connection_utils.cpp
     src/utils/cluster_name_resolver.cpp
