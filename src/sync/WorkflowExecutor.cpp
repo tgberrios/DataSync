@@ -1,4 +1,5 @@
 #include "sync/WorkflowExecutor.h"
+#include "sync/DistributedProcessingManager.h"
 #include <regex>
 #include <algorithm>
 #include <sstream>
@@ -12,6 +13,13 @@ WorkflowExecutor::WorkflowExecutor(std::string metadataConnectionString)
       workflowRepo_(std::make_unique<WorkflowRepository>(metadataConnectionString_)),
       customJobExecutor_(std::make_unique<CustomJobExecutor>(metadataConnectionString_)) {
   workflowRepo_->createTables();
+  
+  // Inicializar DistributedProcessingManager
+  DistributedProcessingManager::ProcessingConfig distConfig;
+  distConfig.sparkConfig.appName = "DataSync-Workflow";
+  distConfig.sparkConfig.masterUrl = "local[*]"; // Default, puede ser configurado
+  distributedManager_ = std::make_unique<DistributedProcessingManager>(distConfig);
+  distributedManager_->initialize();
 }
 
 WorkflowExecutor::~WorkflowExecutor() = default;
@@ -480,28 +488,72 @@ bool WorkflowExecutor::executeTask(const WorkflowModel &workflow,
   std::string errorMessage;
   
   try {
-    switch (task.task_type) {
-    case TaskType::CUSTOM_JOB:
-      success = executeCustomJob(task.task_reference);
-      break;
-    case TaskType::DATA_WAREHOUSE:
-      success = executeDataWarehouse(task.task_reference);
-      break;
-    case TaskType::DATA_VAULT:
-      success = executeDataVault(task.task_reference);
-      break;
-    case TaskType::SYNC:
-      success = executeSync(task.task_config);
-      break;
-    case TaskType::API_CALL:
-      success = executeAPICall(task.task_config);
-      break;
-    case TaskType::SCRIPT:
-      success = executeScript(task.task_config);
-      break;
-    default:
-      errorMessage = "Unknown task type";
-      success = false;
+    // Verificar si la tarea tiene configuración de procesamiento distribuido
+    bool useDistributed = false;
+    if (task.task_config.contains("use_distributed")) {
+      useDistributed = task.task_config["use_distributed"].get<bool>();
+    } else if (task.task_config.contains("processing_mode")) {
+      std::string mode = task.task_config["processing_mode"].get<std::string>();
+      useDistributed = (mode == "distributed" || mode == "auto");
+    }
+    
+    // Si se requiere procesamiento distribuido y está disponible
+    if (useDistributed && distributedManager_ && distributedManager_->isSparkAvailable()) {
+      DistributedProcessingManager::ProcessingTask distTask;
+      distTask.taskId = task.task_name + "_" + std::to_string(taskExecutionId);
+      distTask.taskType = task.task_type == TaskType::DATA_WAREHOUSE ? "warehouse_build" :
+                         task.task_type == TaskType::SYNC ? "sync" : "custom";
+      distTask.config = task.task_config;
+      
+      // Estimar tamaño si está disponible en config
+      if (task.task_config.contains("estimated_rows")) {
+        distTask.estimatedRows = task.task_config["estimated_rows"].get<int64_t>();
+      }
+      if (task.task_config.contains("estimated_size_mb")) {
+        distTask.estimatedSizeMB = task.task_config["estimated_size_mb"].get<int64_t>();
+      }
+      
+      auto distResult = distributedManager_->executeTask(distTask);
+      success = distResult.success;
+      errorMessage = distResult.errorMessage;
+      
+      // Guardar metadata del resultado
+      if (taskExecutionId > 0) {
+        json taskOutput = json::object();
+        taskOutput["execution_mode"] = distResult.executionMode;
+        taskOutput["rows_processed"] = distResult.rowsProcessed;
+        taskOutput["metadata"] = distResult.metadata;
+        
+        TaskExecution te;
+        te.id = taskExecutionId;
+        te.task_output = taskOutput;
+        workflowRepo_->updateTaskExecution(te);
+      }
+    } else {
+      // Ejecución normal (local o sin procesamiento distribuido)
+      switch (task.task_type) {
+      case TaskType::CUSTOM_JOB:
+        success = executeCustomJob(task.task_reference);
+        break;
+      case TaskType::DATA_WAREHOUSE:
+        success = executeDataWarehouse(task.task_reference);
+        break;
+      case TaskType::DATA_VAULT:
+        success = executeDataVault(task.task_reference);
+        break;
+      case TaskType::SYNC:
+        success = executeSync(task.task_config);
+        break;
+      case TaskType::API_CALL:
+        success = executeAPICall(task.task_config);
+        break;
+      case TaskType::SCRIPT:
+        success = executeScript(task.task_config);
+        break;
+      default:
+        errorMessage = "Unknown task type";
+        success = false;
+      }
     }
   } catch (const std::exception &e) {
     errorMessage = e.what();

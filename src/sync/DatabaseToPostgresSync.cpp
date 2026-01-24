@@ -1,7 +1,13 @@
 #include "sync/DatabaseToPostgresSync.h"
 #include "engines/database_engine.h"
+#include "sync/PartitioningManager.h"
+#include "sync/DistributedProcessingManager.h"
 #include <algorithm>
 #include <set>
+
+#ifdef HAVE_SPARK
+#include "engines/spark_engine.h"
+#endif
 
 std::mutex DatabaseToPostgresSync::metadataUpdateMutex;
 
@@ -73,6 +79,38 @@ DatabaseToPostgresSync::parseJSONArray(const std::string &jsonArray) {
                   "Error parsing JSON array: " + std::string(e.what()));
   }
   return result;
+}
+
+PartitioningManager::PartitionDetectionResult
+DatabaseToPostgresSync::detectTablePartitions(
+    const TableInfo& table,
+    const std::vector<std::string>& columnNames,
+    const std::vector<std::string>& columnTypes) {
+  
+  if (!usePartitioning_) {
+    return PartitioningManager::PartitionDetectionResult{false, {}, "", PartitioningManager::PartitionType::DATE};
+  }
+  
+  return PartitioningManager::detectPartitions(
+    table.schema_name,
+    table.table_name,
+    columnNames,
+    columnTypes
+  );
+}
+
+bool DatabaseToPostgresSync::shouldUseDistributedForTable(const TableInfo& table, int64_t estimatedRows) {
+  if (!useDistributedProcessing_ || !distributedManager_) {
+    return false;
+  }
+  
+  DistributedProcessingManager::ProcessingTask task;
+  task.taskId = table.schema_name + "." + table.table_name;
+  task.taskType = "sync";
+  task.estimatedRows = estimatedRows;
+  
+  auto decision = distributedManager_->shouldUseDistributed(task);
+  return decision.useDistributed;
 }
 
 std::string DatabaseToPostgresSync::getPKStrategyFromCatalog(

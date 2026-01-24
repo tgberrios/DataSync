@@ -4,6 +4,8 @@
 #include "core/Config.h"
 #include "core/logger.h"
 #include "sync/ParallelProcessing.h"
+#include "sync/PartitioningManager.h"
+#include "sync/DistributedProcessingManager.h"
 #include "third_party/json.hpp"
 #include <atomic>
 #include <mutex>
@@ -12,6 +14,7 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#include <memory>
 
 using json = nlohmann::json;
 using namespace ParallelProcessing;
@@ -38,6 +41,20 @@ protected:
   ThreadSafeQueue<DataChunk> rawDataQueue{MAX_QUEUE_SIZE};
   ThreadSafeQueue<PreparedBatch> preparedBatchQueue{MAX_QUEUE_SIZE};
   ThreadSafeQueue<ProcessedResult> resultQueue{MAX_QUEUE_SIZE};
+  
+  // Distributed processing and partitioning support
+  std::unique_ptr<DistributedProcessingManager> distributedManager_;
+  bool usePartitioning_{true};
+  bool useDistributedProcessing_{true};
+  
+  // Helper methods for partitioning and distributed processing
+  PartitioningManager::PartitionDetectionResult detectTablePartitions(
+    const TableInfo& table,
+    const std::vector<std::string>& columnNames,
+    const std::vector<std::string>& columnTypes
+  );
+  
+  bool shouldUseDistributedForTable(const TableInfo& table, int64_t estimatedRows);
 
   static constexpr size_t MAX_QUEUE_SIZE = 10;
   static constexpr size_t MAX_BATCH_PREPARERS = 4;

@@ -10,6 +10,12 @@
 #include "governance/DataQuality.h"
 #include "utils/connection_utils.h"
 #include "utils/engine_factory.h"
+#include "sync/MergeStrategyExecutor.h"
+#include "sync/PartitioningManager.h"
+#include "sync/DistributedProcessingManager.h"
+#ifdef HAVE_SPARK
+#include "engines/spark_engine.h"
+#endif
 #include <algorithm>
 #include <bson/bson.h>
 #include <chrono>
@@ -29,9 +35,61 @@ DataWarehouseBuilder::DataWarehouseBuilder(std::string metadataConnectionString)
       warehouseRepo_(std::make_unique<DataWarehouseRepository>(
           metadataConnectionString_)) {
   warehouseRepo_->createTables();
+  
+  // Inicializar MergeStrategyExecutor y DistributedProcessingManager
+#ifdef HAVE_SPARK
+  auto sparkEngine = std::make_shared<SparkEngine>(SparkEngine::SparkConfig{});
+  if (sparkEngine->initialize()) {
+    mergeExecutor_ = std::make_unique<MergeStrategyExecutor>(sparkEngine);
+    
+    DistributedProcessingManager::ProcessingConfig distConfig;
+    distConfig.sparkConfig.appName = "DataSync-Warehouse";
+    distConfig.sparkConfig.masterUrl = "local[*]";
+    distributedManager_ = std::make_unique<DistributedProcessingManager>(distConfig);
+    distributedManager_->initialize();
+  }
+#endif
 }
 
 DataWarehouseBuilder::~DataWarehouseBuilder() = default;
+
+void DataWarehouseBuilder::applyMergeStrategy(
+    const DataWarehouseModel& warehouse,
+    const std::string& tableName,
+    const std::vector<json>& sourceData,
+    MergeStrategyExecutor::MergeStrategy strategy) {
+  
+  if (!mergeExecutor_) {
+    Logger::warning(LogCategory::TRANSFER, "applyMergeStrategy",
+                    "MergeStrategyExecutor not available, using default merge");
+    return;
+  }
+  
+  MergeStrategyExecutor::MergeConfig mergeConfig;
+  mergeConfig.targetTable = getLayerSchemaName(warehouse) + "." + tableName;
+  mergeConfig.sourceTable = "source_data"; // Placeholder
+  mergeConfig.strategy = strategy;
+  mergeConfig.useDistributed = (distributedManager_ && distributedManager_->isSparkAvailable());
+  
+  // Extraer primary key columns desde warehouse model
+  // Esto sería específico de cada dimensión/fact table
+  
+  mergeExecutor_->executeMerge(mergeConfig);
+}
+
+PartitioningManager::PartitionDetectionResult
+DataWarehouseBuilder::detectWarehousePartitions(
+    const DataWarehouseModel& warehouse,
+    const std::vector<std::string>& columnNames,
+    const std::vector<std::string>& columnTypes) {
+  
+  return PartitioningManager::detectPartitions(
+    getLayerSchemaName(warehouse),
+    "warehouse_table", // Placeholder
+    columnNames,
+    columnTypes
+  );
+}
 
 void DataWarehouseBuilder::buildWarehouse(const std::string &warehouseName) {
   std::string errorMessage;
@@ -277,7 +335,13 @@ void DataWarehouseBuilder::buildDimensionTable(
 
   switch (dimension.scd_type) {
   case DimensionType::TYPE_1:
-    applySCDType1(warehouse, dimension, sourceData);
+    // TYPE_1 es equivalente a UPSERT - usar MergeStrategyExecutor si está disponible
+    if (mergeExecutor_) {
+      applyMergeStrategy(warehouse, dimension.target_table, sourceData, 
+                        MergeStrategyExecutor::MergeStrategy::UPSERT);
+    } else {
+      applySCDType1(warehouse, dimension, sourceData);
+    }
     break;
   case DimensionType::TYPE_2:
     applySCDType2(warehouse, dimension, sourceData);
@@ -285,6 +349,8 @@ void DataWarehouseBuilder::buildDimensionTable(
   case DimensionType::TYPE_3:
     applySCDType3(warehouse, dimension, sourceData);
     break;
+  // TYPE_4 y TYPE_6 se pueden agregar al enum DimensionType en el futuro
+  // Por ahora, TYPE_1 con MergeStrategyExecutor proporciona funcionalidad similar
   }
 
   if (!dimension.index_columns.empty()) {

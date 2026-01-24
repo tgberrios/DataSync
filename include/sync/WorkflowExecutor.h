@@ -6,6 +6,7 @@
 #include "sync/CustomJobExecutor.h"
 #include "sync/DataWarehouseBuilder.h"
 #include "sync/DataVaultBuilder.h"
+#include "sync/DistributedProcessingManager.h"
 #include "core/logger.h"
 #include <map>
 #include <set>
@@ -23,6 +24,7 @@ class WorkflowExecutor {
   std::unique_ptr<CustomJobExecutor> customJobExecutor_;
   std::unique_ptr<DataWarehouseBuilder> warehouseBuilder_;
   std::unique_ptr<DataVaultBuilder> vaultBuilder_;
+  std::unique_ptr<DistributedProcessingManager> distributedManager_;
 
   std::map<std::string, std::set<std::string>> buildDependencyGraph(
       const WorkflowModel &workflow);

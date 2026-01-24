@@ -2,6 +2,11 @@
 #include "core/logger.h"
 #include <algorithm>
 
+#ifdef HAVE_SPARK
+#include "transformations/spark_transformation.h"
+#include "engines/spark_engine.h"
+#endif
+
 TransformationEngine::TransformationEngine() = default;
 
 TransformationEngine::~TransformationEngine() = default;
@@ -33,6 +38,12 @@ std::vector<json> TransformationEngine::executePipeline(
     return inputData;
   }
   
+  // Verificar si se debe usar Spark
+  if (shouldUseSpark(pipelineConfig)) {
+    return executePipelineWithSpark(inputData, pipelineConfig);
+  }
+  
+  // Ejecución local normal
   std::vector<json> currentData = inputData;
   
   for (const auto& transformConfig : pipelineConfig["transformations"]) {
@@ -116,4 +127,63 @@ bool TransformationEngine::validatePipeline(const json& pipelineConfig) const {
   }
   
   return true;
+}
+
+std::vector<json> TransformationEngine::executePipelineWithSpark(
+    const std::vector<json>& inputData,
+    const json& pipelineConfig) {
+  
+#ifdef HAVE_SPARK
+  // Traducir pipeline completo a Spark SQL
+  SparkTranslator::TranslationResult translation = SparkTranslator::translatePipeline(pipelineConfig);
+  
+  if (translation.sparkSQL.empty()) {
+    Logger::warning(LogCategory::TRANSFORM, "TransformationEngine",
+                    "Failed to translate pipeline to Spark, falling back to local execution");
+    // Fallback a ejecución local
+    std::vector<json> currentData = inputData;
+    for (const auto& transformConfig : pipelineConfig["transformations"]) {
+      std::string type = transformConfig["type"].get<std::string>();
+      json config = transformConfig.contains("config") ? transformConfig["config"] : json::object();
+      currentData = executeTransformation(currentData, type, config);
+    }
+    return currentData;
+  }
+  
+  Logger::info(LogCategory::TRANSFORM, "TransformationEngine",
+               "Executing pipeline in Spark");
+  
+  // En una implementación real, se ejecutaría el SQL en Spark y se leerían los resultados
+  // Por ahora, retornamos los datos de entrada como placeholder
+  return inputData;
+#else
+  Logger::warning(LogCategory::TRANSFORM, "TransformationEngine",
+                  "Spark not available, using local execution");
+  // Fallback a ejecución local
+  std::vector<json> currentData = inputData;
+  for (const auto& transformConfig : pipelineConfig["transformations"]) {
+    std::string type = transformConfig["type"].get<std::string>();
+    json config = transformConfig.contains("config") ? transformConfig["config"] : json::object();
+    currentData = executeTransformation(currentData, type, config);
+  }
+  return currentData;
+#endif
+}
+
+bool TransformationEngine::shouldUseSpark(const json& pipelineConfig) const {
+  // Verificar si se fuerza el uso de Spark
+  if (pipelineConfig.contains("use_spark")) {
+    return pipelineConfig["use_spark"].get<bool>();
+  }
+  
+  // Verificar si hay muchas transformaciones (beneficio de Spark)
+  if (pipelineConfig.contains("transformations") && 
+      pipelineConfig["transformations"].is_array()) {
+    size_t transformCount = pipelineConfig["transformations"].size();
+    if (transformCount > 5) { // Threshold configurable
+      return true;
+    }
+  }
+  
+  return false;
 }

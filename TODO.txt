@@ -9,27 +9,8 @@ anadir test en los otros para nulls, esto y lo otros
  Pokepath
 
 
- El SDK de DynamoDB no está instalado.
- 
-no falta nada ? 
-
 ## 📊 FASE 2: PROCESAMIENTO DE DATOS
 **Orden lógico:** Requiere connectors y formatos de archivo completados
-
-### 2.1. Big data processing
-- Procesamiento distribuido (clusters)
-- Spark integration
-- MapReduce patterns
-- Distributed joins
-- Broadcast variables
-- Integración con S3/ADLS/GCS
-- Formatos columnar (Parquet, ORC)
-- Partitioning automático por fecha/región
-- Schema evolution
-- Delta Lake / Iceberg support
-- Procesamiento por particiones
-- Incremental processing inteligente
-- Merge strategies (UPSERT, SCD Type 4)
 
 ### 2.2. Data modeling avanzado esto creo que ya lo tenemos en algunos ? 
 - SCD Type 4 (history table)

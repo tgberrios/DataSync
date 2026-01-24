@@ -2,6 +2,7 @@
 #define TRANSFORMATION_ENGINE_H
 
 #include "third_party/json.hpp"
+#include "transformations/spark_translator.h"
 #include <string>
 #include <vector>
 #include <memory>
@@ -49,11 +50,20 @@ public:
     const json& config
   );
   
+  // Execute pipeline using Spark (if available and configured)
+  std::vector<json> executePipelineWithSpark(
+    const std::vector<json>& inputData,
+    const json& pipelineConfig
+  );
+  
   // Validate a pipeline configuration
   bool validatePipeline(const json& pipelineConfig) const;
 
 private:
   std::map<std::string, std::unique_ptr<Transformation>> transformations_;
+  
+  // Check if pipeline should use Spark
+  bool shouldUseSpark(const json& pipelineConfig) const;
 };
 
 #endif // TRANSFORMATION_ENGINE_H

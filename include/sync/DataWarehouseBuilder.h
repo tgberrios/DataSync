@@ -5,6 +5,9 @@
 #include "core/logger.h"
 #include "engines/postgres_engine.h"
 #include "engines/warehouse_engine.h"
+#include "sync/MergeStrategyExecutor.h"
+#include "sync/PartitioningManager.h"
+#include "sync/DistributedProcessingManager.h"
 #include "third_party/json.hpp"
 #include <memory>
 #include <pqxx/pqxx>
@@ -16,6 +19,22 @@ using json = nlohmann::json;
 class DataWarehouseBuilder {
   std::string metadataConnectionString_;
   std::unique_ptr<DataWarehouseRepository> warehouseRepo_;
+  
+  // Distributed processing and merge strategies
+  std::unique_ptr<MergeStrategyExecutor> mergeExecutor_;
+  std::unique_ptr<DistributedProcessingManager> distributedManager_;
+  
+  // Helper methods for merge strategies and partitioning
+  void applyMergeStrategy(const DataWarehouseModel& warehouse,
+                          const std::string& tableName,
+                          const std::vector<json>& sourceData,
+                          MergeStrategyExecutor::MergeStrategy strategy);
+  
+  PartitioningManager::PartitionDetectionResult detectWarehousePartitions(
+    const DataWarehouseModel& warehouse,
+    const std::vector<std::string>& columnNames,
+    const std::vector<std::string>& columnTypes
+  );
 
   std::unique_ptr<IWarehouseEngine>
   createWarehouseEngine(const std::string &targetDbEngine,

@@ -47,6 +47,110 @@ else()
   message(STATUS "Oracle support: DISABLED (oci.h not found)")
 endif()
 
+# Spark detection
+set(SPARK_FILES "")
+set(SPARK_INCLUDE_PATHS
+    /usr/local/spark/include
+    /opt/spark/include
+    ${CMAKE_SOURCE_DIR}/third_party/spark
+)
+
+set(SPARK_LIB_PATHS
+    /usr/local/spark/lib
+    /opt/spark/lib
+)
+
+# Check for Spark installation via spark-submit
+find_program(SPARK_SUBMIT spark-submit
+    PATHS
+    /usr/local/spark/bin
+    /opt/spark/bin
+    /usr/bin
+    /usr/local/bin
+    ENV PATH
+)
+
+if(SPARK_SUBMIT)
+  message(STATUS "Spark submit found: ${SPARK_SUBMIT}")
+  # Try to get Spark home from spark-submit
+  execute_process(
+    COMMAND ${SPARK_SUBMIT} --version
+    OUTPUT_VARIABLE SPARK_VERSION_OUTPUT
+    ERROR_VARIABLE SPARK_VERSION_ERROR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+  
+  # Check if Spark Connect is available (optional)
+  find_program(SPARK_CONNECT spark-connect
+      PATHS
+      /usr/local/spark/bin
+      /opt/spark/bin
+  )
+  
+  set(HAVE_SPARK TRUE)
+  add_definitions(-DHAVE_SPARK)
+  message(STATUS "Spark support: ENABLED")
+  list(APPEND SPARK_FILES
+    src/engines/spark_engine.cpp
+  )
+else()
+  message(STATUS "Spark support: DISABLED (spark-submit not found)")
+  message(STATUS "  Install Spark and ensure spark-submit is in PATH")
+endif()
+
+# Hadoop/MapReduce detection (optional, legacy)
+set(HADOOP_FILES "")
+find_program(HADOOP_CMD hadoop
+    PATHS
+    /usr/local/hadoop/bin
+    /opt/hadoop/bin
+    /usr/bin
+    ENV PATH
+)
+
+if(HADOOP_CMD)
+  message(STATUS "Hadoop found: ${HADOOP_CMD}")
+  set(HAVE_HADOOP TRUE)
+  add_definitions(-DHAVE_HADOOP)
+  message(STATUS "Hadoop/MapReduce support: ENABLED")
+  list(APPEND HADOOP_FILES
+    src/engines/mapreduce_engine.cpp
+  )
+else()
+  message(STATUS "Hadoop/MapReduce support: DISABLED (hadoop not found)")
+endif()
+
+# Delta Lake detection (requires Spark)
+if(HAVE_SPARK)
+  # Delta Lake is typically used via Spark, check for delta-spark package
+  set(HAVE_DELTA_LAKE TRUE)
+  add_definitions(-DHAVE_DELTA_LAKE)
+  message(STATUS "Delta Lake support: ENABLED (via Spark)")
+  list(APPEND SPARK_FILES
+    src/engines/delta_lake_engine.cpp
+  )
+else()
+  message(STATUS "Delta Lake support: DISABLED (requires Spark)")
+endif()
+
+# Apache Iceberg detection
+find_library(ICEBERG_LIB iceberg
+    PATHS
+    /usr/local/lib
+    /opt/iceberg/lib
+)
+
+if(ICEBERG_LIB)
+  set(HAVE_ICEBERG TRUE)
+  add_definitions(-DHAVE_ICEBERG)
+  message(STATUS "Apache Iceberg support: ENABLED")
+  list(APPEND SPARK_FILES
+    src/engines/iceberg_engine.cpp
+  )
+else()
+  message(STATUS "Apache Iceberg support: DISABLED (library not found)")
+endif()
+
 include_directories(
     ./include
     ./include/catalog
@@ -202,6 +306,17 @@ add_executable(DataSync
     src/engines/parquet_engine.cpp
     src/engines/orc_engine.cpp
     src/engines/compressed_file_engine.cpp
+    ${SPARK_FILES}
+    ${HADOOP_FILES}
+    src/sync/DistributedProcessingManager.cpp
+    src/sync/DistributedJoinExecutor.cpp
+    src/sync/PartitioningManager.cpp
+    src/sync/IncrementalProcessor.cpp
+    src/sync/CDCStrategyManager.cpp
+    src/sync/MergeStrategyExecutor.cpp
+    src/governance/SchemaEvolutionManager.cpp
+    src/transformations/spark_translator.cpp
+    src/transformations/spark_transformation.cpp
 )
 
 # Configure executable output directory to project root
