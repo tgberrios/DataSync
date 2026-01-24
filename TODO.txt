@@ -83,16 +83,9 @@ app de todo
 - Canary releases
 
 ---
+nos faltan ruitas en layout ? 
+si metimos todo lo que tiene que estar en la ui y todo lo de cpp tiene su ui ? 
 
-## 📝 FASE 12: NOTAS Y MEJORAS FUTURAS
-**Orden lógico:** Ideas y mejoras que no son críticas pero son deseables
-
-### 12.1. Funcionalidades Adicionales Deseadas
-- Tener un mapeo preciso de dónde viene cada tabla del datalake y además su refresh rate, etc.
-- Obtener un mapeo de objetos no usados
-- Necesitamos un componente que sea para archivados de datos
-- Necesitamos un componente que limpie las tablas de CDC
-- Una aplicación de webhooks en terminal
 
 ### 12.2. Security Pendiente
 - Me falta crear encryption de probar
@@ -102,12 +95,7 @@ app de todo
 ### 12.3. Tareas de Mantenimiento
 - Que archivos podemos eliminar y cuáles no
 
-### 12.4. Tareas Personales (No relacionadas con DataSync)
-- yay (actualizar el sistema con yay)
-- descargar vencord
-- juego en la terminal
 
----
 
 ## 🏗️ FASE 13: OPTIMIZACIÓN Y REFACTORIZACIÓN FINAL
 **Orden lógico:** Debe completarse al final, después de tener todas las funcionalidades implementadas y probadas
@@ -129,3 +117,12 @@ app de todo
   - Swagger/OpenAPI documentation
   - API versioning
   - Autenticación mejorada (API keys, OAuth2) 
+
+
+  ### 12.4. Tareas Personales (No relacionadas con DataSync)
+- yay (actualizar el sistema con yay)
+- descargar vencord
+- juego en la terminal
+
+---
+- Una aplicación de webhooks en terminal

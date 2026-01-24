@@ -330,6 +330,9 @@ add_executable(DataSync
     src/monitoring/LogAggregator.cpp
     src/monitoring/AdvancedAlertingManager.cpp
     src/monitoring/QueryPerformanceAnalyzer.cpp
+    src/catalog/DataLakeMappingManager.cpp
+    src/maintenance/CDCCleanupManager.cpp
+    src/catalog/UnusedObjectsDetector.cpp
     src/metrics/MetricsCollector.cpp
     src/utils/connection_utils.cpp
     src/utils/cluster_name_resolver.cpp

@@ -16,6 +16,9 @@
 #include "monitoring/LogAggregator.h"
 #include "monitoring/AdvancedAlertingManager.h"
 #include "monitoring/QueryPerformanceAnalyzer.h"
+#include "catalog/DataLakeMappingManager.h"
+#include "maintenance/CDCCleanupManager.h"
+#include "catalog/UnusedObjectsDetector.h"
 #include "third_party/json.hpp"
 #include <atomic>
 #include <csignal>
@@ -647,6 +650,317 @@ int handleMonitoringCommand() {
   }
 }
 
+int handleCatalogCommand() {
+  try {
+    DatabaseConfig::loadFromFile("config.json");
+    if (!DatabaseConfig::isInitialized()) {
+      nlohmann::json output;
+      output["success"] = false;
+      output["error"] = "Database configuration failed to initialize";
+      std::cerr << output.dump(2) << std::endl;
+      return 1;
+    }
+    
+    std::string metadataConnStr = DatabaseConfig::getPostgresConnectionString();
+    std::string input;
+    std::string line;
+    while (std::getline(std::cin, line)) {
+      input += line + "\n";
+    }
+    
+    if (input.empty()) {
+      nlohmann::json output;
+      output["success"] = false;
+      output["error"] = "No input provided";
+      std::cerr << output.dump(2) << std::endl;
+      Logger::shutdown();
+      return 1;
+    }
+    
+    nlohmann::json request = nlohmann::json::parse(input);
+    std::string operation = request.value("operation", "");
+    nlohmann::json output;
+    
+    if (operation == "create_mapping") {
+      DataLakeMappingManager mapping(metadataConnStr);
+      DataLakeMappingManager::Mapping map;
+      map.targetSchema = request["target_schema"];
+      map.targetTable = request["target_table"];
+      map.sourceSystem = request["source_system"];
+      map.sourceConnection = request.value("source_connection", "");
+      map.sourceSchema = request.value("source_schema", "");
+      map.sourceTable = request.value("source_table", "");
+      
+      std::string refreshTypeStr = request.value("refresh_rate_type", "manual");
+      if (refreshTypeStr == "scheduled") {
+        map.refreshRateType = DataLakeMappingManager::RefreshRateType::SCHEDULED;
+      } else if (refreshTypeStr == "real-time") {
+        map.refreshRateType = DataLakeMappingManager::RefreshRateType::REAL_TIME;
+      } else if (refreshTypeStr == "on-demand") {
+        map.refreshRateType = DataLakeMappingManager::RefreshRateType::ON_DEMAND;
+      } else {
+        map.refreshRateType = DataLakeMappingManager::RefreshRateType::MANUAL;
+      }
+      
+      map.refreshSchedule = request.value("refresh_schedule", "");
+      map.refreshDurationAvg = 0.0;
+      map.refreshSuccessCount = 0;
+      map.refreshFailureCount = 0;
+      map.refreshSuccessRate = 0.0;
+      
+      int mappingId = mapping.createOrUpdateMapping(map);
+      output["success"] = mappingId > 0;
+      output["mapping_id"] = mappingId;
+      
+    } else if (operation == "get_mapping") {
+      DataLakeMappingManager mapping(metadataConnStr);
+      std::string targetSchema = request["target_schema"];
+      std::string targetTable = request["target_table"];
+      
+      auto map = mapping.getMapping(targetSchema, targetTable);
+      if (map) {
+        output["success"] = true;
+        output["mapping_id"] = map->mappingId;
+        output["target_schema"] = map->targetSchema;
+        output["target_table"] = map->targetTable;
+        output["source_system"] = map->sourceSystem;
+        output["source_connection"] = map->sourceConnection;
+        output["source_schema"] = map->sourceSchema;
+        output["source_table"] = map->sourceTable;
+        // refreshRateTypeToString is private, convert manually
+        std::string refreshTypeStr = "manual";
+        if (map->refreshRateType == DataLakeMappingManager::RefreshRateType::SCHEDULED) {
+          refreshTypeStr = "scheduled";
+        } else if (map->refreshRateType == DataLakeMappingManager::RefreshRateType::REAL_TIME) {
+          refreshTypeStr = "real-time";
+        } else if (map->refreshRateType == DataLakeMappingManager::RefreshRateType::ON_DEMAND) {
+          refreshTypeStr = "on-demand";
+        }
+        output["refresh_rate_type"] = refreshTypeStr;
+        output["refresh_schedule"] = map->refreshSchedule;
+        output["refresh_success_rate"] = map->refreshSuccessRate;
+      } else {
+        output["success"] = false;
+        output["error"] = "Mapping not found";
+      }
+      
+    } else if (operation == "list_mappings") {
+      DataLakeMappingManager mapping(metadataConnStr);
+      std::string sourceSystem = request.value("source_system", "");
+      std::string refreshTypeStr = request.value("refresh_rate_type", "");
+      
+      DataLakeMappingManager::RefreshRateType refreshType = DataLakeMappingManager::RefreshRateType::MANUAL;
+      if (refreshTypeStr == "scheduled") {
+        refreshType = DataLakeMappingManager::RefreshRateType::SCHEDULED;
+      } else if (refreshTypeStr == "real-time") {
+        refreshType = DataLakeMappingManager::RefreshRateType::REAL_TIME;
+      } else if (refreshTypeStr == "on-demand") {
+        refreshType = DataLakeMappingManager::RefreshRateType::ON_DEMAND;
+      }
+      
+      auto mappings = mapping.listMappings(sourceSystem, refreshType);
+      output["success"] = true;
+      output["mappings"] = nlohmann::json::array();
+      for (const auto& m : mappings) {
+        nlohmann::json mapJson;
+        mapJson["mapping_id"] = m.mappingId;
+        mapJson["target_schema"] = m.targetSchema;
+        mapJson["target_table"] = m.targetTable;
+        mapJson["source_system"] = m.sourceSystem;
+        std::string refreshTypeStr2 = "manual";
+        if (m.refreshRateType == DataLakeMappingManager::RefreshRateType::SCHEDULED) {
+          refreshTypeStr2 = "scheduled";
+        } else if (m.refreshRateType == DataLakeMappingManager::RefreshRateType::REAL_TIME) {
+          refreshTypeStr2 = "real-time";
+        } else if (m.refreshRateType == DataLakeMappingManager::RefreshRateType::ON_DEMAND) {
+          refreshTypeStr2 = "on-demand";
+        }
+        mapJson["refresh_rate_type"] = refreshTypeStr2;
+        output["mappings"].push_back(mapJson);
+      }
+      
+    } else if (operation == "record_refresh") {
+      DataLakeMappingManager mapping(metadataConnStr);
+      std::string targetSchema = request["target_schema"];
+      std::string targetTable = request["target_table"];
+      bool success = request.value("success", true);
+      int64_t durationMs = request.value("duration_ms", 0);
+      
+      bool result = mapping.recordRefresh(targetSchema, targetTable, success, durationMs);
+      output["success"] = result;
+      
+    } else if (operation == "track_access") {
+      UnusedObjectsDetector detector(metadataConnStr);
+      std::string objectTypeStr = request["object_type"];
+      std::string schemaName = request["schema_name"];
+      std::string objectName = request["object_name"];
+      std::string accessType = request["access_type"];
+      std::string userName = request.value("user_name", "");
+      
+      UnusedObjectsDetector::ObjectType objectType = UnusedObjectsDetector::ObjectType::TABLE;
+      if (objectTypeStr == "view") {
+        objectType = UnusedObjectsDetector::ObjectType::VIEW;
+      } else if (objectTypeStr == "materialized_view") {
+        objectType = UnusedObjectsDetector::ObjectType::MATERIALIZED_VIEW;
+      }
+      
+      detector.trackAccess(objectType, schemaName, objectName, accessType, userName);
+      output["success"] = true;
+      
+    } else if (operation == "detect_unused") {
+      UnusedObjectsDetector detector(metadataConnStr);
+      int daysThreshold = request.value("days_threshold", 90);
+      std::string generatedBy = request.value("generated_by", "");
+      
+      auto report = detector.detectUnusedObjects(daysThreshold, generatedBy);
+      output["success"] = true;
+      output["report_id"] = report.reportId;
+      output["total_unused_count"] = report.totalUnusedCount;
+      output["unused_objects"] = nlohmann::json::array();
+      for (const auto& obj : report.unusedObjects) {
+        nlohmann::json objJson;
+        // objectTypeToString is private, use string conversion
+        std::string objTypeStr = "table";
+        if (obj.objectType == UnusedObjectsDetector::ObjectType::VIEW) {
+          objTypeStr = "view";
+        } else if (obj.objectType == UnusedObjectsDetector::ObjectType::MATERIALIZED_VIEW) {
+          objTypeStr = "materialized_view";
+        }
+        objJson["object_type"] = objTypeStr;
+        objJson["schema_name"] = obj.schemaName;
+        objJson["object_name"] = obj.objectName;
+        objJson["days_since_last_access"] = obj.daysSinceLastAccess;
+        objJson["dependencies"] = nlohmann::json::array();
+        for (const auto& dep : obj.dependencies) {
+          objJson["dependencies"].push_back(dep);
+        }
+        output["unused_objects"].push_back(objJson);
+      }
+      
+    } else {
+      output["success"] = false;
+      output["error"] = "Unknown operation: " + operation;
+    }
+    
+    std::cout << output.dump(2) << std::endl;
+    Logger::shutdown();
+    return output.value("success", false) ? 0 : 1;
+    
+  } catch (const std::exception& e) {
+    nlohmann::json output;
+    output["success"] = false;
+    output["error"] = e.what();
+    std::cerr << output.dump(2) << std::endl;
+    Logger::shutdown();
+    return 1;
+  }
+}
+
+int handleMaintenanceCommand() {
+  try {
+    DatabaseConfig::loadFromFile("config.json");
+    if (!DatabaseConfig::isInitialized()) {
+      nlohmann::json output;
+      output["success"] = false;
+      output["error"] = "Database configuration failed to initialize";
+      std::cerr << output.dump(2) << std::endl;
+      return 1;
+    }
+    
+    std::string metadataConnStr = DatabaseConfig::getPostgresConnectionString();
+    std::string input;
+    std::string line;
+    while (std::getline(std::cin, line)) {
+      input += line + "\n";
+    }
+    
+    if (input.empty()) {
+      nlohmann::json output;
+      output["success"] = false;
+      output["error"] = "No input provided";
+      std::cerr << output.dump(2) << std::endl;
+      Logger::shutdown();
+      return 1;
+    }
+    
+    nlohmann::json request = nlohmann::json::parse(input);
+    std::string operation = request.value("operation", "");
+    nlohmann::json output;
+    
+    if (operation == "create_cleanup_policy") {
+      CDCCleanupManager cleanup(metadataConnStr);
+      CDCCleanupManager::CleanupPolicy policy;
+      policy.connectionString = request["connection_string"];
+      policy.dbEngine = request["db_engine"];
+      policy.retentionDays = request.value("retention_days", 30);
+      policy.batchSize = request.value("batch_size", 10000);
+      policy.enabled = request.value("enabled", true);
+      
+      int policyId = cleanup.createOrUpdatePolicy(policy);
+      output["success"] = policyId > 0;
+      output["policy_id"] = policyId;
+      
+    } else if (operation == "execute_cleanup") {
+      CDCCleanupManager cleanup(metadataConnStr);
+      std::string connectionString = request.value("connection_string", "");
+      std::string dbEngine = request.value("db_engine", "");
+      int policyId = request.value("policy_id", 0);
+      
+      CDCCleanupManager::CleanupResult result;
+      if (policyId > 0) {
+        result = cleanup.executeCleanup(policyId);
+      } else if (!connectionString.empty() && !dbEngine.empty()) {
+        result = cleanup.executeCleanup(connectionString, dbEngine);
+      } else {
+        output["success"] = false;
+        output["error"] = "Must provide policy_id or connection_string+db_engine";
+        std::cout << output.dump(2) << std::endl;
+        Logger::shutdown();
+        return 1;
+      }
+      
+      output["success"] = result.status == "completed";
+      output["cleanup_id"] = result.cleanupId;
+      output["rows_deleted"] = result.rowsDeleted;
+      output["tables_cleaned"] = result.tablesCleaned;
+      output["status"] = result.status;
+      
+    } else if (operation == "get_cleanup_history") {
+      CDCCleanupManager cleanup(metadataConnStr);
+      std::string connectionString = request.value("connection_string", "");
+      int limit = request.value("limit", 100);
+      
+      auto history = cleanup.getCleanupHistory(connectionString, limit);
+      output["success"] = true;
+      output["history"] = nlohmann::json::array();
+      for (const auto& h : history) {
+        nlohmann::json histJson;
+        histJson["cleanup_id"] = h.cleanupId;
+        histJson["connection_string"] = h.connectionString;
+        histJson["rows_deleted"] = h.rowsDeleted;
+        histJson["status"] = h.status;
+        output["history"].push_back(histJson);
+      }
+      
+    } else {
+      output["success"] = false;
+      output["error"] = "Unknown operation: " + operation;
+    }
+    
+    std::cout << output.dump(2) << std::endl;
+    Logger::shutdown();
+    return output.value("success", false) ? 0 : 1;
+    
+  } catch (const std::exception& e) {
+    nlohmann::json output;
+    output["success"] = false;
+    output["error"] = e.what();
+    std::cerr << output.dump(2) << std::endl;
+    Logger::shutdown();
+    return 1;
+  }
+}
+
 int main(int argc, char* argv[]) {
   if (argc > 1 && std::string(argv[1]) == "backup") {
     return handleBackupCommand(argc, argv);
@@ -664,6 +978,14 @@ int main(int argc, char* argv[]) {
   
   if (argc > 1 && std::string(argv[1]) == "--monitoring") {
     return handleMonitoringCommand();
+  }
+  
+  if (argc > 1 && std::string(argv[1]) == "--catalog") {
+    return handleCatalogCommand();
+  }
+  
+  if (argc > 1 && std::string(argv[1]) == "--maintenance") {
+    return handleMaintenanceCommand();
   }
   try {
     DatabaseConfig::loadFromFile("config.json");
