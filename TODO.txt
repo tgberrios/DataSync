@@ -5,34 +5,13 @@
 
 anadir test en los otros para nulls, esto y lo otros
 
-## 🔌 FASE 1: CONNECTORS Y FUENTES DE DATOS
-**Orden lógico:** Necesario antes de cualquier procesamiento de datos
 
-### 1.1. Connectors adicionales
-- Salesforce
-- SAP
-- Mainframe (COBOL, VSAM)
-- AS/400 (IBM i)
-- Teradata
-- Netezza
-- Hive / HDFS
-- Cassandra
-- DynamoDB
-- S3 / Azure Blob / GCS
-- FTP/SFTP file sources
-- Email (IMAP/POP3)
-- Web Services (SOAP)
-- GraphQL APIs
+ Pokepath
 
-### 1.2. File formats
-- Excel (XLSX, XLS)
-- Fixed-width files
-- EBCDIC files
-- XML estructurado
-- Avro, Parquet, ORC
-- Compressed files (GZIP, BZIP2, LZ4)
 
----
+ El SDK de DynamoDB no está instalado.
+ 
+no falta nada ? 
 
 ## 📊 FASE 2: PROCESAMIENTO DE DATOS
 **Orden lógico:** Requiere connectors y formatos de archivo completados
@@ -52,7 +31,7 @@ anadir test en los otros para nulls, esto y lo otros
 - Incremental processing inteligente
 - Merge strategies (UPSERT, SCD Type 4)
 
-### 2.2. Data modeling avanzado
+### 2.2. Data modeling avanzado esto creo que ya lo tenemos en algunos ? 
 - SCD Type 4 (history table)
 - SCD Type 6 (hybrid)
 - Outrigger dimensions
