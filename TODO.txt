@@ -3,7 +3,8 @@
 │ ORDENADAS POR DEPENDENCIAS LÓGICAS                              │
 └─────────────────────────────────────────────────────────────────┘
 
-anadir test en los otros para nulls, esto y lo otros
+anadir test en los otros para nulls, esto y lo otros para todos los procesos de datos digamos cuando se testean las queries deberia entregar esos valores para ver que tan mal esta todo digamos ?
+
 
 
  Pokepath
@@ -41,16 +42,9 @@ rpg
 
 ---
 
-## 🔒 FASE 7: SECURITY AVANZADO
-**Orden lógico:** Puede desarrollarse en paralelo pero mejor después de la base
 
-### 7.1. Security avanzado
-- Field-level masking dinámico (mejora de data masking existente)
-- Tokenization avanzado
-- Data anonymization
-- Fine-grained permissions
-
----
+app de calendario como calcularse 
+app de todo
 
 ## 📈 FASE 8: MONITORING Y OBSERVABILITY
 **Orden lógico:** Requiere sistema funcionando para monitorear

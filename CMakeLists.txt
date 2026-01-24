@@ -318,6 +318,10 @@ add_executable(DataSync
     src/governance/LineageVisualizer.cpp
     src/governance/PipelineMetadataCollector.cpp
     src/governance/PipelineDocumentationGenerator.cpp
+    src/governance/DynamicMaskingEngine.cpp
+    src/governance/TokenizationManager.cpp
+    src/governance/AnonymizationEngine.cpp
+    src/governance/FineGrainedPermissions.cpp
     src/metrics/MetricsCollector.cpp
     src/utils/connection_utils.cpp
     src/utils/cluster_name_resolver.cpp

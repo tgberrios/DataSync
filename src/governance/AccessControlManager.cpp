@@ -1,11 +1,15 @@
 #include "governance/AccessControlManager.h"
+#include "governance/DynamicMaskingEngine.h"
+#include "governance/FineGrainedPermissions.h"
 #include "core/logger.h"
 #include <algorithm>
 #include <ctime>
 #include <pqxx/pqxx>
 
 AccessControlManager::AccessControlManager(const std::string &connectionString)
-    : connectionString_(connectionString) {}
+    : connectionString_(connectionString),
+      maskingEngine_(std::make_unique<DynamicMaskingEngine>(connectionString)),
+      fineGrainedPermissions_(std::make_unique<FineGrainedPermissions>(connectionString)) {}
 
 bool AccessControlManager::isSensitiveData(const std::string &schemaName,
                                            const std::string &tableName,
@@ -353,4 +357,49 @@ void AccessControlManager::detectAccessAnomalies(int days) {
     Logger::error(LogCategory::GOVERNANCE, "AccessControlManager",
                   "Error detecting access anomalies: " + std::string(e.what()));
   }
+}
+
+std::string AccessControlManager::applyDynamicMasking(
+    const std::string& value,
+    const std::string& schemaName,
+    const std::string& tableName,
+    const std::string& columnName,
+    const std::string& username,
+    const std::vector<std::string>& userRoles) {
+  
+  if (!maskingEngine_) {
+    return value;
+  }
+
+  return maskingEngine_->applyMasking(value, schemaName, tableName, columnName, username, userRoles);
+}
+
+bool AccessControlManager::checkFineGrainedPermission(
+    const std::string& username,
+    const std::vector<std::string>& roles,
+    const std::string& schemaName,
+    const std::string& tableName,
+    const std::string& columnName,
+    const std::string& operation) {
+  
+  if (!fineGrainedPermissions_) {
+    // Fallback to basic permission check
+    return checkAccessPermission(schemaName, tableName, username, operation);
+  }
+
+  return fineGrainedPermissions_->checkColumnPermission(
+      username, roles, schemaName, tableName, columnName, operation);
+}
+
+std::string AccessControlManager::getRowFilter(
+    const std::string& username,
+    const std::vector<std::string>& roles,
+    const std::string& schemaName,
+    const std::string& tableName) {
+  
+  if (!fineGrainedPermissions_) {
+    return "1=1";  // No restrictions
+  }
+
+  return fineGrainedPermissions_->generateRowFilter(username, roles, schemaName, tableName);
 }

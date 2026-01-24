@@ -4,6 +4,11 @@
 #include <pqxx/pqxx>
 #include <string>
 #include <vector>
+#include <memory>
+
+// Forward declarations
+class DynamicMaskingEngine;
+class FineGrainedPermissions;
 
 struct AccessLogEntry {
   std::string schema_name;
@@ -23,6 +28,8 @@ struct AccessLogEntry {
 class AccessControlManager {
 private:
   std::string connectionString_;
+  std::unique_ptr<DynamicMaskingEngine> maskingEngine_;
+  std::unique_ptr<FineGrainedPermissions> fineGrainedPermissions_;
 
   bool isSensitiveData(const std::string &schemaName,
                        const std::string &tableName,
@@ -58,6 +65,32 @@ public:
                              const std::string &accessType);
 
   void detectAccessAnomalies(int days = 7);
+
+  // New methods for advanced security integration
+  std::string applyDynamicMasking(
+      const std::string& value,
+      const std::string& schemaName,
+      const std::string& tableName,
+      const std::string& columnName,
+      const std::string& username,
+      const std::vector<std::string>& userRoles
+  );
+
+  bool checkFineGrainedPermission(
+      const std::string& username,
+      const std::vector<std::string>& roles,
+      const std::string& schemaName,
+      const std::string& tableName,
+      const std::string& columnName,
+      const std::string& operation
+  );
+
+  std::string getRowFilter(
+      const std::string& username,
+      const std::vector<std::string>& roles,
+      const std::string& schemaName,
+      const std::string& tableName
+  );
 };
 
 #endif

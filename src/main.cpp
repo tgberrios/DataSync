@@ -3,6 +3,10 @@
 #include "backup/backup_manager.h"
 #include "backup/backup_scheduler.h"
 #include "sync/DBTExecutor.h"
+#include "governance/DynamicMaskingEngine.h"
+#include "governance/TokenizationManager.h"
+#include "governance/AnonymizationEngine.h"
+#include "governance/FineGrainedPermissions.h"
 #include "third_party/json.hpp"
 #include <atomic>
 #include <csignal>
@@ -207,6 +211,202 @@ int handleDBTCommand(int argc, char* argv[]) {
   }
 }
 
+int handleSecurityCommand() {
+  try {
+    DatabaseConfig::loadFromFile("config.json");
+    if (!DatabaseConfig::isInitialized()) {
+      nlohmann::json output;
+      output["success"] = false;
+      output["error"] = "Database configuration failed to initialize";
+      std::cerr << output.dump(2) << std::endl;
+      return 1;
+    }
+    
+    Logger::initialize();
+    
+    std::string metadataConnStr = DatabaseConfig::getPostgresConnectionString();
+    
+    // Read JSON from stdin
+    std::string input;
+    std::string line;
+    while (std::getline(std::cin, line)) {
+      input += line + "\n";
+    }
+    
+    if (input.empty()) {
+      nlohmann::json output;
+      output["success"] = false;
+      output["error"] = "No input provided";
+      std::cerr << output.dump(2) << std::endl;
+      Logger::shutdown();
+      return 1;
+    }
+    
+    nlohmann::json request = nlohmann::json::parse(input);
+    std::string operation = request.value("operation", "");
+    nlohmann::json output;
+    
+    if (operation == "masking_apply") {
+      DynamicMaskingEngine engine(metadataConnStr);
+      std::string value = request["value"];
+      std::string schemaName = request["schema_name"];
+      std::string tableName = request["table_name"];
+      std::string columnName = request["column_name"];
+      std::string username = request.value("username", "anonymous");
+      std::vector<std::string> userRoles;
+      if (request.contains("user_roles")) {
+        for (const auto& role : request["user_roles"]) {
+          userRoles.push_back(role);
+        }
+      }
+      
+      std::string maskedValue = engine.applyMasking(value, schemaName, tableName, columnName, username, userRoles);
+      output["success"] = true;
+      output["masked_value"] = maskedValue;
+      output["original_value"] = value;
+      
+    } else if (operation == "tokenize") {
+      TokenizationManager manager(metadataConnStr);
+      std::string value = request["value"];
+      std::string tokenTypeStr = request.value("token_type", "reversible");
+      std::string schemaName = request.value("schema_name", "");
+      std::string tableName = request.value("table_name", "");
+      std::string columnName = request.value("column_name", "");
+      
+      // Convert token type string to enum
+      TokenizationManager::TokenType tokenType = TokenizationManager::TokenType::REVERSIBLE;
+      bool reversible = true;
+      if (tokenTypeStr == "irreversible") {
+        tokenType = TokenizationManager::TokenType::IRREVERSIBLE;
+        reversible = false;
+      } else if (tokenTypeStr == "fpe") {
+        tokenType = TokenizationManager::TokenType::FPE;
+        reversible = true;
+      }
+      
+      std::string token = manager.tokenize(value, schemaName, tableName, columnName, reversible, tokenType);
+      output["success"] = true;
+      output["token"] = token;
+      
+    } else if (operation == "detokenize") {
+      TokenizationManager manager(metadataConnStr);
+      std::string token = request["token"];
+      std::string username = request.value("username", "anonymous");
+      std::string schemaName = request.value("schema_name", "");
+      std::string tableName = request.value("table_name", "");
+      std::string columnName = request.value("column_name", "");
+      std::string reason = request.value("reason", "");
+      
+      std::string originalValue = manager.detokenize(token, schemaName, tableName, columnName, username, reason);
+      output["success"] = true;
+      output["original_value"] = originalValue;
+      
+    } else if (operation == "anonymize") {
+      AnonymizationEngine engine(metadataConnStr);
+      std::string profileName = request["profile_name"];
+      nlohmann::json data = request["data"];
+      
+      AnonymizationEngine::AnonymizationResult result = engine.anonymizeDataset(profileName, data);
+      output["success"] = true;
+      output["anonymized_data"] = result.anonymizedDataset;
+      output["information_loss"] = result.informationLoss;
+      
+    } else if (operation == "validate_anonymization") {
+      AnonymizationEngine engine(metadataConnStr);
+      nlohmann::json data = request["dataset"];
+      int k = request.value("k", 0);
+      int l = request.value("l", 0);
+      std::vector<std::string> quasiIdentifiers;
+      if (request.contains("quasi_identifiers")) {
+        for (const auto& qi : request["quasi_identifiers"]) {
+          quasiIdentifiers.push_back(qi);
+        }
+      }
+      std::string sensitiveAttribute = request.value("sensitive_attribute", "");
+      
+      bool kAnonymity = false;
+      bool lDiversity = false;
+      
+      if (k > 0) {
+        kAnonymity = engine.validateKAnonymity(data, k, quasiIdentifiers);
+      }
+      if (l > 0 && !sensitiveAttribute.empty()) {
+        lDiversity = engine.validateLDiversity(data, k, l, quasiIdentifiers, sensitiveAttribute);
+      }
+      
+      output["success"] = true;
+      output["k_anonymity_achieved"] = kAnonymity;
+      output["l_diversity_achieved"] = lDiversity;
+      
+    } else if (operation == "check_permission") {
+      FineGrainedPermissions permissions(metadataConnStr);
+      std::string username = request["username"];
+      std::string schemaName = request["schema_name"];
+      std::string tableName = request["table_name"];
+      std::string columnName = request.value("column_name", "");
+      std::string operationType = request["operation_type"];
+      std::vector<std::string> userRoles;
+      if (request.contains("user_roles")) {
+        for (const auto& role : request["user_roles"]) {
+          userRoles.push_back(role);
+        }
+      }
+      
+      bool allowed = permissions.checkColumnPermission(username, userRoles, schemaName, tableName, columnName, operationType);
+      output["success"] = true;
+      output["allowed"] = allowed;
+      
+    } else if (operation == "get_accessible_columns") {
+      FineGrainedPermissions permissions(metadataConnStr);
+      std::string username = request["username"];
+      std::string schemaName = request["schema_name"];
+      std::string tableName = request["table_name"];
+      std::vector<std::string> userRoles;
+      if (request.contains("user_roles")) {
+        for (const auto& role : request["user_roles"]) {
+          userRoles.push_back(role);
+        }
+      }
+      
+      std::vector<std::string> columns = permissions.getAccessibleColumns(username, userRoles, schemaName, tableName);
+      output["success"] = true;
+      output["columns"] = columns;
+      
+    } else if (operation == "get_row_filter") {
+      FineGrainedPermissions permissions(metadataConnStr);
+      std::string username = request["username"];
+      std::string schemaName = request["schema_name"];
+      std::string tableName = request["table_name"];
+      std::vector<std::string> userRoles;
+      if (request.contains("user_roles")) {
+        for (const auto& role : request["user_roles"]) {
+          userRoles.push_back(role);
+        }
+      }
+      
+      std::string filter = permissions.generateRowFilter(username, userRoles, schemaName, tableName);
+      output["success"] = true;
+      output["filter"] = filter;
+      
+    } else {
+      output["success"] = false;
+      output["error"] = "Unknown operation: " + operation;
+    }
+    
+    std::cout << output.dump(2) << std::endl;
+    Logger::shutdown();
+    return output.value("success", false) ? 0 : 1;
+    
+  } catch (const std::exception& e) {
+    nlohmann::json output;
+    output["success"] = false;
+    output["error"] = e.what();
+    std::cerr << output.dump(2) << std::endl;
+    Logger::shutdown();
+    return 1;
+  }
+}
+
 int main(int argc, char* argv[]) {
   if (argc > 1 && std::string(argv[1]) == "backup") {
     return handleBackupCommand(argc, argv);
@@ -216,6 +416,10 @@ int main(int argc, char* argv[]) {
                    std::string(argv[1]) == "--run-dbt-tests" || 
                    std::string(argv[1]) == "--compile-dbt-model")) {
     return handleDBTCommand(argc, argv);
+  }
+  
+  if (argc > 1 && std::string(argv[1]) == "--security") {
+    return handleSecurityCommand();
   }
   try {
     DatabaseConfig::loadFromFile("config.json");
