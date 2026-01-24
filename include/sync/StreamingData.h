@@ -16,6 +16,7 @@
 #include "sync/DataVaultBuilder.h"
 #include "sync/DBTExecutor.h"
 #include "sync/WorkflowExecutor.h"
+#include "sync/StreamProcessingManager.h"
 #include "sync/GoogleSheetsToDatabaseSync.h"
 #include "sync/MSSQLToPostgres.h"
 #include "sync/MariaDBToPostgres.h"
@@ -66,6 +67,7 @@ private:
   std::unique_ptr<DataVaultBuilder> vaultBuilder;
   std::unique_ptr<DBTExecutor> dbtExecutor;
   std::unique_ptr<WorkflowExecutor> workflowExecutor;
+  std::unique_ptr<StreamProcessingManager> streamProcessingManager;
   CatalogManager catalogManager;
   DataQuality dataQuality;
 
@@ -92,6 +94,7 @@ private:
   void monitoringThread();
   void datalakeSchedulerThread();
   void webhookMonitorThread();
+  void streamProcessingThread();
   void validateTablesForEngine(pqxx::connection &pgConn,
                                const std::string &dbEngine);
 

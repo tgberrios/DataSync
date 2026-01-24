@@ -42,6 +42,7 @@ if(HAVE_ORACLE_HEADER)
     src/governance/LineageExtractorOracle.cpp
     src/engines/oracle_engine.cpp
     src/sync/OracleToPostgres.cpp
+    src/sync/RedoLogReader.cpp
   )
 else()
   message(STATUS "Oracle support: DISABLED (oci.h not found)")
@@ -131,6 +132,104 @@ if(HAVE_SPARK)
   )
 else()
   message(STATUS "Delta Lake support: DISABLED (requires Spark)")
+endif()
+
+# Kafka detection (librdkafka)
+set(KAFKA_FILES "")
+find_library(RDKAFKA_LIB rdkafka
+    PATHS
+    /usr/local/lib
+    /usr/lib
+    /opt/kafka/lib
+    ENV LD_LIBRARY_PATH
+)
+
+find_path(RDKAFKA_INCLUDE_DIR librdkafka/rdkafka.h
+    PATHS
+    /usr/local/include
+    /usr/include
+    /opt/kafka/include
+)
+
+if(RDKAFKA_LIB AND RDKAFKA_INCLUDE_DIR)
+  set(HAVE_KAFKA TRUE)
+  add_definitions(-DHAVE_KAFKA)
+  message(STATUS "Kafka support: ENABLED")
+  list(APPEND KAFKA_FILES
+    src/engines/kafka_engine.cpp
+  )
+else()
+  message(STATUS "Kafka support: DISABLED (librdkafka not found)")
+  message(STATUS "  Install librdkafka and rebuild with HAVE_KAFKA")
+endif()
+
+# RabbitMQ detection (rabbitmq-c)
+set(RABBITMQ_FILES "")
+find_library(RABBITMQ_LIB rabbitmq
+    PATHS
+    /usr/local/lib
+    /usr/lib
+    /opt/rabbitmq/lib
+    ENV LD_LIBRARY_PATH
+)
+
+find_path(RABBITMQ_INCLUDE_DIR amqp.h
+    PATHS
+    /usr/local/include
+    /usr/include
+    /opt/rabbitmq/include
+)
+
+if(RABBITMQ_LIB AND RABBITMQ_INCLUDE_DIR)
+  set(HAVE_RABBITMQ TRUE)
+  add_definitions(-DHAVE_RABBITMQ)
+  message(STATUS "RabbitMQ support: ENABLED")
+  list(APPEND RABBITMQ_FILES
+    src/engines/rabbitmq_engine.cpp
+  )
+else()
+  message(STATUS "RabbitMQ support: DISABLED (rabbitmq-c not found)")
+  message(STATUS "  Install rabbitmq-c and rebuild with HAVE_RABBITMQ")
+endif()
+
+# Redis detection (hiredis)
+set(REDIS_FILES "")
+find_library(HIREDIS_LIB hiredis
+    PATHS
+    /usr/local/lib
+    /usr/lib
+    /opt/redis/lib
+    ENV LD_LIBRARY_PATH
+)
+
+find_path(HIREDIS_INCLUDE_DIR hiredis/hiredis.h
+    PATHS
+    /usr/local/include
+    /usr/include
+    /opt/redis/include
+)
+
+if(HIREDIS_LIB AND HIREDIS_INCLUDE_DIR)
+  set(HAVE_REDIS TRUE)
+  add_definitions(-DHAVE_REDIS)
+  message(STATUS "Redis Streams support: ENABLED")
+  list(APPEND REDIS_FILES
+    src/engines/redis_streams_engine.cpp
+  )
+else()
+  message(STATUS "Redis Streams support: DISABLED (hiredis not found)")
+  message(STATUS "  Install hiredis and rebuild with HAVE_REDIS")
+endif()
+
+# Protobuf detection
+find_package(Protobuf QUIET)
+if(Protobuf_FOUND)
+  set(HAVE_PROTOBUF TRUE)
+  add_definitions(-DHAVE_PROTOBUF)
+  message(STATUS "Protobuf support: ENABLED")
+else()
+  message(STATUS "Protobuf support: DISABLED (protobuf not found)")
+  message(STATUS "  Install protobuf and rebuild with HAVE_PROTOBUF")
 endif()
 
 # Apache Iceberg detection
@@ -308,7 +407,20 @@ add_executable(DataSync
     src/engines/compressed_file_engine.cpp
     ${SPARK_FILES}
     ${HADOOP_FILES}
+    ${KAFKA_FILES}
+    ${RABBITMQ_FILES}
+    ${REDIS_FILES}
     src/sync/DistributedProcessingManager.cpp
+    src/sync/StreamProcessingManager.cpp
+    src/sync/WindowingProcessor.cpp
+    src/sync/StatefulProcessor.cpp
+    src/sync/EventTimeProcessor.cpp
+    src/sync/CEPProcessor.cpp
+    src/sync/BinlogReader.cpp
+    src/sync/WALReader.cpp
+    src/sync/TransactionLogReader.cpp
+    src/sync/ChangeStreamsReader.cpp
+    src/sync/MessageSerializer.cpp
     src/sync/DistributedJoinExecutor.cpp
     src/sync/PartitioningManager.cpp
     src/sync/IncrementalProcessor.cpp
@@ -335,6 +447,26 @@ endif()
 # Optional libraries for new connectors
 # These will be enabled when the libraries are installed
 set(OPTIONAL_LIBS "")
+
+# Stream processing libraries
+if(HAVE_KAFKA)
+    list(APPEND OPTIONAL_LIBS ${RDKAFKA_LIB})
+    include_directories(${RDKAFKA_INCLUDE_DIR})
+endif()
+
+if(HAVE_RABBITMQ)
+    list(APPEND OPTIONAL_LIBS ${RABBITMQ_LIB})
+    include_directories(${RABBITMQ_INCLUDE_DIR})
+endif()
+
+if(HAVE_REDIS)
+    list(APPEND OPTIONAL_LIBS ${HIREDIS_LIB})
+    include_directories(${HIREDIS_INCLUDE_DIR})
+endif()
+
+if(HAVE_PROTOBUF)
+    list(APPEND OPTIONAL_LIBS protobuf::libprotobuf)
+endif()
 
 # Compression libraries
 find_library(ZLIB_LIB z)

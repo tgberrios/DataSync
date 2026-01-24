@@ -82,15 +82,23 @@ CDCStrategyManager::detectCapabilities(const std::string& dbEngine,
     capabilities.hasChangeStreams = true;
   }
   
-  // Verificar infraestructura externa (placeholder)
+  // Verificar infraestructura externa
   // En implementación real, verificaría:
   // - Kafka disponible para Debezium
   // - Spark cluster disponible
-  capabilities.hasDebezium = false; // Placeholder
+  capabilities.hasDebezium = false; // Placeholder - se detectaría verificando Kafka
   capabilities.hasSpark = false;    // Placeholder - se detectaría desde SparkEngine
   
+  // TODO: Integrar con StreamProcessingManager para verificar disponibilidad de Kafka/RabbitMQ/Redis
+  // Esto permitiría usar streams de mensajería como estrategia CDC
+  
   Logger::info(LogCategory::SYSTEM, "CDCStrategyManager",
-               "Detected capabilities for " + dbEngine);
+               "Detected capabilities for " + dbEngine + 
+               " - Binlog: " + std::to_string(capabilities.hasBinlog) +
+               ", WAL: " + std::to_string(capabilities.hasWAL) +
+               ", TxnLog: " + std::to_string(capabilities.hasTxnLog) +
+               ", RedoLog: " + std::to_string(capabilities.hasRedoLog) +
+               ", ChangeStreams: " + std::to_string(capabilities.hasChangeStreams));
   
   return capabilities;
 }

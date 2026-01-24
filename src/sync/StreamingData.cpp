@@ -1,5 +1,7 @@
 #include "sync/StreamingData.h"
+#include "sync/StreamProcessingManager.h"
 #include "catalog/custom_jobs_repository.h"
+#include "catalog/workflow_repository.h"
 #include "core/database_config.h"
 #include "governance/QueryActivityLogger.h"
 #include "governance/QueryStoreCollector.h"
@@ -94,6 +96,24 @@ void StreamingData::initialize() {
                       std::string(e.what()));
   }
 
+  try {
+    StreamProcessingManager::StreamConfig streamConfig;
+    streamConfig.streamType = StreamProcessingManager::StreamType::KAFKA;
+    streamConfig.serializationFormat = StreamProcessingManager::SerializationFormat::JSON;
+    streamProcessingManager = std::make_unique<StreamProcessingManager>(streamConfig);
+    if (streamProcessingManager->initialize()) {
+      Logger::info(LogCategory::MONITORING,
+                   "Stream processing manager initialized successfully");
+    } else {
+      Logger::warning(LogCategory::MONITORING, "initialize",
+                      "Stream processing manager initialization failed");
+    }
+  } catch (const std::exception &e) {
+    Logger::error(LogCategory::MONITORING, "initialize",
+                  "Error initializing stream processing manager: " +
+                      std::string(e.what()));
+  }
+
   Logger::info(LogCategory::MONITORING,
                "System initialization completed successfully");
 }
@@ -139,6 +159,7 @@ void StreamingData::run(std::function<bool()> shutdownCheck) {
   threads.emplace_back(&StreamingData::dbtExecutorThread, this);
   threads.emplace_back(&StreamingData::workflowBuilderThread, this);
   threads.emplace_back(&StreamingData::datalakeSchedulerThread, this);
+  threads.emplace_back(&StreamingData::streamProcessingThread, this);
 
   Logger::info(LogCategory::MONITORING,
                "Transfer threads launched successfully");
@@ -231,6 +252,11 @@ void StreamingData::shutdown() {
   }
   Logger::info(LogCategory::MONITORING, "Shutting down DataSync system");
   running = false;
+
+  // Shutdown stream processing manager
+  if (streamProcessingManager) {
+    streamProcessingManager->shutdown();
+  }
 
   Logger::info(LogCategory::MONITORING,
                "Waiting for all threads to finish (max 30 seconds)");
@@ -2389,6 +2415,117 @@ void StreamingData::webhookMonitorThread() {
     std::this_thread::sleep_for(std::chrono::seconds(5));
   }
   Logger::info(LogCategory::GOVERNANCE, "Webhook monitor thread stopped");
+}
+
+void StreamingData::streamProcessingThread() {
+  Logger::info(LogCategory::MONITORING, "Stream processing thread started");
+  
+  if (!streamProcessingManager) {
+    Logger::warning(LogCategory::MONITORING, "streamProcessingThread",
+                    "Stream processing manager not initialized");
+    return;
+  }
+
+  while (running) {
+    try {
+      // Cargar configuración de streams desde la base de datos
+      std::string connStr = DatabaseConfig::getPostgresConnectionString();
+      pqxx::connection pgConn(connStr);
+      
+      pqxx::work txn(pgConn);
+      auto configs = txn.exec(
+          "SELECT stream_type, topic, queue, stream, consumer_group, consumer_name, "
+          "serialization_format, schema_registry_url, engine_config "
+          "FROM metadata.stream_config "
+          "ORDER BY id DESC LIMIT 1"
+      );
+      txn.commit();
+
+      if (!configs.empty()) {
+        const auto& row = configs[0];
+        StreamProcessingManager::StreamConfig streamConfig;
+        
+        std::string streamType = row["stream_type"].as<std::string>();
+        if (streamType == "KAFKA") {
+          streamConfig.streamType = StreamProcessingManager::StreamType::KAFKA;
+        } else if (streamType == "RABBITMQ") {
+          streamConfig.streamType = StreamProcessingManager::StreamType::RABBITMQ;
+        } else if (streamType == "REDIS_STREAMS") {
+          streamConfig.streamType = StreamProcessingManager::StreamType::REDIS_STREAMS;
+        }
+
+        if (!row["topic"].is_null()) streamConfig.topic = row["topic"].as<std::string>();
+        if (!row["queue"].is_null()) streamConfig.queue = row["queue"].as<std::string>();
+        if (!row["stream"].is_null()) streamConfig.stream = row["stream"].as<std::string>();
+        if (!row["consumer_group"].is_null()) {
+          streamConfig.consumerGroup = row["consumer_group"].as<std::string>();
+        }
+        if (!row["consumer_name"].is_null()) {
+          streamConfig.consumerName = row["consumer_name"].as<std::string>();
+        }
+
+        std::string serialization = row["serialization_format"].as<std::string>("JSON");
+        if (serialization == "AVRO") {
+          streamConfig.serializationFormat = StreamProcessingManager::SerializationFormat::AVRO;
+        } else if (serialization == "PROTOBUF") {
+          streamConfig.serializationFormat = StreamProcessingManager::SerializationFormat::PROTOBUF;
+        } else if (serialization == "JSON_SCHEMA") {
+          streamConfig.serializationFormat = StreamProcessingManager::SerializationFormat::JSON_SCHEMA;
+        } else {
+          streamConfig.serializationFormat = StreamProcessingManager::SerializationFormat::JSON;
+        }
+
+        if (!row["engine_config"].is_null()) {
+          streamConfig.engineConfig = json::parse(row["engine_config"].as<std::string>());
+        }
+
+        // Iniciar consumidor si no está activo
+        auto consumers = streamProcessingManager->getConsumers();
+        if (consumers.empty() && !streamConfig.consumerGroup.empty()) {
+          streamProcessingManager->startConsumer(streamConfig,
+            [this](const StreamProcessingManager::StreamMessage& msg) {
+              // Procesar mensaje - puede trigger workflows, transformaciones, etc.
+              Logger::debug(LogCategory::MONITORING, "streamProcessingThread",
+                           "Processing message from stream: " + msg.source);
+              
+              // TODO: Verificar si el mensaje debe trigger un workflow
+              // Buscar en metadata.workflows por workflows con event triggers de tipo STREAM
+              // y ejecutar workflow si el mensaje cumple las condiciones
+              
+              if (workflowExecutor) {
+                try {
+                  // Ejemplo: trigger workflow si el mensaje contiene un campo específico
+                  json msgJson = json::parse(msg.value);
+                  if (msgJson.contains("triggerWorkflow")) {
+                    std::string workflowName = msgJson["triggerWorkflow"];
+                    workflowExecutor->executeWorkflowAsync(workflowName, TriggerType::EVENT);
+                    Logger::info(LogCategory::MONITORING, "streamProcessingThread",
+                                "Triggered workflow: " + workflowName + " from stream message");
+                  }
+                } catch (const std::exception& e) {
+                  Logger::warning(LogCategory::MONITORING, "streamProcessingThread",
+                                 "Could not parse message for workflow trigger: " + std::string(e.what()));
+                }
+              }
+              
+              return true;
+            });
+        }
+      }
+
+      pgConn.close();
+    } catch (const std::exception &e) {
+      Logger::error(LogCategory::MONITORING, "streamProcessingThread",
+                   "Error in stream processing: " + std::string(e.what()));
+    }
+
+    std::this_thread::sleep_for(std::chrono::seconds(30));
+  }
+
+  if (streamProcessingManager) {
+    streamProcessingManager->shutdown();
+  }
+  Logger::info(LogCategory::MONITORING, "Stream processing thread stopped");
 }
 
 // Validates tables for a specific database engine by querying metadata.catalog

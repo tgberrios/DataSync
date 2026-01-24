@@ -12,47 +12,17 @@ anadir test en los otros para nulls, esto y lo otros
 ## 📊 FASE 2: PROCESAMIENTO DE DATOS
 **Orden lógico:** Requiere connectors y formatos de archivo completados
 
-### 2.2. Data modeling avanzado esto creo que ya lo tenemos en algunos ? 
-- SCD Type 4 (history table)
-- SCD Type 6 (hybrid)
+### 2.2. Data modeling avanzado (patrones de modelado - pueden implementarse con estructuras genéricas existentes)
 - Outrigger dimensions
 - Junk dimensions
 - Degenerate dimensions
 - Factless fact tables
 
----
+**Nota:** SCD Type 4 y 6 ya están implementados en `MergeStrategyExecutor`. Los patrones restantes son conceptos de modelado dimensional que pueden implementarse usando las estructuras genéricas de `DimensionTable` y `FactTable` existentes, pero no tienen soporte explícito/dedicado en el código.
 
-## 🌊 FASE 3: STREAMING Y PROCESAMIENTO EN TIEMPO REAL
-**Orden lógico:** Requiere connectors completados (Fase 1) y preferiblemente big data processing (Fase 2)
 
-### 3.1. Stream Processing (Kafka integration) (6-8 semanas)
-- Integración con Kafka/RabbitMQ/Redis Streams
-- Producer/Consumer patterns
-- Windowing (tumbling, sliding, session windows)
-- Stateful processing
-- Alto impacto para casos de uso en tiempo real
+rpg
 
-**Complejidad:** Alta
-**Impacto:** Alto (funcional)
-
-### 3.2. Streaming y procesamiento en tiempo real
-- Integración con Kafka/RabbitMQ/Redis Streams
-- Producer/Consumer patterns
-- Topic management
-- Partitioning strategy
-- Message serialization (Avro, Protobuf, JSON Schema)
-- Procesamiento de streams en tiempo real
-- Windowing (tumbling, sliding, session windows)
-- Stateful processing (mantener estado entre eventos)
-- Event time vs processing time
-- Watermarks para late data
-- CEP (Complex Event Processing)
-- CDC nativo de bases de datos (Debezium, Oracle GoldenGate)
-- Binlog reading (MySQL/MariaDB)
-- Transaction log reading (MSSQL, PostgreSQL WAL)
-- Redo log reading (Oracle)
-
----
 
 ## ⚡ FASE 4: OPTIMIZACIÓN Y PERFORMANCE
 **Orden lógico:** Requiere que las funcionalidades base funcionen correctamente
