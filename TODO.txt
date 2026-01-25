@@ -22,7 +22,7 @@ anadir test en los otros para nulls, esto y lo otros para todos los procesos de 
 **Nota:** SCD Type 4 y 6 ya están implementados en `MergeStrategyExecutor`. Los patrones restantes son conceptos de modelado dimensional que pueden implementarse usando las estructuras genéricas de `DimensionTable` y `FactTable` existentes, pero no tienen soporte explícito/dedicado en el código.
 
 
-rpg
+
 
 
 
@@ -43,9 +43,6 @@ rpg
 ---
 
 
-app de calendario como calcularse 
-app de todo
-
 
 
 ---
@@ -60,6 +57,23 @@ si metimos todo lo que tiene que estar en la ui y todo lo de cpp tiene su ui ?
 
 ### 12.3. Tareas de Mantenimiento
 - Que archivos podemos eliminar y cuáles no
+
+
+ordenarlo alfabeticamente
+
+
+▒Network
+0.0 IOPS
+▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+Min: 0.0 IOPSMax: 0.0 IOPS
+·Throughput
+0.0 RPS
+▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+Min: 0.0 RPS
+
+DataSync executable not found at: /home/iks/Documents/DataSync-UI/DataSync/DataSync
+
+
 
 
 
@@ -85,13 +99,27 @@ si metimos todo lo que tiene que estar en la ui y todo lo de cpp tiene su ui ?
   - Autenticación mejorada (API keys, OAuth2) 
 
 
-  ### 12.4. Tareas Personales (No relacionadas con DataSync)
+
+
+
+
+
+
+
+
+ ### 12.4. Tareas Personales (No relacionadas con DataSync)
 - yay (actualizar el sistema con yay)
 - descargar vencord
 - juego en la terminal
 
 ---
+app de calendario como calcularse 
+app de todo
+
 - Una aplicación de webhooks en terminal
 
+no tengo libre office
+
+rpg
 
 
