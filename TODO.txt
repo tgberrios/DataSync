@@ -48,40 +48,6 @@ app de todo
 
 
 
-## 🚀 FASE 9: DEPLOYMENT E INFRAESTRUCTURA
-**Orden lógico:** Puede desarrollarse en paralelo pero mejor después de la base estable
-
-### 9.1. Cloud-Native Deployment (4-6 semanas)
-**Por qué es crítico:**
-- "Terraform, Docker, Kubernetes" genera interés (mencionado en LinkedIn post)
-- Facilita deployment enterprise
-- Escalabilidad horizontal
-- Reproducibilidad de infraestructura
-- CI/CD pipelines básicos
-- Facilita adopción por equipos DevOps
-
-**Implementación:**
-- Docker containers (C++ backend + Node.js frontend)
-- Docker Compose para desarrollo local
-- Kubernetes manifests (deployments, services, configmaps)
-- Terraform para infraestructura (AWS/Azure/GCP)
-- Helm charts para Kubernetes
-- CI/CD pipelines básicos (GitHub Actions / GitLab CI)
-- Health checks y readiness probes
-- Service mesh básico (opcional)
-
-**Complejidad:** Media
-**Impacto:** Medio-Alto (DevOps/enterprise + marketing)
-
-### 9.2. DevOps y CI/CD
-- Pipeline versioning
-- Git integration para pipelines
-- Rollback automático
-- Automated testing en CI
-- Deployment pipelines
-- Blue-green deployments
-- Canary releases
-
 ---
 nos faltan ruitas en layout ? 
 si metimos todo lo que tiene que estar en la ui y todo lo de cpp tiene su ui ? 
@@ -126,3 +92,6 @@ si metimos todo lo que tiene que estar en la ui y todo lo de cpp tiene su ui ?
 
 ---
 - Una aplicación de webhooks en terminal
+
+
+
