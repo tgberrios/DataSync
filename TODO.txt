@@ -117,9 +117,6 @@ app de calendario como calcularse
 app de todo
 
 - Una aplicación de webhooks en terminal
-
-no tengo libre office
-
 rpg
 
 
